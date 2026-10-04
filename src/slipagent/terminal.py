@@ -430,6 +430,33 @@ class TerminalUI:
         self.stopping = stopping
         self.app.invalidate()
 
+    def set_title(self, title: str) -> None:
+        """Update the terminal/tab title through the platform's output adapter."""
+        self.output.set_title(title)
+        self.output.flush()
+
+    def clear_transcript(self) -> None:
+        """Replace display storage while retaining the input draft and application."""
+        self._ensure_transcript()
+        archive = TranscriptFile()
+        self._close_transcript()
+        self._raw_output = archive
+        self._block_starts.clear()
+        self._continuation_indents.clear()
+        self._flow = None
+        self._wrapped_columns = self._wrapped_count = self._line_count = 0
+        self._pinned_prompt = None
+        self._prompt_pending = False
+        self.context_visible = False
+        self.transcript.vertical_scroll = self.transcript.vertical_scroll_2 = 0
+        self.scroll_to_end()
+
+    def scroll_to_end(self) -> None:
+        """Resume following the tail, including after loading saved messages."""
+        self.transcript._following = True
+        self.transcript._pending_scroll = 0
+        self.app.invalidate()
+
     def write(
         self, text: str, *, continuation_indents: dict[int, int] | None = None,
         user_prompt: bool = False,

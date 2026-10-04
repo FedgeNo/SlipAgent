@@ -12,6 +12,7 @@ import asyncio
 import re
 import getpass
 import io
+import json
 import math
 import os
 import shutil
@@ -36,14 +37,14 @@ from .openrouter import (
     OpenRouterError,
     OpenRouterLimitError,
 )
-from .tools.base import ToolRegistry
+from .tools.base import ToolRegistry, ToolResult
 from .tools import build_default_registry
 from .types import KeyInfo, Message, ModelInfo
 from .workspace import Workspace, WorkspaceError
 from .terminal import TerminalUI
 from .runtime import RuntimeFrame
 from .task import TaskMemory
-from .sessions import SessionJournal, SessionError
+from .sessions import SessionJournal, SessionError, session_title
 from wcwidth import iter_graphemes, strip_sequences, wcswidth
 from tabulate import tabulate
 
@@ -55,7 +56,7 @@ BANNER = """SlipAgent — OpenRouter compatible coding agent
 {mcp}
 Commands: /help  /tools  /model [slug]  /models [filter]  /key [show|status|key]
           /temperature [value]  /cost  /mcp [add|save|remove]
-          /task [new]  /reset  /reload  /generations
+          /task [new]  /rename <name>  /reset  /reload  /generations
           /sessions  /resume id|latest  /requests [attempt]
           /init  /stop  /exit  /quit
 
@@ -82,8 +83,9 @@ Commands
   /cost                show token usage and cost for this session
   /task                show the active goal, constraints, progress, and source posts
   /task new            start a new task with your next prompt; retain history and logs
+  /rename <name>       name this saved conversation and its terminal title
   /sessions            list saved sessions for this project
-  /resume <id|latest>   restore a saved conversation while idle; never replay tools
+  /resume <id|latest>   restore a saved conversation and scroll to its end (idle only)
   /requests [attempt]  list recent request attempts or inspect an exact saved request
   /mcp                 show MCP servers and their tools
   /mcp add <name> <command> [args...]
@@ -148,6 +150,11 @@ def _use_color(stream: TextIO, force_off: bool) -> bool:
     if force_off or os.environ.get("NO_COLOR"):
         return False
     return hasattr(stream, "isatty") and bool(stream.isatty())
+
+
+def _literal_tool_output(text: str) -> str:
+    """Keep captured terminal controls inert in both live and restored output."""
+    return re.sub(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]", lambda match: f"\\x{ord(match[0]):02x}", text)
 
 
 # --------------------------------------------------------------------------- #
@@ -264,6 +271,48 @@ class Renderer:
         self._erase()
         self._prompt = None
 
+    async def restore_transcript(self, messages: list[Message], pending: list[str]) -> None:
+        """Display archived originals only; never dispatch their tools or requests."""
+        self._finish_stream()
+        if self.terminal is not None:
+            self.terminal.clear_transcript()
+        self._active_block = None
+        self._model_block = object()
+        self._last_output_blank = True
+        for index, message in enumerate(messages):
+            if message.role == "user":
+                self.user_prompt(message.content or "")
+            elif message.role == "assistant":
+                self._model_block = object()
+                if message.reasoning:
+                    self._stream_text("reasoning_delta", message.reasoning)
+                    self._finish_stream()
+                if message.content:
+                    self.handle(AgentEvent(kind="assistant_text", text=message.content))
+                for call in message.tool_calls or []:
+                    self.handle(AgentEvent(kind="tool_start", tool_call=call))
+            elif message.role == "tool":
+                result = ToolResult.ok(message.content or "")
+                try:
+                    saved = json.loads(result.content)
+                except ValueError:
+                    saved = None
+                if (isinstance(saved, dict) and saved.get("status") in ("success", "error")
+                        and isinstance(saved.get("content"), str)):
+                    result = ToolResult(saved["content"], saved["status"] == "error")
+                if result.content:
+                    body = _literal_tool_output(result.content)
+                    if result.is_error:
+                        self.emit(self.style.red(f"  ✗ {body}"), block=self._model_block)
+                    else:
+                        self.emit(self.style.dim(body), block=self._model_block)
+            if index % 100 == 99:
+                await asyncio.sleep(0)
+        for text in pending:
+            self.user_prompt(text, queued=True)
+        if self.terminal is not None:
+            self.terminal.scroll_to_end()
+
     def _erase(self) -> None:
         if self.terminal is not None:
             return
@@ -337,7 +386,7 @@ class Renderer:
             self._tool_streamed = True
             # Commands may emit terminal controls, including split escape
             # sequences. Display them literally instead of executing them.
-            text = re.sub(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]", lambda match: f"\\x{ord(match[0]):02x}", event.text)
+            text = _literal_tool_output(event.text)
             self._stream_text("tool_output", text)
 
         elif event.kind == "tool_end":
@@ -510,6 +559,7 @@ async def build_session(args: argparse.Namespace) -> Session:
             if getattr(args, "resume", None):
                 data = await asyncio.to_thread(journal.load, args.resume)
                 journal.restore(agent, data)
+                session.extensions["restore_transcript"] = True
                 renderer.emit(f"  Resumed {data['id']} as {journal.session_id}; no tools were replayed.")
             else:
                 journal.begin(agent)
@@ -569,6 +619,8 @@ async def run_repl(session: Session) -> int:
         tools=session.registry.names,
         mcp=mcp_line,
     )
+    if session.extensions.pop("restore_transcript", False):
+        await renderer.restore_transcript(session.agent.messages, session.agent.pending)
     quota_task = asyncio.create_task(_poll_quota(session))
     reload_task = asyncio.create_task(session.reloader.watch()) if session.reloader is not None else None
 
@@ -637,6 +689,7 @@ async def _read_line(session: Session, style: Style) -> str | None:
     Returns None at end of input, which the caller treats as EOF.
     """
     renderer = session.renderer
+    _refresh_title(session)
     renderer.draw_prompt(_status_bar(session, style), style.green("> "))
     if renderer.terminal is not None:
         line = await renderer.terminal.read_line()
@@ -1000,6 +1053,16 @@ async def _handle_command(session: Session, line: str) -> bool:
             await frame.checkpoint()
 
 
+def _refresh_title(session: Session) -> None:
+    terminal = session.renderer.terminal
+    if terminal is not None:
+        journal = session.registry.services.get("session_journal")
+        title = journal.title if journal is not None else session.extensions.get("title")
+        if title is None:
+            title = session_title(str(session.workspace.root))
+        terminal.set_title(title)
+
+
 async def _execute_command(session: Session, line: str) -> bool:
     """Execute a slash command. Returns True when the REPL should exit."""
     parts = line[1:].split(None, 1)
@@ -1040,6 +1103,20 @@ async def _execute_command(session: Session, line: str) -> bool:
     elif command == "cost":
         usage = session.agent.usage
         print(f"  {usage.summary()} across this session", file=out)
+    elif command == "rename":
+        if not argument:
+            print(style.red("  usage: /rename <name>"), file=out)
+        else:
+            try:
+                title = session_title(argument)
+                journal = session.registry.services.get("session_journal")
+                if journal is not None:
+                    await asyncio.to_thread(journal.rename, argument)
+                else:
+                    session.extensions["title"] = title
+                print(f"  title: {title}", file=out)
+            except SessionError as exc:
+                print(style.red(f"  {exc}"), file=out)
     elif command == "requests":
         diagnostics = session.registry.services.get("request_diagnostics")
         if diagnostics is None:
@@ -1060,7 +1137,7 @@ async def _execute_command(session: Session, line: str) -> bool:
             print(style.red("  session persistence is disabled; restart without --no-session to enable it."), file=out)
         elif command == "sessions":
             for entry in await asyncio.to_thread(journal.listing):
-                print(f"  {entry['id']}  {entry['created']}" + ("  (current)" if entry["current"] == "True" else ""), file=out)
+                print(f"  {entry['id']}  {entry['created']}  {entry['title']}" + ("  (current)" if entry["current"] == "True" else ""), file=out)
             print(f"  storage: {journal.directory}", file=out)
         elif not argument:
             print(style.red("  usage: /resume <id|latest>"), file=out)
@@ -1072,6 +1149,7 @@ async def _execute_command(session: Session, line: str) -> bool:
                 if jobs is not None:
                     await jobs.stop_all()
                 journal.restore(session.agent, data)
+                await session.renderer.restore_transcript(session.agent.messages, session.agent.pending)
                 print(f"  restored {data['id']} as {journal.session_id}; no tools were replayed. Type a task or continue when ready.", file=out)
             except SessionError as exc:
                 print(style.red(f"  {exc}"), file=out)
@@ -1102,6 +1180,7 @@ async def _execute_command(session: Session, line: str) -> bool:
         if jobs is not None:
             await jobs.stop_all()
         session.agent.reset()
+        session.extensions.pop("title", None)
         print(style.dim("  conversation cleared"), file=out)
     elif command == "reload":
         if session.reloader is None:
@@ -1119,6 +1198,7 @@ async def _execute_command(session: Session, line: str) -> bool:
         await _init_command(session, style, out)
     else:
         print(style.red(f"  unknown command: /{command} (try /help)"), file=out)
+    _refresh_title(session)
     session.agent._persist()
     return False
 

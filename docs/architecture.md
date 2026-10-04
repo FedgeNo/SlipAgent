@@ -462,6 +462,18 @@ headers retain that path for identity checks. New directories/files are private.
 Credentials from configuration are not serialized, although user/tool text can
 itself contain sensitive data.
 
+The conversation title defaults to the full project path plus ` | SlipAgent`.
+New journal headers carry their initial title. `/rename` atomically replaces a
+private `<session-id>.title.json` file in the same project state directory;
+the sidecar overrides the header without rewriting conversation records.
+Listings read headers and title metadata only, rather than scanning each journal.
+Malformed metadata reports an error; legacy journals without titles use their
+project path. Resume embeds the restored title in the new journal's header,
+so subsequent renames leave the parent untouched. Reset gets the default title.
+The CLI uses that same title for terminal output; `Session.app_title` remains the
+OpenRouter attribution setting. Without persistence, the name lives in
+`Session.extensions`. Names cannot contain terminal control characters.
+
 Messages append as deltas, with explicit replacement records for refreshed system
 instructions or post-batch check annotations. State records hold task boundaries,
 the working task record, usage, queued input, and selected settings. Post records
@@ -479,6 +491,16 @@ sources, summaries, queued input, usage and command logs are restored to a new
 journal. The original remains available. Operating/project instructions and
 model settings come from the current process. Interrupted summaries stay
 labelled; restoration itself performs no model calls.
+
+Interactive restore rebuilds the display from original saved messages and queued
+input through the renderer, replaces the current transcript's temporary files,
+and follows the final row. It retains the input draft/application. Readable
+reasoning and tool observations are shown; system instructions, provider reasoning
+signatures, and compaction summaries are excluded from ordinary scrollback.
+Rendering never invokes archived tools. `--resume` defers this display work until
+the REPL terminal exists; one-shot mode continues to print only its new answer.
+This reconstructs the conversation, not transient progress/retry notices that
+were never part of the saved messages.
 
 The CLI exposes `/sessions`, `/resume id|latest`, `--resume [id]`, and
 `--no-session`. `/reset` starts a new journal while retaining prior sessions.

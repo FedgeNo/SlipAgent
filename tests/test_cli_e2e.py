@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -764,7 +765,7 @@ def test_prompt_and_status_never_share_a_line_with_output(project_dir: Path) -> 
 
     assert proc.returncode == 0, proc.stderr
     for line in proc.stderr.splitlines():
-        if ">" not in line:
+        if re.search(r"(?:^|\s)>(?:\s|$)", line) is None:
             continue
         # Either a prompt row (readouts, then the marker and the user's text)
         # or the echo of a queued line — never both mashed together.
@@ -947,6 +948,17 @@ def test_mcp_command_preserves_quoted_arguments() -> None:
     assert spec.args == ["path with spaces/server.py"]
 
 
+def test_rename_is_saved_listed_and_restored_in_another_process(project_dir):
+    first = run_repl_commands(project_dir, ["/rename", "/rename Review café changes", "/sessions"])
+    assert first.returncode == 0, first.stderr
+    assert "usage: /rename <name>" in first.stderr
+    assert first.stderr.count("Review café changes | SlipAgent") >= 2
+    second = run_repl_commands(project_dir, ["/sessions"], "--resume", "latest")
+    assert second.returncode == 0, second.stderr
+    assert second.stderr.count("Review café changes | SlipAgent") >= 2
+    assert "\x1b]2;" not in first.stderr + second.stderr
+
+
 async def test_interrupted_repl_turn_cancels_agent(tmp_path, monkeypatch, metadata_server) -> None:
     import asyncio
     import io
@@ -1036,14 +1048,17 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             pytest.fail("terminal state timed out: " + repr(screen.display))
         try:
             wait_for(lambda: "model: stub/one" in screen.display[23])
+            assert screen.title == f"{project_dir} | SlipAgent"
             assert screen.display[22].strip() == ""
             startup = "\n".join(screen.display[:17])
-            for command in ["/help", "/tools", "/model", "/models", "/key", "/cost", "/mcp", "/reset", "/reload", "/generations", "/init", "/stop", "/exit", "/quit"]:
+            for command in ["/help", "/tools", "/model", "/models", "/key", "/cost", "/mcp", "/rename", "/reset", "/reload", "/generations", "/init", "/stop", "/exit", "/quit"]:
                 assert command in startup
             assert "Follow-ups queue" in startup
             assert "Ctrl-D quits" in startup
             os.write(master, b"go\r")
             wait_for(started.is_set)
+            os.write(master, b"/rename Work in progress\r")
+            wait_for(lambda: screen.title == "Work in progress | SlipAgent")
             os.write(master, b"/stop\r")
             wait_for(lambda: "Stopping After This Turn" in screen.display[18])
             os.write(master, b"queued followup\r")
@@ -1060,6 +1075,15 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             assert "queued followup" in [context_body(m["content"]) for m in history if m["role"] == "user"]
             os.write(master, b"/model stub/two\r")
             wait_for(lambda: "model: stub/two" in screen.display[23])
+            assert screen.title == "Work in progress | SlipAgent"
+            os.write(master, b"/reset\r")
+            wait_for(lambda: screen.title == f"{project_dir} | SlipAgent")
+            wait_for(lambda: "conversation cleared" in "\n".join(screen.display[:17]))
+            os.write(master, b"/resume latest\r")
+            wait_for(lambda: screen.title == "Work in progress | SlipAgent")
+            wait_for(lambda: "restored " in "\n".join(screen.display[:17]))
+            assert "resumed successfully" in "\n".join(screen.display[:17])
+            assert "conversation cleared" not in "\n".join(screen.display[:17])
             os.write(master, b"/exit\r")
             assert proc.wait(timeout=5) == 0
             assert termios.tcgetattr(slave) == original_modes

@@ -14,6 +14,7 @@ import math
 import os
 import re
 import shutil
+import tempfile
 import uuid
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -32,6 +33,19 @@ if TYPE_CHECKING:
 
 class SessionError(OpenRouterError):
     """Session storage cannot safely save or restore its records."""
+
+
+def _validate_title(value: Any) -> str:
+    if not isinstance(value, str) or not value.strip() or any(
+        ord(char) < 32 or 127 <= ord(char) <= 159 for char in value
+    ):
+        raise SessionError("Session names must be nonempty and contain no control characters.")
+    return value
+
+
+def session_title(name: str) -> str:
+    """Format the shared saved-conversation and terminal title."""
+    return f"{_validate_title(name)} | SlipAgent"
 
 
 def _private_directory(path: Path) -> None:
@@ -91,7 +105,43 @@ class SessionJournal:
             self.failed = True
             raise SessionError(f"Could not save session {self.session_id}: {exc}. Inspect its journal before resuming.") from exc
 
-    def begin(self, agent: Agent, parent: str | None = None) -> None:
+    @property
+    def title(self) -> str:
+        # Older live journals predate titles; their project path is still known.
+        return getattr(self, "_title", session_title(self.project))
+
+    def rename(self, name: str) -> None:
+        """Atomically save mutable title metadata without rewriting the journal."""
+        title = session_title(name)
+        if self.path is None or self.failed:
+            raise SessionError("Session journal is unavailable; the title was not changed.")
+        temporary: Path | None = None
+        try:
+            fd, filename = tempfile.mkstemp(prefix=".title-", dir=self.directory)
+            temporary = Path(filename)
+            with os.fdopen(fd, "w", encoding="utf-8") as target:
+                json.dump({"title": title}, target, ensure_ascii=False)
+                target.flush()
+                os.fsync(target.fileno())
+            temporary.replace(self.directory / (self.session_id + ".title.json"))
+        except OSError as exc:
+            raise SessionError(f"Could not save the session title: {exc}") from exc
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+        self._title = title
+
+    def _saved_title(self, session_id: str, header: dict[str, Any]) -> str:
+        title = header.get("title", session_title(self.project))
+        try:
+            with (self.directory / (session_id + ".title.json")).open(encoding="utf-8") as source:
+                title = json.load(source)["title"]
+        except FileNotFoundError:
+            pass  # Unrenamed and older sessions use their header/project title.
+        return _validate_title(title)
+
+    def begin(self, agent: Agent, parent: str | None = None, *, title: str | None = None) -> None:
+        title = session_title(self.project) if title is None else _validate_title(title)
         self.session_id = uuid.uuid4().hex
         self.path = self.directory / (self.session_id + ".jsonl")
         self.cursor, self.post_count = 0, 0
@@ -103,7 +153,8 @@ class SessionJournal:
         except OSError as exc:
             raise SessionError(f"Cannot create session journal: {exc}") from exc
         self._append("header", version=1, project=self.project, session_id=self.session_id,
-                     parent=parent, created=datetime.now(timezone.utc).isoformat())
+                     parent=parent, created=datetime.now(timezone.utc).isoformat(), title=title)
+        self._title = title
         agent.session_id = self.session_id
         diagnostics = agent.registry.services.get("request_diagnostics")
         if diagnostics is not None:
@@ -165,8 +216,9 @@ class SessionJournal:
                     header = json.loads(source.readline())
                 if header.get("type") != "header" or header.get("project") != self.project:
                     raise SessionError(f"Invalid session header: {path}")
-                result.append({"id": path.stem, "created": header["created"], "current": str(path == self.path)})
-        except (OSError, ValueError, KeyError) as exc:
+                result.append({"id": path.stem, "created": header["created"], "current": str(path == self.path),
+                               "title": self._saved_title(path.stem, header)})
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             raise SessionError(f"Cannot list saved sessions: {exc}") from exc
         return result
 
@@ -191,6 +243,7 @@ class SessionJournal:
                     if index == 0:
                         if kind != "header" or event.get("version") != 1 or event.get("project") != self.project or event.get("session_id") != selected:
                             raise ValueError("unsupported or mismatched session header")
+                        data["title"] = self._saved_title(selected, event)
                     elif kind == "message":
                         data["messages"].append(event["message"])
                     elif kind == "replace":
@@ -314,7 +367,7 @@ class SessionJournal:
         agent.history.task = loaded.task
         agent.pending = list(data["state"]["pending"])
         agent.usage = data["usage"]
-        self.begin(agent, parent=data["id"])
+        self.begin(agent, parent=data["id"], title=data["title"])
         archive = agent.registry.services.get("command_archive")
         if archive is not None:
             for log_id, metadata in data["logs"].items():

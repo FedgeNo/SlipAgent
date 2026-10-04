@@ -425,8 +425,9 @@ In the REPL:
 | `/cost` | Session token usage and spend |
 | `/task` | Show the active goal, constraints, facts, pending work, next steps, and source posts |
 | `/task new` | Make the next prompt a new task, retaining previous history and command logs |
+| `/rename <name>` | Save this conversation's name and set its terminal title to `{name} \| SlipAgent` |
 | `/sessions` | List saved sessions for this project's path |
-| `/resume <id>` or `/resume latest` | Restore a saved conversation while idle without replaying tools |
+| `/resume <id>` or `/resume latest` | Restore a saved conversation and its scrolling transcript at the end, while idle; no tools are replayed |
 | `/requests [attempt]` | List the latest 20 request attempts, or inspect one exact request and its outcome |
 | `/mcp` | Show MCP servers, their status, and the tools they contribute |
 | `/mcp add <name> <cmd> [args…]` | Connect a server over stdio for this session only |
@@ -441,6 +442,19 @@ In the REPL:
 
 `/key` validates against OpenRouter's `GET /key` before accepting anything, and
 never writes to `.env` without an explicit `y` at the prompt.
+
+Conversation titles default to `{full working directory} | SlipAgent`.
+`/rename Fix login` changes the saved conversation and terminal title to
+`Fix login | SlipAgent`, including while the agent works. `/sessions` shows saved
+titles, and `/resume` or `--resume` restores them. In the REPL, restoring also
+loads the original conversation into the scrolling area and starts at the end.
+Prompts, replies, saved thoughts, tool calls/results, and queued input remain
+available by scrolling up; restoring does not execute tools or call the model.
+Names are private metadata
+beside the saved journal in the project's hashed directory under the expanded
+user-home `.SlipAgent` directory (or `SLIPAGENT_STATE_DIR`), outside the checkout.
+`/reset` starts a new conversation with the default title. With `--no-session`,
+renaming lasts only for the current conversation in the running process.
 
 On an interactive terminal, six fixed rows sit at the bottom of the screen:
 a pulsing activity indicator, three rows for wrapping input, an empty line,

@@ -14,7 +14,7 @@ from slipagent.tools import build_default_registry
 from slipagent.tools.base import ToolRegistry
 from slipagent.types import Message, ToolCall
 from test_agent import StubClient, RecordingTool, completion
-from test_cli_e2e import StubOpenRouter, run_cli, text_step
+from test_cli_e2e import StubOpenRouter, run_cli, run_repl_commands, text_step
 
 
 def attach(agent, workspace, tmp_path):
@@ -22,6 +22,85 @@ def attach(agent, workspace, tmp_path):
     agent.registry.services["session_journal"] = journal
     journal.begin(agent)
     return journal
+
+
+def test_session_titles_survive_reopen_resume_and_reset(workspace, tmp_path):
+    agent = Agent(StubClient([]), ToolRegistry(), "test")
+    journal = attach(agent, workspace, tmp_path)
+    default = f"{workspace.root} | SlipAgent"
+    assert journal.title == default
+    assert journal.listing()[0]["title"] == default
+    original = journal.path.read_bytes()
+    parent = journal.session_id
+    journal.rename("Review café changes")
+    title = "Review café changes | SlipAgent"
+    assert journal.title == title
+    assert journal.path.read_bytes() == original
+    assert journal.listing()[0]["title"] == title
+    if os.name == "posix":
+        assert (journal.directory / (parent + ".title.json")).stat().st_mode & 0o077 == 0
+
+    reopened = SessionJournal(str(workspace.root), tmp_path / "saved")
+    restored = Agent(StubClient([]), ToolRegistry(), "test")
+    restored.registry.services["session_journal"] = reopened
+    reopened.restore(restored, reopened.load(parent))
+    child = reopened.session_id
+    assert child != parent and reopened.title == title
+    assert reopened.load(child)["title"] == title
+    reopened.rename("Follow-up")
+    assert reopened.load(parent)["title"] == title
+    assert reopened.load(child)["title"] == "Follow-up | SlipAgent"
+    restored.reset()
+    assert reopened.title == default
+    assert reopened.load(child)["title"] == "Follow-up | SlipAgent"
+
+
+def test_legacy_session_title_defaults_to_full_project_path(workspace, tmp_path):
+    agent = Agent(StubClient([]), ToolRegistry(), "test")
+    journal = attach(agent, workspace, tmp_path)
+    lines = journal.path.read_text().splitlines()
+    header = json.loads(lines[0])
+    del header["title"]
+    lines[0] = json.dumps(header)
+    journal.path.write_text("\n".join(lines) + "\n")
+    assert journal.load(journal.session_id)["title"] == f"{workspace.root} | SlipAgent"
+    assert journal.listing()[0]["title"] == f"{workspace.root} | SlipAgent"
+
+
+def test_failed_rename_keeps_previous_saved_title(workspace, tmp_path, monkeypatch):
+    from pathlib import Path
+    agent = Agent(StubClient([]), ToolRegistry(), "test")
+    journal = attach(agent, workspace, tmp_path)
+    journal.rename("Original")
+    def fail(*args):
+        raise OSError("simulated replace failure")
+    monkeypatch.setattr(Path, "replace", fail)
+    with pytest.raises(SessionError, match="Could not save"):
+        journal.rename("Replacement")
+    assert journal.title == "Original | SlipAgent"
+    assert journal.load(journal.session_id)["title"] == journal.title
+    assert not list(journal.directory.glob(".title-*"))
+
+
+@pytest.mark.parametrize("name", ["", "   ", "bad\nname", "bad\x1b]2;title\x07", "bad\x9cname"])
+def test_invalid_names_do_not_change_saved_title(workspace, tmp_path, name):
+    agent = Agent(StubClient([]), ToolRegistry(), "test")
+    journal = attach(agent, workspace, tmp_path)
+    before = journal.title
+    with pytest.raises(SessionError, match="control characters"):
+        journal.rename(name)
+    assert journal.title == journal.load(journal.session_id)["title"] == before
+
+
+@pytest.mark.parametrize("contents", ['{"title":', '{}', '{"title": 123}'])
+def test_invalid_title_metadata_is_reported(workspace, tmp_path, contents):
+    agent = Agent(StubClient([]), ToolRegistry(), "test")
+    journal = attach(agent, workspace, tmp_path)
+    (journal.directory / (journal.session_id + ".title.json")).write_text(contents)
+    with pytest.raises(SessionError):
+        journal.load(journal.session_id)
+    with pytest.raises(SessionError):
+        journal.listing()
 
 
 async def test_originals_summaries_reasoning_usage_and_pending_survive_resume(workspace, tmp_path):
@@ -166,3 +245,16 @@ def test_cli_resume_sends_previous_history_to_next_request(tmp_path):
     assert "continued answer" in second.stdout
     request = json.dumps(stub.requests[-1])
     assert "original question" in request and "original answer" in request
+
+
+def test_startup_resume_displays_saved_conversation_without_inference(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    with StubOpenRouter([text_step("Original saved answer")]) as stub:
+        first = run_cli("-p", "Original saved question", "--base-url", stub.base_url, cwd=project)
+        assert first.returncode == 0, first.stderr
+        resumed = run_repl_commands(project, [], "--base-url", stub.base_url, "--resume", "latest")
+        assert resumed.returncode == 0, resumed.stderr
+        assert "> Original saved question" in resumed.stderr
+        assert "Original saved answer" in resumed.stderr
+        assert len(stub.requests) == 1

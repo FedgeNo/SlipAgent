@@ -19,7 +19,7 @@ from slipagent.terminal import TerminalUI
 from slipagent.agent import AgentEvent
 from slipagent.cli import BANNER, HELP, Renderer, Style
 from slipagent.tools.base import ToolResult
-from slipagent.types import ToolCall, Usage
+from slipagent.types import Message, ToolCall, Usage
 
 
 async def wait_until(predicate) -> None:
@@ -266,6 +266,7 @@ async def test_latest_user_prompt_pins_at_top_and_releases_on_next_prompt(displa
             await wait_until(lambda: "> Keep the original task visible" in "\n".join(snapshot()[:17]))
             assert snapshot()[0].strip() == "Startup information"
             pipe.send_text("unfinished draft")
+            await wait_until(lambda: "unfinished draft" in snapshot()[19])
             ui.write("\n".join(f"result {i}" for i in range(50)))
             await wait_until(lambda: snapshot()[0].rstrip() == "> Keep the original task visible")
             assert "result 49" in "\n".join(snapshot()[1:17])
@@ -444,6 +445,61 @@ async def test_pinned_line_requires_green_prompt_prefix_and_survives_reload(disp
             await task
 
 
+async def test_restored_transcript_replaces_output_and_scrolls_to_end(display):
+    sink, _, output, screen, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        renderer = Renderer(Style(True), sink, False)
+        renderer.terminal = ui
+        task = asyncio.create_task(ui.run())
+        first_reply = Message.assistant("Saved first answer")
+        first_reply.reasoning = "Saved readable thoughts"
+        first_reply.reasoning_details = [{"signature": "opaque signature"}]
+        messages = [
+            Message.system("System instructions stay in the context view"),
+            Message.user("Saved first task"), first_reply,
+            Message.user("Saved next task"),
+            Message.assistant("Reading the file", [
+                ToolCall("read", "read_file", {"path": "app.py"}),
+                ToolCall("legacy", "custom_tool", {}),
+            ]),
+            Message.tool_result("read", json.dumps({"status": "error", "content": "Saved tool failure"})),
+            Message.tool_result("legacy", '{"status": [], "data": "Legacy tool output"}'),
+            Message.assistant("\n".join(f"Saved output {i}" for i in range(40)) + "\nSaved final answer"),
+        ]
+        original = [message.to_api() for message in messages]
+        try:
+            ui.write("Unrelated old transcript\n" * 50)
+            await wait_until(lambda: "Unrelated old transcript" in snapshot()[0])
+            ui._scroll_output(-1000)
+            ui.input.text = "unfinished draft"
+            ui.context_visible = True
+            await renderer.restore_transcript(messages, [])
+            await wait_until(lambda: "Saved final answer" in "\n".join(snapshot()[:17]))
+            assert snapshot()[0].rstrip() == "> Saved next task"
+            assert "unfinished draft" in snapshot()[19]
+            assert "readout" in snapshot()[23]
+            recorded = "\n".join(ui._raw_output)
+            assert "Unrelated old transcript" not in recorded
+            assert "System instructions" not in recorded and "opaque signature" not in recorded
+            assert "Saved readable thoughts" in recorded and "Saved first answer" in recorded
+            assert "read_file" in recorded and "Saved tool failure" in recorded
+            assert '{"status": [], "data": "Legacy tool output"}' in recorded
+            assert "\x1b[38;2;255;0;255m" in recorded
+            assert "\x1b[38;2;255;0;0m" in recorded
+            assert [message.to_api() for message in messages] == original
+            ui._scroll_output(-1000)
+            await wait_until(lambda: "Saved first answer" in "\n".join(snapshot()[:17]))
+            assert snapshot()[0].rstrip() == "> Saved first task"
+            assert screen.buffer[0][0].fg == "00ff00"
+            await renderer.restore_transcript(messages, ["Queued correction"])
+            await wait_until(lambda: "> Queued correction" in "\n".join(snapshot()[:17]))
+            assert "queued" in "\n".join(snapshot()[:17])
+        finally:
+            ui.close()
+            await task
+
+
 async def test_working_indicator_pulses_and_becomes_idle(display) -> None:
     sink, _, output, _, snapshot = display
     with create_pipe_input() as pipe:
@@ -522,7 +578,7 @@ def test_startup_and_help_list_all_commands_with_requested_spacing():
     banner = BANNER.format(model="test/model", workspace="project", tools="read_file", mcp="")
     for command in [
         "/help", "/tools", "/model", "/models", "/key", "/cost", "/mcp",
-        "/reset", "/reload", "/generations", "/init", "/stop", "/exit", "/quit",
+        "/rename", "/reset", "/reload", "/generations", "/init", "/stop", "/exit", "/quit",
     ]:
         assert command in banner
         assert command in HELP

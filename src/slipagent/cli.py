@@ -58,7 +58,7 @@ Commands: /help  /tools  /model [slug]  /models [filter]  /key [show|status|key]
           /temperature [value]  /cost  /mcp [add|save|remove]
           /task [new]  /rename <name>  /reset  /reload  /generations
           /sessions  /resume [id|latest]  /requests [attempt]
-          /menu  /init  /stop  /exit  /quit
+          /menu  /danger [on|off|status]  /init  /stop  /exit  /quit
 
 Type a task and press Enter. Follow-ups queue while the agent works.
 /stop finishes this turn and stops. /exit, /quit, or Ctrl-D quits.
@@ -71,6 +71,9 @@ Commands
 
   /help                show this help
   /menu                open the arrow-key command menu; Enter selects, Esc closes
+  /danger [on]         disable workspace path confinement (idle only)
+  /danger off          restore workspace path confinement (idle only)
+  /danger status       show whether danger mode is active
   /tools               list the available tools
   /model               show the active model
   /model <slug>        switch model for this session
@@ -512,7 +515,7 @@ async def build_session(args: argparse.Namespace) -> Session:
         context_tokens=args.context_tokens,
     )
     try:
-        workspace = Workspace(config.workspace)
+        workspace = Workspace(config.workspace, danger=getattr(args, "danger", False))
         load_project_instructions(workspace)
     except WorkspaceError as exc:
         raise ConfigError(str(exc)) from exc
@@ -634,8 +637,9 @@ async def run_repl(session: Session) -> int:
     terminal_task: asyncio.Task[None] | None = None
     if sys.stdin.isatty() and renderer.stream.isatty() and os.environ.get("TERM") != "dumb":
         terminal = TerminalUI(
-            lambda columns: _status_bar(session, Style(False), columns=columns),
+            lambda columns: _status_bar(session, style, columns=columns),
             renderer.stream, color=style.enabled,
+            status_suffix=lambda: _danger_suffix(session, style),
         )
         renderer.terminal = terminal
         terminal_task = asyncio.create_task(terminal.run())
@@ -785,13 +789,20 @@ def _status_bar(session: Session, style: Style, *, columns: int | None = None) -
     model = f"model: {session.agent.model}"
     if columns is None:
         columns = shutil.get_terminal_size(fallback=(0, 0)).columns
+    danger = _danger_suffix(session, Style(False))
+    available = max(0, columns - wcswidth(danger)) if columns else 0
     if columns:
-        room = columns - wcswidth(model + free + _READOUT_SEP * 2)
+        room = available - wcswidth(model + free + _READOUT_SEP * 2)
         cwd = _fit_readout(cwd, room, keep_end=True) if room >= 4 else ""
         if not cwd:
-            model = _fit_readout(model, columns - wcswidth(free + _READOUT_SEP))
+            model = _fit_readout(model, available - wcswidth(free + _READOUT_SEP))
     parts = [part for part in (cwd, model, free) if part]
-    return style.dim(_fit_readout(_READOUT_SEP.join(parts), columns) if columns else _READOUT_SEP.join(parts))
+    return (style.dim(_fit_readout(_READOUT_SEP.join(parts), available) if columns else _READOUT_SEP.join(parts))
+            + style.red(_fit_readout(danger, columns, keep_end=True) if columns else danger))
+
+
+def _danger_suffix(session: Session, style: Style) -> str:
+    return style.red(" | Danger Mode") if session.workspace.access.danger else ""
 
 
 def _cwd_readout(workspace: Workspace) -> str:
@@ -1116,6 +1127,7 @@ async def _execute_command(session: Session, line: str) -> bool:
     mutates_session = mutates_session or command == "model" and bool(argument) or command == "mcp" and bool(argument)
     mutates_session = mutates_session or command == "temperature" and bool(argument)
     mutates_session = mutates_session or command == "task" and bool(argument)
+    mutates_session = mutates_session or command == "danger" and argument.lower() != "status"
     if session.agent.running and mutates_session:
         print(style.dim(f"  /{command} changes session state; use it after this turn finishes."), file=out)
         return False
@@ -1133,6 +1145,18 @@ async def _execute_command(session: Session, line: str) -> bool:
         print(HELP, file=out, end="")
     elif command == "tools":
         print("  " + "\n  ".join(session.registry.names), file=out)
+    elif command == "danger":
+        if argument.lower() not in {"", "on", "off", "status"}:
+            print(style.red("  usage: /danger [on|off|status]"), file=out)
+        else:
+            if argument.lower() != "status":
+                session.workspace.access.danger = argument.lower() != "off"
+            if session.workspace.access.danger:
+                print(style.red("  Danger mode ON: workspace path confinement is disabled."), file=out)
+            else:
+                print("  Danger mode OFF: workspace path confinement is enabled.", file=out)
+            if session.renderer.terminal is not None:
+                session.renderer.terminal.app.invalidate()
     elif command == "model":
         await _model_command(session, argument, style, out)
     elif command == "models":
@@ -1721,7 +1745,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Task to run, then exit.")
     parser.add_argument("-m", "--model", help="Model slug (default: $OPENROUTER_MODEL).")
     parser.add_argument("-w", "--workspace", default=None,
-                        help="Project directory the agent may touch. Default: cwd.")
+                        help="Project root and default path boundary (lifted by --danger). Default: cwd.")
     parser.add_argument("--max-steps", type=int, default=None,
                         help="Cap on model requests per run, including response retries. "
                              "Default: 200, far above what real work needs.")
@@ -1745,6 +1769,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-reload", action="store_true", help="Disable automatic component reloads.")
     parser.add_argument("--resume", nargs="?", const="latest", help="Restore a project session by full ID, or the latest saved session.")
     parser.add_argument("--no-session", action="store_true", help="Keep conversation and command logs only until reset or exit.")
+    parser.add_argument("--danger", action="store_true",
+                        help="Disable built-in workspace path confinement without a confirmation prompt.")
     parser.add_argument("--no-mcp", action="store_true",
                         help="Do not connect to MCP servers from .mcp.json.")
     parser.add_argument("--mcp", action="store_true",

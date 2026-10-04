@@ -1,4 +1,4 @@
-"""Project guidance is read inside the workspace before model or tool activity."""
+"""Read scoped guidance for permitted paths before model or tool activity."""
 
 from __future__ import annotations
 
@@ -100,6 +100,10 @@ class ProjectInstructions:
     def snapshot(self) -> dict[str, str]:
         result = {".": load_project_instructions(self.workspace)}
         for scope in sorted(self.scopes - {"."}):
+            # Retain visited external scopes for a later re-enable, but neither
+            # read nor present them while confinement is restored.
+            if Path(scope).is_absolute() and not self.workspace.access.danger:
+                continue
             directory = self.workspace.resolve(scope)
             if directory.exists():
                 # Scope controls applicability, while the original workspace
@@ -129,7 +133,9 @@ class ProjectInstructions:
         directory = target if target.is_dir() else target.parent
         relevant = {"."}
         while directory != self.workspace.root:
-            relevant.add(directory.relative_to(self.workspace.root).as_posix())
+            relevant.add(self.workspace.relative(directory))
+            if directory == directory.parent:
+                break
             directory = directory.parent
         self.scopes.update(relevant)
         if tool.mutates_workspace:

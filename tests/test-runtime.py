@@ -286,6 +286,23 @@ def test_invalid_edit_keeps_previous_version_and_recovers_on_next_edit(run_copy,
     ''')
 
 
+def test_danger_mode_survives_component_reload(run_copy):
+    run_copy('''
+        await cli._handle_command(session, '/danger')
+        edit('cli.py', '"  current model: ', '"  updated model: ')
+        await frame.checkpoint()
+        assert frame.generation == 1, sink.getvalue()
+        assert workspace.access.danger
+        outside = Path.cwd().parent / 'outside-reload.txt'
+        outside.write_text('external fixture')
+        result = await registry.invoke('read_file', {'path': str(outside)})
+        assert not result.is_error and 'external fixture' in result.content, result.content
+        await cli._handle_command(session, '/danger off')
+        assert not workspace.access.danger
+        assert (await registry.invoke('read_file', {'path': str(outside)})).is_error
+    ''')
+
+
 def test_hashes_detect_same_size_same_timestamp_edits_and_manual_reload(run_copy):
     run_copy('''
         path = root / 'cli.py'

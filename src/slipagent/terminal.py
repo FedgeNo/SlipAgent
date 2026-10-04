@@ -13,7 +13,7 @@ from prompt_toolkit import Application
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.filters import Condition
-from prompt_toolkit.formatted_text import StyleAndTextTuples
+from prompt_toolkit.formatted_text import ANSI, StyleAndTextTuples, to_formatted_text
 from prompt_toolkit.formatted_text.utils import fragment_list_to_text
 from prompt_toolkit.input import Input
 from prompt_toolkit.history import DummyHistory
@@ -152,9 +152,11 @@ class TerminalUI:
     def __init__(
         self, status: Callable[[int], str], stream: TextIO, *, color: bool = True,
         input: Input | None = None, output: Output | None = None,
+        status_suffix: Callable[[], str] | None = None,
     ) -> None:
         self.output = output if output is not None else create_output(stdout=stream)
         self._status = status
+        self._status_suffix = status_suffix
         self._lines: asyncio.Queue[str | None] = asyncio.Queue()
         self._raw_output = TranscriptFile()
         self._block_starts: set[int] = set()
@@ -200,13 +202,13 @@ class TerminalUI:
             Window(FormattedTextControl(lambda: self._activity()), height=1),
             self.input,
             Window(height=1),
-            Window(FormattedTextControl(lambda: self._status(self.output.get_size().columns)),
+            Window(FormattedTextControl(lambda: ANSI(self._status(self.output.get_size().columns))),
                    height=1, style="class:status"),
         ], height=FOOTER_ROWS)
         menu_footer = HSplit([
             Window(FormattedTextControl(lambda: self._menu_title), height=1, style="class:menu-title"),
             self._menu_window,
-            Window(FormattedTextControl("↑/↓ = move | Enter = select | Esc = back"),
+            Window(FormattedTextControl(lambda: self._menu_hint()),
                    height=1, style="class:status"),
         ], height=FOOTER_ROWS)
         context = HSplit([
@@ -247,6 +249,17 @@ class TerminalUI:
             fragments.append(("class:menu-selected" if selected else "",
                               ("› " if selected else "  ") + label))
         return fragments
+
+    def _menu_hint(self) -> ANSI:
+        """Keep access indicators visible even while the menu replaces readouts."""
+        callback = getattr(self, "_status_suffix", None)
+        suffix = callback() if callback is not None else ""
+        remaining = max(0, self.output.get_size().columns - display_width(
+            fragment_list_to_text(to_formatted_text(ANSI(suffix)))))
+        hint = "↑/↓ = move | Enter = select | Esc = back"
+        if len(hint) > remaining:
+            hint = hint[:remaining - 1] + "…" if remaining else ""
+        return ANSI(hint + suffix)
 
     async def choose(self, title: str, options: list[tuple[str, str]]) -> str | None:
         """Choose a value/label pair in the footer; cancellation preserves the draft."""

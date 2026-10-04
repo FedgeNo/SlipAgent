@@ -31,7 +31,13 @@ def _atomic_write(workspace: Workspace, target: Path, content: str) -> None:
     resolved by Workspace. New files use the process umask; replacements keep mode.
     """
     encoded = content.encode("utf-8")
-    relative = target.relative_to(workspace.root)
+    workspace.resolve(target)
+    # Outside targets in danger mode use their filesystem root as the anchor;
+    # retain descriptor-based traversal and atomic replacement in both modes.
+    anchor = workspace.root
+    if not workspace.contains(target):
+        anchor = Path(target.anchor)
+    relative = target.relative_to(anchor)
     if os.name != "posix":
         target.parent.mkdir(parents=True, exist_ok=True)
         workspace.resolve(target)
@@ -51,7 +57,7 @@ def _atomic_write(workspace: Workspace, target: Path, content: str) -> None:
         return
 
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-    directory = os.open(workspace.root, flags)
+    directory = os.open(anchor, flags)
     temporary_name: str | None = None
     try:
         for part in relative.parts[:-1]:
@@ -92,7 +98,7 @@ class ReadFileTool(Tool):
     instruction_path = "path"
     name = "read_file"
     description = (
-        "Read a text file from the workspace. Returns numbered lines so they can "
+        "Read a text file allowed by the current Workspace Access mode. Returns numbered lines so they can "
         "be cited; omit the displayed line numbers when calling edit_file. "
         "Line endings are displayed as LF. Use offset/limit for large files. "
         "Binary files are rejected."
@@ -102,7 +108,7 @@ class ReadFileTool(Tool):
         "properties": {
             "path": {
                 "type": "string",
-                "description": "Path relative to the workspace root.",
+                "description": "Workspace-relative or absolute path, subject to the current Workspace Access mode.",
             },
             "offset": {
                 "type": "integer",
@@ -193,7 +199,7 @@ class WriteFileTool(Tool):
     parameters = {
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "Path relative to the workspace root."},
+            "path": {"type": "string", "description": "Workspace-relative or absolute path, subject to the current Workspace Access mode."},
             "content": {"type": "string", "description": "Full file contents to write."},
         },
         "required": ["path", "content"],
@@ -246,7 +252,7 @@ class EditFileTool(Tool):
     parameters = {
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "Path relative to the workspace root."},
+            "path": {"type": "string", "description": "Workspace-relative or absolute path, subject to the current Workspace Access mode."},
             "old_string": {
                 "type": "string",
                 "description": "Exact text to replace, including indentation.",

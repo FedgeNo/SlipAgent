@@ -1,17 +1,18 @@
 """Path confinement for built-in file, navigation, search, and Git tools.
 
 These tools funnel project paths through `Workspace.resolve`, which
-resolves symlinks and rejects anything landing outside the project root. That
+resolves symlinks and, by default, rejects anything outside the project root. That
 rejects ordinary attempts to reach outside the project. This is not an OS
 sandbox: shell/MCP subprocesses have process permissions, and session log
-storage is owned separately by the harness.
+storage is owned separately by the harness. Danger mode lifts path confinement
+without changing the root used for relative paths or the process's permissions.
 """
 
 from __future__ import annotations
 
 import os
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 # Prune expensive generated/dependency trees during recursive search. list_dir
@@ -41,24 +42,33 @@ class WorkspaceError(Exception):
     """Raised when a path escapes the sandbox or cannot be resolved."""
 
 
+@dataclass(slots=True)
+class WorkspaceAccess:
+    """Session-owned access mode shared by tools and retained across reloads."""
+
+    danger: bool = False
+
+
 @dataclass(frozen=True, slots=True)
 class Workspace:
-    """A resolved project root that all filesystem tools are confined to."""
+    """An immutable project root with an independently mutable access mode."""
 
     root: Path
+    access: WorkspaceAccess = field(compare=False, repr=False)
 
-    def __init__(self, root: Path | str = ".") -> None:
+    def __init__(self, root: Path | str = ".", *, danger: bool = False) -> None:
         resolved = Path(root).expanduser().resolve()
         if not resolved.is_dir():
             raise WorkspaceError(f"workspace root is not a directory: {resolved}")
         object.__setattr__(self, "root", resolved)
+        object.__setattr__(self, "access", WorkspaceAccess(danger=danger))
 
     def resolve(self, raw: str | Path) -> Path:
-        """Resolve a model-supplied path to an absolute path inside the root.
+        """Resolve a model-supplied path, enforcing the current access mode.
 
         Relative paths are anchored to the root. Absolute paths are allowed but
-        still sandboxed. Symlinks are followed *before* the containment check so
-        a link inside the tree cannot point out of it.
+        confined unless danger mode is enabled. Symlinks are followed before
+        the containment check so a link cannot bypass confinement.
         """
         text = str(raw)
         if not text.strip():
@@ -69,7 +79,7 @@ class Workspace:
             candidate = self.root / candidate
 
         resolved = candidate.resolve()
-        if not self.contains(resolved):
+        if not self.access.danger and not self.contains(resolved):
             raise WorkspaceError(
                 f"path is outside the workspace: {text!r} "
                 f"(workspace root is {self.root})"
@@ -97,7 +107,7 @@ class Workspace:
         Uses `os.walk` with in-place pruning so a large `.git` or `node_modules`
         is never descended into, rather than filtering an already-complete walk.
 
-        Symlinks that point outside the root are skipped: `os.walk` does not
+        With confinement enabled, symlinks outside the root are skipped: `os.walk` does not
         descend into symlinked directories, but it does list symlinked *files* in
         `filenames`, and reading one would hand out content from beyond the
         sandbox even though `resolve` refuses the same path when asked directly.
@@ -112,15 +122,15 @@ class Workspace:
             current = Path(dirpath)
             for filename in filenames:
                 candidate = current / filename
-                if candidate.is_symlink() and not self.contains(candidate.resolve()):
+                if not self.access.danger and candidate.is_symlink() and not self.contains(candidate.resolve()):
                     continue
                 yield candidate
 
     def iter_entries(self, start: Path | str | None = None) -> Iterator[tuple[Path, bool]]:
         """Yield `(path, is_dir)` for every entry beneath `start`, pruned.
 
-        As in `iter_files`, entries whose symlink target lands outside the root
-        are skipped so `glob` cannot be used to enumerate them.
+        As in `iter_files`, confinement skips entries whose symlink target lands
+        outside the root. Danger mode includes them.
         """
         base = self.resolve(start) if start is not None else self.root
         if not base.is_dir():
@@ -132,11 +142,11 @@ class Workspace:
             current = Path(dirpath)
             for name in dirnames:
                 entry = current / name
-                if entry.is_symlink() and not self.contains(entry.resolve()):
+                if not self.access.danger and entry.is_symlink() and not self.contains(entry.resolve()):
                     continue
                 yield entry, True
             for name in filenames:
                 entry = current / name
-                if entry.is_symlink() and not self.contains(entry.resolve()):
+                if not self.access.danger and entry.is_symlink() and not self.contains(entry.resolve()):
                     continue
                 yield entry, False

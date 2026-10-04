@@ -422,8 +422,8 @@ servers of changed, created, and deleted files, excluding generated/dependency
 trees through the normal workspace traversal. The current file is always opened
 explicitly even if excluded from recursive traversal. Configuration requests are
 answered from explicit settings. Server-originated workspace edits are refused.
-Locations and symlinks are confined to the workspace; outside results are counted
-and omitted. Hover and location pages are bounded. Errors retire the failed client
+Locations and symlinks follow `Workspace.resolve`: confinement counts and omits
+outside results, while danger mode permits them. Hover and location pages are bounded. Errors retire the failed client
 so later explicit calls can start cleanly.
 
 ## Edit Recovery, Checks and Loop Detection
@@ -568,6 +568,18 @@ to the model along with the active generation number.
   checks both worktree and metadata, rejects active staging filters, and disables
   hooks/signing/diff helpers/automatic fetching. Shell and MCP remain unrestricted
   subprocesses with the harness's operating-system permissions.
+  The frozen workspace retains its root and owns a mutable `WorkspaceAccess`
+  object shared by all tools and session services. `/danger` and `--danger` lift
+  only the path boundary; `contains` still answers geometric containment and
+  external display paths remain absolute. Changes are idle-only. Reset, resume,
+  and compatible component reloads preserve this process setting; journals do
+  not restore it. Each request supplies a current Workspace Access section, and
+  the footer reserves room for a red `| Danger Mode` suffix when active.
+  External atomic writes retain descriptor-based traversal from the target's
+  filesystem root. Git ancestor discovery stops at the filesystem root in danger
+  mode. External instruction scopes include the target's ancestors and are
+  omitted from snapshots when confinement is restored. Installing changes to
+  `workspace.py` requires a process restart, as with other stable contracts.
 - **Search:** directory listing includes dotfiles and environments. Recursive
   search prunes generated/dependency directories; explicit paths can target them.
   Regex matching lives in a killable child, while file traversal remains in the

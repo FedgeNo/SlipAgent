@@ -416,6 +416,9 @@ In the REPL:
 | --- | --- |
 | `/help` | Show command help |
 | `/menu` | Open the command menu in the input area; Up/Down move, Enter selects, Escape closes |
+| `/danger` or `/danger on` | Disable workspace path confinement for this process (idle only) |
+| `/danger off` | Restore workspace path confinement (idle only) |
+| `/danger status` | Show the current access mode |
 | `/tools` | List available tools |
 | `/model` | Show the active model |
 | `/model <slug>` | Switch model for this session |
@@ -513,6 +516,20 @@ The transcript stays visible above it. Escape closes the menu without running
 anything, preserving your draft and scroll position. Selecting an item runs its
 usual slash command, including the same restrictions while the agent is working.
 Commands that need arguments are still entered at the normal prompt.
+
+`/danger` enables access outside the workspace for built-in file, search,
+navigation, and Git tools. `/danger off` restores confinement; `/danger status`
+reports the mode. Changes take effect while idle, so an in-flight tool batch
+keeps one access policy. While active, the bottom readout ends with
+`| Danger Mode` in red. The current mode is supplied to the model on every request.
+The working directory and relative-path base stay the same. OS permissions and
+the tools' validation, atomic writes, and resource limits still apply.
+
+For an unattended one-shot task, use `slipagent --danger -p "your task"`.
+The flag enables the same mode at startup without a confirmation prompt.
+The setting lasts for the current process, including `/reset`, `/resume`, and
+component reloads; saved sessions do not enable it in a future launch. A new
+process starts confined unless `--danger` is supplied.
 
 Press **Ctrl+backslash (`Ctrl+\`)** to toggle the context view. It shows the
 latest outgoing working request, with every system, user, assistant, and tool
@@ -824,7 +841,8 @@ Useful flags:
 | `-h, --help` | Show all command-line options and examples. |
 | `-p, --prompt` | Supply a one-shot task instead of positional task text. |
 | `-m, --model` | Model slug for this run. |
-| `-w, --workspace` | Project directory the agent may touch. |
+| `-w, --workspace` | Project root and default path boundary. |
+| `--danger` | Disable workspace path confinement at startup, including unattended one-shot tasks; no confirmation prompt. |
 | `--max-steps` | Cap working model requests per run, including response retries (default 200); background summaries are separate. |
 | `--context-posts` | Recent window with verbatim user requests and full responses where the budget allows (default 50). |
 | `--context-tokens` | Estimated token budget for the recent window (default 200000). |
@@ -1010,8 +1028,9 @@ returns a clear setup error rather than failing silently.
 
 Git tools accept an optional workspace-relative `repo` directory (default `.`)
 and `timeout` in seconds (default 120, maximum 600). Git must be installed.
-The worktree and Git metadata must stay inside the workspace; parent repositories,
-bare repositories, external worktree metadata, and escaping symlinks are rejected.
+By default, the worktree and Git metadata must stay inside the workspace; parent
+repositories, external worktree metadata, and escaping symlinks are rejected.
+Danger mode allows those external paths. Bare repositories are not supported.
 File paths are literal, so wildcards and Git pathspec magic cannot broaden a selection.
 Inherited Git environment redirects are ignored. Hooks, signing, external diff
 helpers, filesystem monitoring helpers, and automatic maintenance are disabled.
@@ -1028,9 +1047,10 @@ actually read the file rather than reconstructing it from memory, and turns a
 mis-targeted edit into a recoverable error message instead of silent
 corruption.
 
-**Filesystem tool paths are confined to the workspace.** Paths resolve through a symlink-aware check that
+**Filesystem tool paths are confined to the workspace by default.** Paths resolve through a symlink-aware check that
 rejects anything landing outside the workspace root, so `../../.ssh/config`
-is rejected by file, navigation, and search tools. `run_command` and MCP servers
+is rejected by file, navigation, and search tools unless `/danger` or `--danger`
+is active. `run_command` and MCP servers
 run with the harness process's permissions and can access paths outside the
 workspace. The workspace check is not an operating-system sandbox.
 

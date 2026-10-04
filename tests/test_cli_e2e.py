@@ -217,6 +217,24 @@ def test_one_shot_answers_on_stdout(project_dir: Path) -> None:
     assert stub.requests[0]["model"] == "stub/model"
 
 
+@pytest.mark.parametrize("danger", [False, True])
+def test_danger_flag_controls_unattended_external_write(project_dir, danger):
+    target = project_dir.parent / "external.txt"
+    with StubOpenRouter([tool_step("write_file", {"path": str(target), "content": "outside"}),
+                         text_step("Finished")]) as stub:
+        result = run_cli("-p", "Write the requested file", "--base-url", stub.base_url,
+                         "--model", "stub/model", *(["--danger"] if danger else []), cwd=project_dir)
+    assert result.returncode == 0, result.stderr
+    assert target.exists() is danger
+    assert result.stdout.strip() == "Finished"
+    system = "\n".join(m["content"] for m in stub.requests[0]["messages"] if m["role"] == "system")
+    assert ("Danger mode ON" if danger else "Danger mode OFF") in system
+    if danger:
+        assert target.read_text() == "outside"
+    else:
+        assert "outside the workspace" in result.stderr
+
+
 @pytest.mark.parametrize("mode", ["one-shot", "repl"])
 def test_project_instructions_are_present_before_first_model_request(project_dir: Path, mode: str) -> None:
     instructions = {
@@ -922,7 +940,7 @@ def test_followup_during_final_response_is_answered(project_dir: Path) -> None:
     assert len(stub.requests) == 2
 
 
-@pytest.mark.parametrize("command", ["/reset", "/resume", "/key secret", "/mcp remove stub", "/model new/model"])
+@pytest.mark.parametrize("command", ["/reset", "/resume", "/danger", "/danger off", "/key secret", "/mcp remove stub", "/model new/model"])
 async def test_mutating_commands_wait_until_turn_finishes(tmp_path, monkeypatch, command, metadata_server) -> None:
     import io
     from slipagent.cli import build_parser, build_session, _shutdown, _handle_command
@@ -940,6 +958,35 @@ async def test_mutating_commands_wait_until_turn_finishes(tmp_path, monkeypatch,
     finally:
         session.agent.running = False
         await _shutdown(session)
+
+
+async def test_danger_commands_preserve_mode_through_reset_and_resume(tmp_path, metadata_server):
+    import io
+    from slipagent import cli
+    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    output = io.StringIO()
+    session.renderer.stream = output
+    try:
+        assert not session.workspace.access.danger
+        await cli._handle_command(session, "/danger")
+        assert session.workspace.access.danger
+        await cli._handle_command(session, "/danger")
+        assert session.workspace.access.danger  # Repeating the command keeps it enabled.
+        await cli._handle_command(session, "/reset")
+        await cli._handle_command(session, "/resume latest")
+        assert session.workspace.access.danger
+        session.agent.running = True
+        await cli._handle_command(session, "/danger status")
+        assert "Danger mode ON" in output.getvalue()
+        session.agent.running = False
+        await cli._handle_command(session, "/danger off")
+        assert not session.workspace.access.danger
+        await cli._handle_command(session, "/danger invalid")
+        assert "usage: /danger" in output.getvalue()
+        assert not session.workspace.access.danger
+    finally:
+        session.agent.running = False
+        await cli._shutdown(session)
 
 
 @pytest.mark.parametrize("selection", [None, "/tools", "/reset", "/quit", "/models"])
@@ -1174,7 +1221,7 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             [sys.executable, "-m", "slipagent.cli", "--base-url", stub.base_url,
              "--workspace", str(project_dir), "--model", "stub/one", "--no-mcp"],
             cwd=project_dir, stdin=slave, stdout=slave, stderr=slave,
-            env=cli_environment(TERM="xterm-256color"),
+            env=cli_environment(TERM="xterm-256color", NO_COLOR=""),
         )
         def wait_for(predicate):
             deadline = time.monotonic() + 8
@@ -1193,10 +1240,16 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             assert screen.title == f"{project_dir} | SlipAgent"
             assert screen.display[22].strip() == ""
             startup = "\n".join(screen.display[:17])
-            for command in ["/help", "/menu", "/tools", "/model", "/models", "/key", "/cost", "/mcp", "/rename", "/reset", "/reload", "/generations", "/init", "/stop", "/exit", "/quit"]:
+            for command in ["/help", "/menu", "/danger", "/tools", "/model", "/models", "/key", "/cost", "/mcp", "/rename", "/reset", "/reload", "/generations", "/init", "/stop", "/exit", "/quit"]:
                 assert command in startup
             assert "Follow-ups queue" in startup
             assert "Ctrl-D quits" in startup
+            os.write(master, b"/danger\r")
+            wait_for(lambda: screen.display[23].rstrip().endswith(" | Danger Mode"))
+            start = screen.display[23].index("Danger Mode")
+            assert all(screen.buffer[23][column].fg == "ff0000" for column in range(start, start + len("Danger Mode")))
+            os.write(master, b"/danger off\r")
+            wait_for(lambda: "Danger Mode" not in screen.display[23])
             os.write(master, b"/menu\r")
             wait_for(lambda: "Enter = select | Esc = back" in screen.display[23])
             assert screen.display[18].strip() == "Commands"

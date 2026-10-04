@@ -61,7 +61,8 @@ def build_default_registry(
     owns_services = services is None
     if services is None:
         settings = load_project_settings(workspace)
-        services = {"project_environment": ProjectEnvironment(workspace),
+        services = {"workspace": workspace,
+                    "project_environment": ProjectEnvironment(workspace),
                     "project_instructions": ProjectInstructions(workspace),
                     "command_archive": CommandArchive(settings.log_quota_bytes),
                     "command_jobs": CommandJobs(),

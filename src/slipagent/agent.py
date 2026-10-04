@@ -84,8 +84,9 @@ development conventions.
 
 ## Environment
 - Workspace root: {workspace}
-- Filesystem tool paths are relative to that root and are confined to it. \
-Paths that escape the root will be rejected.
+- Relative filesystem tool paths are anchored to that root. Paths outside it \
+are rejected by default; the current Workspace Access section states whether \
+the user has disabled that confinement with danger mode.
 - The shell runs in the workspace but inherits PATH; it does not activate a \
 project environment. The interpreter running this harness is {interpreter}; \
 that is not necessarily the project's interpreter.
@@ -182,7 +183,7 @@ start another model request; /stop leaves jobs running, while reset and exit sto
 - When navigate_code is available, a configured language server can resolve \
 definitions, references, implementations, and hover information. Use grep and \
 read_file for ordinary discovery. Follow the tool's explicit position units; \
-navigation results exclude locations outside the workspace.
+navigation results follow the current Workspace Access mode.
 
 ## Style
 - Your output is displayed as plain text in a terminal, not interpreted as \
@@ -427,6 +428,19 @@ class Agent:
             except ValueError as exc:
                 raise ContextError(str(exc)) from exc
         sections = PromptSections()
+        workspace = self.registry.services.get("workspace")
+        if workspace is not None:
+            access = "Danger mode OFF: built-in filesystem and Git paths are confined to the workspace root."
+            if workspace.access.danger:
+                access = ("Danger mode ON: the user has disabled workspace path confinement. "
+                          "File, search, navigation, and Git tools may use absolute paths, parent paths, "
+                          "and symlinks outside the workspace. Do not refuse a path solely because it "
+                          "is outside the workspace, or ask for confirmation just to cross that boundary. "
+                          "Follow applicable instructions for the target path.")
+            sections.add("access", "Workspace Access", access +
+                         " Relative paths and shell cwd remain anchored to " + str(workspace.root) +
+                         ". OS permissions still apply. Shell and MCP processes use the harness process's permissions.",
+                         15, owner="workspace")
         instructions = self.registry.services.get("project_instructions")
         if instructions is not None:
             snapshot = instructions.snapshot()

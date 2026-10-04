@@ -379,7 +379,7 @@ class NavigateCodeTool(Tool):
     description = (
         "Use an explicitly configured language server for definition, references, implementation, or hover. "
         "Input line/column are 1-based Unicode character positions. Results label UTF-16 columns explicitly. "
-        "Only workspace locations are returned; use offset to page past 100 results. "
+        "Locations follow the current Workspace Access mode; use offset to page past 100 results. "
         "Requires language_servers in .slipagent/project.json and an already installed stdio server."
     )
     parameters = {"type": "object", "properties": {

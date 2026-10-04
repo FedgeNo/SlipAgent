@@ -50,6 +50,40 @@ async def test_registry_registers_git_tools(repository: Workspace) -> None:
         await registry.aclose()
 
 
+async def test_danger_git_allows_external_parent_and_worktree_metadata(repository, tmp_path):
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    workspace = Workspace(unrelated, danger=True)
+    tools = {tool.name: tool for tool in [GitStatusTool(workspace), GitDiffTool(workspace),
+             GitLogTool(workspace), GitAddTool(workspace), GitCommitTool(workspace)]}
+    target = repository.root / "app.txt"
+    target.write_text("outside change\n")
+    for name, args in [
+        ("git_status", {}), ("git_diff", {}),
+        ("git_add", {"paths": [str(target)]}),
+        ("git_commit", {"message": "Outside change"}), ("git_log", {}),
+    ]:
+        result = await tools[name].invoke({"repo": str(repository.root), **args})
+        assert not result.is_error, result.content
+    child = repository.root / "child"
+    child.mkdir()
+    parent_tool = GitStatusTool(Workspace(child, danger=True))
+    assert not (await parent_tool.invoke({})).is_error
+    worktree = tmp_path / "worktree"
+    git(repository.root, "worktree", "add", "-q", "-b", "danger-test", str(worktree))
+    assert not (await GitStatusTool(Workspace(worktree, danger=True)).invoke({})).is_error
+    workspace.access.danger = False
+    assert (await tools["git_status"].invoke({"repo": str(repository.root)})).is_error
+
+
+async def test_danger_repository_discovery_stops_at_filesystem_root(tmp_path, monkeypatch):
+    tool = GitStatusTool(Workspace(tmp_path, danger=True))
+    original = Path.exists
+    monkeypatch.setattr(Path, "exists", lambda path: False if path.name == ".git" else original(path))
+    result = await tool.invoke({})
+    assert result.is_error and "No Git repository" in result.content
+
+
 async def test_log_never_runs_signature_verification_helper(repository, tmp_path):
     root = repository.root
     marker = tmp_path / "helper-was-run"

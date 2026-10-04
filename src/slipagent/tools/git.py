@@ -19,12 +19,12 @@ from .shell import DEFAULT_TIMEOUT, MAX_OUTPUT_CHARS, MAX_TIMEOUT, capture_proce
 
 REPO_PARAMETER = {
     "type": "string",
-    "description": "Repository directory relative to the workspace (default '.').",
+    "description": "Repository directory, workspace-relative or absolute (default '.'); follows Workspace Access mode.",
 }
 PATHS_PARAMETER = {
     "type": "array",
     "items": {"type": "string"},
-    "description": "Literal workspace-relative file/directory paths; use ['.'] for all files.",
+    "description": "Literal workspace-relative or absolute file/directory paths; use ['.'] for all workspace files. Paths must belong to the selected repository.",
 }
 TIMEOUT_PARAMETER = {
     "type": "number",
@@ -72,10 +72,10 @@ class GitTool(Tool):
         if not root.is_dir():
             raise WorkspaceError(f"Repository directory does not exist: {repo!r}")
         while not (root / ".git").exists():
-            if root == self.workspace.root:
+            if root == root.parent or (not self.workspace.access.danger and root == self.workspace.root):
                 raise WorkspaceError(
-                    "No Git repository inside the workspace at this path. "
-                    "Parent repositories and bare repositories are not supported."
+                    "No Git repository found within the allowed directories at this path. "
+                    "Parent repositories require danger mode; bare repositories are not supported."
                 )
             root = root.parent
         marker = self.workspace.resolve(root / ".git")
@@ -202,7 +202,7 @@ class GitTool(Tool):
 
 class GitStatusTool(GitTool):
     name = "git_status"
-    description = "Show branch and short Git status for a repository inside the workspace."
+    description = "Show branch and short Git status for a repository allowed by the current Workspace Access mode."
     parameters = {
         "type": "object",
         "properties": {"repo": REPO_PARAMETER, "timeout": TIMEOUT_PARAMETER},
@@ -220,7 +220,7 @@ class GitDiffTool(GitTool):
     name = "git_diff"
     description = (
         "Show unstaged changes, or staged changes with staged=true. Paths are literal "
-        "and workspace-relative. External diff/text conversion helpers are disabled."
+        "and workspace-relative or absolute. External diff/text conversion helpers are disabled."
     )
     parameters = {
         "type": "object",
@@ -247,7 +247,7 @@ class GitDiffTool(GitTool):
 
 class GitLogTool(GitTool):
     name = "git_log"
-    description = "Show recent commits in a workspace repository, newest first (default 10, maximum 100)."
+    description = "Show recent commits in a repository allowed by Workspace Access mode, newest first (default 10, maximum 100)."
     parameters = {
         "type": "object",
         "properties": {
@@ -269,9 +269,9 @@ class GitLogTool(GitTool):
 class GitAddTool(GitTool):
     name = "git_add"
     description = (
-        "Stage literal workspace-relative paths, including deletions; paths=['.'] "
-        "stages all in the workspace-root repository. Rejects escaping symlinks and "
-        "active clean/process filters instead of running external helpers."
+        "Stage literal workspace-relative or absolute paths, including deletions; paths=['.'] "
+        "stages all in the workspace-root repository. Paths follow the current Workspace Access mode. "
+        "Active clean/process filters are rejected instead of running external helpers."
     )
     parameters = {
         "type": "object",

@@ -184,7 +184,8 @@ class GlobTool(Tool):
     name = "glob"
     description = (
         "Find files and directories by name pattern. Patterns are matched "
-        "against the workspace-relative path, so '*.py', 'src/**/*.ts', and "
+        "against the workspace-relative path (or relative to the searched directory "
+        "for external paths in danger mode), so '*.py', 'src/**/*.ts', and "
         "'**/test_*.py' all work. Directories are shown with a trailing '/'."
     )
     parameters = {
@@ -226,12 +227,15 @@ class GlobTool(Tool):
         if not base.exists():
             return ToolResult.error(f"Path not found: {self.workspace.relative(base)}")
 
-        # Patterns are matched against workspace-relative paths so the model
-        # gets stable, root-anchored results back.
+        # External searches in danger mode match relative to the requested
+        # directory, while their displayed results remain absolute and reusable.
+        match_root = self.workspace.root
+        if not self.workspace.contains(base):
+            match_root = base if base.is_dir() else base.parent
         matches = [
             (entry, is_dir)
             for entry, is_dir in self.workspace.iter_entries(base)
-            if _matches_glob(self.workspace.relative(entry), pattern)
+            if _matches_glob(entry.relative_to(match_root).as_posix(), pattern)
         ]
         matches.sort(key=lambda pair: self.workspace.relative(pair[0]))
 

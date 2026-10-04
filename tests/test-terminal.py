@@ -17,7 +17,7 @@ from prompt_toolkit.output.vt100 import Vt100_Output
 
 from slipagent.terminal import TerminalUI
 from slipagent.agent import AgentEvent
-from slipagent.cli import BANNER, HELP, Renderer, Style
+from slipagent.cli import BANNER, HELP, Renderer, Style, _status_bar, _danger_suffix
 from slipagent.tools.base import ToolResult
 from slipagent.types import Message, ToolCall, Usage
 
@@ -269,6 +269,43 @@ async def test_menu_uses_footer_and_scrolls_selection_through_refresh_and_resize
             ui.close()
             if choice is not None:
                 await choice
+            await task
+
+
+async def test_danger_status_suffix_is_red_last_and_survives_resize(display, tmp_path):
+    from types import SimpleNamespace
+    from slipagent.workspace import Workspace
+    sink, size, output, screen, snapshot = display
+    session = SimpleNamespace(workspace=Workspace(tmp_path), agent=SimpleNamespace(model="stub/model"), free_calls=42)
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda columns: _status_bar(session, Style(True), columns=columns), sink,
+                        input=pipe, output=output, status_suffix=lambda: _danger_suffix(session, Style(True)))
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: "free: 42" in snapshot()[23])
+            assert "Danger Mode" not in snapshot()[23]
+            session.workspace.access.danger = True
+            ui.app.invalidate()
+            await wait_until(lambda: snapshot()[23].rstrip().endswith(" | Danger Mode"))
+            assert snapshot()[23].index("free: 42") < snapshot()[23].index("Danger Mode")
+            start = snapshot()[23].index("Danger Mode")
+            assert all(screen.buffer[23][column].fg == "ff0000" for column in range(start, start + len("Danger Mode")))
+            choice = asyncio.create_task(ui.choose("Commands", [("one", "One")]))
+            await wait_until(lambda: "Commands" in snapshot()[18])
+            assert snapshot()[23].rstrip().endswith(" | Danger Mode")
+            assert "Enter = select" in snapshot()[23]
+            pipe.send_text("\x1b")
+            assert await asyncio.wait_for(choice, 3) is None
+            await wait_until(lambda: "Ready" in snapshot()[18])
+            size[0] = Size(rows=24, columns=35)
+            screen.resize(lines=24, columns=35)
+            ui.app._on_resize()
+            await wait_until(lambda: snapshot()[23].rstrip().endswith(" | Danger Mode") and "free: 42" in snapshot()[23])
+            session.workspace.access.danger = False
+            ui.app.invalidate()
+            await wait_until(lambda: "Danger Mode" not in snapshot()[23])
+        finally:
+            ui.close()
             await task
 
 
@@ -695,7 +732,7 @@ async def test_input_word_wrap_preserves_editing_submission_and_resize(display) 
 def test_startup_and_help_list_all_commands_with_requested_spacing():
     banner = BANNER.format(model="test/model", workspace="project", tools="read_file", mcp="")
     for command in [
-        "/help", "/menu", "/tools", "/model", "/models", "/key", "/cost", "/mcp",
+        "/help", "/menu", "/danger", "/tools", "/model", "/models", "/key", "/cost", "/mcp",
         "/rename", "/reset", "/reload", "/generations", "/init", "/stop", "/exit", "/quit",
     ]:
         assert command in banner

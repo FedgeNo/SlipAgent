@@ -233,7 +233,8 @@ async def test_close_cancels_pending_summaries_and_releases_jobs():
 async def test_fast_summary_cannot_hide_unseen_tool_results_at_tiny_budget():
     result = "ACTUAL RESULT " * 5000
     client = Client([reply("Read", [ToolCall("read", "record", {"value": "A"})]), reply("Done")])
-    agent = Agent(client, ToolRegistry([RecordingTool(result)]), "test", context_tokens=1000)
+    agent = Agent(client, ToolRegistry([RecordingTool(result)]), "test")
+    agent._context_lengths[agent.model] = 9000
     await agent.run("Inspect")
     sent = "\n".join(message.content or "" for message in client.main_requests[1]["messages"])
     assert "Actual Agent/Tool Transcript (Excerpt)" in sent

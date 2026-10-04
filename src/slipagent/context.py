@@ -1,7 +1,7 @@
 """Keep originals in session memory; compact only the view sent to the model.
 
 A post stores its active prompt, assistant response, and complete tool batch.
-Recent posts use those originals; older posts use one background summary each.
+Recent posts use those originals; older posts use summaries only if smaller.
 Active task state has its own pinned working record. Compatibility readers
 below support records from sessions using earlier inline-memory formats.
 """
@@ -23,7 +23,12 @@ from .protocol import COMPRESSED_FIELDS, ResponseRecord, response_format
 from .task import TaskMemory
 
 DEFAULT_CONTEXT_LENGTH = 1_000_000
+MIN_FULL_POSTS = 5
 MAX_CONTEXT_SUMMARIES = 100
+COMPRESSED_HISTORY_HEADING = (
+    "## Earlier Conversation (Compressed)\n\n"
+    "Compressed conversation history. Originals are available with recall_history.\n\n"
+)
 SUMMARY_MAX_CHARS = 6_000
 SUMMARY_START = "<slipagent_context>"
 SUMMARY_END = "</slipagent_context>"
@@ -58,10 +63,13 @@ RECORD_INSTRUCTIONS = """\
 ## Reading Conversation Memory
 Each numbered post is one agent response and its complete tool batch, together
 with the active user prompt. Recent posts contain their full prompt, response,
-tool calls and tool results. Older posts contain ONLY a whole-turn summary.
-The normal full window is 50 posts (configurable); it shrinks by whole posts
-when needed to fit the context budget. At most the newest 100 older summaries
-are included. Older summaries may be omitted when the request is still too big.
+tool calls and tool results. Each older post contains either its whole-turn
+summary or its full original, whichever costs fewer tokens; never both.
+The normal full window is 50 posts (configurable, with a minimum of 5).
+The selected model's context allowance determines what fits. Older history is
+omitted before reducing the recent full window, oldest first. Even the latest
+5 posts may be reduced if they cannot fit. At most the newest 100 older records
+are included. Omitted records can return on later requests when space permits.
 The harness creates summaries separately in the background. Do NOT write
 compressed fields in your working responses. A pending or failed summary is
 labelled as such: use recall_history to retrieve any missing information.
@@ -597,7 +605,7 @@ class ConversationHistory:
 
     async def view(
         self, messages: list[Message], specs: list[ToolSpec], *,
-        keep_posts: int, full_tokens: int, context_length: int,
+        keep_posts: int, context_length: int,
         max_output: int, summarize: Summarizer | None = None,
         extra_instructions: str = "",
         native_tools: bool = False,
@@ -636,11 +644,11 @@ class ConversationHistory:
         tail_tokens = tokens(tail)
         if tail_tokens + 256 >= available:
             raise ContextError("Current input and instructions exceed the context budget. Shorten the input or reference a file; conversation history is preserved.")
-        boundary = max(0, len(self.posts) - keep_posts)
+        boundary = max(0, len(self.posts) - max(MIN_FULL_POSTS, keep_posts))
         initial_boundary = boundary
         memory_start = max(0, boundary - MAX_CONTEXT_SUMMARIES)
-        # Old originals may be large and remain archived indefinitely. Only
-        # materialize the candidate full window; earlier posts need summaries.
+        # Older originals remain archived indefinitely. Materialize only the
+        # recent window and the bounded older candidates needed by this request.
         parts = [post.context_messages() for post in self.posts[boundary:]]
         sizes = [tokens(part) for part in parts]
         pending = bool(self.posts and self.posts[-1].has_results and not (
@@ -648,27 +656,52 @@ class ConversationHistory:
         # A continuation still needs its active user prompt even at tiny budgets.
         required_last = pending or bool(self.posts and not tail)
         max_boundary = len(self.posts) - int(required_last)
-        # The recent-window cap is independent of older summary size. Shrink
-        # whole posts first so doing so does not discard useful older summaries.
-        while boundary < max_boundary and sum(sizes[boundary - initial_boundary:]) + tail_tokens > full_tokens:
-            boundary += 1
+        older_parts: dict[int, str | list[Message]] = {}
+
+        def older_context(start: int, end: int) -> list[Message]:
+            result: list[Message] = []
+            summaries: list[str] = []
+
+            def flush_summaries() -> None:
+                if summaries:
+                    result.append(Message.assistant(COMPRESSED_HISTORY_HEADING + "\n\n".join(summaries)))
+                    summaries.clear()
+
+            for index in range(start, end):
+                if index not in older_parts:
+                    post = self.posts[index]
+                    original = parts[index - initial_boundary] if index >= initial_boundary else post.context_messages()
+                    summary = _headed_summary(post)
+                    compressed = [Message.assistant(COMPRESSED_HISTORY_HEADING + summary)]
+                    # Measure the same projection sent to this provider, including
+                    # headings, tool arguments and message overhead. Ties retain
+                    # originals. Cache only within this view: summaries can finish
+                    # in the background and budgets can change on the next call.
+                    older_parts[index] = summary if tokens(compressed) < tokens(original) else original
+                selected = older_parts[index]
+                if isinstance(selected, str):
+                    summaries.append(selected)
+                else:
+                    flush_summaries()
+                    result.extend(selected)
+            flush_summaries()
+            return result
+
         while True:
             memory_start = max(memory_start, boundary - MAX_CONTEXT_SUMMARIES)
-            older = self.posts[memory_start:boundary]
-            compact = [Message.assistant(
-                "## Earlier Conversation (Compressed)\n\n"
-                "Compressed conversation history. Originals are available with recall_history.\n\n"
-                + "\n\n".join(_headed_summary(post) for post in older)
-            )] if older else []
+            older = older_context(memory_start, boundary)
             offset = boundary - initial_boundary
             full = [message for part in parts[offset:] for message in part]
             # Prompt retention is the harness's responsibility. Even when its
             # original post is compressed, supply its exact text and source ID.
-            prompt = self.task.prompt_supplement(full + tail)
-            budget = min(full_tokens, available - tokens(compact) - tokens(prompt))
+            prompt = self.task.prompt_supplement(older + full + tail)
+            budget = available - tokens(older) - tokens(prompt)
             if sum(sizes[offset:]) + tail_tokens <= budget:
-                return pinned + compact + prompt + full + tail
-            if older:
+                return pinned + older + prompt + full + tail
+            # Drop older records before shortening the full window. Start from
+            # the normal boundaries on every request so records return when a
+            # large turn ages out; omission never changes the stored history.
+            if memory_start < boundary:
                 memory_start += 1
                 continue
             if boundary < max_boundary:
@@ -678,8 +711,8 @@ class ConversationHistory:
                 excerpt = self.posts[-1].excerpt_context_messages(int((budget - tail_tokens) / token_scale))
                 if excerpt is not None:
                     prompt = self.task.prompt_supplement(excerpt + tail)
-                    if tokens(prompt + excerpt + tail) <= available - tokens(compact):
-                        return pinned + compact + prompt + excerpt + tail
+                    if tokens(prompt + excerpt + tail) <= available - tokens(older):
+                        return pinned + older + prompt + excerpt + tail
             raise ContextError("Current input and latest tool results exceed the context budget even without older history; originals and summaries are preserved.")
 
 

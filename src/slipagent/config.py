@@ -22,7 +22,6 @@ DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 # circles.
 DEFAULT_MAX_STEPS = 200
 DEFAULT_CONTEXT_POSTS = 50
-DEFAULT_CONTEXT_TOKENS = 200_000
 
 
 def save_private_text(path: Path, content: str) -> None:
@@ -157,15 +156,14 @@ class Config:
     temperature: float | None = None
     max_tokens: int | None = None
     context_posts: int = DEFAULT_CONTEXT_POSTS
-    context_tokens: int = DEFAULT_CONTEXT_TOKENS
 
     def __post_init__(self) -> None:
         if self.max_steps < 1:
             raise ConfigError("max_steps must be at least 1")
         if self.max_tokens is not None and self.max_tokens < 1:
             raise ConfigError("max_tokens must be at least 1")
-        if self.context_posts < 1 or self.context_tokens < 1:
-            raise ConfigError("context_posts and context_tokens must be at least 1")
+        if self.context_posts < 1:
+            raise ConfigError("context_posts must be at least 1")
         if self.temperature is not None and (not math.isfinite(self.temperature) or self.temperature < 0):
             raise ConfigError("temperature must be a finite non-negative number")
 
@@ -181,7 +179,6 @@ class Config:
         temperature: float | None = None,
         max_tokens: int | None = None,
         context_posts: int | None = None,
-        context_tokens: int | None = None,
         environ: dict[str, str] | None = None,
     ) -> Config:
         env = os.environ if environ is None else environ
@@ -208,7 +205,6 @@ class Config:
             temperature=temperature,
             max_tokens=max_tokens,
             context_posts=context_posts if context_posts is not None else DEFAULT_CONTEXT_POSTS,
-            context_tokens=context_tokens if context_tokens is not None else DEFAULT_CONTEXT_TOKENS,
         )
 
     def with_overrides(self, **changes: object) -> Config:

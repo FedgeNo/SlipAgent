@@ -18,7 +18,7 @@ from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Literal
 
 from .openrouter import OpenRouterClient
-from .config import DEFAULT_MAX_STEPS, DEFAULT_CONTEXT_POSTS, DEFAULT_CONTEXT_TOKENS
+from .config import DEFAULT_MAX_STEPS, DEFAULT_CONTEXT_POSTS
 from .context import (
     DEFAULT_CONTEXT_LENGTH,
     ContextError, ContextStopped, ConversationHistory,
@@ -236,7 +236,6 @@ class Agent:
     temperature: float | None = None
     max_tokens: int | None = None
     context_posts: int = DEFAULT_CONTEXT_POSTS
-    context_tokens: int = DEFAULT_CONTEXT_TOKENS
     system_prompt: str | None = None
     on_event: EventHandler | None = None
     on_boundary: Callable[[], Awaitable[None]] | None = None
@@ -255,8 +254,8 @@ class Agent:
     _summary_progress: dict[str, tuple[int, str]] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
-        if self.context_posts < 1 or self.context_tokens < 1:
-            raise ValueError("context_posts and context_tokens must be at least 1")
+        if self.context_posts < 1:
+            raise ValueError("context_posts must be at least 1")
         if self.system_prompt is not None:
             self.messages.append(Message.system(self.system_prompt))
         self.registry.register(RecallHistoryTool(self.history))
@@ -489,7 +488,7 @@ class Agent:
             repository_map = await self.registry.services["repository_map"].snapshot(query, min(8000, int(length * budget_fraction * .03)))
         view_options: dict[str, Any] = dict(
             keep_posts=self.context_posts,
-            full_tokens=max(1, int(self.context_tokens * budget_fraction)), context_length=int(length * budget_fraction),
+            context_length=int(length * budget_fraction),
             max_output=self.max_tokens or min(8192, max(256, length // 8)),
             native_tools=native_tools,
             text_tool_history=capabilities is not None and not native_tools,

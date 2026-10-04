@@ -512,7 +512,6 @@ async def build_session(args: argparse.Namespace) -> Session:
         temperature=args.temperature,
         max_tokens=args.max_tokens,
         context_posts=args.context_posts,
-        context_tokens=args.context_tokens,
     )
     try:
         workspace = Workspace(config.workspace, danger=getattr(args, "danger", False))
@@ -546,7 +545,6 @@ async def build_session(args: argparse.Namespace) -> Session:
             temperature=config.temperature,
             max_tokens=config.max_tokens,
             context_posts=config.context_posts,
-            context_tokens=config.context_tokens,
             system_prompt=build_system_prompt(str(workspace.root)),
             on_event=lambda event: renderer.handle(event),
         )
@@ -1754,9 +1752,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-tokens", type=int, default=None,
                         help="Cap on completion tokens per response.")
     parser.add_argument("--context-posts", type=int, default=None,
-                        help="Recent model calls supplied in full (default: 50).")
-    parser.add_argument("--context-tokens", type=int, default=None,
-                        help="Estimated token budget for the recent window (default: 200000).")
+                        help="Recent model calls supplied in full (default: 50, minimum: 5 when context permits).")
     parser.add_argument("--python", default=None,
                         help="Project Python interpreter path, overriding .slipagent/project.json and venv discovery.")
     parser.add_argument("--api-key", help="OpenRouter API key (or set OPENROUTER_API_KEY).")

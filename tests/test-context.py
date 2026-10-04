@@ -41,27 +41,34 @@ def make_agent(responses, *, include_memory=True, **kwargs):
     return agent, client
 
 
+def add_intermediate_posts(agent):
+    """Age a record past the five-call minimum without extra inference fixtures."""
+    agent.extend([Message.assistant("Intermediate response") for _ in range(4)])
+
+
 async def test_keeps_recent_full_and_both_sides_in_older_summary():
+    first_answer = "FIRST FULL ANSWER " * 100
     agent, client = make_agent([
-        completion(reply(1, "FIRST FULL ANSWER", "User asked FIRST FULL QUESTION; model answered first.")),
+        completion(first_answer),
         completion(reply(2, "SECOND FULL ANSWER", "User asked second; model answered second.")),
         completion(reply(3, "THIRD FULL ANSWER", "User asked third; model answered third.")),
     ], context_posts=1)
     events = []
     agent.on_event = events.append
-    assert await agent.run("FIRST FULL QUESTION") == "FIRST FULL ANSWER"
+    assert (await agent.run("FIRST FULL QUESTION")).strip() == first_answer.strip()
+    add_intermediate_posts(agent)
     await agent.run("SECOND FULL QUESTION")
     await agent.run("THIRD FULL QUESTION")
     messages = client.calls[-1]["messages"]
     assert context_body(messages[0].content).startswith("Project instructions stay pinned.")
     assert agent.history.posts[0].summary in messages[1].content
-    assert not any(context_body(m.content) == "FIRST FULL ANSWER" for m in messages)
+    assert not any(context_body(m.content).strip() == first_answer.strip() for m in messages)
     assert any(context_body(m.content) == "SECOND FULL QUESTION" for m in messages)
     assert any(context_body(m.content).startswith("SECOND FULL ANSWER") for m in messages)
     assert context_body(messages[-1].content) == "THIRD FULL QUESTION"
     assert len(client.calls) == 3
     assert not any(SUMMARY_START in e.text for e in events)
-    assert agent.messages[2].content == "FIRST FULL ANSWER"
+    assert agent.messages[2].content.strip() == first_answer.strip()
     original = json.loads((await agent.registry.invoke("recall_history", {"post_id": 1})).content)
     assert "FIRST FULL QUESTION" in original["content"]
     assert "FIRST FULL ANSWER" in original["content"]
@@ -111,6 +118,7 @@ async def test_stopped_tool_post_rolls_with_tool_summary_without_summary_repair(
     agent.on_event = stop_after_tool
     assert await agent.run("read") == STOP_NOTICE
     agent.on_event = None
+    add_intermediate_posts(agent)
     await agent.run("next")
     await agent.run("next again")
     wire = "\n".join(m.content or "" for m in client.calls[-1]["messages"])
@@ -133,7 +141,7 @@ async def test_only_50_full_posts_and_100_older_summaries_are_supplied(total):
         post.summary = f"STORED_SUMMARY_{post.id:03d}"
         post.results_summarized = True
     messages.append(Message.user("current question"))
-    view = await history.view(messages, [], keep_posts=50, full_tokens=200000,
+    view = await history.view(messages, [], keep_posts=50,
                               context_length=1000000, max_output=8192)
     wire = "\n".join(message.content or "" for message in view)
     boundary = max(0, total - 50)
@@ -158,6 +166,7 @@ async def test_background_summary_contains_tool_findings_and_user_prompt():
     ], context_posts=1)
     await agent.run("read file")
     assert context_body(client.calls[1]["messages"][-1].content) == "EXACT TOOL RESULT"
+    add_intermediate_posts(agent)
     await agent.run("next")
     archived = client.calls[2]["messages"][1]
     assert "User: read file" in archived.content
@@ -174,7 +183,8 @@ async def test_over_budget_preserves_recent_tool_batch_without_extra_calls():
         completion(reply(1, "Read two.", "User asked read; two tools requested."), [
             ToolCall("a", "record", {"value": "one"}), ToolCall("b", "record", {"value": "two"})]),
         completion(reply(2, "Received excerpts.", "Model received bounded results.", "Two tools returned large payloads; only excerpts were visible.")),
-    ], context_tokens=1200)
+    ])
+    agent._context_lengths[agent.model] = 9000
     agent.registry.get("record").result = payload
     assert await agent.run("read") == "Received excerpts."
     assert len(client.calls) == 2
@@ -185,7 +195,7 @@ async def test_over_budget_preserves_recent_tool_batch_without_extra_calls():
     assert json.loads(agent.history.posts[0].messages[-1].content)["content"] == payload
 
 
-async def test_over_200000_shrinks_full_window_by_whole_posts():
+async def test_full_window_shrinks_by_whole_posts_at_model_limit():
     history = ConversationHistory()
     messages = [Message.system("pinned")]
     for index in range(51):
@@ -206,8 +216,8 @@ async def test_over_200000_shrinks_full_window_by_whole_posts():
     messages.append(Message.user("current request"))
     async def unused(source):
         pytest.fail("valid stored summaries should not require another call")
-    view = await history.view(messages, [], keep_posts=50, full_tokens=200000,
-                              context_length=1000000, max_output=8192, summarize=unused)
+    view = await history.view(messages, [], keep_posts=50,
+                              context_length=200000, max_output=8192, summarize=unused)
     wire = "\n".join(message.content or "" for message in view)
     assert [context_body(message.content) for message in view if message.role == "user"] == [
         *(f"FULL USER REQUEST {index}: preserve this exact wording λ" for index in range(2, 51)),
@@ -231,31 +241,32 @@ async def test_small_model_does_not_arbitrarily_halve_the_recent_budget():
     messages = [Message.user("original request"), Message.assistant(answer), Message.user("next")]
     history.sync(messages)
     history.posts[0].summary = "Short stored summary."
-    view = await history.view(messages, [], keep_posts=50, full_tokens=200000,
+    view = await history.view(messages, [], keep_posts=50,
                               context_length=262144, max_output=8192)
     assert any(context_body(message.content) == answer for message in view)
     assert not any("Short stored summary." in (message.content or "") for message in view)
 
 
-async def test_shrunk_window_uses_only_summaries_outside_its_boundary():
+async def test_older_window_uses_original_when_summary_is_larger():
     history = ConversationHistory()
     messages = [Message.user("first request"), Message.assistant("Short exact answer."),
                 Message.user("second request"), Message.assistant("LARGE SECOND ANSWER " * 1000),
                 Message.user("third request"), Message.assistant("Latest exact answer."),
+                *[Message.assistant("Intermediate response") for _ in range(4)],
                 Message.user("current request")]
     history.sync(messages)
     history.posts[0].summary = "INFLATED SUMMARY " * 300
     history.posts[1].summary = "Second answer compressed."
     history.posts[2].summary = "Latest answer compressed."
-    view = await history.view(messages, [], keep_posts=50, full_tokens=800,
+    view = await history.view(messages, [], keep_posts=5,
                               context_length=1000000, max_output=8192)
     wire = "\n".join(message.content or "" for message in view)
-    assert "Short exact answer." not in wire and "Latest exact answer." in wire
-    assert "INFLATED SUMMARY" in wire
+    assert "Short exact answer." in wire and "Latest exact answer." in wire
+    assert "INFLATED SUMMARY" not in wire
     assert "LARGE SECOND ANSWER" not in wire and "Second answer compressed." in wire
     assert "Latest answer compressed." not in wire
     assert [context_body(message.content) for message in view if message.role == "user"] == [
-        "third request", "current request",
+        "first request", *("third request" for _ in range(5)), "current request",
     ]
 
 
@@ -269,7 +280,7 @@ async def test_shrunk_window_has_whole_turn_summary_and_full_latest_turn():
     ])
     agent.registry.get("record").result = "FULL LARGE TOOL OUTPUT " * 1000
     await agent.run("Original exact request")
-    agent.context_tokens = 1200
+    agent._context_lengths[agent.model] = 9000
     await agent.run("Follow-up exact request")
     view = client.calls[-1]["messages"]
     wire = "\n".join(message.content or "" for message in view)
@@ -292,7 +303,7 @@ async def test_large_archived_reasoning_does_not_consume_context_headroom():
     answer.reasoning_details = [{"type": "reasoning.encrypted", "data": "OPAQUE " * 100000}]
     messages = [Message.user("Work"), answer, Message.tool_result("a", "ACTUAL RESULT"), Message.user("Continue")]
     history = ConversationHistory()
-    view = await history.view(messages, [], keep_posts=50, full_tokens=1000,
+    view = await history.view(messages, [], keep_posts=50,
                               context_length=16000, max_output=1000)
     assert any(context_body(m.content) == "ACTUAL ANSWER" and m.tool_calls for m in view)
     assert any(context_body(m.content) == "ACTUAL RESULT" for m in view)
@@ -309,7 +320,7 @@ async def test_under_budget_keeps_entire_recent_window_in_full():
                 Message.tool_result("c", "full tool result"), Message.user("next")]
     async def unused(source):
         pytest.fail("no compression should run below the budget")
-    view = await history.view(messages, [], keep_posts=50, full_tokens=200000,
+    view = await history.view(messages, [], keep_posts=50,
                               context_length=1000000, max_output=8192, summarize=unused)
     assert [context_body(m.content) for m in view if m.role == "user"] == ["first question", "second question", "next"]
     assert any(context_body(m.content).startswith("first answer") for m in view)
@@ -322,6 +333,7 @@ async def test_only_posts_outside_window_use_summaries():
     messages = [Message.user("oldest question"), Message.assistant("OLDEST FULL RESPONSE " * 1000),
                 Message.user("middle question"), Message.assistant("MIDDLE FULL RESPONSE " * 50),
                 Message.user("latest question"), Message.assistant("LATEST FULL RESPONSE " * 50),
+                *[Message.assistant("Intermediate response") for _ in range(3)],
                 Message.user("next question")]
     history.sync(messages)
     for post in history.posts:
@@ -329,7 +341,7 @@ async def test_only_posts_outside_window_use_summaries():
         post.results_summarized = True
     async def unused(source):
         pytest.fail("the oldest stored summary is available")
-    view = await history.view(messages, [], keep_posts=2, full_tokens=2000,
+    view = await history.view(messages, [], keep_posts=2,
                               context_length=1000000, max_output=8192, summarize=unused)
     wire = "\n".join(m.content or "" for m in view)
     assert "OLDEST FULL RESPONSE" not in wire
@@ -337,7 +349,7 @@ async def test_only_posts_outside_window_use_summaries():
     assert "MIDDLE FULL RESPONSE " * 50 in wire
     assert "LATEST FULL RESPONSE " * 50 in wire
     assert [context_body(m.content) for m in view if m.role == "user"] == [
-        "middle question", "latest question", "next question",
+        "middle question", *("latest question" for _ in range(4)), "next question",
     ]
     assert history.posts[0].summary in wire
     assert history.posts[1].summary not in wire
@@ -350,9 +362,10 @@ async def test_missing_archived_summary_is_omitted_without_a_repair_call():
                 Message.assistant("FULL RESPONSE", [ToolCall("c", "record", {"value": "v"})]),
                 Message.tool_result("c", "HUGE TOOL OUTPUT " * 1000), Message.user("current request")]
     messages.insert(-1, Message.assistant("next response"))
+    messages[-1:-1] = [Message.assistant("Intermediate response") for _ in range(4)]
     async def unused(source):
         pytest.fail("missing stored summaries must not trigger additional calls")
-    view = await history.view(messages, [], keep_posts=1, full_tokens=1000,
+    view = await history.view(messages, [], keep_posts=1,
                               context_length=1000000, max_output=8192, summarize=unused)
     assert any(context_body(message.content) == "current request" for message in view)
     assert not any("HUGE TOOL OUTPUT" in (message.content or "") for message in view)
@@ -363,13 +376,13 @@ async def test_missing_archived_summary_is_omitted_without_a_repair_call():
 
 async def test_large_old_user_requests_reduce_the_recent_window_without_compression_calls():
     history = ConversationHistory()
-    first, second = "FIRST USER REQUEST " * 100, "SECOND USER REQUEST " * 100
+    first, second = "FIRST USER REQUEST " * 1000, "SECOND USER REQUEST " * 100
     messages = [Message.user(first), Message.assistant("first answer"),
                 Message.user(second), Message.assistant("second answer")]
     async def unused(source):
         pytest.fail("compressing responses cannot make the user requests fit")
-    view = await history.view(messages, [], keep_posts=50, full_tokens=1000,
-                              context_length=1000000, max_output=8192, summarize=unused)
+    view = await history.view(messages, [], keep_posts=50,
+                              context_length=9000, max_output=1000, summarize=unused)
     assert [context_body(message.content) for message in view if message.role == "user"] == [second]
     assert any(context_body(message.content) == "second answer" for message in view)
     assert history.posts[0].messages[0].content == first
@@ -380,8 +393,8 @@ async def test_reduced_history_keeps_active_request_and_complete_latest_tool_bat
     history = ConversationHistory()
     request, correction = "Inspect the project environment.", "Use the existing .venv."
     messages = [Message.user("OLD USER REQUEST " * 1000), Message.assistant("Old answer."),
-                Message.user(request), Message.user(correction), Message.assistant("OLD RESPONSE " * 300),
-                Message.assistant("INTERMEDIATE RESPONSE " * 300),
+                Message.user(request), Message.user(correction), Message.assistant("OLD RESPONSE " * 3000),
+                Message.assistant("INTERMEDIATE RESPONSE " * 3000),
                 Message.assistant("Checking.", [ToolCall("a", "record", {"value": "one"}),
                                                ToolCall("b", "record", {"value": "two"})]),
                 Message.tool_result("a", "EXACT FIRST RESULT"),
@@ -393,7 +406,7 @@ async def test_reduced_history_keeps_active_request_and_complete_latest_tool_bat
         post.previous_tool_responses_compressed = ""
         post.results_summarized = not post.has_results
     originals = [post.full_text() for post in history.posts]
-    view = await history.view(messages, [], keep_posts=50, full_tokens=500,
+    view = await history.view(messages, [], keep_posts=50,
                               context_length=9000, max_output=1000)
     assert [context_body(message.content) for message in view if message.role == "user"] == [request + "\n" + correction]
     assert [(message.tool_call_id, context_body(message.content)) for message in view if message.role == "tool"] == [
@@ -408,11 +421,11 @@ async def test_reduced_history_keeps_active_request_and_complete_latest_tool_bat
 
 async def test_history_can_be_omitted_entirely_if_even_its_summaries_are_too_large():
     history = ConversationHistory()
-    messages = [Message.user("old request"), Message.assistant("OLD RESPONSE " * 300),
+    messages = [Message.user("old request"), Message.assistant("OLD RESPONSE " * 3000),
                 Message.user("latest exact request")]
     history.sync(messages)
     history.posts[0].summary = "INFLATED SUMMARY " * 2000
-    view = await history.view(messages, [], keep_posts=50, full_tokens=100,
+    view = await history.view(messages, [], keep_posts=50,
                               context_length=8000, max_output=1000)
     assert [context_body(message.content) for message in view if message.role != "system"] == ["latest exact request"]
     assert "OLD RESPONSE" in (await RecallHistoryTool(history).invoke({"post_id": 1})).content
@@ -420,17 +433,18 @@ async def test_history_can_be_omitted_entirely_if_even_its_summaries_are_too_lar
 
 async def test_background_summaries_have_separate_requests_and_accounting():
     agent, client = make_agent([
-        completion(reply(1, "Original answer.", "User asked original question; model gave original answer.")),
+        completion("Original answer. " * 100),
         completion(reply(2, "Second answer.", "User asked second; model replied.")),
         completion(reply(3, "Third answer.", "User asked third; model replied.")),
     ], context_posts=1)
     await agent.run("original question")
+    add_intermediate_posts(agent)
     await agent.run("second question")
     assert len(client.calls) == 2
     await agent.run("third question")
     assert len(client.calls) == 3
     assert agent.history.posts[0].summary in client.calls[2]["messages"][1].content
-    assert not any(context_body(m.content) == "Original answer." for m in client.calls[2]["messages"])
+    assert not any(context_body(m.content).strip() == ("Original answer. " * 100).strip() for m in client.calls[2]["messages"])
     assert len(client.summary_calls) == 3
     assert agent.usage.total_tokens == 45
     assert agent.total_cost == pytest.approx(.03)
@@ -752,7 +766,7 @@ async def test_stored_summaries_over_budget_preserve_originals_without_extra_cal
     history = ConversationHistory()
     messages = [Message.system("pinned instructions")]
     for i in range(20):
-        messages.extend([Message.user(f"question {i}"), Message.assistant(f"answer {i}")])
+        messages.extend([Message.user(f"question {i}"), Message.assistant(f"answer {i} " * 300)])
     history.sync(messages)
     for post in history.posts:
         post.summary = f"User asked question {post.id}; model answered. " + "detail " * 150
@@ -761,12 +775,12 @@ async def test_stored_summaries_over_budget_preserve_originals_without_extra_cal
     summaries = [post.summary for post in history.posts]
     async def unused(source):
         pytest.fail("stored summaries must not trigger an overview request")
-    view = await history.view(messages, [], keep_posts=1, full_tokens=200000,
-                              context_length=9000, max_output=1000, summarize=unused)
+    view = await history.view(messages, [], keep_posts=1,
+                              context_length=14000, max_output=1000, summarize=unused)
     wire = "\n".join(message.content or "" for message in view)
     assert "Post 1:" not in wire
-    assert "Post 19:" in wire
-    assert any(context_body(message.content) == "answer 19" for message in view)
+    assert "Post 15:" in wire
+    assert any(context_body(message.content) == "answer 19 " * 300 for message in view)
     assert any(context_body(message.content) == "next" for message in view)
     assert [post.summary for post in history.posts] == summaries
     assert len(history.posts) == 20
@@ -780,7 +794,7 @@ async def test_current_input_never_silently_truncates():
     async def unused(source):
         pytest.fail("should not spend calls summarizing when the current input cannot fit")
     with pytest.raises(ContextError, match="Shorten the input"):
-        await history.view([Message.user(question)], [], keep_posts=50, full_tokens=200000,
+        await history.view([Message.user(question)], [], keep_posts=50,
                            context_length=9000, max_output=1000, summarize=unused)
     assert not history.posts
 
@@ -897,7 +911,7 @@ async def test_memory_prompt_explains_background_summaries_and_retrieval(has_pre
     if has_previous_results:
         messages.extend([Message.assistant("Reading.", [ToolCall("c", "read_file", {"path": "README.md"})]),
                          Message.tool_result("c", "File contents.")])
-    view = await ConversationHistory().view(messages, [], keep_posts=50, full_tokens=200000,
+    view = await ConversationHistory().view(messages, [], keep_posts=50,
                                             context_length=1000000, max_output=8192)
     system = view[0].content
     assert "ordinary plain text is allowed" in system
@@ -925,7 +939,7 @@ async def test_catalog_context_length_limits_full_history_and_is_cached():
         response["choices"][0]["message"] = structured_message(response["choices"][0]["message"], requests[-1]["messages"], include_memory=False)
         return httpx.Response(200, json=response)
     async with OpenRouterClient(api_key="test", transport=httpx.MockTransport(respond)) as client:
-        agent = Agent(client=client, registry=ToolRegistry(), model="small/model", context_tokens=200000)
+        agent = Agent(client=client, registry=ToolRegistry(), model="small/model")
         await agent.run("original question")
         assert await agent.run("next question") == "next"
     assert len(catalog_calls) == 1
@@ -946,19 +960,22 @@ def test_real_cli_hides_memory_rolls_window_and_recalls_originals(tmp_path):
     third = tool_step("recall_history", {"post_id": 1})
     third["choices"][0]["message"]["content"] = reply(3, "Checking the original record.", "User asked inspect and report; model requested history post 1.",
                                                         "User asked inspect and report; model listed the directory and found app.py.")
-    with StubOpenRouter([first, second, third, text_step(reply(4, "Inspection complete.", "User asked inspect and report; model reported completion.",
+    for index in range(4):
+        (tmp_path / f"directory-{index}").mkdir()
+    intermediate = [tool_step("list_dir", {"path": f"directory-{index}"}) for index in range(4)]
+    with StubOpenRouter([first, *intermediate, second, third, text_step(reply(8, "Inspection complete.", "User asked inspect and report; model reported completion.",
                                                                "User asked inspect and report; model recalled exact original input, response and file content."))]) as stub:
-        result = run_cli("-p", "inspect and report", "--context-posts", "1", "--context-tokens", "50000",
+        result = run_cli("-p", "inspect and report", "--context-posts", "5",
                          "--base-url", stub.base_url, "--model", "stub/one", cwd=tmp_path)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "Inspection complete."
     assert SUMMARY_START not in result.stdout + result.stderr
     assert "read_file(" in result.stderr
-    assert len(stub.requests) == 4
-    third_messages = stub.requests[2]["messages"]
+    assert len(stub.requests) == 8
+    third_messages = stub.requests[6]["messages"]
     assert "User: inspect and report" in third_messages[1]["content"]
     assert not any(call["function"]["name"] == "read_file" for message in third_messages for call in message.get("tool_calls", []))
-    recalled = stub.requests[3]["messages"][-1]
+    recalled = stub.requests[7]["messages"][-1]
     assert recalled["role"] == "tool"
     record = json.loads(json.loads(context_body(recalled["content"]))["content"])
     assert record["prompt"] == "inspect and report"
@@ -966,14 +983,14 @@ def test_real_cli_hides_memory_rolls_window_and_recalls_originals(tmp_path):
     assert "EXACT ORIGINAL FILE CONTENT" in record["tool_results"][-1]["content"]
 
 
-def test_config_and_cli_expose_window_controls():
+def test_config_and_cli_expose_post_window_without_separate_token_cap():
     config = Config.from_env(environ={"OPENROUTER_API_KEY": "test"})
-    assert config.context_posts == 50 and config.context_tokens == 200000
-    args = build_parser().parse_args(["--context-posts", "12", "--context-tokens", "50000"])
+    assert config.context_posts == 50
+    assert not hasattr(config, "context_tokens")
+    args = build_parser().parse_args(["--context-posts", "12"])
     config = Config.from_env(environ={"OPENROUTER_API_KEY": "test"},
-                             context_posts=args.context_posts, context_tokens=args.context_tokens)
-    assert config.context_posts == 12 and config.context_tokens == 50000
+                             context_posts=args.context_posts)
+    assert config.context_posts == 12
     with pytest.raises(ConfigError):
         Config.from_env(environ={"OPENROUTER_API_KEY": "test"}, context_posts=0)
-    with pytest.raises(ConfigError):
-        Config.from_env(environ={"OPENROUTER_API_KEY": "test"}, context_tokens=-1)
+    assert "--context-tokens" not in build_parser().format_help()

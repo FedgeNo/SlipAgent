@@ -101,7 +101,8 @@ async def test_goal_and_constraints_survive_beyond_full_and_summary_windows():
     assert agent.history.task.source_revision == 153
     assert agent.history.task.sources[1] == [original]
     assert agent.history.posts[0].task_record["goal"] == "Implement inventory support"
-    assert len(re.findall(r"Conversation Record \(Compressed\)", wire)) == 100
+    # These short replies are smaller than their summaries and stay original.
+    assert len(re.findall(r"— Agent Response \(Full\)", wire)) == 150
     agent.history.task.record["goal"] = "Later working state"
     assert agent.history.posts[-1].task_record["goal"] == "Implement inventory support"
 
@@ -127,7 +128,7 @@ async def test_new_prompt_replaces_active_prompt_without_forcing_old_source_reca
         assert "Request only recall_history" not in wire
 
 
-@pytest.mark.parametrize("window", [1, 50])
+@pytest.mark.parametrize("window", [5, 50])
 async def test_current_prompt_and_its_source_survive_compression_without_task_updates(window):
     text = "ORIGINAL USER PROMPT λ\nCONSTRAINT " * 600
     tool = RecordingTool()
@@ -161,15 +162,16 @@ async def test_legacy_task_revision_is_owned_by_harness(include_revision):
 
 async def test_context_supplies_retained_prompt_when_legacy_full_post_has_no_copy():
     prompt = "ORIGINAL PROMPT\nUse the local environment."
-    messages = [Message.user(prompt), Message.assistant("First answer"), Message.assistant("Later answer")]
+    messages = [Message.user(prompt), Message.assistant("First answer " * 1000),
+                *[Message.assistant("Later answer") for _ in range(5)]]
     history = ConversationHistory()
     history.sync(messages)
     history.posts[0].summary = "Old call summary without original wording."
     # Existing sessions can contain older records without TurnPost.user_prompt.
-    post = history.posts[-1]
-    history.posts[-1] = HistoryPost(post.id, post.request, post.messages)
+    for index, post in enumerate(history.posts[1:], 1):
+        history.posts[index] = HistoryPost(post.id, post.request, post.messages)
     originals = [message.to_api() for message in messages]
-    view = await history.view(messages, [], keep_posts=1, full_tokens=1000, context_length=9000, max_output=1000)
+    view = await history.view(messages, [], keep_posts=1, context_length=9000, max_output=1000)
     supplied = [message for message in view if message.role == "user"]
     assert len(supplied) == 1
     assert supplied[0].content == "## Current User Request — Post 1 (Full)\n\n" + prompt

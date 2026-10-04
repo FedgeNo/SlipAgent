@@ -61,8 +61,8 @@ async def test_provider_overflow_retries_smaller_history_without_losing_original
             return httpx.Response(400, json={"error": {"message": "context_length_exceeded"}})
         return router.handle(request)
     async with OpenRouterClient("test", transport=httpx.MockTransport(handle)) as client:
-        agent = Agent(client, ToolRegistry(), "test/model", context_tokens=30000)
-        originals = [m for i in range(9) for m in (Message.user(f"old {i}"), Message.assistant(str(i) * 9000))]
+        agent = Agent(client, ToolRegistry(), "test/model")
+        originals = [m for i in range(9) for m in (Message.user(f"old {i}"), Message.assistant(str(i) * 240000))]
         agent.extend(originals)
         assert await agent.run("current request") == "Done"
         await agent.wait_for_compaction()

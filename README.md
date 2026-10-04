@@ -755,16 +755,24 @@ Each accepted model response forms one numbered turn: its active user prompt,
 response, requested tool calls, and complete tool results. Those four originals
 are stored separately, alongside the response's reasoning as one string when
 available. Recent turns present the full prompt, response, calls, and results,
-with reasoning excluded; older
-turns present only their whole-turn summary. A turn never includes both its full
-original and its summary in the same request.
+with reasoning excluded. Older turns use their whole-turn summary only when its
+estimated token cost is smaller than the original; otherwise they retain their
+full prompt, response, tool calls, and results. The comparison includes headings,
+message overhead, and the selected provider's tool format. Ties retain originals.
+A turn never includes both its full original and its summary in the same request.
 
-The default recent window is **50 model calls**, with a **200,000 estimated-token**
-budget. If it is too large, the full window shrinks by whole turns. At most the
-**100 newest older summaries** accompany it. The oldest summaries can be omitted
-if needed to fit the selected endpoint. Original records remain retrievable even
-after their summaries leave context. Project instructions and the active-task
-record stay pinned outside this rolling window.
+The default recent window is **50 model calls**, with a minimum target of **5**
+even if `--context-posts` is set lower. There is no separate history token cap:
+history uses the selected model's live context allowance after reserving space
+for instructions, tools, output, and estimation headroom. At most the **100 newest
+older records** accompany the full window. If the request is too large, the oldest
+of those records are omitted first, then the oldest calls in the full window.
+Even the five-call minimum can shrink to whatever fits the model allowance.
+
+Selection starts fresh on every request. As a large call ages out and its smaller
+summary takes its place, previously omitted older history can return within the
+100-record limit. Original records remain retrievable even when omitted. Project
+instructions and the active-task record stay pinned outside this rolling window.
 
 **One separate background request starts after each complete tool batch returns**,
 or immediately after a reply without tools. It receives only that turn's prompt,
@@ -817,11 +825,10 @@ Startup and model selection fetch live catalog and endpoint capabilities,
 require a valid context length, and check that the current instructions, tool
 definitions, and reserved output fit before accepting the model. The harness
 uses the selected endpoints' conservative limits to reduce the budget for
-smaller models. The recent window has an estimated **200,000-token** budget, further
-limited by the space remaining after instructions, tools, older summaries,
-and reserved output. The harness moves whole turns out of the full window and
-uses their summaries, omitting the oldest summaries when needed. Both stored
-versions remain intact.
+smaller models. The request reserves output tokens and a 15% estimation margin;
+the remaining space accommodates instructions, tools, and selected history.
+Older records are omitted before the recent full window is reduced. Both stored
+versions remain intact, and a summary is used only when it saves tokens.
 It reports a limit if mandatory input and instructions cannot fit even after
 older history is omitted and oversized observations use excerpts.
 
@@ -844,8 +851,7 @@ Useful flags:
 | `-w, --workspace` | Project root and default path boundary. |
 | `--danger` | Disable workspace path confinement at startup, including unattended one-shot tasks; no confirmation prompt. |
 | `--max-steps` | Cap working model requests per run, including response retries (default 200); background summaries are separate. |
-| `--context-posts` | Recent window with verbatim user requests and full responses where the budget allows (default 50). |
-| `--context-tokens` | Estimated token budget for the recent window (default 200000). |
+| `--context-posts` | Target recent model calls supplied in full (default 50, minimum 5 when context permits). |
 | `--python` | Explicit project interpreter, overriding project-file settings and discovery. |
 | `--temperature`, `--max-tokens` | Sampling controls. |
 | `-v, --verbose` | Show full tool output and per-step token usage. |

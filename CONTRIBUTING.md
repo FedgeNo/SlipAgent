@@ -152,8 +152,12 @@ valid recovery using disposable package copies when modifying this machinery.
   state, use the selected project environment, and report skipped/failed checks
   to the model without implying that edits themselves failed.
 - Store the original prompt, reply, tool calls, and results as independently
-  retrievable parts. Recent turns use all originals; older turns use only one
-  whole-turn summary. Shrink the window by whole turns when needed.
+  retrievable parts. Recent turns use all originals; older turns use a whole-turn
+  summary only when it costs fewer tokens, otherwise the original. Never supply
+  both versions of a turn. Use the model allowance without a separate history
+  token cap. Omit older records before reducing the recent window below its
+  five-call minimum, and only reduce it when those calls cannot fit. Reconsider
+  omitted records on each request so they can return when space becomes available.
 - Summarize each completed turn in a separate background request containing only
   those four parts. Never include the thread or project/task state. Test reset,
   cancellation, late results, and model/profile changes. Summary completion must

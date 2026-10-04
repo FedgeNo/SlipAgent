@@ -100,7 +100,7 @@ async def test_snapshot_uses_selected_compacted_context_and_stays_immutable():
         return httpx.Response(200, json=result)
     async with OpenRouterClient("test", transport=httpx.MockTransport(transport)) as client:
         agent = Agent(client, ToolRegistry(), "test", context_posts=1, on_event=events.append)
-        for prompt in ["First task.", "Second task.", "Third task."]:
+        for prompt in ["First task.", *[f"Next task {index}." for index in range(6)]]:
             await agent.run(prompt)
         snapshots = [json.loads(event.text) for event in events if event.kind == "context"]
         assert snapshots == requests

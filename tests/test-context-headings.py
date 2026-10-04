@@ -20,7 +20,7 @@ async def test_full_context_labels_roles_posts_and_named_tool_results_without_ch
         Message.tool_result("read-1", "EXACT FILE CONTENT"), Message.user("Now explain it")]
     before = [message.to_api() for message in originals]
     history = ConversationHistory()
-    view = await history.view(originals, [], keep_posts=50, full_tokens=200000,
+    view = await history.view(originals, [], keep_posts=50,
                               context_length=1000000, max_output=8192)
     assert [message.role for message in view] == [message.role for message in originals]
     assert "## System Instructions" in view[0].content
@@ -41,12 +41,12 @@ async def test_full_context_labels_roles_posts_and_named_tool_results_without_ch
 async def test_compressed_and_full_history_have_distinct_headings():
     history = ConversationHistory()
     messages = [Message.system("System guidance")]
-    for index in range(1, 4):
-        messages += [Message.user(f"Question {index}"), Message.assistant(f"Answer {index}")]
+    for index in range(1, 8):
+        messages += [Message.user(f"Question {index}"), Message.assistant(f"Answer {index} " * 100)]
         history.sync(messages)
         history.posts[-1].summary = "Whole-turn summary"
     messages.append(Message.user("Current task"))
-    view = await history.view(messages, [], keep_posts=1, full_tokens=200000,
+    view = await history.view(messages, [], keep_posts=1,
                               context_length=1000000, max_output=8192)
     wire = "\n".join(message.content or "" for message in view)
     assert "## Earlier Conversation (Compressed)" in wire

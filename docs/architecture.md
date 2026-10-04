@@ -56,10 +56,19 @@ Context construction proceeds in this order:
    a rejected generation cannot leave global prompt registrations behind.
    Messages retain their existing provider-compatible placement. The inspector
    displays the final body rather than reconstructing it separately.
-3. Up to 100 older whole-turn summaries precede the recent full window. Each
+3. Up to 100 older records precede the recent full window. Each
    retained turn has one representation: either its complete prompt, response,
-   calls and results, or its summary. Budget pressure shrinks the full window by
-   whole turns; it never retains a full prompt alongside that turn's summary.
+   calls and results, or its summary. A summary is selected only if its estimated
+   token cost, including standalone headings and message overhead, is lower.
+   The comparison uses the provider's native or text tool-history projection;
+   ties keep originals, with roles and complete tool batches intact. Consecutive
+   selected summaries share a heading; originals remain in chronological order.
+   The full window targets 50 calls by default, with a floor of 5 on the requested
+   window size. Under model context pressure, selection drops the oldest older
+   records first, then reduces the full window oldest-first, below 5 if necessary.
+   Boundaries and representation caches belong to one view: later requests can
+   restore omitted records as large calls age into smaller summaries. There is
+   no persistent omission marker and no separate history token cap.
 4. The current input remains verbatim. Continuation turns carry the active user
    prompt with their full records. Newly returned results cannot leave the full
    window before the working model receives them, even when their independent
@@ -74,8 +83,8 @@ Context construction proceeds in this order:
 The selected model's context/prompt limits constrain the whole request. The
 budget reserves output, system instructions, tool definitions, response schema,
 and a 15% estimation margin before fitting history. Text estimates use UTF-8
-size, not a model tokenizer. The default 200,000-token recent-window budget is
-an additional cap, not a promise that every model can accept that much history.
+size, not a model tokenizer. History uses the remaining model allowance;
+`--context-posts` controls its target full-call count, not a separate token budget.
 Selection preflight uses a copy of history/task selection state so an incompatible
 model cannot mutate the active conversation merely by being considered.
 

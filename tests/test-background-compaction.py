@@ -5,6 +5,8 @@ import json
 
 import pytest
 
+from test_agent import unpack_context, context_records
+
 from slipagent.agent import Agent
 from slipagent.context import ConversationHistory, RecallHistoryTool
 from slipagent.capabilities import ModelCapabilities
@@ -98,11 +100,11 @@ async def test_reasoning_is_saved_per_turn_and_recallable_but_never_compacted():
     for request in client.main_requests:
         for message in request["messages"]:
             assert "reasoning" not in message.to_api() and "reasoning_details" not in message.to_api()
-        assert "FIRST REASONING" not in str([m.to_api() for m in request["messages"]])
+        assert "FIRST REASONING" not in str([m.to_api() for m in unpack_context(request["messages"])])
     for request in client.summary_requests:
         source = json.loads(request["messages"][1].content)
         assert set(source) == {"user_prompt", "agent_response", "tool_calls", "tool_results"}
-        assert "REASONING" not in str([m.to_api() for m in request["messages"]])
+        assert "REASONING" not in str([m.to_api() for m in unpack_context(request["messages"])])
 
 
 async def test_rejected_response_reasoning_does_not_enter_accepted_record():
@@ -238,7 +240,7 @@ async def test_fast_summary_cannot_hide_unseen_tool_results_at_tiny_budget():
     agent._context_lengths[agent.model] = 9000
     await agent.run("Inspect")
     sent = "\n".join(message.content or "" for message in client.main_requests[1]["messages"])
-    assert "Actual Agent/Tool Transcript (Excerpt)" in sent
+    assert any(record["representation"] == "excerpt" for record in context_records(client.main_requests[1]["messages"]))
     assert "ACTUAL RESULT" in sent and "Inspected the project;" not in sent
     assert result in agent.history.posts[0].full_text()
 
@@ -341,6 +343,6 @@ async def test_tool_saved_goals_survive_both_history_windows_with_plain_response
         assert "Keep the project environment" in request["messages"][0].content
     assert agent.history.task.current_prompt_post == 1
     wire = "\n".join(message.content or "" for message in client.main_requests[-1]["messages"])
-    assert wire.count("Conversation Record (Compressed)") == 100
+    assert sum(record["representation"] == "compressed" for record in context_records(client.main_requests[-1]["messages"])) == 100
     assert "Post 1 — Conversation Record" not in wire
     assert not any(event.get("response_format") for event in client.main_requests)

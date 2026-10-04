@@ -10,6 +10,8 @@ import re
 import httpx
 import pytest
 
+from test_agent import unpack_context, context_records
+
 from test_agent import summary_response
 
 from slipagent.agent import Agent, STOP_NOTICE, STEP_LIMIT_NOTICE
@@ -59,7 +61,7 @@ async def test_keeps_recent_full_and_both_sides_in_older_summary():
     add_intermediate_posts(agent)
     await agent.run("SECOND FULL QUESTION")
     await agent.run("THIRD FULL QUESTION")
-    messages = client.calls[-1]["messages"]
+    messages = unpack_context(client.calls[-1]["messages"])
     assert context_body(messages[0].content).startswith("Project instructions stay pinned.")
     assert agent.history.posts[0].summary in messages[1].content
     assert not any(context_body(m.content).strip() == first_answer.strip() for m in messages)
@@ -121,8 +123,9 @@ async def test_stopped_tool_post_rolls_with_tool_summary_without_summary_repair(
     add_intermediate_posts(agent)
     await agent.run("next")
     await agent.run("next again")
-    wire = "\n".join(m.content or "" for m in client.calls[-1]["messages"])
-    assert "Conversation Record (Compressed):" in wire and agent.history.posts[0].summary in wire
+    wire = "\n".join(m.content or "" for m in unpack_context(client.calls[-1]["messages"]))
+    assert any(record["representation"] == "compressed" for record in context_records(client.calls[-1]["messages"]))
+    assert agent.history.posts[0].summary in wire
     assert "retrieve post 1 with recall_history" not in wire
     assert "EXACT TOOL RESULT" in wire
     assert "EXACT TOOL RESULT" in (await agent.registry.invoke("recall_history", {"post_id": 1})).content
@@ -143,7 +146,7 @@ async def test_only_50_full_posts_and_100_older_summaries_are_supplied(total):
     messages.append(Message.user("current question"))
     view = await history.view(messages, [], keep_posts=50,
                               context_length=1000000, max_output=8192)
-    wire = "\n".join(message.content or "" for message in view)
+    wire = "\n".join(message.content or "" for message in unpack_context(view))
     boundary = max(0, total - 50)
     oldest_summary = max(0, boundary - 100)
     for post_id in range(1, total + 1):
@@ -165,13 +168,13 @@ async def test_background_summary_contains_tool_findings_and_user_prompt():
         completion(reply(3, "New answer.", "User asked next; model answered next.")),
     ], context_posts=1)
     await agent.run("read file")
-    assert context_body(client.calls[1]["messages"][-1].content) == "EXACT TOOL RESULT"
+    assert context_body(unpack_context(client.calls[1]["messages"])[-1].content) == "EXACT TOOL RESULT"
     add_intermediate_posts(agent)
     await agent.run("next")
     archived = client.calls[2]["messages"][1]
     assert "User: read file" in archived.content
     assert "EXACT TOOL RESULT" in archived.content
-    assert not any(m.role == "tool" for m in client.calls[2]["messages"])
+    assert not any(m.role == "tool" for m in unpack_context(client.calls[2]["messages"]))
     assert agent.history.posts[0].results_summarized
     full = await agent.registry.invoke("recall_history", {"post_id": 1})
     assert "EXACT TOOL RESULT" in full.content
@@ -188,7 +191,7 @@ async def test_over_budget_preserves_recent_tool_batch_without_extra_calls():
     agent.registry.get("record").result = payload
     assert await agent.run("read") == "Received excerpts."
     assert len(client.calls) == 2
-    assert "Excerpt" in "\n".join(m.content or "" for m in client.calls[1]["messages"])
+    assert "Excerpt" in "\n".join(m.content or "" for m in unpack_context(client.calls[1]["messages"]))
     assert agent.history.posts[0].agent_response == "Read two."
     assert len(client.summary_calls) == 2
     assert len([m for m in agent.messages if m.role == "tool"]) == 2
@@ -218,8 +221,8 @@ async def test_full_window_shrinks_by_whole_posts_at_model_limit():
         pytest.fail("valid stored summaries should not require another call")
     view = await history.view(messages, [], keep_posts=50,
                               context_length=200000, max_output=8192, summarize=unused)
-    wire = "\n".join(message.content or "" for message in view)
-    assert [context_body(message.content) for message in view if message.role == "user"] == [
+    wire = "\n".join(message.content or "" for message in unpack_context(view))
+    assert [context_body(message.content) for message in unpack_context(view) if message.role == "user"] == [
         *(f"FULL USER REQUEST {index}: preserve this exact wording λ" for index in range(2, 51)),
         "current request",
     ]
@@ -227,7 +230,7 @@ async def test_full_window_shrinks_by_whole_posts_at_model_limit():
     assert "LARGE ORIGINAL TOOL OUTPUT" not in wire
     assert history.posts[1].summary in wire
     assert all(f"FULL RESPONSE {index}" in wire for index in range(2, 51))
-    assert not any(message.role == "tool" or message.tool_calls for message in view)
+    assert not any(message.role == "tool" or message.tool_calls for message in unpack_context(view))
     assert len(history.posts) == 51
     for index, post in enumerate(history.posts):
         assert post.messages[0].content == f"FULL USER REQUEST {index}: preserve this exact wording λ"
@@ -243,8 +246,8 @@ async def test_small_model_does_not_arbitrarily_halve_the_recent_budget():
     history.posts[0].summary = "Short stored summary."
     view = await history.view(messages, [], keep_posts=50,
                               context_length=262144, max_output=8192)
-    assert any(context_body(message.content) == answer for message in view)
-    assert not any("Short stored summary." in (message.content or "") for message in view)
+    assert any(context_body(message.content) == answer for message in unpack_context(view))
+    assert not any("Short stored summary." in (message.content or "") for message in unpack_context(view))
 
 
 async def test_older_window_uses_original_when_summary_is_larger():
@@ -260,12 +263,12 @@ async def test_older_window_uses_original_when_summary_is_larger():
     history.posts[2].summary = "Latest answer compressed."
     view = await history.view(messages, [], keep_posts=5,
                               context_length=1000000, max_output=8192)
-    wire = "\n".join(message.content or "" for message in view)
+    wire = "\n".join(message.content or "" for message in unpack_context(view))
     assert "Short exact answer." in wire and "Latest exact answer." in wire
     assert "INFLATED SUMMARY" not in wire
     assert "LARGE SECOND ANSWER" not in wire and "Second answer compressed." in wire
     assert "Latest answer compressed." not in wire
-    assert [context_body(message.content) for message in view if message.role == "user"] == [
+    assert [context_body(message.content) for message in unpack_context(view) if message.role == "user"] == [
         "first request", *("third request" for _ in range(5)), "current request",
     ]
 
@@ -283,16 +286,16 @@ async def test_shrunk_window_has_whole_turn_summary_and_full_latest_turn():
     agent._context_lengths[agent.model] = 9000
     await agent.run("Follow-up exact request")
     view = client.calls[-1]["messages"]
-    wire = "\n".join(message.content or "" for message in view)
-    assert [context_body(message.content) for message in view if message.role == "user"] == [
+    wire = "\n".join(message.content or "" for message in unpack_context(view))
+    assert [context_body(message.content) for message in unpack_context(view) if message.role == "user"] == [
         "Original exact request", "Follow-up exact request",
     ]
     assert agent.history.posts[0].summary in wire
-    assert not any(context_body(m.content) == "FULL TOOL RESPONSE" for m in view)
+    assert not any(context_body(m.content) == "FULL TOOL RESPONSE" for m in unpack_context(view))
     assert "LATEST FULL ANSWER" in wire
     assert "User requested Original exact request" not in wire
     assert "Assistant completed the request." not in wire
-    assert not any(message.role == "tool" or message.tool_calls for message in view)
+    assert not any(message.role == "tool" or message.tool_calls for message in unpack_context(view))
     assert len(client.calls) == 3
     assert "FULL LARGE TOOL OUTPUT" in (await agent.registry.invoke("recall_history", {"post_id": 1})).content
 
@@ -305,9 +308,9 @@ async def test_large_archived_reasoning_does_not_consume_context_headroom():
     history = ConversationHistory()
     view = await history.view(messages, [], keep_posts=50,
                               context_length=16000, max_output=1000)
-    assert any(context_body(m.content) == "ACTUAL ANSWER" and m.tool_calls for m in view)
-    assert any(context_body(m.content) == "ACTUAL RESULT" for m in view)
-    assert all(m.reasoning is None and m.reasoning_details is None for m in view)
+    assert any(context_body(m.content) == "ACTUAL ANSWER" and m.tool_calls for m in unpack_context(view))
+    assert any(context_body(m.content) == "ACTUAL RESULT" for m in unpack_context(view))
+    assert all(m.reasoning is None and m.reasoning_details is None for m in unpack_context(view))
     assert answer.reasoning == "THOUGHTS " * 100000
     assert answer.reasoning_details == [{"type": "reasoning.encrypted", "data": "OPAQUE " * 100000}]
     assert history.posts[0].reasoning == answer.reasoning
@@ -322,10 +325,10 @@ async def test_under_budget_keeps_entire_recent_window_in_full():
         pytest.fail("no compression should run below the budget")
     view = await history.view(messages, [], keep_posts=50,
                               context_length=1000000, max_output=8192, summarize=unused)
-    assert [context_body(m.content) for m in view if m.role == "user"] == ["first question", "second question", "next"]
-    assert any(context_body(m.content).startswith("first answer") for m in view)
-    assert any(m.tool_calls and m.tool_calls[0].id == "c" for m in view)
-    assert any(m.role == "tool" and m.tool_call_id == "c" and context_body(m.content) == "full tool result" for m in view)
+    assert [context_body(m.content) for m in unpack_context(view) if m.role == "user"] == ["first question", "second question", "next"]
+    assert any(context_body(m.content).startswith("first answer") for m in unpack_context(view))
+    assert any(m.tool_calls and m.tool_calls[0].id == "c" for m in unpack_context(view))
+    assert any(m.role == "tool" and m.tool_call_id == "c" and context_body(m.content) == "full tool result" for m in unpack_context(view))
 
 
 async def test_only_posts_outside_window_use_summaries():
@@ -343,12 +346,12 @@ async def test_only_posts_outside_window_use_summaries():
         pytest.fail("the oldest stored summary is available")
     view = await history.view(messages, [], keep_posts=2,
                               context_length=1000000, max_output=8192, summarize=unused)
-    wire = "\n".join(m.content or "" for m in view)
+    wire = "\n".join(m.content or "" for m in unpack_context(view))
     assert "OLDEST FULL RESPONSE" not in wire
-    assert "Conversation Record (Compressed):" in wire
+    assert any(record["representation"] == "compressed" for record in context_records(view))
     assert "MIDDLE FULL RESPONSE " * 50 in wire
     assert "LATEST FULL RESPONSE " * 50 in wire
-    assert [context_body(m.content) for m in view if m.role == "user"] == [
+    assert [context_body(m.content) for m in unpack_context(view) if m.role == "user"] == [
         "middle question", *("latest question" for _ in range(4)), "next question",
     ]
     assert history.posts[0].summary in wire
@@ -367,8 +370,8 @@ async def test_missing_archived_summary_is_omitted_without_a_repair_call():
         pytest.fail("missing stored summaries must not trigger additional calls")
     view = await history.view(messages, [], keep_posts=1,
                               context_length=1000000, max_output=8192, summarize=unused)
-    assert any(context_body(message.content) == "current request" for message in view)
-    assert not any("HUGE TOOL OUTPUT" in (message.content or "") for message in view)
+    assert any(context_body(message.content) == "current request" for message in unpack_context(view))
+    assert not any("HUGE TOOL OUTPUT" in (message.content or "") for message in unpack_context(view))
     assert history.posts[0].messages[0].content == "original request"
     assert history.posts[0].messages[1].content == "queued correction"
     assert "HUGE TOOL OUTPUT" in history.posts[0].full_text()
@@ -383,8 +386,8 @@ async def test_large_old_user_requests_reduce_the_recent_window_without_compress
         pytest.fail("compressing responses cannot make the user requests fit")
     view = await history.view(messages, [], keep_posts=50,
                               context_length=9000, max_output=1000, summarize=unused)
-    assert [context_body(message.content) for message in view if message.role == "user"] == [second]
-    assert any(context_body(message.content) == "second answer" for message in view)
+    assert [context_body(message.content) for message in unpack_context(view) if message.role == "user"] == [second]
+    assert any(context_body(message.content) == "second answer" for message in unpack_context(view))
     assert history.posts[0].messages[0].content == first
     assert history.posts[1].messages[0].content == second
 
@@ -408,12 +411,12 @@ async def test_reduced_history_keeps_active_request_and_complete_latest_tool_bat
     originals = [post.full_text() for post in history.posts]
     view = await history.view(messages, [], keep_posts=50,
                               context_length=9000, max_output=1000)
-    assert [context_body(message.content) for message in view if message.role == "user"] == [request + "\n" + correction]
-    assert [(message.tool_call_id, context_body(message.content)) for message in view if message.role == "tool"] == [
+    assert [context_body(message.content) for message in unpack_context(view) if message.role == "user"] == [request + "\n" + correction]
+    assert [(message.tool_call_id, context_body(message.content)) for message in unpack_context(view) if message.role == "tool"] == [
         ("a", "EXACT FIRST RESULT"), ("b", "EXACT SECOND RESULT"),
     ]
-    assert [call.id for message in view for call in message.tool_calls or []] == ["a", "b"]
-    wire = "\n".join(message.content or "" for message in view)
+    assert [call.id for message in unpack_context(view) for call in message.tool_calls or []] == ["a", "b"]
+    wire = "\n".join(message.content or "" for message in unpack_context(view))
     assert "OLD USER REQUEST" not in wire
     assert "USER SUMMARY MUST NOT DUPLICATE THE ACTIVE REQUEST" not in wire
     assert [post.full_text() for post in history.posts] == originals
@@ -427,7 +430,7 @@ async def test_history_can_be_omitted_entirely_if_even_its_summaries_are_too_lar
     history.posts[0].summary = "INFLATED SUMMARY " * 2000
     view = await history.view(messages, [], keep_posts=50,
                               context_length=8000, max_output=1000)
-    assert [context_body(message.content) for message in view if message.role != "system"] == ["latest exact request"]
+    assert [context_body(message.content) for message in unpack_context(view) if message.role != "system"] == ["latest exact request"]
     assert "OLD RESPONSE" in (await RecallHistoryTool(history).invoke({"post_id": 1})).content
 
 
@@ -444,7 +447,7 @@ async def test_background_summaries_have_separate_requests_and_accounting():
     await agent.run("third question")
     assert len(client.calls) == 3
     assert agent.history.posts[0].summary in client.calls[2]["messages"][1].content
-    assert not any(context_body(m.content).strip() == ("Original answer. " * 100).strip() for m in client.calls[2]["messages"])
+    assert not any(context_body(m.content).strip() == ("Original answer. " * 100).strip() for m in unpack_context(client.calls[2]["messages"]))
     assert len(client.summary_calls) == 3
     assert agent.usage.total_tokens == 45
     assert agent.total_cost == pytest.approx(.03)
@@ -548,8 +551,8 @@ async def test_retry_keeps_previous_tool_results_and_current_user_correction():
     assert await agent.run("read") == "Corrected."
     assert len(client.calls) == 3
     for request in client.calls[1:]:
-        assert any(m.role == "tool" and context_body(m.content) == "EXACT TOOL RESULT" for m in request["messages"])
-        assert context_body(request["messages"][-1].content) == "current correction"
+        assert any(m.role == "tool" and context_body(m.content) == "EXACT TOOL RESULT" for m in unpack_context(request["messages"]))
+        assert context_records(request["messages"])[-1]["user_prompt"] == ["current correction"]
         assert "CURRENT_POST_ID: 2" in request["messages"][0].content
     assert agent.registry.get("record").seen == [{"value": "v"}]
     assert agent.history.posts[1].agent_response == "Corrected."
@@ -777,11 +780,11 @@ async def test_stored_summaries_over_budget_preserve_originals_without_extra_cal
         pytest.fail("stored summaries must not trigger an overview request")
     view = await history.view(messages, [], keep_posts=1,
                               context_length=14000, max_output=1000, summarize=unused)
-    wire = "\n".join(message.content or "" for message in view)
+    wire = "\n".join(message.content or "" for message in unpack_context(view))
     assert history.posts[0].summary not in wire
     assert history.posts[14].summary in wire
-    assert any(context_body(message.content) == "answer 19 " * 300 for message in view)
-    assert any(context_body(message.content) == "next" for message in view)
+    assert any(context_body(message.content) == "answer 19 " * 300 for message in unpack_context(view))
+    assert any(context_body(message.content) == "next" for message in unpack_context(view))
     assert [post.summary for post in history.posts] == summaries
     assert len(history.posts) == 20
     assert "question 0" in history.posts[0].full_text()
@@ -878,7 +881,7 @@ def test_real_cli_retries_before_emitting_rejected_text_or_writing_rejected_file
     assert "rejected.txt" not in result.stdout + result.stderr
     assert "compressed record" not in result.stdout + result.stderr
     assert len(stub.requests) == 3
-    assert context_body(stub.requests[1]["messages"][-1]["content"]) == "write the file"
+    assert context_records(stub.requests[1]["messages"])[-1]["user_prompt"] == ["write the file"]
     assert not any(m.get("tool_calls") for m in stub.requests[1]["messages"])
 
 
@@ -894,10 +897,10 @@ async def test_post_ids_are_internal_and_recent_summaries_are_not_duplicated(kee
     await agent.run("first")
     await agent.run("second")
     view = client.calls[-1]["messages"]
-    system = "\n".join(message.content or "" for message in view if message.role == "system")
+    system = "\n".join(message.content or "" for message in unpack_context(view) if message.role == "system")
     assert "CURRENT_POST_ID: 3" in system
     assert "PREVIOUS_POST_ID: 2" in system
-    assert "User asked second; model requested record." not in "\n".join(m.content or "" for m in view)
+    assert "User asked second; model requested record." not in "\n".join(m.content or "" for m in unpack_context(view))
     for message in view:
         if message.role != "system":
             assert "[Harness context metadata]" not in (message.content or "")
@@ -975,9 +978,9 @@ def test_real_cli_hides_memory_rolls_window_and_recalls_originals(tmp_path):
     third_messages = stub.requests[6]["messages"]
     assert "User: inspect and report" in third_messages[1]["content"]
     assert not any(call["function"]["name"] == "read_file" for message in third_messages for call in message.get("tool_calls", []))
-    recalled = stub.requests[7]["messages"][-1]
-    assert recalled["role"] == "tool"
-    record = json.loads(json.loads(context_body(recalled["content"]))["content"])
+    recalled = context_records(stub.requests[7]["messages"])[-2]["tool_results"][-1]
+    assert recalled["tool_name"] == "recall_history"
+    record = json.loads(json.loads(recalled["content"])["content"])
     assert record["prompt"] == "inspect and report"
     assert record["response"] == "Reading file."
     assert "EXACT ORIGINAL FILE CONTENT" in record["tool_results"][-1]["content"]

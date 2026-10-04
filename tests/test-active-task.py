@@ -4,6 +4,8 @@ import re
 
 import pytest
 
+from test_agent import unpack_context, context_records
+
 from slipagent.agent import Agent
 from slipagent.cli import Renderer, Session, Style, _handle_command
 from slipagent.context import ConversationHistory, HistoryPost, message_tokens
@@ -93,7 +95,7 @@ async def test_goal_and_constraints_survive_beyond_full_and_summary_windows():
     original = "Build inventory support. Never install global packages."
     for index in range(153):
         await agent.run(original if index == 0 else "continue")
-    wire = "\n".join(message.content or "" for message in client.calls[-1]["messages"])
+    wire = "\n".join(message.content or "" for message in unpack_context(client.calls[-1]["messages"]))
     assert original not in wire
     assert "Use only the project virtual environment" in wire
     assert "Implement inventory support" in wire
@@ -102,7 +104,7 @@ async def test_goal_and_constraints_survive_beyond_full_and_summary_windows():
     assert agent.history.task.sources[1] == [original]
     assert agent.history.posts[0].task_record["goal"] == "Implement inventory support"
     # The 100 older records may use either representation, whichever is smaller.
-    assert len(re.findall(r"Conversation Record \((?:Full|Compressed)\):", wire)) == 150
+    assert sum(record["record_type"] == "history_turn" for record in context_records(client.calls[-1]["messages"])) == 150
     agent.history.task.record["goal"] = "Later working state"
     assert agent.history.posts[-1].task_record["goal"] == "Implement inventory support"
 
@@ -122,7 +124,7 @@ async def test_new_prompt_replaces_active_prompt_without_forcing_old_source_reca
     assert not any(event.kind == "retry" for event in events)
     assert len(client.calls) == 2
     for request in client.calls:
-        wire = "\n".join(message.content or "" for message in request["messages"])
+        wire = "\n".join(message.content or "" for message in unpack_context(request["messages"]))
         assert "Current request" in wire
         assert '"current_prompt_post": 3' in wire
         assert "Request only recall_history" not in wire
@@ -141,10 +143,10 @@ async def test_current_prompt_and_its_source_survive_compression_without_task_up
     assert len(tool.seen) == window + 2
     assert len(client.calls) == window + 3
     for request in client.calls:
-        wire = "\n".join(message.content or "" for message in request["messages"])
+        wire = "\n".join(message.content or "" for message in unpack_context(request["messages"]))
         assert text in wire
         assert '"current_prompt_post": 1' in wire
-    assert "Conversation Record (Compressed):" in "\n".join(m.content or "" for m in client.calls[-1]["messages"])
+    assert any(record["representation"] == "compressed" for record in context_records(client.calls[-1]["messages"]))
     assert not any(event.kind == "retry" for event in events)
     assert agent.history.task.record is None
 
@@ -172,9 +174,10 @@ async def test_context_supplies_retained_prompt_when_legacy_full_post_has_no_cop
         history.posts[index] = HistoryPost(post.id, post.request, post.messages)
     originals = [message.to_api() for message in messages]
     view = await history.view(messages, [], keep_posts=1, context_length=9000, max_output=1000)
-    supplied = [message for message in view if message.role == "user"]
-    assert len(supplied) == 1
-    assert supplied[0].content == "Current User Request (Full):\n\n" + prompt
+    supplied = [message for message in unpack_context(view) if message.role == "user"]
+    assert len(supplied) == 5
+    assert all(message.content == prompt for message in supplied)
+    assert context_records(view)[-1]["user_prompt"] == []
     assert message_tokens(view) + 1000 < 9000 * .85
     assert [message.to_api() for message in messages] == originals
 
@@ -196,7 +199,7 @@ async def test_queued_prompt_replaces_retained_prompt_after_current_batch():
     assert '"current_prompt_post": 1' in client.calls[0]["messages"][0].content
     for request in client.calls[1:]:
         assert '"current_prompt_post": 2' in request["messages"][0].content
-        assert any((m.content or "").endswith("NEW PROMPT: run the targeted tests") for m in request["messages"] if m.role == "user")
+        assert any((m.content or "").endswith("NEW PROMPT: run the targeted tests") for m in unpack_context(request["messages"]) if m.role == "user")
     result = await agent.registry.invoke("recall_history", {"post_id": 2, "section": "user"})
     assert not result.is_error
     assert json.loads(json.loads(result.content)["content"]) == ["NEW PROMPT: run the targeted tests"]

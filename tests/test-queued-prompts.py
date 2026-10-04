@@ -2,6 +2,8 @@
 
 import pytest
 
+from test_agent import unpack_context, context_records
+
 from slipagent.context import ContextError
 from test_agent import build_agent, completion, call, context_body
 
@@ -18,7 +20,7 @@ async def test_waiting_prompts_are_sent_together_before_new_step():
     agent.on_boundary = boundary
     agent.on_event = events.append
     await agent.run("start")
-    users = [context_body(m.content) for m in client.calls[1]["messages"] if m.role == "user"]
+    users = [context_body(m.content) for m in unpack_context(client.calls[1]["messages"]) if m.role == "user"]
     assert users == ["start", "first correction", "second correction"]
     assert [e.text for e in events if e.kind == "user_message_sent"] == users[1:]
 
@@ -72,7 +74,7 @@ async def test_prompts_arriving_during_context_preparation_join_the_same_request
         return result
     monkeypatch.setattr(type(agent), "_context_view", prepare)
     await agent.run("start")
-    users = [context_body(m.content) for m in client.calls[0]["messages"] if m.role == "user"]
+    users = [context_body(m.content) for m in unpack_context(client.calls[0]["messages"]) if m.role == "user"]
     assert users == ["start", "late correction", "another correction"]
     assert len(client.calls) == 1
 
@@ -113,7 +115,7 @@ async def test_unsent_receipts_survive_session_restore(workspace, tmp_path, monk
     assert list(restored.queued_messages.values()) == ["unsent correction"]
     await restored.run("continue")
     assert [e.text for e in events if e.kind == "user_message_sent"] == ["unsent correction"]
-    users = [context_body(m.content) for m in client.calls[0]["messages"] if m.role == "user"]
+    users = [context_body(m.content) for m in unpack_context(client.calls[0]["messages"]) if m.role == "user"]
     assert users == ["unsent correction", "start", "continue"]
 
 
@@ -148,7 +150,7 @@ async def test_openrouter_receipt_matches_the_submitted_payload():
         await agent.run("")
         await agent.wait_for_compaction()
         await agent.registry.aclose()
-    users = [context_body(m["content"]) for m in requests[0]["messages"] if m["role"] == "user"]
+    users = context_records(requests[0]["messages"])[-1]["user_prompt"]
     assert users == ["first", "second"]
     assert agent.pending == ["next request"]
     assert len([e for e in events if e.kind == "user_message_sent"]) == 2

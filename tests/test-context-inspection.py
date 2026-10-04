@@ -73,8 +73,9 @@ async def test_agent_snapshots_include_retry_prompt_and_matching_tool_results():
     assert snapshots == requests
     assert "last response was rejected" in snapshots[1]["messages"][0]["content"]
     assert "last response was rejected" not in snapshots[2]["messages"][0]["content"]
-    tool_message = snapshots[2]["messages"][-1]
-    assert {**tool_message, "content": context_body(tool_message["content"])} == {"role": "tool", "content": "EXACT TOOL RESULT", "tool_call_id": "call-1"}
+    record = json.loads(snapshots[2]["messages"][-2]["content"])
+    assert record["tool_results"] == [{"call_id": "call-1", "tool_name": "record", "status": "success", "content": "EXACT TOOL RESULT"}]
+    assert json.loads(snapshots[2]["messages"][-1]["content"])["record_type"] == "current_turn"
     renderer = Renderer(Style(False), io.StringIO(), False)
     for event in events:
         if event.kind == "context":

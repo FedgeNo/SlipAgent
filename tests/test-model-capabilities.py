@@ -193,7 +193,8 @@ async def test_json_object_retries_before_reply_or_tool_execution():
     assert not any(event.text == "REJECTED REPLY" for event in events)
     assert [event.kind for event in events].index("retry") < [event.kind for event in events].index("tool_start")
     assert "last response was rejected" in requests[1]["messages"][0]["content"]
-    assert context_body(requests[2]["messages"][-1]["content"]) == "actual result"
+    assert json.loads(requests[2]["messages"][-2]["content"])["tool_results"][0]["content"] == "actual result"
+    assert all(request.get("response_format") == requests[0].get("response_format") for request in requests)
 
 
 async def test_selection_loads_capabilities_and_switches_without_stale_settings(tmp_path):

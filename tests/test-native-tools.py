@@ -7,6 +7,8 @@ import json
 import httpx
 import pytest
 
+from test_agent import unpack_api_context, context_records
+
 from slipagent.agent import Agent
 from slipagent.capabilities import ModelCapabilities
 from slipagent.cli import Renderer, Session, Style, _model_command
@@ -87,7 +89,8 @@ async def test_native_calls_execute_once_and_results_round_trip_with_ids():
     assert "tool_choice" not in request
     assert "tool_calls" not in request["response_format"]["json_schema"]["schema"]["properties"]
     assert "native API" in request["messages"][0]["content"]
-    second = router.requests[1]["messages"]
+    second = unpack_api_context(router.requests[1]["messages"])
+    assert router.requests[1]["response_format"] == request["response_format"]
     calls = next(message["tool_calls"] for message in second if message.get("tool_calls"))
     assert [call["id"] for call in calls] == ["read-1", "read-2"]
     assert [message["tool_call_id"] for message in second if message["role"] == "tool"] == ["read-1", "read-2"]
@@ -203,7 +206,7 @@ async def test_alternate_call_carriers_follow_the_same_loop(carrier):
         agent = Agent(client, ToolRegistry([tool]), "test/native")
         assert await agent.run("Inspect the project.") == "Done."
     assert tool.seen == [{"value": "A"}]
-    messages = router.requests[1]["messages"]
+    messages = unpack_api_context(router.requests[1]["messages"])
     call_id = next(message["tool_calls"][0]["id"] for message in messages if message.get("tool_calls"))
     assert next(message["tool_call_id"] for message in messages if message["role"] == "tool") == call_id
 
@@ -224,8 +227,9 @@ async def test_json_only_fallback_omits_native_parameters_and_replays_observatio
         assert "tools" not in request and "tool_choice" not in request
         assert "Available Tool Definitions" in request["messages"][0]["content"]
         assert all(message["role"] != "tool" and "tool_calls" not in message for message in request["messages"])
-    transcript = "\n".join(message["content"] or "" for message in router.requests[1]["messages"])
-    assert "ACTUAL RESULT" in transcript and "Executed tool calls" in transcript
+    transcript = "\n".join(message["content"] or "" for message in unpack_api_context(router.requests[1]["messages"]))
+    assert "ACTUAL RESULT" in transcript
+    assert context_records(router.requests[1]["messages"])[0]["tool_calls"][0]["tool_name"] == "record"
 
 
 async def test_selection_refreshes_and_caches_native_support_between_calls(tmp_path):
@@ -329,7 +333,7 @@ async def test_streamed_native_batch_waits_for_complete_record_and_preserves_rea
             release.set()
         assert await running == "Done."
     assert tool.seen == [{"value": "A"}]
-    prior = next(message for message in router.requests[1]["messages"] if message.get("tool_calls"))
+    prior = next(message for message in unpack_api_context(router.requests[1]["messages"]) if message.get("tool_calls"))
     assert "reasoning_details" not in prior and "reasoning" not in prior
     assert agent.history.posts[0].reasoning == "Inspecting. Reading."
     assert not any("opaque-provider-data" in event.text or "part-1" in event.text for event in events)
@@ -396,8 +400,8 @@ def test_native_file_operation_through_real_cli(tmp_path):
     assert result.stdout.strip() == "Done."
     assert (tmp_path / "native.txt").read_text() == "actual content\n"
     assert len(stub.requests) == 2
-    calls = [message["tool_calls"] for message in stub.requests[1]["messages"] if message.get("tool_calls")]
+    calls = [message["tool_calls"] for message in unpack_api_context(stub.requests[1]["messages"]) if message.get("tool_calls")]
     assert len(calls) == 1 and len(calls[0]) == 1
     assert calls[0][0]["id"] == "write-1"
-    results = [message for message in stub.requests[1]["messages"] if message["role"] == "tool"]
+    results = [message for message in unpack_api_context(stub.requests[1]["messages"]) if message["role"] == "tool"]
     assert len(results) == 1 and results[0]["tool_call_id"] == "write-1"

@@ -542,15 +542,27 @@ remain available. Isolated background summaries do not replace this view.
 Before the first working request, the view indicates that none has
 been sent.
 
-The model's input uses plain labels for system instructions, the response
-contract, current turn state, history records, user requests, and named tool
-results with call IDs. Each historical turn starts with one unnumbered
-`Conversation Record` label identifying full, compressed, or excerpted content.
+After the system instructions, each input message contains exactly one JSON
+object: one per historical turn, followed by one for the current turn. No prose
+headings are inserted into prompts, replies, or tool content.
+`record_type` distinguishes `history_turn` from `current_turn`; `representation`
+distinguishes `full`, `compressed`, and `excerpt`. Full records have `user_prompt`
+(an array, preserving multiple queued messages), `agent_response`, `tool_calls`,
+and `tool_results`. Calls retain their names, argument objects and IDs; results
+retain the matching IDs, status and content. Compressed records contain only
+their summary. Excerpts carry omission counts and retrieval instructions in
+separate fields, without inserting descriptions into original text.
 The current post number and task-source IDs stay in the system prompt. The last
 historical record is the current post minus one; earlier records can be located
-by counting backward for `recall_history`. Current user input is separate.
-These labels count toward the context budget. Archived originals and source-file
-formatting remain verbatim; the harness adds no Markdown headings to them.
+by counting backward for `recall_history`. The current-turn object identifies
+continuation requests and retains the active prompt when history lacks a full
+copy. JSON fields and escaping count toward the context budget. This input format
+is separate from the selected model's response contract, which stays consistent
+between calls. Native tool calls remain available for responses from models that
+support them; the harness does not ask models to echo its history-record format.
+Echoes of former harness response labels are removed from ordinary reply text
+and from assistant replies reused as context, without rewriting saved originals.
+Quoted or fenced examples, user input, tool arguments and file content remain intact.
 
 The prompt stays live while the agent works. All waiting prompts join the next
 model request together, after the current tool batch finishes. Each has a queued
@@ -762,8 +774,8 @@ are stored separately, alongside the response's reasoning as one string when
 available. Recent turns present the full prompt, response, calls, and results,
 with reasoning excluded. Older turns use their whole-turn summary only when its
 estimated token cost is smaller than the original; otherwise they retain their
-full prompt, response, tool calls, and results. The comparison includes headings,
-message overhead, and the selected provider's tool format. Ties retain originals.
+full prompt, response, tool calls, and results. The comparison includes JSON fields,
+escaped content, and message overhead. Ties retain originals.
 A turn never includes both its full original and its summary in the same request.
 
 The default recent window is **50 model calls**, with a minimum target of **5**

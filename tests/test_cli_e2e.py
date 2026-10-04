@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 
-from test_agent import structured_message, context_body, summary_response
+from test_agent import structured_message, context_body, summary_response, context_records, unpack_api_context
 from slipagent.config import DEFAULT_MODEL
 from offline.sitecustomize import GUARD_DIRECTORY
 
@@ -296,9 +296,9 @@ def test_one_shot_executes_a_read_tool(project_dir: Path) -> None:
 
     # The second request must carry the tool result back to the model.
     second = stub.requests[1]
-    tool_messages = [m for m in second["messages"] if m["role"] == "tool"]
+    tool_messages = context_records(second["messages"])[0]["tool_results"]
     assert len(tool_messages) == 1
-    assert tool_messages[0]["tool_call_id"] == "call_1"
+    assert tool_messages[0]["call_id"] == "call_1"
     assert "def main():" in tool_messages[0]["content"]
 
 
@@ -339,7 +339,7 @@ def test_one_shot_refuses_to_write_outside_workspace(project_dir: Path, tmp_path
     assert result.returncode == 0, result.stderr
     assert victim.read_text() == "original"
 
-    tool_messages = [m for m in stub.requests[1]["messages"] if m["role"] == "tool"]
+    tool_messages = context_records(stub.requests[1]["messages"])[0]["tool_results"]
     assert "outside the workspace" in tool_messages[0]["content"]
 
 
@@ -360,9 +360,7 @@ def test_workspace_flag_changes_the_sandbox_root(project_dir: Path, tmp_path: Pa
         )
 
     assert result.returncode == 0, result.stderr
-    assert "data" in [
-        m for m in stub.requests[1]["messages"] if m["role"] == "tool"
-    ][0]["content"]
+    assert "data" in context_records(stub.requests[1]["messages"])[0]["tool_results"][0]["content"]
 
 
 def test_positional_prompt_is_accepted(project_dir: Path) -> None:
@@ -370,7 +368,7 @@ def test_positional_prompt_is_accepted(project_dir: Path) -> None:
         result = run_cli("hello", "world", "--base-url", stub.base_url, cwd=project_dir)
 
     assert result.returncode == 0, result.stderr
-    assert context_body(stub.requests[0]["messages"][-1]["content"]) == "hello world"
+    assert context_records(stub.requests[0]["messages"])[-1]["user_prompt"] == ["hello world"]
 
 
 def test_verbose_shows_tool_output_on_stderr(project_dir: Path) -> None:
@@ -642,7 +640,7 @@ def test_mcp_tool_is_callable_by_the_model(project_dir: Path) -> None:
 
     assert proc.returncode == 0, proc.stderr
     # The result must come back to the model on the next request.
-    tool_messages = [m for m in stub.requests[1]["messages"] if m["role"] == "tool"]
+    tool_messages = context_records(stub.requests[1]["messages"])[0]["tool_results"]
     assert context_body(tool_messages[0]["content"]) == "echo: from the model"
 
 
@@ -808,7 +806,7 @@ def test_mid_turn_input_is_queued_and_labelled(project_dir: Path) -> None:
     assert "queued" in lines[submitted + 1]
     assert lines[submitted + 2] == ""
     # It must have reached the model as ordinary user input.
-    users = [context_body(m["content"]) for m in stub.requests[-1]["messages"] if m["role"] == "user"]
+    users = [prompt for record in context_records(stub.requests[-1]["messages"]) for prompt in record.get("user_prompt", [])]
     assert "also do this" in users
 
 
@@ -1310,7 +1308,7 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             os.write(master, b"continue\r")
             wait_for(lambda: "resumed successfully" in "\n".join(screen.display[:17]))
             assert len(stub.requests) == 2
-            history = stub.requests[1]["messages"]
+            history = unpack_api_context(stub.requests[1]["messages"])
             assert [m["tool_call_id"] for m in history if m["role"] == "tool"] == ["call_1", "call_2"]
             assert "queued followup" in [context_body(m["content"]) for m in history if m["role"] == "user"]
             os.write(master, b"/model stub/two\r")

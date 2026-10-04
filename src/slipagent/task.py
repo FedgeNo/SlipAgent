@@ -13,6 +13,7 @@ from collections.abc import Callable
 
 from .types import Message
 from .tools.base import Tool, ToolResult
+from .records import record_message, turn_record
 
 TASK_MAX_CHARS = 8000
 TASK_TEXT_MAX_CHARS = 2000
@@ -123,13 +124,18 @@ class TaskMemory:
             return []
         prompts = self.sources[post_id]
         joined = "\n".join(prompts)
-        supplied = {message.content.partition("\n\n")[2]
-                    for message in messages if message.role == "user" and message.content
-                    and message.content.startswith(("Current User Request (Full):", "User Request (Full):",
-                                                    "Conversation Record (Full):", "Conversation Record (Excerpt):"))}
+        supplied: set[str] = set()
+        current = turn_record([], current=True)
+        for message in messages:
+            if message.role != "user":
+                continue
+            record = json.loads(message.content or "{}")
+            supplied.update(record.get("user_prompt", []))
+            if record.get("record_type") == "current_turn":
+                current = record
         if joined in supplied or all(prompt in supplied for prompt in prompts):
             return []
-        return [Message.user("Current User Request (Full):\n\n" + joined)]
+        return [record_message({**current, "user_prompt": prompts})]
 
     def instructions(self) -> str:
         return (

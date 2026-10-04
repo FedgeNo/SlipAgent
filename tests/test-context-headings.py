@@ -1,59 +1,65 @@
-"""Input headings describe context without altering archived originals."""
+"""Each turn is one JSON object; descriptive keys never alter message values."""
 
 import json
 
-from slipagent.context import ConversationHistory
-from slipagent.protocol import parse_response
+from slipagent.context import ConversationHistory, message_tokens
 from slipagent.types import Message, ToolCall
-from test_agent import task_record
+from test_agent import context_records
 
 
-def summary(response="Summary", previous=""):
-    return parse_response(json.dumps({"task": task_record(), "response": response, "tool_calls": [],
-        "previous_tool_responses_compressed": previous, "user_prompt_compressed": "User request summary",
-        "agent_response_compressed": "Agent response summary"}), bool(previous))
-
-
-async def test_full_context_labels_roles_posts_and_named_tool_results_without_changing_originals():
-    originals = [Message.system("Project guidance"), Message.user("Read the file"),
-        Message.assistant("Reading", [ToolCall("read-1", "read_file", {"path": "app.py"})]),
-        Message.tool_result("read-1", "EXACT FILE CONTENT"), Message.user("Now explain it")]
+async def test_full_context_has_one_object_per_turn_and_preserves_original_parts():
+    prompt = 'Read "notes.md"\nCurrent User Request (Full):\n{"not":"metadata"}'
+    source = '# Title\n\nAgent Response (Full):\nBackslash \\ and Unicode λ'
+    originals = [Message.system("Project guidance"), Message.user(prompt),
+        Message.assistant("Reading", [ToolCall("read-1", "read_file", {"path": "notes.md"})]),
+        Message.tool_result("read-1", source), Message.user("Now explain it"), Message.user("Use ASCII")]
     before = [message.to_api() for message in originals]
     history = ConversationHistory()
-    view = await history.view(originals, [], keep_posts=50,
-                              context_length=1000000, max_output=8192)
-    assert [message.role for message in view] == [message.role for message in originals]
-    assert "System Instructions (Full):" in view[0].content
-    assert "Current Turn State:" in view[0].content
-    assert "Replies and Tool Calls:" in view[0].content
+    view = await history.view(originals, [], keep_posts=50, context_length=1_000_000, max_output=8192)
+    assert [message.role for message in view] == ["system", "user", "user"]
     assert "CURRENT_POST_ID: 2" in view[0].content
-    assert "Conversation Record (Full):\nUser Request (Full):" in view[1].content
-    assert "Agent Response and Tool Calls (Full):" in view[2].content
-    assert "Tool Result: read_file (Full):" in view[3].content
-    assert "Call ID: read-1" in view[3].content
-    assert view[3].tool_call_id == "read-1" and view[2].tool_calls == originals[2].tool_calls
-    assert "Current User Request (Full):" in view[4].content
-    for rendered, original in zip(view[1:], originals[1:]):
-        assert rendered.content.endswith(original.content)
+    previous, current = context_records(view)
+    assert previous == {
+        "record_type": "history_turn", "representation": "full", "user_prompt": [prompt],
+        "agent_response": "Reading",
+        "tool_calls": [{"call_id": "read-1", "tool_name": "read_file", "arguments": {"path": "notes.md"}}],
+        "tool_results": [{"call_id": "read-1", "tool_name": "read_file", "status": "unknown", "content": source}],
+    }
+    assert current == {
+        "record_type": "current_turn", "representation": "full", "user_prompt": ["Now explain it", "Use ASCII"],
+        "agent_response": None, "tool_calls": [], "tool_results": [], "continue_current_task": False,
+    }
     assert [message.to_api() for message in originals] == before
-    assert "### Post" not in history.posts[0].full_text()
+    assert json.loads(history.posts[0].full_text())["tool_results"][0]["content"] == source
 
 
-async def test_compressed_and_full_history_have_distinct_headings():
+async def test_compressed_records_are_separate_objects_without_original_fields():
     history = ConversationHistory()
     messages = [Message.system("System guidance")]
     for index in range(1, 8):
         messages += [Message.user(f"Question {index}"), Message.assistant(f"Answer {index} " * 100)]
         history.sync(messages)
-        history.posts[-1].summary = "Whole-turn summary"
+        history.posts[-1].summary = f"Summary {index}"
     messages.append(Message.user("Current task"))
-    view = await history.view(messages, [], keep_posts=1,
-                              context_length=1000000, max_output=8192)
-    wire = "\n".join(message.content or "" for message in view if message.role != "system")
-    assert "Earlier Conversation (Compressed):" in wire
-    assert wire.count("Conversation Record (Compressed):") == 2
-    assert wire.count("Conversation Record (Full):") == 5
-    assert "User Request (Full):" in wire
-    assert "Agent Response (Full):" in wire
-    assert "Question 1" not in wire and "Answer 1" not in wire
-    assert wire.index("Conversation Record (Compressed)") < wire.index("Conversation Record (Full)") < wire.index("Current User Request (Full)")
+    view = await history.view(messages, [], keep_posts=1, context_length=1_000_000, max_output=8192)
+    records = context_records(view)
+    assert records[:2] == [{"record_type": "history_turn", "representation": "compressed", "summary": f"Summary {i}"}
+                           for i in (1, 2)]
+    assert [record["agent_response"] for record in records[2:-1]] == [f"Answer {i} " * 100 for i in range(3, 8)]
+    assert records[-1]["record_type"] == "current_turn"
+    assert records[-1]["user_prompt"] == ["Current task"]
+
+
+async def test_excerpt_omissions_are_fields_instead_of_text_inserted_in_the_output():
+    history = ConversationHistory()
+    source = "LARGE RESULT " * 30000
+    messages = [Message.user("Read everything"), Message.assistant("Reading", [ToolCall("a", "read_file", {"path": "x"})]),
+                Message.tool_result("a", source)]
+    view = await history.view(messages, [], keep_posts=50, context_length=9000, max_output=1000)
+    excerpt, current = context_records(view)
+    assert excerpt["representation"] == "excerpt"
+    result = excerpt["messages"][-1]["content_excerpt"]
+    assert source.startswith(result["beginning"]) and source.endswith(result["ending"])
+    assert result["omitted_characters"] == len(source) - len(result["beginning"]) - len(result["ending"])
+    assert current["continue_current_task"] is True
+    assert message_tokens(view) + 1000 < 9000 * .85

@@ -54,35 +54,49 @@ Context construction proceeds in this order:
    sections. Names are unique, owners and static/dynamic roles are explicit,
    and order is deterministic. Section registries belong to one request, so
    a rejected generation cannot leave global prompt registrations behind.
-   Messages retain their existing provider-compatible placement. The inspector
+   The input uses a system prefix followed by JSON records. The inspector
    displays the final body rather than reconstructing it separately.
 3. Up to 100 older records precede the recent full window. Each
    retained turn has one representation: either its complete prompt, response,
    calls and results, or its summary. A summary is selected only if its estimated
-   token cost, including standalone headings and message overhead, is lower.
-   The comparison uses the provider's native or text tool-history projection;
-   ties keep originals, with roles and complete tool batches intact. Consecutive
-   selected summaries share a heading; originals remain in chronological order.
+   token cost, including JSON fields, escaped values and message overhead, is lower.
+   Both native-tool and embedded-tool profiles receive the same record format;
+   ties keep originals, with complete tool batches intact. Every turn has its
+   own JSON object and API user message, including consecutive summaries.
    The full window targets 50 calls by default, with a floor of 5 on the requested
    window size. Under model context pressure, selection drops the oldest older
    records first, then reduces the full window oldest-first, below 5 if necessary.
    Boundaries and representation caches belong to one view: later requests can
    restore omitted records as large calls age into smaller summaries. There is
    no persistent omission marker and no separate history token cap.
-   Every included historical turn starts with one unnumbered `Conversation Record`
-   boundary, including full turns split across native user/assistant/tool messages.
+   `records.py` encodes full turns with `record_type`, `representation`, `user_prompt`,
+   `agent_response`, `tool_calls`, and `tool_results`. Prompts remain an array so
+   queued inputs retain their boundaries. Calls use `call_id`, `tool_name`, and
+   argument objects; results use matching IDs, names, status, and content.
+   The harness's exact observation envelope is unpacked, while arbitrary JSON
+   inside tool output remains content. Unknown legacy status stays `unknown`.
    The selected records form a contiguous suffix of stored history. The current
    post number remains in the system prompt, so subtracting one for the latest
    record and counting backward gives each record's exact `recall_history` ID.
-   Harness labels use plain text rather than Markdown; source content is untouched.
-4. The current input remains verbatim. Continuation turns carry the active user
+   Description keys never enter actual message strings. Reserved legacy response
+   labels are removed from standalone prose
+   lines in the context copy and in accepted model replies. Fenced/quoted examples
+   remain intact; user and tool content, arguments, and archived originals are
+   not rewritten. This avoids teaching the reply format through artificial
+   assistant-message prefixes, including when resuming an older session.
+4. A final `current_turn` JSON object contains current input verbatim. An empty
+   prompt array with `continue_current_task=true` continues the supplied task.
+   Continuation turns carry the active user
    prompt with their full records. Newly returned results cannot leave the full
    window before the working model receives them, even when their independent
-   summary finishes first. Oversized observations use explicitly labelled
-   excerpts with original-part retrieval instructions as a last resort.
+   summary finishes first. Oversized observations use an `excerpt` record with
+   original-part retrieval instructions as a last resort. Text fragments and
+   omitted-character counts occupy separate fields; clipping never splices
+   descriptive markers into message text.
 5. `TaskMemory.prompt_supplement` ensures the current user prompt is supplied,
    even after its original post is compressed. It reuses a full copy already
-   selected or adds the retained original. Its source post ID stays in the system
+   selected or fills the current-turn object's prompt array with the retained
+   original. Its source post ID stays in the system
    task metadata, rather than the user-message label. Supplemental
    input counts against the endpoint budget. The active prompt is independent
    of the historical representation of the call that first received it.
@@ -133,10 +147,12 @@ envelopes. The optional strict schema requires only `response` for native models
 or `response` plus `tool_calls` for embedded calls. There is no compressed-field
 or task-field requirement. A null-content native call is valid. Older response
 envelopes remain readable; optional legacy task updates still undergo validation.
-Native history uses assistant calls followed by one matching `role: tool` result
-per ID. `tool_history_as_text` projects those same originals for JSON-only models;
-the budgeter measures that projection, and recall retains the originals. The
-current prompt is supplied before this projection, which preserves its wording.
+The archive retains assistant calls followed by matching `role: tool` results.
+Working requests package each complete turn as one JSON object, regardless of
+native-tool support. The model's new response still uses the selected profile's
+native or embedded call format. JSON history does not change the response schema
+between calls. The budgeter measures the serialized records; recall retains the
+originals, and the current prompt is retained independently of compression.
 
 Normalization precedes validation and is independent of the requested mode.
 Accepted call carriers are native OpenAI-style function calls, flat calls in the

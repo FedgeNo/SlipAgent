@@ -10,6 +10,7 @@ from slipagent.context import ConversationHistory, RecallHistoryTool
 from slipagent.instructions import ProjectInstructions
 from slipagent.prompts import PromptSections
 from slipagent.types import Message, ToolCall
+from test_agent import context_records
 
 
 async def test_routine_context_keeps_post_counters_only_in_system_messages():
@@ -30,9 +31,10 @@ async def test_routine_context_keeps_post_counters_only_in_system_messages():
     for key in ("CURRENT_POST_ID:", "PREVIOUS_POST_ID:", "TASK_SOURCE_REVISION:",
                 '"current_prompt_post":', '"origin_post":', '"source_posts":'):
         assert key not in wire
-    assert wire.count("Conversation Record (Compressed):") == 3
-    assert wire.count("Conversation Record (Full):") == 5
-    assert "Agent Response (Full):" in wire
+    records = context_records(view)
+    assert sum(record["representation"] == "compressed" for record in records) == 3
+    assert sum(record["representation"] == "full" for record in records[:-1]) == 5
+    assert "Agent Response (Full):" not in wire
     assert history.task.current_prompt_post == 9
 
 
@@ -44,9 +46,9 @@ async def test_source_markdown_and_tool_protocol_are_preserved():
                 Message.tool_result("read", source)]
     before = [message.to_api() for message in messages]
     view = await history.view(messages, [], keep_posts=5, context_length=1_000_000, max_output=8192)
-    assert view[-1].content.endswith(source)
-    assert view[-1].role == "tool" and view[-1].tool_call_id == "read"
-    assert view[-2].tool_calls == messages[1].tool_calls
+    record = context_records(view)[0]
+    assert record["tool_results"] == [{"call_id": "read", "tool_name": "read_file", "status": "unknown", "content": source}]
+    assert record["tool_calls"] == [{"call_id": "read", "tool_name": "read_file", "arguments": {"path": "notes.md"}}]
     assert [message.to_api() for message in messages] == before
     assert ProjectInstructions.render({".": source}).endswith(source)
     assert not ProjectInstructions.render({".": source}).startswith("###")
@@ -84,7 +86,7 @@ async def test_counting_backwards_recovers_ids_after_both_history_limits(context
     messages.append(Message.user("Continue"))
     view = await history.view(messages, [], keep_posts=50, context_length=context_length, max_output=1000)
     wire = "\n".join(message.content or "" for message in view if message.role != "system")
-    records = re.split(r"Conversation Record \((?:Full|Compressed)\):\n", wire)[1:]
+    records = [json.dumps(record) for record in context_records(view) if record["record_type"] == "history_turn"]
     assert 0 < len(records) <= 150
     current = int(re.search(r"CURRENT_POST_ID: (\d+)", view[0].content)[1])
     recall = RecallHistoryTool(history)

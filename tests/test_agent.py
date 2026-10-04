@@ -13,6 +13,56 @@ from slipagent.types import Completion, Message, ToolCall, Usage
 from slipagent.context import response_memory, tool_response_memory
 
 
+def context_records(messages):
+    """Read the actual one-object-per-turn request format for assertions."""
+    records = []
+    for message in messages:
+        raw = message.to_api() if isinstance(message, Message) else message
+        if raw["role"] != "system":
+            record = json.loads(raw["content"])
+            assert record["record_type"] in {"history_turn", "current_turn"}
+            records.append(record)
+    return records
+
+
+def unpack_context(messages):
+    """Compare original parts in JSON input with older behavioral fixtures.
+
+    This is only an assertion/fixture reader. Clients retain the real JSON
+    requests, which format-specific tests inspect using context_records.
+    """
+    result = []
+    for source in messages:
+        message = source if isinstance(source, Message) else Message.from_api(source)
+        try:
+            record = json.loads(message.content or "")
+        except ValueError:
+            record = None
+        if not isinstance(record, dict) or record.get("record_type") not in {"history_turn", "current_turn"}:
+            result.append(message)
+            continue
+        result.extend(Message.user(text) for text in record.get("user_prompt", []))
+        if record["representation"] == "compressed":
+            result.append(Message.assistant(record["summary"]))
+        elif record["representation"] == "excerpt":
+            result.append(Message.assistant(json.dumps(record, ensure_ascii=False)))
+        else:
+            calls = [ToolCall(call["call_id"], call["tool_name"], call["arguments"]) for call in record.get("tool_calls", [])]
+            if record["record_type"] == "history_turn" or record.get("agent_response") is not None or calls:
+                result.append(Message.assistant(record.get("agent_response"), calls))
+            for item in record.get("tool_results", []):
+                content = item["content"]
+                if item["status"] != "unknown":
+                    content = json.dumps({"tool": item["tool_name"], "call_id": item["call_id"],
+                                          "status": item["status"], "content": content}, ensure_ascii=False)
+                result.append(Message.tool_result(item["call_id"], content))
+    return result
+
+
+def unpack_api_context(messages):
+    return [message.to_api() for message in unpack_context(messages)]
+
+
 def task_record(messages=None, *, revision=1, **changes):
     system = "\n".join(m.get("content") or "" for m in messages or [] if m["role"] == "system")
     match = re.search(r"TASK_SOURCE_REVISION: (\d+)", system)
@@ -52,6 +102,7 @@ def summary_response(body):
 
 def inline_memory(text: str | None, messages: list[dict[str, Any]]) -> str:
     """Supply legacy envelopes to fixtures exercising older response formats."""
+    messages = unpack_api_context(messages)
     content = text or ""
     if "<slipagent_context>" in content:
         return content
@@ -73,6 +124,7 @@ def inline_memory(text: str | None, messages: list[dict[str, Any]]) -> str:
 
 def structured_message(message: dict[str, Any], messages: list[dict[str, Any]], *, include_memory: bool = True) -> dict[str, Any]:
     """Translate canned fixtures to the supported legacy response envelope."""
+    messages = unpack_api_context(messages)
     text = message.get("content") or ""
     try:
         existing = json.loads(text)
@@ -202,7 +254,7 @@ async def test_pending_correction_is_delivered_before_resumed_tools():
         await agent.run("Initial task")
     client.chat = original
     await agent.run("Continue")
-    requests = [context_body(m.content) for m in client.calls[0]["messages"] if m.role == "user"]
+    requests = [context_body(m.content) for m in unpack_context(client.calls[0]["messages"]) if m.role == "user"]
     assert requests == ["Initial task", "Never change settings", "Continue"]
 
 
@@ -210,7 +262,7 @@ async def test_error_status_reaches_model_and_archive():
     agent, client = build_agent([completion(tool_calls=[call(value="act")]), completion("done")],
                                 tools=[RecordingTool("same body", is_error=True)])
     await agent.run("Task")
-    result = next(m for m in client.calls[1]["messages"] if m.role == "tool")
+    result = next(m for m in unpack_context(client.calls[1]["messages"]) if m.role == "tool")
     assert '"status": "error"' in result.content
     assert '"tool": "record"' in result.content
     assert "same body" in result.content
@@ -223,7 +275,7 @@ async def test_broken_dispatch_cannot_leave_an_unanswered_tool_batch():
         raise AttributeError("broken registry")
     agent.registry.invoke = broken
     assert await agent.run("Task") == "done"
-    results = [m for m in client.calls[1]["messages"] if m.role == "tool"]
+    results = [m for m in unpack_context(client.calls[1]["messages"]) if m.role == "tool"]
     assert len(results) == 1
     assert "broken registry" in results[0].content
 
@@ -318,7 +370,7 @@ async def test_unknown_tool_error_is_fed_back_to_model() -> None:
     tool_message = [m for m in agent.messages if m.role == "tool"][0]
     assert "Unknown tool" in tool_message.content
     # The model must receive the tool error before its next turn.
-    assert client.calls[1]["messages"][-1].role == "tool"
+    assert unpack_context(client.calls[1]["messages"])[-1].role == "tool"
 
 
 async def test_tool_error_is_fed_back_to_model() -> None:
@@ -332,7 +384,7 @@ async def test_tool_error_is_fed_back_to_model() -> None:
     )
 
     assert await agent.run("go") == "I see, denied."
-    assert context_body(client.calls[1]["messages"][-1].content) == "permission denied"
+    assert context_body(unpack_context(client.calls[1]["messages"])[-1].content) == "permission denied"
 
 
 async def test_conversation_history_accumulates_across_turns() -> None:
@@ -381,7 +433,7 @@ async def test_queued_message_reaches_the_model_as_user_input() -> None:
 
     await agent.run("go")
 
-    queued = [m for m in client.calls[1]["messages"] if m.role == "user"]
+    queued = [m for m in unpack_context(client.calls[1]["messages"]) if m.role == "user"]
     assert [context_body(m.content) for m in queued] == ["go", "actually, use pytest"]
 
 
@@ -394,7 +446,7 @@ async def test_queued_message_lands_after_the_tool_result() -> None:
 
     await agent.run("go")
 
-    roles = [m.role for m in client.calls[1]["messages"]]
+    roles = [m.role for m in unpack_context(client.calls[1]["messages"])]
     assert roles == ["system", "user", "assistant", "tool", "user"]
 
 
@@ -459,7 +511,7 @@ async def test_a_whole_batch_runs_in_one_turn() -> None:
     assert [entry["value"] for entry in tool.seen] == ["a", "b", "c"]
     # One model request covered all three: no round trip between them.
     assert len(client.calls) == 2
-    roles = [m.role for m in client.calls[1]["messages"]]
+    roles = [m.role for m in unpack_context(client.calls[1]["messages"])]
     assert roles == ["system", "user", "assistant", "tool", "tool", "tool"]
 
 
@@ -663,7 +715,7 @@ async def test_stop_finishes_whole_batch_and_prevents_next_request() -> None:
     assert await agent.run("continue") == "resumed"
     assert not agent.stopped
     assert len(tool.seen) == 2
-    assert [m.tool_call_id for m in client.calls[1]["messages"] if m.role == "tool"] == ["one", "two"]
+    assert [m.tool_call_id for m in unpack_context(client.calls[1]["messages"]) if m.role == "tool"] == ["one", "two"]
 
 
 async def test_stop_during_a_tool_preserves_its_result() -> None:
@@ -695,7 +747,7 @@ async def test_stop_on_final_answer_keeps_pending_input_for_explicit_resume() ->
     assert agent.stopped
     agent.on_event = None
     await agent.run("continue")
-    users = [context_body(m.content) for m in client.calls[-1]["messages"] if m.role == "user"]
+    users = [context_body(m.content) for m in unpack_context(client.calls[-1]["messages"]) if m.role == "user"]
     assert users == ["go", "followup", "continue"]
 
 

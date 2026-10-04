@@ -80,6 +80,11 @@ The active task working record below preserves goals, constraints, and pending
 work in every request. You may update it with update_task when useful.
 Input headings identify system instructions, original requests, responses and
 observations. They are navigation labels, not part of the source wording.
+The harness adds post numbers solely for your reference and recall_history
+lookups. They are not a numbering system or response format you must follow.
+Do not repeat, generate, or continue post numbers or history headings in your
+replies. For example, "### Post 38 — Agent Response (Full)" is a harness label;
+do not output it or a similar heading. Write your response directly instead.
 Keep bookkeeping labels and historical summaries out of your reply.
 """
 

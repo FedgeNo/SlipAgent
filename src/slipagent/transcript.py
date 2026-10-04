@@ -32,6 +32,28 @@ class TranscriptFile(Sequence[str]):
         self._file.seek(self._offsets[-1])
         self._file.write(data)
         self._offsets.append(self._file.tell())
+        if hasattr(self, "_ends"):
+            self._ends.append(self._file.tell())
+
+    def _editable_index(self) -> array[int]:
+        # Existing live files have contiguous offsets. Split their end offsets
+        # only when removing a notice, leaving file contents in place.
+        if not hasattr(self, "_ends"):
+            self._ends = self._offsets[1:]
+        return self._ends
+
+    def clear_record(self, index: int) -> None:
+        """Empty one record without changing other records' indices."""
+        if not 0 <= index < len(self):
+            raise IndexError(index)
+        self._editable_index()[index] = self._offsets[index]
+
+    def remove(self, start: int, stop: int) -> None:
+        """Remove indexed records without reading or rewriting their neighbors."""
+        if not 0 <= start <= stop <= len(self):
+            raise IndexError((start, stop))
+        del self._editable_index()[start:stop]
+        del self._offsets[start:stop]  # Keep the final file-end offset for appends.
 
     def __len__(self) -> int:
         return len(self._offsets) - 1
@@ -50,7 +72,8 @@ class TranscriptFile(Sequence[str]):
         if not 0 <= index < len(self):
             raise IndexError(index)
         self._file.seek(self._offsets[index])
-        return self._file.read(self._offsets[index + 1] - self._offsets[index]).decode(
+        end = self._ends[index] if hasattr(self, "_ends") else self._offsets[index + 1]
+        return self._file.read(end - self._offsets[index]).decode(
             "utf-8", errors="surrogatepass",
         )
 
@@ -100,7 +123,7 @@ def compact_fragments(characters: StyleAndTextTuples) -> StyleAndTextTuples:
 
 
 class WrappedTranscript:
-    """Append-only completed rows with a revisable wrapping tail.
+    """Incrementally formatted rows with a revisable wrapping tail.
 
     A growing word can move off the previous row, and a later code point can
     extend the final grapheme. Keeping two rows uncommitted allows both without
@@ -282,6 +305,19 @@ class WrappedTranscript:
                 self._cache.popitem(last=False)
         self._cache.move_to_end(index)
         return self._cache[index]
+
+    def remove_rows(self, start: int, stop: int) -> None:
+        """Retract complete notice rows, preserving the unfinished output tail."""
+        count = stop - start
+        self.rows.remove(start, stop)
+        self._cache = OrderedDict(
+            (index if index < start else index - count, row)
+            for index, row in self._cache.items() if index < start or index >= stop
+        )
+        def shifted(index: int) -> int:
+            return index - min(count, max(0, index - start))
+        self.prompt_rows = [(shifted(left), shifted(right)) for left, right in self.prompt_rows
+                            if left < start or left >= stop]
 
     def close(self) -> None:
         self.rows.close()

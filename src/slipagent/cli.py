@@ -289,6 +289,10 @@ class Renderer:
         self._finish_stream()
         self._begin_block()
         block = self.style.green(f"> {text}")
+        if queued and self.terminal is not None:
+            self._write(block + "\n", user_prompt=True)
+            self.terminal.write_queued_notice(self.style.dim("  (queued — the agent is still working)"), text)
+            return
         if queued:
             block += "\n" + self.style.dim("  (queued — the agent is still working)")
         self._write(f"{block}\n", user_prompt=True)
@@ -300,7 +304,8 @@ class Renderer:
         self._erase()
         self._prompt = None
 
-    async def restore_transcript(self, messages: list[Message], pending: list[str]) -> None:
+    async def restore_transcript(self, messages: list[Message], pending: list[str], *,
+                                 queued_messages: dict[int, str] | None = None) -> None:
         """Display archived originals only; never dispatch their tools or requests."""
         self._finish_stream()
         if self.terminal is not None:
@@ -310,7 +315,7 @@ class Renderer:
         self._last_output_blank = True
         for index, message in enumerate(messages):
             if message.role == "user":
-                self.user_prompt(message.content or "")
+                self.user_prompt(message.content or "", queued=index in (queued_messages or {}))
             elif message.role == "assistant":
                 self._model_block = object()
                 if message.reasoning:
@@ -406,6 +411,14 @@ class Renderer:
             # echoed rather than the live prompt, because the prompt they are
             # typing into is still on screen holding the text they just sent.
             self.user_prompt(event.text, queued=True)
+
+        elif event.kind == "user_message_sent":
+            if self.terminal is not None:
+                self.terminal.queued_prompt_sent(event.text)
+
+        elif event.kind == "user_queue_reset":
+            if self.terminal is not None:
+                self.terminal.forget_queued_notices()
 
         elif event.kind == "tool_start" and event.tool_call is not None:
             self._tool_streamed = False
@@ -648,7 +661,8 @@ async def run_repl(session: Session) -> int:
         mcp=mcp_line,
     )
     if session.extensions.pop("restore_transcript", False):
-        await renderer.restore_transcript(session.agent.messages, session.agent.pending)
+        await renderer.restore_transcript(session.agent.messages, session.agent.pending,
+                                          queued_messages=session.agent.queued_messages)
     quota_task = asyncio.create_task(_poll_quota(session))
     reload_task = asyncio.create_task(session.reloader.watch()) if session.reloader is not None else None
 
@@ -1228,7 +1242,8 @@ async def _execute_command(session: Session, line: str) -> bool:
                 if jobs is not None:
                     await jobs.stop_all()
                 journal.restore(session.agent, data)
-                await session.renderer.restore_transcript(session.agent.messages, session.agent.pending)
+                await session.renderer.restore_transcript(session.agent.messages, session.agent.pending,
+                                                          queued_messages=session.agent.queued_messages)
                 print(f"  restored {data['id']} as {journal.session_id}; no tools were replayed. Type a task or continue when ready.", file=out)
             except SessionError as exc:
                 print(style.red(f"  {exc}"), file=out)

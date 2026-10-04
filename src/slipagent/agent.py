@@ -51,6 +51,8 @@ EventKind = Literal[
     "stream_end",
     "retry",
     "user_message",
+    "user_message_sent",
+    "user_queue_reset",
     "tool_start",
     "tool_output",
     "tool_end",
@@ -341,6 +343,8 @@ class Agent:
         self.messages = list(prefix)
         self.usage = Usage()
         self.pending.clear()
+        self.queued_messages.clear()
+        self._emit(AgentEvent(kind="user_queue_reset"))
         self.stop_requested = False
         self.stopped = False
         self.history.clear()
@@ -540,7 +544,36 @@ class Agent:
         self._loop_guard().reset()
         self.registry.context_notes.pop("progress", None)
         for message in queued:
+            self.queued_messages[len(self.messages)] = message
             self.messages.append(Message.user(message))
+
+    @property
+    def queued_messages(self) -> dict[int, str]:
+        """Messages in history that are still awaiting request submission.
+
+        Draining a queue preserves tool-result ordering, but context preparation
+        or a stop can still prevent delivery. Indices also survive journal resume.
+        """
+        queued: dict[int, str] = self.registry.services.setdefault("queued_messages", {})
+        return queued
+
+    def _queued_messages_sent(self) -> None:
+        delivered = list(self.queued_messages.values())
+        self.queued_messages.clear()
+        if delivered:
+            self._persist()
+            for text in delivered:
+                self._emit(AgentEvent(kind="user_message_sent", text=text))
+
+    async def _queued_context(self, specs: list[ToolSpec], step: int, *,
+                              repair: str = "", budget_fraction: float | None = None) -> list[Message]:
+        # Context preparation can yield to input. Rebuild if more prompts arrive
+        # so every message waiting at submission joins the same request.
+        while True:
+            self._drain_pending()
+            context = await self._context_view(specs, step, repair=repair, budget_fraction=budget_fraction)
+            if not self.pending:
+                return context
 
     def _emit(self, event: AgentEvent) -> None:
         if self.on_event is not None:
@@ -606,7 +639,7 @@ class Agent:
         self._emit(AgentEvent(kind="step_start", step=step))
 
         try:
-            context = await self._context_view(specs, step)
+            context = await self._queued_context(specs, step)
         except ContextStopped:
             return self._stop_notice(step)
 
@@ -624,6 +657,8 @@ class Agent:
         budget_fraction = self._budget().fraction
         repair = ""
         while True:
+            if self.pending:
+                context = await self._queued_context(specs, step, repair=repair, budget_fraction=budget_fraction)
             self._reserve_request()
             request_text = ""
             diagnostic_id: int | None = None
@@ -638,6 +673,7 @@ class Agent:
             def request_sent(request: str) -> None:
                 nonlocal request_text, diagnostic_id
                 request_text = request
+                self._queued_messages_sent()
                 if diagnostics is not None:
                     diagnostic_id = diagnostics.begin(request, step=step, post=len(self.history.posts) + 1)
                 instructions = self.registry.services.get("project_instructions")
@@ -654,6 +690,7 @@ class Agent:
             } if isinstance(self.client, OpenRouterClient) else {}
             try:
                 if not options:
+                    self._queued_messages_sent()
                     instructions = self.registry.services.get("project_instructions")
                     if instructions is not None:
                         instructions.presented(self.registry.services.get("instruction_snapshot", {}))
@@ -676,7 +713,7 @@ class Agent:
                     raise
                 overflows += 1
                 budget_fraction *= .65
-                smaller = await self._context_view(specs, step, repair=repair, budget_fraction=budget_fraction)
+                smaller = await self._queued_context(specs, step, repair=repair, budget_fraction=budget_fraction)
                 if [m.to_api() for m in smaller] == [m.to_api() for m in context]:
                     raise ContextError("The provider rejected the current input even without removable history. Originals are preserved; shorten the input or select a larger-context model.")
                 context = smaller
@@ -760,7 +797,7 @@ class Agent:
                 )
             # Include diagnostics in the budget calculation, rather than append
             # them to a request that might already fill the available context.
-            context = await self._context_view(specs, step, repair=repair, budget_fraction=budget_fraction)
+            context = await self._queued_context(specs, step, repair=repair, budget_fraction=budget_fraction)
 
         if record.task is not None:
             self.history.task.accept(record.task)

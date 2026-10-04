@@ -28,6 +28,61 @@ async def wait_until(predicate) -> None:
             await asyncio.sleep(.02)
 
 
+@pytest.mark.parametrize("columns", [18, 100])
+@pytest.mark.parametrize("paint_first", [False, True])
+def test_queued_notice_disappears_without_reformatting_history(display, monkeypatch, columns, paint_first):
+    from slipagent.transcript import WrappedTranscript
+    sink, _, output, _, _ = display
+    ui = TerminalUI(lambda width: "status", sink, output=output)
+    renderer = Renderer(Style(True), sink, False)
+    renderer.terminal = ui
+    renderer.emit("Old transcript " * 2000)
+    literal = "Keep (queued — the agent is still working) in this prompt"
+    renderer.user_prompt(literal, queued=True)
+    renderer.user_prompt("same", queued=True)
+    renderer.user_prompt("same", queued=True)
+    renderer.emit("Working output " * 100)
+    ui.input.text = "unfinished draft"
+    if paint_first:
+        before = ui._transcript_content(columns)
+        ui.transcript._following = False
+        ui.transcript.vertical_scroll = before.line_count - 3
+        old_row = before.get_line(ui.transcript.vertical_scroll)
+    examined = []
+    append = WrappedTranscript.append
+    def measure(self, text, **kwargs):
+        examined.append(text)
+        return append(self, text, **kwargs)
+    monkeypatch.setattr(WrappedTranscript, "append", measure)
+    renderer.handle(AgentEvent(kind="user_message_sent", text=literal))
+    renderer.handle(AgentEvent(kind="user_message_sent", text="same"))
+    content = ui._transcript_content(columns)
+    if paint_first:
+        assert not examined
+        assert content.get_line(ui.transcript.vertical_scroll) == old_row
+        assert not ui.transcript._following
+    text = "\n".join("".join(part[1] for part in content.get_line(i)) for i in range(content.line_count))
+    assert text.count("queued") == 2  # User's literal text and the remaining identical prompt's notice.
+    assert text.count("> same") == 2
+    assert ui.input.text == "unfinished draft"
+    # Resize/reload rebuild from the updated originals; notices cannot return.
+    ui.refresh()
+    content = ui._transcript_content(100)
+    text = "\n".join("".join(part[1] for part in content.get_line(i)) for i in range(content.line_count))
+    assert text.count("(queued — the agent is still working)") == 2
+    assert literal in text
+    renderer.handle(AgentEvent(kind="user_message_sent", text="same"))
+    content = ui._transcript_content(100)
+    text = "\n".join("".join(part[1] for part in content.get_line(i)) for i in range(content.line_count))
+    assert text.count("(queued — the agent is still working)") == 1
+    assert ui._flow.prompt_at(content.line_count - 1) is not None
+    renderer.emit("The new answer")
+    content = ui._transcript_content(100)
+    text = "\n".join("".join(part[1] for part in content.get_line(i)) for i in range(content.line_count))
+    assert "The new answer" in text and literal in text
+    ui._close_transcript()
+
+
 def test_long_thought_updates_only_format_a_bounded_tail(display, monkeypatch):
     import slipagent.transcript as terminal
     sink, _, output, _, _ = display

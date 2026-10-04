@@ -211,6 +211,15 @@ registry validates arguments and converts ordinary exceptions into error results
 not-run observations, retaining completed results and one observation per call.
 Errors carry explicit status and possible partial effects into model context.
 User messages queued during the batch are appended after all matching results.
+Before submitting a request, the agent includes every waiting prompt together,
+including arrivals during context preparation. Drained messages retain a delivery
+receipt keyed by their archive index until the request is sent; merely draining
+the queue, preparing context, or reaching `/stop` cannot acknowledge them. These
+indices are journaled so unsent prompts retain their queued labels on resume.
+Submission emits one receipt per prompt. The terminal removes that prompt's
+separate notice chunk and indexed display rows without reformatting surrounding
+history, then adjusts scroll and pinned-prompt indices. Identical queued prompts
+are acknowledged in arrival order. Plain stdout remains an append-only log.
 
 `/stop` finishes the active response and entire tool batch and prevents another
 working model request. The completed turn can still be summarized in the

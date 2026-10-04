@@ -188,6 +188,7 @@ class SessionJournal:
         self.last_message = copy.deepcopy(self._message(agent.messages[-1])) if agent.messages else None
         state = {"task_start": agent.history.task.start_message, "task": agent.history.task.record,
                  "usage": asdict(agent.usage), "pending": list(agent.pending),
+                 "queued_message_indices": list(agent.queued_messages),
                  "model": agent.model, "temperature": agent.temperature}
         if state != self.state:
             self._append("state", **state)
@@ -270,6 +271,12 @@ class SessionJournal:
                 raise ValueError("invalid task record")
             if not isinstance(state.get("pending"), list) or any(not isinstance(text, str) for text in state["pending"]):
                 raise ValueError("invalid queued input")
+            queued = state.get("queued_message_indices", [])
+            if (not isinstance(queued, list) or any(
+                    type(index) is not int or not 0 <= index < len(data["messages"])
+                    or data["messages"][index].role != "user" for index in queued)
+                    or queued != sorted(set(queued))):
+                raise ValueError("invalid queued message indices")
             usage = state["usage"]
             if not isinstance(usage, dict) or any(type(usage.get(name)) is not int or usage[name] < 0 for name in ("prompt_tokens", "completion_tokens", "total_tokens")):
                 raise ValueError("invalid token accounting")
@@ -366,6 +373,8 @@ class SessionJournal:
         agent.history._request = loaded._request
         agent.history.task = loaded.task
         agent.pending = list(data["state"]["pending"])
+        agent.queued_messages.update({index: messages[index].content or ""
+                                      for index in data["state"].get("queued_message_indices", [])})
         agent.usage = data["usage"]
         self.begin(agent, parent=data["id"], title=data["title"])
         archive = agent.registry.services.get("command_archive")

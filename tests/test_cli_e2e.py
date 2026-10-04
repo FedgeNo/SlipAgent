@@ -915,7 +915,20 @@ async def test_cancelled_input_reader_does_not_lose_next_line(tmp_path, monkeypa
 
 def test_followup_during_final_response_is_answered(project_dir: Path) -> None:
     import time
-    with StubOpenRouter([text_step("first answer"), text_step("followup answer")]) as stub:
+    requested, release, queued = threading.Event(), threading.Event(), threading.Event()
+    class WaitingStub(StubOpenRouter):
+        def _make_handler(self):
+            handler = super()._make_handler()
+            send = handler._send
+            def paused_send(instance, payload, status=200):
+                if payload.get("choices") and not requested.is_set():
+                    requested.set()
+                    assert release.wait(5)
+                send(instance, payload, status)
+            handler._send = paused_send
+            return handler
+
+    with WaitingStub([text_step("first answer"), text_step("followup answer")]) as stub:
         # Keep stdin open: /quit and EOF intentionally prevent another queued
         # run. Submit quit only after the owed follow-up has actually started.
         proc = subprocess.Popen(
@@ -924,17 +937,38 @@ def test_followup_during_final_response_is_answered(project_dir: Path) -> None:
             cwd=project_dir, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, env=cli_environment(),
         )
+        output = []
+        def read_output():
+            for line in proc.stderr:
+                output.append(line)
+                if "(queued" in line:
+                    queued.set()
+        reader = threading.Thread(target=read_output, daemon=True)
+        reader.start()
         try:
-            proc.stdin.write("go\nfollowup task\n")
+            proc.stdin.write("go\n")
             proc.stdin.flush()
+            assert requested.wait(5)
+            proc.stdin.write("followup task\n")
+            proc.stdin.flush()
+            assert queued.wait(5)
+            release.set()
             deadline = time.monotonic() + 5
             while len(stub.requests) < 2 and proc.poll() is None and time.monotonic() < deadline:
                 time.sleep(.01)
-            _, error = proc.communicate("/quit\n", timeout=5)
+            proc.stdin.write("/quit\n")
+            proc.stdin.flush()
+            proc.wait(timeout=5)
         finally:
+            release.set()
             if proc.poll() is None:
                 proc.kill()
-                proc.communicate()
+                proc.wait(timeout=5)
+            reader.join(timeout=5)
+            proc.stdin.close()
+            proc.stdout.close()
+            proc.stderr.close()
+        error = "".join(output)
     assert proc.returncode == 0, error
     assert "followup answer" in error
     assert len(stub.requests) == 2

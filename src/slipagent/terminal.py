@@ -560,6 +560,7 @@ class TerminalUI:
         self._raw_output = archive
         self._block_starts.clear()
         self._continuation_indents.clear()
+        self.forget_queued_notices()
         self._flow = None
         self._wrapped_columns = self._wrapped_count = self._line_count = 0
         self._pinned_prompt = None
@@ -597,10 +598,42 @@ class TerminalUI:
         self._raw_output.append(text)
         self.app.invalidate()
 
+    def write_queued_notice(self, text: str, prompt: str) -> None:
+        """Append a removable full line immediately after a user's prompt."""
+        self._ensure_transcript()
+        self._queued_notices[len(self._raw_output)] = prompt
+        self.write_chunk(text + "\n")
+
+    def forget_queued_notices(self) -> None:
+        """Detach old queue receipts when resetting or replacing a session."""
+        self._queued_notices: dict[int, str] = {}
+        self._notice_rows: dict[int, tuple[int, int]] = {}
+
+    def queued_prompt_sent(self, prompt: str) -> None:
+        self._ensure_transcript()
+        index = next((i for i, text in self._queued_notices.items() if text == prompt), None)
+        if index is None:
+            return
+        del self._queued_notices[index]
+        self._raw_output.clear_record(index)
+        span = self._notice_rows.pop(index, None)
+        if span is not None and self._flow is not None:
+            start, stop = span
+            count = stop - start
+            self._flow.remove_rows(start, stop)
+            self._notice_rows = {i: (left - count, right - count) if left >= stop else (left, right)
+                                 for i, (left, right) in self._notice_rows.items()}
+            self.transcript.vertical_scroll -= min(count, max(0, self.transcript.vertical_scroll - start))
+            self._line_count -= count
+            self._pinned_prompt = None
+        self.app.invalidate()
+
     def _ensure_transcript(self) -> None:
         """Migrate pre-file-buffer sessions once, without rebuilding the frame."""
         # Older running sessions have no explicit wrap alignment metadata.
         self.__dict__.setdefault("_continuation_indents", {})
+        self.__dict__.setdefault("_queued_notices", {})
+        self.__dict__.setdefault("_notice_rows", {})
         original = self.__dict__["_raw_output"]
         if isinstance(original, TranscriptFile):
             return
@@ -629,14 +662,18 @@ class TerminalUI:
             if self._flow is not None:
                 self._flow.close()
             self._flow = WrappedTranscript(columns)
+            self._notice_rows.clear()
             self._wrapped_count = 0
             self._wrapped_columns = columns
         flow = self._flow
         for index in range(self._wrapped_count, len(self._raw_output)):
+            start = len(flow.rows)
             flow.append(
                 self._raw_output[index], first=index in self._block_starts,
                 continuation_indents=self._continuation_indents.get(index),
             )
+            if index in self._queued_notices:
+                self._notice_rows[index] = (start, len(flow.rows))
         self._wrapped_count = len(self._raw_output)
         preview = flow.content_rows()
         complete = len(flow.rows)

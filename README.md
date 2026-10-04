@@ -552,8 +552,10 @@ by counting backward for `recall_history`. Current user input is separate.
 These labels count toward the context budget. Archived originals and source-file
 formatting remain verbatim; the harness adds no Markdown headings to them.
 
-The prompt stays live while the agent works. Text entered mid-turn is queued
-and delivered after the current tool batch, with a visible queued label.
+The prompt stays live while the agent works. All waiting prompts join the next
+model request together, after the current tool batch finishes. Each has a queued
+label that disappears from the interactive transcript when its request is sent.
+If context preparation fails or `/stop` prevents that request, the label stays.
 Blank lines separate submitted prompts from the surrounding transcript.
 Each model reply starts with a blank line, including replies preceded only by
 tool output. Its following tool calls and results stay together until the next

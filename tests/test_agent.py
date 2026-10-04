@@ -390,7 +390,7 @@ async def test_queued_message_lands_after_the_tool_result() -> None:
     agent, client = build_agent(
         [completion(tool_calls=[call(value="x")]), completion(text="done")]
     )
-    agent.on_event = lambda event: agent.enqueue("wait, do this instead") if event.kind == "step_start" and event.step == 1 else None
+    agent.on_event = lambda event: agent.enqueue("wait, do this instead") if event.kind == "tool_start" and event.step == 1 else None
 
     await agent.run("go")
 
@@ -420,7 +420,7 @@ async def test_blank_input_is_not_queued() -> None:
 async def test_message_typed_during_a_finishing_turn_survives() -> None:
     """Text arriving on the last step stays queued for the next turn."""
     agent, _ = build_agent([completion(text="done")])
-    agent.on_event = lambda event: agent.enqueue("one more thing") if event.kind == "step_start" and event.step == 1 else None
+    agent.on_event = lambda event: agent.enqueue("one more thing") if event.kind == "assistant_text" and event.step == 1 else None
 
     await agent.run("go")
 

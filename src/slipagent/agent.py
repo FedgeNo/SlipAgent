@@ -186,6 +186,7 @@ read_file for ordinary discovery. Follow the tool's explicit position units; \
 navigation results follow the current Workspace Access mode.
 
 ## Style
+- DO NOT OUTPUT THE POST NUMBER UNDER ANY CIRCUMSTANCE.
 - User-facing replies and progress updates are displayed as raw ASCII text. \
 The terminal does not render Markdown or LaTeX. Do not use Markdown headings, \
 bold/italic markers, backticks, code fences, or LaTeX commands and math delimiters \

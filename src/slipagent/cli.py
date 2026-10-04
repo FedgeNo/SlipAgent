@@ -47,7 +47,7 @@ from .sessions import SessionJournal, SessionError
 from wcwidth import iter_graphemes, strip_sequences, wcswidth
 from tabulate import tabulate
 
-BANNER = """SlipAgent — OpenRouter coding agent
+BANNER = """SlipAgent — OpenRouter compatible coding agent
 
   model:     {model}
   workspace: {workspace}

@@ -922,7 +922,7 @@ def test_followup_during_final_response_is_answered(project_dir: Path) -> None:
     assert len(stub.requests) == 2
 
 
-@pytest.mark.parametrize("command", ["/reset", "/key secret", "/mcp remove stub", "/model new/model"])
+@pytest.mark.parametrize("command", ["/reset", "/resume", "/key secret", "/mcp remove stub", "/model new/model"])
 async def test_mutating_commands_wait_until_turn_finishes(tmp_path, monkeypatch, command, metadata_server) -> None:
     import io
     from slipagent.cli import build_parser, build_session, _shutdown, _handle_command
@@ -980,10 +980,108 @@ async def test_menu_dispatch_preserves_command_checks(tmp_path, monkeypatch, met
 
 
 def test_menu_without_terminal_reports_how_to_get_commands(project_dir):
-    proc = run_repl_commands(project_dir, ["/menu extra", "/menu"])
+    proc = run_repl_commands(project_dir, ["/menu extra", "/menu", "/resume"])
     assert proc.returncode == 0, proc.stderr
     assert "usage: /menu" in proc.stderr
     assert "/menu requires an interactive terminal; use /help" in proc.stderr
+    assert "use /resume <id|latest>" in proc.stderr
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_resume_picker_lists_all_sessions_and_restores_only_the_selected_one(
+    tmp_path, metadata_server, cancel,
+):
+    import io
+    from unittest.mock import AsyncMock, Mock
+    from slipagent import cli
+    from slipagent.terminal import TerminalUI
+    from slipagent.types import Message
+
+    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    journal = session.registry.services["session_journal"]
+    output = io.StringIO()
+    terminal = Mock(spec=TerminalUI)
+    terminal.write.side_effect = lambda text, **kwargs: output.write(text)
+    session.renderer.terminal = terminal
+    try:
+        ids = []
+        for index in range(8):
+            journal.rename(f"Saved Session {index}")
+            session.agent.messages.extend([
+                Message.user(f"Question {index}"), Message.assistant(f"Answer {index}"),
+            ])
+            session.agent._persist()
+            ids.append(journal.session_id)
+            session.agent.reset()
+        entries = journal.listing()
+        originals = {path: path.read_bytes() for path in journal.directory.glob("*.jsonl")}
+        current_id = journal.session_id
+        current_messages = list(session.agent.messages)
+        terminal.choose = AsyncMock(return_value=None if cancel else ids[2])
+
+        assert await cli._handle_command(session, "/resume") is False
+        terminal.choose.assert_awaited_once()
+        title, options = terminal.choose.call_args.args
+        assert title == "Resume Session"
+        assert [value for value, label in options] == [entry["id"] for entry in entries]
+        for entry, (value, label) in zip(entries, options):
+            assert entry["title"] in label and entry["created"] in label
+            assert ("(current)" in label) == (value == current_id)
+        assert all(path.read_bytes() == content for path, content in originals.items())
+        if cancel:
+            assert journal.session_id == current_id
+            assert session.agent.messages == current_messages
+            assert len(journal.listing()) == 9
+            assert output.getvalue() == ""
+            terminal.clear_transcript.assert_not_called()
+        else:
+            assert journal.session_id not in {*ids, current_id}
+            assert journal.title == "Saved Session 2 | SlipAgent"
+            assert [message.content for message in session.agent.messages if message.role != "system"] == ["Question 2", "Answer 2"]
+            assert "Question 2" in output.getvalue() and "Answer 2" in output.getvalue()
+            terminal.clear_transcript.assert_called_once()
+            terminal.scroll_to_end.assert_called_once()
+            terminal.set_title.assert_called_with("Saved Session 2 | SlipAgent")
+    finally:
+        await cli._shutdown(session)
+
+
+@pytest.mark.parametrize("scenario", ["empty", "unreadable", "invalid", "disabled"])
+async def test_resume_picker_errors_preserve_active_session(tmp_path, monkeypatch, metadata_server, scenario):
+    import io
+    from unittest.mock import AsyncMock, Mock
+    from slipagent import cli
+    from slipagent.sessions import SessionError
+    from slipagent.terminal import TerminalUI
+
+    args = ["--no-mcp", "-w", str(tmp_path)]
+    if scenario == "disabled":
+        args.append("--no-session")
+    session = await cli.build_session(cli.build_parser().parse_args(args))
+    output = io.StringIO()
+    terminal = Mock(spec=TerminalUI)
+    terminal.choose = AsyncMock(return_value="f" * 32)
+    terminal.write.side_effect = lambda text, **kwargs: output.write(text)
+    session.renderer.terminal = terminal
+    journal = session.registry.services.get("session_journal")
+    current_id = session.agent.session_id
+    current_messages = list(session.agent.messages)
+    try:
+        if scenario == "empty":
+            monkeypatch.setattr(journal, "listing", lambda: [])
+        elif scenario == "unreadable":
+            monkeypatch.setattr(journal, "listing", Mock(side_effect=SessionError("Cannot list saved sessions: unreadable")))
+        assert await cli._handle_command(session, "/resume") is False
+        expected = {"empty": "no saved sessions", "unreadable": "Cannot list saved sessions",
+                    "invalid": "Cannot resume", "disabled": "session persistence is disabled"}
+        assert expected[scenario] in output.getvalue()
+        assert session.agent.session_id == current_id
+        assert session.agent.messages == current_messages
+        terminal.clear_transcript.assert_not_called()
+        if scenario != "invalid":
+            terminal.choose.assert_not_awaited()
+    finally:
+        await cli._shutdown(session)
 
 
 def test_mcp_command_preserves_quoted_arguments() -> None:
@@ -1134,7 +1232,15 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             os.write(master, b"/reset\r")
             wait_for(lambda: screen.title == f"{project_dir} | SlipAgent")
             wait_for(lambda: "conversation cleared" in "\n".join(screen.display[:17]))
-            os.write(master, b"/resume latest\r")
+            os.write(master, b"/resume\r")
+            wait_for(lambda: screen.display[18].strip() == "Resume Session")
+            os.write(master, b"\x1b")
+            wait_for(lambda: "Ready" in screen.display[18])
+            assert screen.title == f"{project_dir} | SlipAgent"
+            assert "conversation cleared" in "\n".join(screen.display[:17])
+            os.write(master, b"/resume\r")
+            wait_for(lambda: screen.display[18].strip() == "Resume Session")
+            os.write(master, b"\x1b[B\r")
             wait_for(lambda: screen.title == "Work in progress | SlipAgent")
             wait_for(lambda: "restored " in "\n".join(screen.display[:17]))
             assert "resumed successfully" in "\n".join(screen.display[:17])

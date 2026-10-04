@@ -235,7 +235,10 @@ async def test_menu_uses_footer_and_scrolls_selection_through_refresh_and_resize
             ui.write("Transcript stays visible")
             await wait_until(lambda: "Ready" in snapshot()[18])
             before = snapshot()[:18]
-            choice = asyncio.create_task(ui.choose("Commands", [(str(i), f"Option {i}") for i in range(12)]))
+            choice = asyncio.create_task(ui.choose("Commands", [
+                (str(i), f"Option {i} — A saved conversation title with additional details")
+                for i in range(12)
+            ]))
             await wait_until(lambda: "Commands" in snapshot()[18])
             assert snapshot()[:18] == before
             assert snapshot()[23].strip() == "↑/↓ = move | Enter = select | Esc = back"
@@ -243,14 +246,23 @@ async def test_menu_uses_footer_and_scrolls_selection_through_refresh_and_resize
             pipe.send_text("\x1b[A" + "\x1b[B" * 8)
             await wait_until(lambda: "› Option 8" in "\n".join(snapshot()[19:23]))
             assert "Option 0" not in "\n".join(snapshot()[19:23])
+            pipe.send_text("\x1b[B" * 8)
+            await wait_until(lambda: "› Option 11" in "\n".join(snapshot()[19:23]))
+            pipe.send_text("\x1b[A" * 8)
+            await wait_until(lambda: "› Option 3" in "\n".join(snapshot()[19:23]))
+            assert "Option 11" not in "\n".join(snapshot()[19:23])
             ui.refresh()
             size[0] = Size(rows=24, columns=40)
             screen.resize(lines=24, columns=40)
             ui.app._on_resize()
-            await wait_until(lambda: "› Option 8" in "\n".join(snapshot()[19:23]))
+            await wait_until(lambda: "› Option 3" in "\n".join(snapshot()[19:23]))
             assert "Enter = select | Esc = back" in snapshot()[23]
+            pipe.send_text("\x1b[A" * 3)
+            await wait_until(lambda: "› Option 0" in "\n".join(snapshot()[19:23]))
+            pipe.send_text("\x1b[B" * 3)
+            await wait_until(lambda: "› Option 3" in "\n".join(snapshot()[19:23]))
             pipe.send_text("\r")
-            assert await asyncio.wait_for(choice, 3) == "8"
+            assert await asyncio.wait_for(choice, 3) == "3"
             await wait_until(lambda: "Ready" in snapshot()[18])
             assert ui._lines.empty()
         finally:

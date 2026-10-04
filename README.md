@@ -369,7 +369,10 @@ absolute storage path and saved IDs. `SLIPAGENT_STATE_DIR` overrides the storage
 root. Journals and logs may contain private project text; configuration API
 keys are not included in their metadata.
 
-Use `/resume <id>` or `/resume latest` while idle, or launch with
+Use `/resume` while idle to choose a saved session by title and date. Up/Down
+moves through the list, scrolling at either edge; Enter restores the selection
+and Escape cancels. The current session is marked in the list.
+You can also use `/resume <id>` or `/resume latest`, or launch with
 `slipagent --resume latest`. Resume creates a new journal, restores numbered
 originals, summaries, task state, pending input, usage and command logs, and
 keeps the currently selected model/settings. Project/system instructions are
@@ -428,6 +431,7 @@ In the REPL:
 | `/task new` | Make the next prompt a new task, retaining previous history and command logs |
 | `/rename <name>` | Save this conversation's name and set its terminal title to `{name} \| SlipAgent` |
 | `/sessions` | List saved sessions for this project's path |
+| `/resume` | Choose a saved session with Up/Down and Enter; Escape cancels (interactive terminal, idle only) |
 | `/resume <id>` or `/resume latest` | Restore a saved conversation and its scrolling transcript at the end, while idle; no tools are replayed |
 | `/requests [attempt]` | List the latest 20 request attempts, or inspect one exact request and its outcome |
 | `/mcp` | Show MCP servers, their status, and the tools they contribute |

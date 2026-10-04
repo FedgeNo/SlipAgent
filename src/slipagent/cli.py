@@ -57,7 +57,7 @@ BANNER = """SlipAgent — OpenRouter compatible coding agent
 Commands: /help  /tools  /model [slug]  /models [filter]  /key [show|status|key]
           /temperature [value]  /cost  /mcp [add|save|remove]
           /task [new]  /rename <name>  /reset  /reload  /generations
-          /sessions  /resume id|latest  /requests [attempt]
+          /sessions  /resume [id|latest]  /requests [attempt]
           /menu  /init  /stop  /exit  /quit
 
 Type a task and press Enter. Follow-ups queue while the agent works.
@@ -86,6 +86,7 @@ Commands
   /task new            start a new task with your next prompt; retain history and logs
   /rename <name>       name this saved conversation and its terminal title
   /sessions            list saved sessions for this project
+  /resume              choose a saved session with Up/Down and Enter (idle only)
   /resume <id|latest>   restore a saved conversation and scroll to its end (idle only)
   /requests [attempt]  list recent request attempts or inspect an exact saved request
   /mcp                 show MCP servers and their tools
@@ -124,6 +125,7 @@ MENU_OPTIONS = [
     ("/cost", "Token Usage and Cost"),
     ("/task", "Active Task"),
     ("/sessions", "Saved Sessions"),
+    ("/resume", "Resume Session"),
     ("/requests", "Request Diagnostics"),
     ("/mcp", "MCP Servers"),
     ("/reload", "Reload Components"),
@@ -1178,10 +1180,26 @@ async def _execute_command(session: Session, line: str) -> bool:
             for entry in await asyncio.to_thread(journal.listing):
                 print(f"  {entry['id']}  {entry['created']}  {entry['title']}" + ("  (current)" if entry["current"] == "True" else ""), file=out)
             print(f"  storage: {journal.directory}", file=out)
-        elif not argument:
-            print(style.red("  usage: /resume <id|latest>"), file=out)
         else:
             try:
+                if not argument:
+                    terminal = session.renderer.terminal
+                    if terminal is None:
+                        print(style.red("  /resume requires an interactive terminal to choose a session; use /resume <id|latest>."), file=out)
+                        return False
+                    entries = await asyncio.to_thread(journal.listing)
+                    if not entries:
+                        print("  no saved sessions for this project.", file=out)
+                        return False
+                    options = [
+                        (entry["id"], f"{entry['title']}  {entry['created']}" +
+                         ("  (current)" if entry["current"] == "True" else ""))
+                        for entry in entries
+                    ]
+                    selected = await terminal.choose("Resume Session", options)
+                    if selected is None:
+                        return False
+                    argument = selected
                 await session.agent.wait_for_compaction()
                 data = await asyncio.to_thread(journal.load, argument)
                 jobs = session.registry.services.get("command_jobs")

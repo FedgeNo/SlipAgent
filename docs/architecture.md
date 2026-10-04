@@ -502,8 +502,14 @@ the REPL terminal exists; one-shot mode continues to print only its new answer.
 This reconstructs the conversation, not transient progress/retry notices that
 were never part of the saved messages.
 
-The CLI exposes `/sessions`, `/resume id|latest`, `--resume [id]`, and
+The CLI exposes `/sessions`, `/resume [id|latest]`, `--resume [id]`, and
 `--no-session`. `/reset` starts a new journal while retaining prior sessions.
+On an interactive terminal, bare `/resume` passes saved titles and dates to
+`TerminalUI.choose`, using full session IDs as selection values. The list keeps
+the journal's newest-first order and marks the current session. The selected row
+stays visible when moving down or up beyond the footer's edges. Escape returns
+before compaction waits, job shutdown, or changes to the active conversation.
+An explicit ID or `latest` uses the same restore path without opening the picker.
 No automatic deletion policy is applied to saved journals. The command-output
 quota is per session; it does not limit cumulative saved conversations.
 Tests redirect storage to disposable directories, including inherited CLI

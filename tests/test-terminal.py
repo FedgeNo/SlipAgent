@@ -97,6 +97,7 @@ def test_refresh_migrates_legacy_transcript_and_keeps_live_state(display):
         ui._raw_output.close()
         # State left by the previous implementation before its methods reload.
         ui._raw_output = ["\x1b[1mfirst\x1b[0m", "growing reply"]
+        del ui._continuation_indents
         ui.transcript.content = FormattedTextControl("old display")
         ui._transcript = [("", "old cached text")]
         ui._wrapped_spans = [(0, 0)]
@@ -334,6 +335,36 @@ def test_startup_and_help_list_all_commands_with_requested_spacing():
         assert command in HELP
     assert banner.splitlines()[1] == ""
     assert "\n\nType a task and press Enter." in banner
+
+
+def test_startup_tool_list_keeps_hanging_indent_after_resize(display, tmp_path):
+    from wcwidth import width
+
+    sink, _, output, _, _ = display
+    tools = ["read_file", "write_file", "list_dir"] + [f"mcp__server__tool_{i}" for i in range(40)]
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda columns: "status", sink, input=pipe, output=output)
+        renderer = Renderer(Style(False), sink, verbose=False)
+        renderer.terminal = ui
+        try:
+            renderer.show_banner(model="test/model", workspace=tmp_path, tools=tools)
+            renderer.emit("  ordinary output wraps with its original indentation")
+            for columns in [80, 40, 120, 14, 13, 80]:
+                content = ui.transcript.content.create_content(columns, 17)
+                rows = ["".join(fragment[1] for fragment in content.get_line(i))
+                        for i in range(content.line_count)]
+                start = next(i for i, row in enumerate(rows) if row.startswith("  tools:"))
+                end = next(i for i in range(start + 1, len(rows)) if not rows[i].strip())
+                tool_rows = rows[start:end]
+                assert len(tool_rows) > 1
+                assert all(width(row) <= columns for row in tool_rows)
+                if columns > 13:
+                    assert all(row.startswith(" " * 13) for row in tool_rows[1:])
+                assert "".join(row.strip().replace(" ", "") for row in tool_rows) == "tools:" + ",".join(tools)
+                ordinary = next(i for i, row in enumerate(rows) if row.startswith("  ordinary"))
+                assert all(row.startswith("  ") for row in rows[ordinary:] if row.strip())
+        finally:
+            ui.close()
 
 
 @pytest.mark.parametrize("text, first, second", [

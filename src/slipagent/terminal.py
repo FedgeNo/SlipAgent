@@ -157,6 +157,7 @@ class TerminalUI:
         self._lines: asyncio.Queue[str | None] = asyncio.Queue()
         self._raw_output = TranscriptFile()
         self._block_starts: set[int] = set()
+        self._continuation_indents: dict[int, dict[int, int]] = {}
         self._flow: WrappedTranscript | None = None
         self._wrapped_columns = 0
         self._wrapped_count = 0
@@ -375,8 +376,11 @@ class TerminalUI:
         self.stopping = stopping
         self.app.invalidate()
 
-    def write(self, text: str) -> None:
+    def write(self, text: str, *, continuation_indents: dict[int, int] | None = None) -> None:
+        """Append a block, optionally aligning wrapped rows of selected source lines."""
         self._ensure_transcript()
+        if continuation_indents:
+            self._continuation_indents[len(self._raw_output)] = dict(continuation_indents)
         self._block_starts.add(len(self._raw_output))
         self._raw_output.append(text)
         self.app.invalidate()
@@ -390,6 +394,8 @@ class TerminalUI:
 
     def _ensure_transcript(self) -> None:
         """Migrate pre-file-buffer sessions once, without rebuilding the frame."""
+        # Older running sessions have no explicit wrap alignment metadata.
+        self.__dict__.setdefault("_continuation_indents", {})
         original = self.__dict__["_raw_output"]
         if isinstance(original, TranscriptFile):
             return
@@ -421,7 +427,10 @@ class TerminalUI:
             self._wrapped_columns = columns
         flow = self._flow
         for index in range(self._wrapped_count, len(self._raw_output)):
-            flow.append(self._raw_output[index], first=index in self._block_starts)
+            flow.append(
+                self._raw_output[index], first=index in self._block_starts,
+                continuation_indents=self._continuation_indents.get(index),
+            )
         self._wrapped_count = len(self._raw_output)
         preview = flow.content_rows()
         complete = len(flow.rows)

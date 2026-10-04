@@ -563,7 +563,10 @@ to the model along with the active generation number.
   a 256-row cache; it does not build or hash a full transcript on each repaint.
   The application coalesces redraws at a maximum of 30 per second. Resize replays
   original chunks to rebuild the width-specific row file; ordinary appends
-  process only new chunks. Refresh explicitly migrates older in-memory block
+  process only new chunks. Explicit continuation indents are indexed by chunk
+  and source line, and replayed on resize. The startup tool list uses this to
+  align wrapped rows beneath its first item without changing ordinary output.
+  Refresh explicitly migrates older in-memory block
   lists while preserving the application, draft, input queue, and scroll state.
   Closing the terminal releases both temporary files. These files serve display,
   not conversation persistence or model context. Password entry owns a separate

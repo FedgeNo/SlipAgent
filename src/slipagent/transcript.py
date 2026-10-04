@@ -185,13 +185,27 @@ class WrappedTranscript:
             self._continued = True
         self._preview = None
 
-    def append(self, text: str, *, first: bool) -> None:
+    def _override_indent(self, columns: int | None) -> None:
+        # On a terminal narrower than the label, retain normal wrapping so
+        # indentation cannot consume all the available space.
+        if columns is not None and 0 <= columns < self.columns:
+            self._indent = " " * columns
+            self._indent_known = True
+
+    def append(
+        self, text: str, *, first: bool,
+        continuation_indents: dict[int, int] | None = None,
+    ) -> None:
+        """Append text; indent overrides use zero-based source lines in this chunk."""
         if first:
             if self.started:
                 self._settle(final=True)
             self._ansi = AnsiStream()
         self.started = True
         self._preview = None
+        indents = continuation_indents or {}
+        line_number = 0
+        self._override_indent(indents.get(line_number))
         # Bounded feed intervals prevent a large tool result from becoming one
         # enormous intermediate styled-character list.
         interval = max(64, self.columns * 4)
@@ -200,6 +214,8 @@ class WrappedTranscript:
             for char in value:
                 if char == "\n":
                     self._settle(final=True)
+                    line_number += 1
+                    self._override_indent(indents.get(line_number))
                 elif char == "\t":
                     column = self._consumed_width + display_width("".join(item[1] for item in self._pending))
                     for _ in range(8 - column % 8):

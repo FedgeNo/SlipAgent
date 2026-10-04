@@ -176,11 +176,11 @@ class Renderer:
         self._prompt: tuple[str, str] | None = None
         self.terminal: TerminalUI | None = None
 
-    def _write(self, text: str) -> None:
+    def _write(self, text: str, *, continuation_indents: dict[int, int] | None = None) -> None:
         plain = strip_sequences(text)
         self._last_output_blank = not plain.rsplit("\n", 1)[-1].strip()
         if self.terminal is not None:
-            self.terminal.write(text)
+            self.terminal.write(text, continuation_indents=continuation_indents)
             return
         prompt = self._prompt
         if prompt is not None:
@@ -197,12 +197,26 @@ class Renderer:
                 self._write("")
             self._active_block = block
 
-    def emit(self, text: str = "", *, block: object | None = None, separate: bool = True) -> None:
+    def emit(
+        self, text: str = "", *, block: object | None = None, separate: bool = True,
+        continuation_indents: dict[int, int] | None = None,
+    ) -> None:
         """Separate output units while keeping their lines together."""
         self._finish_stream()
         if separate and strip_sequences(text).strip():
             self._begin_block(block)
-        self._write(text)
+        self._write(text, continuation_indents=continuation_indents)
+
+    def show_banner(self, *, model: str, workspace: Path, tools: list[str], mcp: str = "") -> None:
+        before, _, after = BANNER.partition("{tools}")
+        before = before.format(model=model, workspace=workspace, mcp=mcp)
+        after = after.format(model=model, workspace=workspace, mcp=mcp)
+        # Keep the list unbroken in storage so resize can reflow it. The
+        # placeholder's rendered column defines the continuation alignment.
+        self.emit(
+            before + ", ".join(tools) + after,
+            continuation_indents={before.count("\n"): wcswidth(before.rsplit("\n", 1)[-1])},
+        )
 
     def _finish_stream(self) -> None:
         if getattr(self, "_stream_kind", None) is None:
@@ -546,13 +560,11 @@ async def run_repl(session: Session) -> int:
         )
         renderer.terminal = terminal
         terminal_task = asyncio.create_task(terminal.run())
-    renderer.emit(
-        BANNER.format(
-            model=session.agent.model,
-            workspace=session.workspace.root,
-            tools=", ".join(session.registry.names),
-            mcp=mcp_line,
-        )
+    renderer.show_banner(
+        model=session.agent.model,
+        workspace=session.workspace.root,
+        tools=session.registry.names,
+        mcp=mcp_line,
     )
     quota_task = asyncio.create_task(_poll_quota(session))
     reload_task = asyncio.create_task(session.reloader.watch()) if session.reloader is not None else None

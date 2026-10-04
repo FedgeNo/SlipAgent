@@ -53,6 +53,32 @@ def test_streamed_ansi_escapes_and_styles_survive_chunk_boundaries():
     assert all(style == "bold" for style, _ in result[14:])
 
 
+@pytest.mark.parametrize("chunk_size", [1, 7, 4096])
+def test_prompt_lookup_tracks_green_lines_through_streaming_and_wrapping(chunk_size):
+    flow = WrappedTranscript(20)
+    text = ("Opening\n\x1b[38;2;0;255;0m> First task with wrapped instructions\x1b[0m\n"
+            "> Plain quote\n\x1b[38;2;0;255;0mGreen without prefix\n> Second task with more instructions")
+    try:
+        for start in range(0, len(text), chunk_size):
+            flow.append(text[start:start + chunk_size], first=start == 0)
+            rows = lines(flow)
+            matching = [i for i, row in enumerate(rows)
+                        if row and row[0][1].startswith(">") and "#00ff00" in row[0][0]]
+            for row in range(len(rows)):
+                previous = [index for index in matching if index <= row]
+                prompt = flow.prompt_at(row)
+                if previous:
+                    assert prompt is not None and prompt[0] == previous[-1]
+                    assert prompt[1] > prompt[0]
+                else:
+                    assert prompt is None
+        assert flow.prompt_at(0) is None
+        assert flow.prompt_at(2) == (1, 3)
+        assert flow.prompt_at(len(rows) - 1) == (5, len(rows))
+    finally:
+        flow.close()
+
+
 def test_explicit_blocks_reset_style_but_newlines_keep_it():
     flow = WrappedTranscript(20)
     try:

@@ -11,6 +11,7 @@ import json
 import re
 import tempfile
 from array import array
+from bisect import bisect_right
 from collections import OrderedDict
 from collections.abc import Iterator, Sequence
 from typing import overload
@@ -113,6 +114,8 @@ class WrappedTranscript:
     def __init__(self, columns: int) -> None:
         self.columns = max(1, columns)
         self.rows = TranscriptFile()
+        self.prompt_rows: list[tuple[int, int]] = []
+        self._prompt_line = False
         self._cache: OrderedDict[int, StyleAndTextTuples] = OrderedDict()
         self._ansi = AnsiStream()
         self._pending: StyleAndTextTuples = []
@@ -126,6 +129,24 @@ class WrappedTranscript:
 
     def _save(self, row: StyleAndTextTuples) -> None:
         self.rows.append(json.dumps(row, ensure_ascii=False))
+
+    def _starts_prompt(self) -> bool:
+        return bool(self._pending and self._pending[0][1] == ">"
+                    and "#00ff00" in self._pending[0][0].lower().split())
+
+    def prompt_at(self, row: int) -> tuple[int, int] | None:
+        """Nearest preceding green > line, including all its wrapped rows."""
+        tail = self.content_rows()
+        complete = len(self.rows)
+        if not self._continued and self._starts_prompt() and complete <= row:
+            return complete, complete + len(tail)
+        index = bisect_right(self.prompt_rows, row, key=lambda span: span[0]) - 1
+        if index < 0:
+            return None
+        start, end = self.prompt_rows[index]
+        if self._continued and self._prompt_line and index == len(self.prompt_rows) - 1:
+            end += len(tail)
+        return start, end
 
     def _render(self) -> tuple[list[StyleAndTextTuples], list[int]]:
         text = "".join(item[1] for item in self._pending)
@@ -169,9 +190,16 @@ class WrappedTranscript:
                 # word across more than two rows before it reaches this point.
                 word_row = next((i for i, start in enumerate(starts) if start >= last_word.start()), len(rows) - 1)
                 count = min(count, max(0, word_row - 1))
+        if count and not self._continued:
+            self._prompt_line = self._starts_prompt()
+            if self._prompt_line:
+                self.prompt_rows.append((len(self.rows), len(self.rows)))
         for row in rows[:count]:
             self._save(row)
+        if count and self._prompt_line:
+            self.prompt_rows[-1] = (self.prompt_rows[-1][0], len(self.rows))
         if final:
+            self._prompt_line = False
             self._pending.clear()
             self._indent = ""
             self._indent_known = False

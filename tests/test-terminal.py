@@ -98,7 +98,7 @@ def test_refresh_migrates_legacy_transcript_and_keeps_live_state(display):
         # State left by the previous implementation before its methods reload.
         ui._raw_output = ["\x1b[1mfirst\x1b[0m", "growing reply"]
         del ui._continuation_indents
-        for name in ("_prompt_chunk", "_prompt_length", "_prompt_start", "_prompt_end", "_prompt_pinned"):
+        for name in ("_pinned_prompt", "_prompt_pending"):
             del ui.__dict__[name]
         ui.transcript.content = FormattedTextControl("old display")
         ui._transcript = [("", "old cached text")]
@@ -294,6 +294,65 @@ async def test_latest_user_prompt_pins_at_top_and_releases_on_next_prompt(displa
             await task
 
 
+async def test_pinned_prompt_follows_scrollback_in_both_directions(display):
+    sink, size, output, screen, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        renderer = Renderer(Style(True), sink, False)
+        renderer.terminal = ui
+        task = asyncio.create_task(ui.run())
+        try:
+            ui.write("Startup information\n" * 4)
+            for prompt in ("First task\nFirst details", "Second task", "Third task\nThird details"):
+                renderer.user_prompt(prompt)
+                ui.write("\n".join(f"{prompt.splitlines()[0]} output {i}" for i in range(40)))
+            await wait_until(lambda: snapshot()[0].rstrip() == "> Third task")
+            pipe.send_text("unfinished draft")
+            await wait_until(lambda: "unfinished draft" in snapshot()[19])
+
+            async def scroll_to(text, offset=0):
+                content = ui.transcript.content.create_content(size[0].columns, 17)
+                row = next(i for i in range(content.line_count)
+                           if "".join(part[1] for part in content.get_line(i)) == text) + offset
+                ui._scroll_output(row - ui.transcript.vertical_scroll)
+                await wait_until(lambda: ui.transcript.vertical_scroll == row)
+
+            # Crossing each prompt boundary changes the header in either direction.
+            for text, offset, pinned in (
+                ("> Third task", -1, "> Second task"),
+                ("> Second task", -1, "> First task"),
+                ("Startup information", 0, "Startup information"),
+                ("> First task", 0, "> First task"),
+                ("> Second task", 0, "> Second task"),
+                ("> Third task", 0, "> Third task"),
+            ):
+                await scroll_to(text, offset)
+                await wait_until(lambda: snapshot()[0].rstrip() == pinned)
+                assert "unfinished draft" in snapshot()[19]
+                assert "readout" in snapshot()[23]
+
+            # A wheel event on the header crosses back into the previous task.
+            pipe.send_text("\x1b[<64;1;1M")
+            await wait_until(lambda: snapshot()[0].rstrip() == "> Second task")
+            assert screen.buffer[0][0].fg == "00ff00"
+            pipe.send_text("\x1b[<65;1;1M")
+            await wait_until(lambda: snapshot()[0].rstrip() == "> Third task")
+
+            # Narrowing doubles many output rows; lookup must use the new file offsets.
+            size[0] = Size(rows=24, columns=15)
+            screen.resize(lines=24, columns=15)
+            ui.app.invalidate()
+            await wait_until(lambda: ui._wrapped_columns == 15)
+            await scroll_to("> Second task", -1)
+            await wait_until(lambda: snapshot()[0].rstrip() == "> First task")
+            ui.refresh()
+            await scroll_to("> Third task")
+            await wait_until(lambda: snapshot()[0].rstrip() == "> Third task")
+        finally:
+            ui.close()
+            await task
+
+
 async def test_pinned_prompt_wraps_resizes_and_survives_context_view_and_refresh(display):
     sink, size, output, screen, snapshot = display
     size[0] = Size(rows=24, columns=20)
@@ -307,16 +366,15 @@ async def test_pinned_prompt_wraps_resizes_and_survives_context_view_and_refresh
             renderer.user_prompt("alpha beta gamma delta epsilon\nKeep tests passing")
             ui.write("\n".join(f"output {i}" for i in range(50)))
             await wait_until(lambda: snapshot()[0].rstrip() == "> alpha beta gamma")
-            assert [row.rstrip() for row in snapshot()[:3]] == [
-                "> alpha beta gamma", "delta epsilon", "Keep tests passing",
+            assert [row.rstrip() for row in snapshot()[:2]] == [
+                "> alpha beta gamma", "delta epsilon",
             ]
-            assert all(screen.buffer[row][0].fg == "00ff00" for row in range(3))
+            assert all(screen.buffer[row][0].fg == "00ff00" for row in range(2))
             size[0] = Size(rows=24, columns=40)
             screen.resize(lines=24, columns=40)
             ui.app.invalidate()
             await wait_until(lambda: snapshot()[0].rstrip() == "> alpha beta gamma delta epsilon")
-            assert snapshot()[1].rstrip() == "Keep tests passing"
-            assert "output 49" in "\n".join(snapshot()[2:17])
+            assert "output 49" in "\n".join(snapshot()[1:17])
 
             ui.set_context(json.dumps({"messages": [{"role": "system", "content": "System context"}]}))
             pipe.send_text("\x1c")
@@ -328,7 +386,6 @@ async def test_pinned_prompt_wraps_resizes_and_survives_context_view_and_refresh
             ui.write("after refresh")
             await wait_until(lambda: "after refresh" in "\n".join(snapshot()[2:17]))
             assert snapshot()[0].rstrip() == "> alpha beta gamma delta epsilon"
-            assert snapshot()[1].rstrip() == "Keep tests passing"
         finally:
             ui.close()
             await task
@@ -342,10 +399,10 @@ async def test_oversized_pinned_prompt_keeps_output_and_footer_visible(display):
         renderer.terminal = ui
         task = asyncio.create_task(ui.run())
         try:
-            prompt = "\n".join(f"requirement {i}" for i in range(100))
+            prompt = " ".join(f"requirement {i}" for i in range(100))
             renderer.user_prompt(prompt)
             ui.write("\n".join(f"output {i}" for i in range(50)))
-            await wait_until(lambda: snapshot()[0].rstrip() == "> requirement 0")
+            await wait_until(lambda: snapshot()[0].startswith("> requirement 0 "))
             assert snapshot()[13].strip() == "…"
             assert "output 49" in "\n".join(snapshot()[14:17])
             assert "readout" in snapshot()[23]
@@ -358,6 +415,30 @@ async def test_oversized_pinned_prompt_keeps_output_and_footer_visible(display):
             ui.app.invalidate()
             await wait_until(lambda: "readout" in snapshot()[9])
             assert "output 49" in "\n".join(snapshot()[:3])
+        finally:
+            ui.close()
+            await task
+
+
+async def test_pinned_line_requires_green_prompt_prefix_and_survives_reload(display):
+    sink, _, output, screen, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        task = asyncio.create_task(ui.run())
+        try:
+            # No renderer metadata: selection comes from the styled transcript.
+            ui.write("\x1b[38;2;0;255;0m> Saved task\x1b[0m\n")
+            ui.write("> Ordinary quote\n\x1b[38;2;0;255;0mGreen without marker\x1b[0m\n")
+            ui.write("\n".join(f"output {i}" for i in range(40)))
+            await wait_until(lambda: snapshot()[0].rstrip() == "> Saved task")
+            assert screen.buffer[0][0].fg == "00ff00"
+            # Rebuild from the file, as for a session without prompt metadata.
+            for name in ("_pinned_prompt", "_prompt_pending"):
+                del ui.__dict__[name]
+            ui.refresh()
+            ui.write("after refresh")
+            await wait_until(lambda: "after refresh" in "\n".join(snapshot()[1:17]))
+            assert snapshot()[0].rstrip() == "> Saved task"
         finally:
             ui.close()
             await task

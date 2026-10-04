@@ -18,7 +18,7 @@ from prompt_toolkit.formatted_text.utils import fragment_list_to_text
 from prompt_toolkit.input import Input
 from prompt_toolkit.history import DummyHistory
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
-from prompt_toolkit.layout import ConditionalContainer, Dimension, DynamicContainer, HSplit, Layout, Window
+from prompt_toolkit.layout import Dimension, DynamicContainer, Float, FloatContainer, HSplit, Layout, Window
 from prompt_toolkit.layout.controls import FormattedTextControl, UIContent, UIControl
 from prompt_toolkit.layout.mouse_handlers import MouseHandlers
 from prompt_toolkit.layout.processors import Processor, Transformation, TransformationInput
@@ -205,50 +205,59 @@ class TerminalUI:
             Window(FormattedTextControl("Context — latest model request | Ctrl+\\: close"), height=1, style="class:status"),
             self.context_window,
         ])
-        transcript = HSplit([
-            ConditionalContainer(
-                Window(TranscriptControl(self._pinned_prompt_content),
-                       height=self._pinned_prompt_height, dont_extend_height=True),
-                Condition(lambda: self._prompt_pinned),
-            ),
-            self.transcript,
-        ])
+        # Overlay the prompt so switching between prompts of different heights
+        # does not move the scroll position and select a different prompt again.
+        transcript = FloatContainer(self.transcript, floats=[Float(
+            top=0, left=0, right=0, height=self._pinned_prompt_height,
+            content=Window(TranscriptControl(self._pinned_prompt_content)),
+        )])
         return Layout(HSplit([
             DynamicContainer(lambda: context if self.context_visible else transcript),
             Window(height=1), footer,
         ]), focused_element=self.input)
 
     def _ensure_prompt(self) -> None:
-        """Add prompt tracking to existing sessions without guessing from old text."""
-        if hasattr(self, "_prompt_chunk"):
+        """Migrate header state; prompt locations come from the transcript file."""
+        if hasattr(self, "_pinned_prompt"):
             return
-        self._prompt_chunk: int | None = None
-        self._prompt_length = 0
-        self._prompt_start: int | None = None
-        self._prompt_end = 0
-        self._prompt_pinned = False
+        chunk = getattr(self, "_prompt_chunk", None)
+        pinned = getattr(self, "_prompt_pinned", False)
+        self._pinned_prompt: tuple[int, int] | None = None
+        self._prompt_pending = chunk is not None and not pinned
+        self._wrapped_columns = 0
 
     def _pinned_prompt_height(self, columns: int | None = None) -> int:
         size = self.output.get_size()
         self._transcript_content(size.columns if columns is None else columns)
-        if self._prompt_start is None:
+        assert self._flow is not None
+        selected = self._flow.prompt_at(self.transcript.vertical_scroll)
+        if self._prompt_pending:
+            # New input releases the old header; scrolling explicitly resumes
+            # browsing, otherwise wait for the newest prompt to reach the top.
+            if selected is not None and selected == self._flow.prompt_at(self._line_count):
+                self._prompt_pending = False
+            else:
+                selected = None
+        self._pinned_prompt = selected
+        if self._pinned_prompt is None:
             return 0
         # Keep enough scrollback rows for output and its surrounding blank
         # lines, even when the submitted prompt is taller than the screen.
         available = max(0, size.rows - FOOTER_ROWS - 1 - 3)
-        return min(self._prompt_end - self._prompt_start, available)
+        start, end = self._pinned_prompt
+        return min(end - start, available)
 
     def _pinned_prompt_content(self, width: int) -> UIContent:
         height = self._pinned_prompt_height(width)
         source = self._transcript_content(width)
-        start = self._prompt_start or 0
+        start, end = self._pinned_prompt or (0, 0)
 
         def get_line(index: int) -> StyleAndTextTuples:
             if not 0 <= index < height:
                 return []
-            if index == height - 1 and start + height < self._prompt_end:
+            if index == height - 1 and start + height < end:
                 return [("class:user", "…")]
-            return source.get_line(start + index)
+            return [("class:user", fragment_list_to_text(source.get_line(start + index)))]
 
         return UIContent(get_line=get_line, line_count=height, show_cursor=False)
 
@@ -305,6 +314,8 @@ class TerminalUI:
 
     def _scroll_output(self, rows: int) -> None:
         window = self.context_window if self.context_visible else self.transcript
+        if not self.context_visible and rows:
+            self._prompt_pending = False
         window.scroll(rows)
         self.app.invalidate()
 
@@ -387,13 +398,6 @@ class TerminalUI:
         self.app.invalidate()
 
     def _route_mouse_wheel(self, app: Application[None]) -> None:
-        # Latch only after the real transcript viewport reaches this prompt.
-        # Scrolling back or finishing a turn does not release it; new input does.
-        if (not self.context_visible and not self._prompt_pinned
-                and self._prompt_start is not None
-                and self.transcript.vertical_scroll >= self._prompt_start):
-            self._prompt_pinned = True
-            app.invalidate()
         original = app.renderer.mouse_handlers
 
         def mouse_handler(event: MouseEvent) -> object:
@@ -428,17 +432,14 @@ class TerminalUI:
 
     def write(
         self, text: str, *, continuation_indents: dict[int, int] | None = None,
-        prompt_length: int | None = None,
+        user_prompt: bool = False,
     ) -> None:
         """Append a block, optionally aligning wrapped rows of selected source lines."""
         self._ensure_transcript()
-        if prompt_length is not None:
+        if user_prompt:
             self._ensure_prompt()
-            self._prompt_chunk = len(self._raw_output)
-            self._prompt_length = prompt_length
-            self._prompt_start = None
-            self._prompt_end = 0
-            self._prompt_pinned = False
+            self._pinned_prompt = None
+            self._prompt_pending = True
         if continuation_indents:
             self._continuation_indents[len(self._raw_output)] = dict(continuation_indents)
         self._block_starts.add(len(self._raw_output))
@@ -478,8 +479,9 @@ class TerminalUI:
 
     def _transcript_content(self, width: int) -> UIContent:
         self._ensure_transcript()
+        self._ensure_prompt()
         columns = max(1, width)
-        if self._flow is None or columns != self._wrapped_columns:
+        if self._flow is None or columns != self._wrapped_columns or not hasattr(self._flow, "prompt_rows"):
             if self._flow is not None:
                 self._flow.close()
             self._flow = WrappedTranscript(columns)
@@ -487,21 +489,10 @@ class TerminalUI:
             self._wrapped_columns = columns
         flow = self._flow
         for index in range(self._wrapped_count, len(self._raw_output)):
-            text = self._raw_output[index]
-            if index == self._prompt_chunk:
-                # Resolve only the latest prompt's row range while appending
-                # or reflowing. Reuse those styled rows in the pinned view.
-                flow.append("", first=True)
-                self._prompt_start = len(flow.rows)
-                flow.append(text[:self._prompt_length], first=False)
-                tail = flow.content_rows()
-                self._prompt_end = len(flow.rows) + len(tail)
-                flow.append(text[self._prompt_length:], first=False)
-            else:
-                flow.append(
-                    text, first=index in self._block_starts,
-                    continuation_indents=self._continuation_indents.get(index),
-                )
+            flow.append(
+                self._raw_output[index], first=index in self._block_starts,
+                continuation_indents=self._continuation_indents.get(index),
+            )
         self._wrapped_count = len(self._raw_output)
         preview = flow.content_rows()
         complete = len(flow.rows)

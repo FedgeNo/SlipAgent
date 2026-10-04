@@ -566,15 +566,17 @@ to the model along with the active generation number.
   process only new chunks. Explicit continuation indents are indexed by chunk
   and source line, and replayed on resize. The startup tool list uses this to
   align wrapped rows beneath its first item without changing ordinary output.
-  The renderer marks user prompts explicitly with their text boundary, excluding
-  the queued-status annotation. The terminal retains the latest prompt's chunk
-  index and resolves its styled row range during normal append/reflow. When that
-  range reaches the viewport top, a pinned window reuses its rows until another
-  prompt arrives. It does not scan old output for prompt-like text or add a copy
-  to the transcript/model history. Oversized pinned content leaves at least three
-  transcript rows available; the full original remains scrollable. Context view
-  hides the pinned window without releasing it. Compatible reloads preserve the
-  marker and pin state; sessions without this metadata start tracking new prompts.
+  During append/reflow, `WrappedTranscript` indexes source lines whose first
+  character is `>` with decoded foreground color `#00ff00`. Binary search selects
+  the nearest preceding matching line at the viewport top, including its wrapped
+  rows. The unfinished tail participates without rescanning previous output.
+  A green overlay reuses those rows; changing its height never moves scroll
+  offsets. Scrolling in either direction selects the corresponding older/newer
+  prompt. New submissions release the header until the new prompt reaches the
+  top or explicit scrolling resumes. Oversized pinned content leaves at least
+  three transcript rows visible. Context view keeps its own layout. Reloads
+  rebuild the index from stored text and colors, including existing scrollback;
+  no display copies enter the transcript or model history.
   Refresh explicitly migrates older in-memory block
   lists while preserving the application, draft, input queue, and scroll state.
   Closing the terminal releases both temporary files. These files serve display,

@@ -610,11 +610,14 @@ to the model along with the active generation number.
   character is `>` with decoded foreground color `#00ff00`. Binary search selects
   the nearest preceding matching line at the viewport top, including its wrapped
   rows. The unfinished tail participates without rescanning previous output.
-  A green overlay reuses those rows; changing its height never moves scroll
-  offsets. Scrolling in either direction selects the corresponding older/newer
+  A one-row green overlay reuses the first wrapped row, adding an ellipsis at a
+  word boundary when more text follows. Long words fall back to a display-width
+  cutoff that preserves graphemes. The full prompt remains in the transcript;
+  drawing the header never moves scroll offsets or scans the entire prompt.
+  Scrolling in either direction selects the corresponding older/newer
   prompt. New submissions release the header until the new prompt reaches the
-  top or explicit scrolling resumes. Oversized pinned content leaves at least
-  three transcript rows visible. Context view keeps its own layout. Reloads
+  top or explicit scrolling resumes. The header is hidden if there is no room
+  for at least one output row below it. Context view keeps its own layout. Reloads
   rebuild the index from stored text and colors, including existing scrollback;
   no display copies enter the transcript or model history.
   Refresh explicitly migrates older in-memory block

@@ -509,7 +509,7 @@ async def test_pinned_prompt_follows_scrollback_in_both_directions(display):
             await task
 
 
-async def test_pinned_prompt_wraps_resizes_and_survives_context_view_and_refresh(display):
+async def test_pinned_prompt_truncates_resizes_and_survives_context_view_and_refresh(display):
     sink, size, output, screen, snapshot = display
     size[0] = Size(rows=24, columns=20)
     screen.resize(lines=24, columns=20)
@@ -521,11 +521,9 @@ async def test_pinned_prompt_wraps_resizes_and_survives_context_view_and_refresh
         try:
             renderer.user_prompt("alpha beta gamma delta epsilon\nKeep tests passing")
             ui.write("\n".join(f"output {i}" for i in range(50)))
-            await wait_until(lambda: snapshot()[0].rstrip() == "> alpha beta gamma")
-            assert [row.rstrip() for row in snapshot()[:2]] == [
-                "> alpha beta gamma", "delta epsilon",
-            ]
-            assert all(screen.buffer[row][0].fg == "00ff00" for row in range(2))
+            await wait_until(lambda: snapshot()[0].rstrip() == "> alpha beta gamma…")
+            assert snapshot()[1].startswith("output ")
+            assert screen.buffer[0][0].fg == "00ff00"
             size[0] = Size(rows=24, columns=40)
             screen.resize(lines=24, columns=40)
             ui.app.invalidate()
@@ -559,8 +557,9 @@ async def test_oversized_pinned_prompt_keeps_output_and_footer_visible(display):
             renderer.user_prompt(prompt)
             ui.write("\n".join(f"output {i}" for i in range(50)))
             await wait_until(lambda: snapshot()[0].startswith("> requirement 0 "))
-            assert snapshot()[13].strip() == "…"
-            assert "output 49" in "\n".join(snapshot()[14:17])
+            assert snapshot()[0].rstrip().endswith("…")
+            assert snapshot()[1].startswith("output ")
+            assert "output 49" in "\n".join(snapshot()[1:17])
             assert "readout" in snapshot()[23]
             # The complete prompt is still part of ordinary scrollback.
             content = ui.transcript.content.create_content(100, 17)
@@ -574,6 +573,35 @@ async def test_oversized_pinned_prompt_keeps_output_and_footer_visible(display):
         finally:
             ui.close()
             await task
+
+
+@pytest.mark.parametrize("prompt, width, expected", [
+    ("alpha beta later", 12, "> alpha…"),
+    ("short task", 12, "> short task"),
+    ("abcdefghijklmnopqr", 20, "> abcdefghijklmnopqr"),
+    ("abcdefghijklmnopqrs", 20, "> abcdefghijklmnopq…"),
+    ("x" * 40, 12, "> xxxxxxxxx…"),
+    ("猫" * 10, 10, "> 猫猫猫…"),
+    ("e\u0301" * 12, 10, "> " + "e\u0301" * 7 + "…"),
+    ("👩‍💻" * 8, 10, "> " + "👩‍💻" * 3 + "…"),
+    ("long prompt", 1, "…"),
+])
+def test_pinned_prompt_ellipsis_preserves_words_and_graphemes(display, prompt, width, expected):
+    sink, _, output, _, _ = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda columns: "readout", sink, input=pipe, output=output)
+        try:
+            renderer = Renderer(Style(True), sink, False)
+            renderer.terminal = ui
+            renderer.user_prompt(prompt)
+            ui.write("output\n" * 50)
+            ui.transcript.vertical_scroll = 40
+            content = ui._pinned_prompt_content(width)
+            assert content.line_count == 1
+            assert "".join(fragment[1] for fragment in content.get_line(0)) == expected
+            assert content.get_line(1) == []
+        finally:
+            ui.close()
 
 
 async def test_pinned_line_requires_green_prompt_prefix_and_survives_reload(display):

@@ -318,23 +318,37 @@ class TerminalUI:
         self._pinned_prompt = selected
         if self._pinned_prompt is None:
             return 0
-        # Keep enough scrollback rows for output and its surrounding blank
-        # lines, even when the submitted prompt is taller than the screen.
-        available = max(0, size.rows - FOOTER_ROWS - 1 - 3)
-        start, end = self._pinned_prompt
-        return min(end - start, available)
+        # One header row, leaving at least one transcript row above the footer.
+        available = max(0, size.rows - FOOTER_ROWS - 2)
+        return min(1, available)
 
     def _pinned_prompt_content(self, width: int) -> UIContent:
         height = self._pinned_prompt_height(width)
         source = self._transcript_content(width)
         start, end = self._pinned_prompt or (0, 0)
+        text = fragment_list_to_text(source.get_line(start)) if height else ""
+        if height and end > start + 1:
+            # Reuse bounded, already wrapped rows instead of rereading a long
+            # prompt. A first word can wrap onto its own row after the > marker.
+            if text.strip() == ">":
+                text += " " + fragment_list_to_text(source.get_line(start + 1)).lstrip()
+            prefix = ""
+            cells = 0
+            for cluster in iter_graphemes(text):
+                cells += display_width(cluster)
+                if cells > max(0, width - 1):
+                    break
+                prefix += cluster
+            if len(prefix) < len(text) and not text[len(prefix)].isspace():
+                boundary = re.search(r"\s+\S*$", prefix)
+                if boundary is not None and prefix[:boundary.start()].strip() != ">":
+                    prefix = prefix[:boundary.start()]
+            text = prefix.rstrip() + "…"
 
         def get_line(index: int) -> StyleAndTextTuples:
             if not 0 <= index < height:
                 return []
-            if index == height - 1 and start + height < end:
-                return [("class:user", "…")]
-            return [("class:user", fragment_list_to_text(source.get_line(start + index)))]
+            return [("class:user", text)]
 
         return UIContent(get_line=get_line, line_count=height, show_cursor=False)
 

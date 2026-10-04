@@ -30,7 +30,7 @@ def main() -> None:
         [
             sys.executable, "-m", "slipagent.cli",
             "--workspace", str(workspace),
-            "--model", "stealth/space-bunny-alpha",
+            "--model", "nvidia/nemotron-3.5-lightning:free",
         ],
         cwd=workspace,
         input="\n".join(commands) + "\n",

@@ -115,7 +115,7 @@ def test_config_falls_back_to_env_then_default() -> None:
 
 
 def test_default_model_is_the_configured_one() -> None:
-    assert DEFAULT_MODEL == "stealth/space-bunny-alpha"
+    assert DEFAULT_MODEL == "nvidia/nemotron-3.5-lightning:free"
 
 
 # --------------------------------------------------------------------------- #

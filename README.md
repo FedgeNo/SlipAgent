@@ -44,17 +44,17 @@ python -m pip install -e ".[dev]"
 ```
 
 Create an ignored `.env` file containing `OPENROUTER_API_KEY=your-key`. Start with
-Space Bunny Alpha, the default model, selected explicitly:
+NVIDIA Nemotron 3.5 Lightning (free), the default model, selected explicitly:
 
 ```bash
-slipagent --model stealth/space-bunny-alpha
+slipagent --model nvidia/nemotron-3.5-lightning:free
 ```
 
 For another project or a single task:
 
 ```bash
 slipagent --workspace ~/code/myproject --model nvidia/nemotron-3-super-120b-a12b:free
-slipagent --model stealth/space-bunny-alpha -p "add type hints to src/parser.py and run the tests"
+slipagent --model nvidia/nemotron-3.5-lightning:free -p "add type hints to src/parser.py and run the tests"
 ```
 
 The editable install (`-e`) is essential for working on the running harness:
@@ -70,7 +70,7 @@ explicitly without needing pip inside it. See the
 ## Using Free Models
 
 **Choose a model explicitly.** We recommend free coding models with a **1M-token
-context window**, such as Space Bunny Alpha and NVIDIA Nemotron 3 Super.
+context window**, such as NVIDIA Nemotron 3.5 Lightning and NVIDIA Nemotron 3 Super.
 We do not recommend free-router: automatic selection can route to models
 unsuitable for coding, including classifiers.
 A large context window gives the agent room for project instructions, source,
@@ -79,7 +79,7 @@ own harness.
 
 | Recommended Model | OpenRouter Model ID |
 | --- | --- |
-| [Space Bunny Alpha](https://openrouter.ai/stealth/space-bunny-alpha) (default) | `stealth/space-bunny-alpha` |
+| [NVIDIA Nemotron 3.5 Lightning (free)](https://openrouter.ai/nvidia/nemotron-3.5-lightning:free) (default) | `nvidia/nemotron-3.5-lightning:free` |
 | [NVIDIA Nemotron 3 Super (free)](https://openrouter.ai/nvidia/nemotron-3-super-120b-a12b:free) | `nvidia/nemotron-3-super-120b-a12b:free` |
 
 Provider context limits and free availability can change. Check `/models` for
@@ -178,7 +178,7 @@ From an editable checkout, start a session with the harness itself as the
 workspace:
 
 ```bash
-slipagent --workspace . --model stealth/space-bunny-alpha
+slipagent --workspace . --model nvidia/nemotron-3.5-lightning:free
 ```
 
 You can then ask it, for example:
@@ -266,7 +266,7 @@ export OPENROUTER_API_KEY="sk-or-..."
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `OPENROUTER_API_KEY` | — | **Required.** Your API key. |
-| `OPENROUTER_MODEL` | `stealth/space-bunny-alpha` | Default model slug. |
+| `OPENROUTER_MODEL` | `nvidia/nemotron-3.5-lightning:free` | Default model slug. |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Point at a gateway or mock. |
 | `EXA_API_KEY` | — | Optional. Enables the `web_search` tool. |
 | `OPENROUTER_REFERER` | — | Optional app-attribution URL. |
@@ -396,14 +396,14 @@ ignore rules if its settings should remain local.
 One-shot mode runs a task, prints the final answer, and exits:
 
 ```bash
-slipagent --model stealth/space-bunny-alpha "add type hints to src/parser.py and run the tests"
-slipagent --model stealth/space-bunny-alpha -p "explain what this repo does"
+slipagent --model nvidia/nemotron-3.5-lightning:free "add type hints to src/parser.py and run the tests"
+slipagent --model nvidia/nemotron-3.5-lightning:free -p "explain what this repo does"
 ```
 
 Interactive REPL — a multi-turn session with conversation state:
 
 ```bash
-slipagent --model stealth/space-bunny-alpha
+slipagent --model nvidia/nemotron-3.5-lightning:free
 slipagent --workspace ~/code/myproject --model nvidia/nemotron-3-super-120b-a12b:free
 ```
 

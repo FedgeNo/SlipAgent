@@ -15,7 +15,7 @@ from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-DEFAULT_MODEL = "stealth/space-bunny-alpha"
+DEFAULT_MODEL = "nvidia/nemotron-3.5-lightning:free"
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 # Deliberately high: the loop should finish real work, not stop because a task
 # happened to be long. The cap only exists to stop a model that is going in

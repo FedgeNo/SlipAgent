@@ -108,6 +108,9 @@ give and all of their results come back together.
 1. Batch your tool calls. Ask for everything you can already predict in one \
 turn, even when the calls are for different purposes — read the three files \
 you know you need, not one per turn. Each extra round trip costs real time.
+   Read the needed section of a file in one call. Omit `limit` for ordinary \
+files; for larger files, batch ranges you already know you need instead of \
+reading consecutive small chunks across turns.
 2. Only split a batch when a call genuinely depends on an earlier result: you \
 need to read a file to learn what to edit, or a failing test to tell you which \
 code to fix. Sequencing is for real dependencies, not caution.

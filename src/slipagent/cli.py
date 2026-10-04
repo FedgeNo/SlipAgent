@@ -176,11 +176,14 @@ class Renderer:
         self._prompt: tuple[str, str] | None = None
         self.terminal: TerminalUI | None = None
 
-    def _write(self, text: str, *, continuation_indents: dict[int, int] | None = None) -> None:
+    def _write(
+        self, text: str, *, continuation_indents: dict[int, int] | None = None,
+        prompt_length: int | None = None,
+    ) -> None:
         plain = strip_sequences(text)
         self._last_output_blank = not plain.rsplit("\n", 1)[-1].strip()
         if self.terminal is not None:
-            self.terminal.write(text, continuation_indents=continuation_indents)
+            self.terminal.write(text, continuation_indents=continuation_indents, prompt_length=prompt_length)
             return
         prompt = self._prompt
         if prompt is not None:
@@ -250,9 +253,10 @@ class Renderer:
         self._finish_stream()
         self._begin_block()
         block = self.style.green(f"> {text}")
+        prompt_length = len(block)
         if queued:
             block += "\n" + self.style.dim("  (queued — the agent is still working)")
-        self._write(f"{block}\n")
+        self._write(f"{block}\n", prompt_length=prompt_length)
 
     def clear_prompt(self) -> None:
         """Erase the live prompt row, leaving everything above it alone."""

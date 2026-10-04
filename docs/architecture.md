@@ -566,6 +566,15 @@ to the model along with the active generation number.
   process only new chunks. Explicit continuation indents are indexed by chunk
   and source line, and replayed on resize. The startup tool list uses this to
   align wrapped rows beneath its first item without changing ordinary output.
+  The renderer marks user prompts explicitly with their text boundary, excluding
+  the queued-status annotation. The terminal retains the latest prompt's chunk
+  index and resolves its styled row range during normal append/reflow. When that
+  range reaches the viewport top, a pinned window reuses its rows until another
+  prompt arrives. It does not scan old output for prompt-like text or add a copy
+  to the transcript/model history. Oversized pinned content leaves at least three
+  transcript rows available; the full original remains scrollable. Context view
+  hides the pinned window without releasing it. Compatible reloads preserve the
+  marker and pin state; sessions without this metadata start tracking new prompts.
   Refresh explicitly migrates older in-memory block
   lists while preserving the application, draft, input queue, and scroll state.
   Closing the terminal releases both temporary files. These files serve display,

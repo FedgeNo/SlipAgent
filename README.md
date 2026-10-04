@@ -453,6 +453,12 @@ your draft and prompt history. Scrolling back pauses automatic scrolling until y
 return to the bottom. The CWD is the workspace where tools run; long paths
 and model names shorten to fit narrow terminals.
 
+The latest submitted user prompt pins to the top when it scrolls there. Output
+continues scrolling beneath it, and the prompt stays pinned until another task
+or queued follow-up is submitted. The pinned copy wraps on resize. Very tall
+prompts end with an ellipsis in the pinned area to leave room for output; the
+complete original remains in scrollback. The context view keeps its own layout.
+
 The interactive transcript keeps original output and indexed display rows in
 private temporary files for the session. Streaming formats new text and the
 unfinished wrapping tail; ordinary redraws fetch visible rows from a bounded

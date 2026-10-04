@@ -98,6 +98,8 @@ def test_refresh_migrates_legacy_transcript_and_keeps_live_state(display):
         # State left by the previous implementation before its methods reload.
         ui._raw_output = ["\x1b[1mfirst\x1b[0m", "growing reply"]
         del ui._continuation_indents
+        for name in ("_prompt_chunk", "_prompt_length", "_prompt_start", "_prompt_end", "_prompt_pinned"):
+            del ui.__dict__[name]
         ui.transcript.content = FormattedTextControl("old display")
         ui._transcript = [("", "old cached text")]
         ui._wrapped_spans = [(0, 0)]
@@ -246,6 +248,116 @@ async def test_footer_stays_fixed_while_transcript_scrolls_and_input_survives(di
             assert "output 0" not in "\n".join(rows[:17])
             pipe.send_text("\r")
             assert await ui.read_line() == "partially typed"
+        finally:
+            ui.close()
+            await task
+
+
+async def test_latest_user_prompt_pins_at_top_and_releases_on_next_prompt(display):
+    sink, _, output, screen, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        renderer = Renderer(Style(True), sink, False)
+        renderer.terminal = ui
+        task = asyncio.create_task(ui.run())
+        try:
+            ui.write("Startup information\n" * 4)
+            renderer.user_prompt("Keep the original task visible")
+            await wait_until(lambda: "> Keep the original task visible" in "\n".join(snapshot()[:17]))
+            assert snapshot()[0].strip() == "Startup information"
+            pipe.send_text("unfinished draft")
+            ui.write("\n".join(f"result {i}" for i in range(50)))
+            await wait_until(lambda: snapshot()[0].rstrip() == "> Keep the original task visible")
+            assert "result 49" in "\n".join(snapshot()[1:17])
+            assert screen.buffer[0][0].fg == "00ff00"
+            assert "unfinished draft" in snapshot()[19]
+            assert "readout" in snapshot()[23]
+
+            before = snapshot()[1:17]
+            # Wheel events over the pinned prompt must still scroll history.
+            pipe.send_text("\x1b[<64;1;1M" * 3)
+            await wait_until(lambda: snapshot()[1:17] != before)
+            assert snapshot()[0].rstrip() == "> Keep the original task visible"
+            pipe.send_text("\x1b[<65;1;1M" * 30)
+            await wait_until(lambda: "result 49" in "\n".join(snapshot()[1:17]))
+
+            renderer.user_prompt("The next task", queued=True)
+            await wait_until(lambda: snapshot()[0].rstrip() != "> Keep the original task visible")
+            assert "> The next task" in "\n".join(snapshot()[:17])
+            ui.write("\n".join(f"next result {i}" for i in range(50)))
+            await wait_until(lambda: snapshot()[0].rstrip() == "> The next task")
+            assert "next result 49" in "\n".join(snapshot()[1:17])
+            assert "queued" not in snapshot()[0]
+            assert "unfinished draft" in snapshot()[19]
+        finally:
+            ui.close()
+            await task
+
+
+async def test_pinned_prompt_wraps_resizes_and_survives_context_view_and_refresh(display):
+    sink, size, output, screen, snapshot = display
+    size[0] = Size(rows=24, columns=20)
+    screen.resize(lines=24, columns=20)
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        renderer = Renderer(Style(True), sink, False)
+        renderer.terminal = ui
+        task = asyncio.create_task(ui.run())
+        try:
+            renderer.user_prompt("alpha beta gamma delta epsilon\nKeep tests passing")
+            ui.write("\n".join(f"output {i}" for i in range(50)))
+            await wait_until(lambda: snapshot()[0].rstrip() == "> alpha beta gamma")
+            assert [row.rstrip() for row in snapshot()[:3]] == [
+                "> alpha beta gamma", "delta epsilon", "Keep tests passing",
+            ]
+            assert all(screen.buffer[row][0].fg == "00ff00" for row in range(3))
+            size[0] = Size(rows=24, columns=40)
+            screen.resize(lines=24, columns=40)
+            ui.app.invalidate()
+            await wait_until(lambda: snapshot()[0].rstrip() == "> alpha beta gamma delta epsilon")
+            assert snapshot()[1].rstrip() == "Keep tests passing"
+            assert "output 49" in "\n".join(snapshot()[2:17])
+
+            ui.set_context(json.dumps({"messages": [{"role": "system", "content": "System context"}]}))
+            pipe.send_text("\x1c")
+            await wait_until(lambda: "System context" in "\n".join(snapshot()[:17]))
+            assert "> alpha" not in "\n".join(snapshot()[:17])
+            pipe.send_text("\x1c")
+            await wait_until(lambda: snapshot()[0].rstrip() == "> alpha beta gamma delta epsilon")
+            ui.refresh()
+            ui.write("after refresh")
+            await wait_until(lambda: "after refresh" in "\n".join(snapshot()[2:17]))
+            assert snapshot()[0].rstrip() == "> alpha beta gamma delta epsilon"
+            assert snapshot()[1].rstrip() == "Keep tests passing"
+        finally:
+            ui.close()
+            await task
+
+
+async def test_oversized_pinned_prompt_keeps_output_and_footer_visible(display):
+    sink, size, output, screen, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        renderer = Renderer(Style(True), sink, False)
+        renderer.terminal = ui
+        task = asyncio.create_task(ui.run())
+        try:
+            prompt = "\n".join(f"requirement {i}" for i in range(100))
+            renderer.user_prompt(prompt)
+            ui.write("\n".join(f"output {i}" for i in range(50)))
+            await wait_until(lambda: snapshot()[0].rstrip() == "> requirement 0")
+            assert snapshot()[13].strip() == "…"
+            assert "output 49" in "\n".join(snapshot()[14:17])
+            assert "readout" in snapshot()[23]
+            # The complete prompt is still part of ordinary scrollback.
+            content = ui.transcript.content.create_content(100, 17)
+            assert any("requirement 99" in "".join(part[1] for part in content.get_line(i))
+                       for i in range(content.line_count))
+            size[0] = Size(rows=10, columns=100)
+            screen.resize(lines=10, columns=100)
+            ui.app.invalidate()
+            await wait_until(lambda: "readout" in snapshot()[9])
+            assert "output 49" in "\n".join(snapshot()[:3])
         finally:
             ui.close()
             await task

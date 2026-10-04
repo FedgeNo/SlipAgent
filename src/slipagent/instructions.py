@@ -55,7 +55,7 @@ def load_project_instructions(workspace: Workspace, scope: str = ".") -> str:
         except (OSError, UnicodeError, RuntimeError, WorkspaceError) as exc:
             raise WorkspaceError(f"cannot read project instructions {relative}: {exc}") from exc
         seen.add(path)
-        sources.append(f"### {relative}\n{content}\n")
+        sources.append(f"Instruction File: {relative}\n{content}\n")
 
     for filename in INSTRUCTION_FILES:
         relative = (base / filename).as_posix()
@@ -153,7 +153,7 @@ class ProjectInstructions:
         sections = []
         for scope, content in snapshot.items():
             if content:
-                sections.append(f"### Instruction Scope: {scope}/\n{content}")
+                sections.append(f"Instruction Scope: {scope}/\n{content}")
         if not sections:
             return ""
         return ("Explicit user instructions take precedence. Apply each file's path and glob restrictions. "

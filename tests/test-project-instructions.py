@@ -22,7 +22,7 @@ def test_harness_operating_guidance_does_not_depend_on_project_notes(workspace):
     assert "test-runtime.py" not in prompt
     project_guidance = "Project-specific check: run ./verify-project."
     combined = build_system_prompt(str(workspace.root), project_instructions=project_guidance)
-    assert combined.index("read_command_output") < combined.index("## Project instructions")
+    assert combined.index("read_command_output") < combined.index("Project Instructions:")
     assert project_guidance in combined
 
 
@@ -35,7 +35,7 @@ def test_reads_recognized_instruction_files(workspace, name):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("Project rule: preserve existing behavior.", encoding="utf-8")
     content = load_project_instructions(workspace)
-    assert f"### {name}\nProject rule: preserve existing behavior." in content
+    assert f"Instruction File: {name}\nProject rule: preserve existing behavior." in content
 
 
 @pytest.mark.parametrize("folder, suffix", [
@@ -166,7 +166,7 @@ def test_prompt_sections_have_stable_order_and_reject_duplicate_owners():
     sections = PromptSections()
     sections.add("dynamic", "Dynamic", "changes", 20)
     sections.add("stable", "Stable", "rules", 0)
-    assert sections.render() == "## Stable\nrules\n\n## Dynamic\nchanges"
+    assert sections.render() == "Stable:\nrules\n\nDynamic:\nchanges"
     with pytest.raises(ValueError, match="Duplicate"):
         sections.add("stable", "Duplicate", "bad", 30)
 
@@ -179,6 +179,6 @@ async def test_stable_prompt_prefix_survives_new_user_input():
     agent.messages.append(Message.user("Additional constraint"))
     context = await agent._context_view(agent.registry.specs(), 1)
     second = context[0].content
-    assert first.partition("## Current Turn State")[0] == second.partition("## Current Turn State")[0]
+    assert first.partition("Current Turn State:")[0] == second.partition("Current Turn State:")[0]
     assert any("Additional constraint" in (message.content or "") for message in context[1:])
     assert "Additional constraint" not in first

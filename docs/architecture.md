@@ -69,6 +69,12 @@ Context construction proceeds in this order:
    Boundaries and representation caches belong to one view: later requests can
    restore omitted records as large calls age into smaller summaries. There is
    no persistent omission marker and no separate history token cap.
+   Every included historical turn starts with one unnumbered `Conversation Record`
+   boundary, including full turns split across native user/assistant/tool messages.
+   The selected records form a contiguous suffix of stored history. The current
+   post number remains in the system prompt, so subtracting one for the latest
+   record and counting backward gives each record's exact `recall_history` ID.
+   Harness labels use plain text rather than Markdown; source content is untouched.
 4. The current input remains verbatim. Continuation turns carry the active user
    prompt with their full records. Newly returned results cannot leave the full
    window before the working model receives them, even when their independent
@@ -76,7 +82,8 @@ Context construction proceeds in this order:
    excerpts with original-part retrieval instructions as a last resort.
 5. `TaskMemory.prompt_supplement` ensures the current user prompt is supplied,
    even after its original post is compressed. It reuses a full copy already
-   selected or adds the retained original with its source post ID. Supplemental
+   selected or adds the retained original. Its source post ID stays in the system
+   task metadata, rather than the user-message label. Supplemental
    input counts against the endpoint budget. The active prompt is independent
    of the historical representation of the call that first received it.
 
@@ -226,7 +233,8 @@ After archiving a complete batch, `Agent._archive_turn` submits it to
 response, tool calls and results, the selected model, and its capabilities. Every job starts asynchronously;
 the working loop does not wait. A reply without tools also gets one job. The
 compaction request contains exactly two messages: summarization instructions
-and the JSON serialization of those parts. It contains no thread, prior
+with the post ID as private system metadata, and the JSON serialization of those
+four parts without a post-number field. It contains no thread, prior
 summaries, task state, project guidance, or reasoning. No tools or output schema
 are requested; the reply is a plain summary capped at 6,000 characters. The
 complete input is checked against the frozen endpoint budget without silently

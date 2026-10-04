@@ -33,7 +33,7 @@ class Client:
             self.started.set()
             await self.release.wait()
             source = json.loads(messages[1].content)
-            return Completion(Message.assistant(f"Turn {source['post_id']}: inspected the project; tools returned their recorded results."),
+            return Completion(Message.assistant("Inspected the project; tools returned their recorded results."),
                               "test", usage=Usage(prompt_tokens=10, completion_tokens=5))
         self.main_requests.append(kwargs)
         return self.replies.pop(0)
@@ -76,7 +76,8 @@ async def test_summary_gets_only_its_completed_turn_and_runs_in_background():
     assert agent.history.posts[-2].summary is None
     client.release.set()
     await agent.wait_for_compaction()
-    assert agent.history.posts[-2].summary.startswith("Turn 2:")
+    assert agent.history.posts[-2].summary.startswith("Inspected the project;")
+    assert "CURRENT_POST_ID: 2" in first["messages"][0].content
 
 
 async def test_reasoning_is_saved_per_turn_and_recallable_but_never_compacted():
@@ -100,7 +101,7 @@ async def test_reasoning_is_saved_per_turn_and_recallable_but_never_compacted():
         assert "FIRST REASONING" not in str([m.to_api() for m in request["messages"]])
     for request in client.summary_requests:
         source = json.loads(request["messages"][1].content)
-        assert set(source) == {"post_id", "user_prompt", "agent_response", "tool_calls", "tool_results"}
+        assert set(source) == {"user_prompt", "agent_response", "tool_calls", "tool_results"}
         assert "REASONING" not in str([m.to_api() for m in request["messages"]])
 
 
@@ -238,7 +239,7 @@ async def test_fast_summary_cannot_hide_unseen_tool_results_at_tiny_budget():
     await agent.run("Inspect")
     sent = "\n".join(message.content or "" for message in client.main_requests[1]["messages"])
     assert "Actual Agent/Tool Transcript (Excerpt)" in sent
-    assert "ACTUAL RESULT" in sent and "Turn 1: inspected" not in sent
+    assert "ACTUAL RESULT" in sent and "Inspected the project;" not in sent
     assert result in agent.history.posts[0].full_text()
 
 

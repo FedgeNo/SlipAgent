@@ -122,7 +122,7 @@ async def test_stopped_tool_post_rolls_with_tool_summary_without_summary_repair(
     await agent.run("next")
     await agent.run("next again")
     wire = "\n".join(m.content or "" for m in client.calls[-1]["messages"])
-    assert "Post 1:" in wire and agent.history.posts[0].summary in wire
+    assert "Conversation Record (Compressed):" in wire and agent.history.posts[0].summary in wire
     assert "retrieve post 1 with recall_history" not in wire
     assert "EXACT TOOL RESULT" in wire
     assert "EXACT TOOL RESULT" in (await agent.registry.invoke("recall_history", {"post_id": 1})).content
@@ -225,7 +225,7 @@ async def test_full_window_shrinks_by_whole_posts_at_model_limit():
     ]
     assert "OLD TOOL RESPONSE" not in wire
     assert "LARGE ORIGINAL TOOL OUTPUT" not in wire
-    assert "Post 2:" in wire
+    assert history.posts[1].summary in wire
     assert all(f"FULL RESPONSE {index}" in wire for index in range(2, 51))
     assert not any(message.role == "tool" or message.tool_calls for message in view)
     assert len(history.posts) == 51
@@ -345,7 +345,7 @@ async def test_only_posts_outside_window_use_summaries():
                               context_length=1000000, max_output=8192, summarize=unused)
     wire = "\n".join(m.content or "" for m in view)
     assert "OLDEST FULL RESPONSE" not in wire
-    assert "Post 1:" in wire
+    assert "Conversation Record (Compressed):" in wire
     assert "MIDDLE FULL RESPONSE " * 50 in wire
     assert "LATEST FULL RESPONSE " * 50 in wire
     assert [context_body(m.content) for m in view if m.role == "user"] == [
@@ -778,8 +778,8 @@ async def test_stored_summaries_over_budget_preserve_originals_without_extra_cal
     view = await history.view(messages, [], keep_posts=1,
                               context_length=14000, max_output=1000, summarize=unused)
     wire = "\n".join(message.content or "" for message in view)
-    assert "Post 1:" not in wire
-    assert "Post 15:" in wire
+    assert history.posts[0].summary not in wire
+    assert history.posts[14].summary in wire
     assert any(context_body(message.content) == "answer 19 " * 300 for message in view)
     assert any(context_body(message.content) == "next" for message in view)
     assert [post.summary for post in history.posts] == summaries

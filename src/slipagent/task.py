@@ -52,7 +52,7 @@ def task_update_instructions() -> str:
               "pending": ["Verify the fix"], "next_steps": ["Run the relevant tests"]}
     complete = {**active, "status": "complete", "facts": ["Relevant tests passed"], "pending": [], "next_steps": []}
     return (
-        "\n## Task Update Arguments\n"
+        "\nTask Update Arguments:\n"
         "update_task is optional. Ordinary replies need no task object. When calling it, supply all six fields: "
         "status, goal, constraints, facts, pending, next_steps. Pass these fields directly as the tool arguments, "
         "not inside a task object. Each call replaces the whole record; preserve still-relevant entries.\n"
@@ -125,14 +125,15 @@ class TaskMemory:
         joined = "\n".join(prompts)
         supplied = {message.content.partition("\n\n")[2]
                     for message in messages if message.role == "user" and message.content
-                    and message.content.startswith(("## Current User Request — Post ", "### Post "))}
+                    and message.content.startswith(("Current User Request (Full):", "User Request (Full):",
+                                                    "Conversation Record (Full):", "Conversation Record (Excerpt):"))}
         if joined in supplied or all(prompt in supplied for prompt in prompts):
             return []
-        return [Message.user(f"## Current User Request — Post {post_id} (Full)\n\n" + joined)]
+        return [Message.user("Current User Request (Full):\n\n" + joined)]
 
     def instructions(self) -> str:
         return (
-            "\n## Active Task Working Record\n"
+            "\nActive Task Working Record:\n"
             f"TASK_SOURCE_REVISION: {self.source_revision}\n"
             + json.dumps({"origin_post": next(iter(self.sources), None),
                           "source_posts": list(self.sources),

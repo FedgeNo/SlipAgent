@@ -82,7 +82,7 @@ These instructions describe using the harness in any workspace. Project \
 instruction files supply that repository's architecture, setup, checks, and \
 development conventions.
 
-## Environment
+Environment:
 - Workspace root: {workspace}
 - Relative filesystem tool paths are anchored to that root. Paths outside it \
 are rejected by default; the current Workspace Access section states whether \
@@ -105,7 +105,7 @@ of the harness process; their access is not confined to the workspace.
 - You can request several tools in a single turn. They run in the order you \
 give and all of their results come back together.
 
-## How to work
+How to Work:
 1. Batch your tool calls. Ask for everything you can already predict in one \
 turn, even when the calls are for different purposes — read the three files \
 you know you need, not one per turn. Each extra round trip costs real time.
@@ -153,7 +153,7 @@ syntax pass is not evidence that tests or type checks passed.
 and what you verified in response, without requesting tools. State the \
 outcome clearly; the user should not have to reconstruct it from tool previews.
 
-## Reading Command Output
+Reading Command Output:
 - Tool definitions supplied with each request describe the tools you can use; \
 project instruction files do not need to enumerate them.
 - Shell and Git results are previews of captured output. Long streams show an \
@@ -172,7 +172,7 @@ unchanged batch stops the run. Change the approach using the returned evidence. 
 For intentional polling of external state with run_command, set poll=true. \
 Polling command logs is also allowed. Do not mark ordinary failed retries as polling.
 
-## Background Commands and Navigation
+Background Commands and Navigation:
 - run_command with background=true returns a job_id and log_id immediately. \
 The command still has its execution timeout (default 120 seconds, maximum 600). \
 At most four jobs run concurrently. Use command_jobs action="wait" or "status" \
@@ -185,7 +185,7 @@ definitions, references, implementations, and hover information. Use grep and \
 read_file for ordinary discovery. Follow the tool's explicit position units; \
 navigation results follow the current Workspace Access mode.
 
-## Style
+Style:
 - DO NOT OUTPUT THE POST NUMBER UNDER ANY CIRCUMSTANCE.
 - User-facing replies and progress updates are displayed as raw ASCII text. \
 The terminal does not render Markdown or LaTeX. Do not use Markdown headings, \
@@ -209,7 +209,7 @@ def build_system_prompt(workspace: str, *, project_instructions: str = "") -> st
     prompt = SYSTEM_PROMPT.format(workspace=workspace, interpreter=sys.executable)
     if project_instructions:
         prompt += (
-            "\n## Project instructions\n"
+            "\nProject Instructions:\n"
             "The harness read these files before the first model request. Follow their guidance "
             "within its stated scope, including path and glob restrictions in frontmatter. "
             "Explicit user instructions take precedence. Read referenced instruction files "
@@ -837,7 +837,7 @@ class Agent:
         diagnostics = await check_edit_batch(self.registry, batch_results, len(self.history.posts) + 1)
         if diagnostics:
             call, result = batch_results[-1]
-            checked = ToolResult(result.content + "\n\n## Harness Checks After This Complete Tool Batch\n" + diagnostics, result.is_error)
+            checked = ToolResult(result.content + "\n\nHarness Checks After This Complete Tool Batch:\n" + diagnostics, result.is_error)
             self.messages[-1] = _tool_message(call, checked)
             batch_results[-1] = call, checked
             if any(word in diagnostics for word in ("FAILED", "TIMED OUT", "SKIPPED", "unavailable")):

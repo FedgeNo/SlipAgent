@@ -129,7 +129,7 @@ class RepositoryMap:
             terms = set(re.findall(r"[a-z_][a-z_0-9]{2,}", (name + " " + retained[name][1]).casefold()))
             return -(len(words & terms) * 20 + min(10, all_references.count(Path(name).stem))), name
         header = (
-            "\n## Repository Map (Orientation Only)\n"
+            "\nRepository Map (Orientation Only):\n"
             "Paths and Python definitions with line numbers; signatures omit defaults and annotations. "
             "Other languages list paths only. Read files before editing. Dependencies, hidden directories, "
             "symlinks and Git-ignored files are excluded from this map; file tools can still inspect them.\n"

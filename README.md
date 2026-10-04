@@ -542,12 +542,15 @@ remain available. Isolated background summaries do not replace this view.
 Before the first working request, the view indicates that none has
 been sent.
 
-The model's input includes headings for system instructions, the response
-contract, current turn state, compressed history, numbered full history posts,
-user requests, and named tool results with call IDs. Headings identify each
-section's role and whether it is full or compressed. They appear only in the
-context sent to the model; archived originals remain verbatim, and the headings
-count toward the context budget.
+The model's input uses plain labels for system instructions, the response
+contract, current turn state, history records, user requests, and named tool
+results with call IDs. Each historical turn starts with one unnumbered
+`Conversation Record` label identifying full, compressed, or excerpted content.
+The current post number and task-source IDs stay in the system prompt. The last
+historical record is the current post minus one; earlier records can be located
+by counting backward for `recall_history`. Current user input is separate.
+These labels count toward the context budget. Archived originals and source-file
+formatting remain verbatim; the harness adds no Markdown headings to them.
 
 The prompt stays live while the agent works. Text entered mid-turn is queued
 and delivered after the current tool batch, with a visible queued label.

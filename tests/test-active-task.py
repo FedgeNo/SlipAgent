@@ -101,8 +101,8 @@ async def test_goal_and_constraints_survive_beyond_full_and_summary_windows():
     assert agent.history.task.source_revision == 153
     assert agent.history.task.sources[1] == [original]
     assert agent.history.posts[0].task_record["goal"] == "Implement inventory support"
-    # These short replies are smaller than their summaries and stay original.
-    assert len(re.findall(r"— Agent Response \(Full\)", wire)) == 150
+    # The 100 older records may use either representation, whichever is smaller.
+    assert len(re.findall(r"Conversation Record \((?:Full|Compressed)\):", wire)) == 150
     agent.history.task.record["goal"] = "Later working state"
     assert agent.history.posts[-1].task_record["goal"] == "Implement inventory support"
 
@@ -144,7 +144,7 @@ async def test_current_prompt_and_its_source_survive_compression_without_task_up
         wire = "\n".join(message.content or "" for message in request["messages"])
         assert text in wire
         assert '"current_prompt_post": 1' in wire
-    assert "Post 1 — Conversation Record (Compressed)" in "\n".join(m.content or "" for m in client.calls[-1]["messages"])
+    assert "Conversation Record (Compressed):" in "\n".join(m.content or "" for m in client.calls[-1]["messages"])
     assert not any(event.kind == "retry" for event in events)
     assert agent.history.task.record is None
 
@@ -174,7 +174,7 @@ async def test_context_supplies_retained_prompt_when_legacy_full_post_has_no_cop
     view = await history.view(messages, [], keep_posts=1, context_length=9000, max_output=1000)
     supplied = [message for message in view if message.role == "user"]
     assert len(supplied) == 1
-    assert supplied[0].content == "## Current User Request — Post 1 (Full)\n\n" + prompt
+    assert supplied[0].content == "Current User Request (Full):\n\n" + prompt
     assert message_tokens(view) + 1000 < 9000 * .85
     assert [message.to_api() for message in messages] == originals
 

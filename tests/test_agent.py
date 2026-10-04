@@ -24,7 +24,11 @@ def task_record(messages=None, *, revision=1, **changes):
 def context_body(content: str | None) -> str:
     """Read original content inside the harness heading/observation envelope."""
     text = content or ""
-    if text.startswith(("## System Instructions", "## Current User Request", "### Post ")):
+    if text.startswith(("## System Instructions", "## Current User Request", "### Post ",
+                        "System Instructions (Full):", "Current User Request (Full):",
+                        "Conversation Record (Full):", "Conversation Record (Excerpt):",
+                        "User Request (Full):", "Agent Response (Full):",
+                        "Agent Response and Tool Calls (Full):", "Tool Result:")):
         text = text.partition("\n\n")[2]
     try:
         observation = json.loads(text)

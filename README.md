@@ -867,8 +867,9 @@ Useful flags:
 
 In one-shot mode the final answer goes to **stdout** and progress goes to
 **stderr**, so the answer can be piped to another program. Model output is
-plain terminal text; Markdown is not rendered. The prompt asks the model to
-space ASCII tables for a monospaced display.
+raw ASCII terminal text; Markdown and LaTeX are not rendered. The prompt asks
+for plain equations and space-padded tables, reserving document formatting for
+files that support it, such as Markdown documents, LaTeX source, and PDFs.
 
 ## MCP
 

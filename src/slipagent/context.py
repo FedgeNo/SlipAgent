@@ -601,7 +601,9 @@ class ConversationHistory:
         def tokens(part: list[Message]) -> int:
             return math.ceil(message_tokens(tool_history_as_text(part) if text_tool_history else part) * token_scale)
         instructions = (NATIVE_TOOL_INSTRUCTIONS if native_tools else JSON_TOOL_INSTRUCTIONS) + RECORD_INSTRUCTIONS
-        instructions += self.instructions(native_tools=native_tools) + self.task.instructions() + extra_instructions
+        # Stable response/tool guidance precedes changing turn IDs and task
+        # state. Keep one system-message prefix for provider compatibility.
+        instructions += extra_instructions + self.instructions(native_tools=native_tools) + self.task.instructions()
         pinned = [message for message in messages if message.role == "system"]
         pinned = [replace(message, content=f"## System Instructions — Section {index} (Full)\n\n" + (message.content or ""))
                   for index, message in enumerate(pinned, 1)]

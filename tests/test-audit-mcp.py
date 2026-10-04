@@ -82,6 +82,47 @@ async def test_cancel_during_tool_discovery_reaps_server(tmp_path, monkeypatch):
         await manager.aclose()
 
 
+@pytest.mark.parametrize("during_startup", [False, True])
+async def test_cancelled_disconnect_retains_ownership_until_server_is_reaped(monkeypatch, during_startup):
+    ready, stopping = asyncio.Event(), asyncio.Event()
+    client = MCPClient(ServerSpec("sleep", sys.executable, ["-c", "import time; time.sleep(60)"]))
+
+    async def negotiate():
+        ready.set()
+        if during_startup:
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(client, "_negotiate", negotiate)
+    task = asyncio.create_task(client.connect())
+    await asyncio.wait_for(ready.wait(), 3)
+    process = client._process
+    wait = process.wait
+
+    async def observed_wait():
+        stopping.set()
+        return await wait()
+
+    monkeypatch.setattr(process, "wait", observed_wait)
+    try:
+        if during_startup:
+            task.cancel()
+        else:
+            await task
+            task = asyncio.create_task(client.disconnect())
+        await stopping.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 8)
+        assert process.returncode is not None
+        assert client._process is None
+        assert client._pump is None and client._stderr_pump is None
+    finally:
+        if process.returncode is None:
+            process.kill()
+        await wait()
+        await client.disconnect()
+
+
 async def test_deadline_includes_a_blocked_pipe_write(tmp_path):
     server = tmp_path / "blocked.py"
     server.write_text("import time\ntime.sleep(60)\n")

@@ -47,6 +47,13 @@ class OpenRouterAPIError(OpenRouterError):
         super().__init__(message)
         self.status_code = status_code
         self.body = body
+        self.retry_after: str | None = None
+        self.partial_response = ""
+        self.usage = Usage()
+
+
+class OpenRouterTransportError(OpenRouterAPIError):
+    """An interrupted request can be retried before accepting any actions."""
 
 
 class OpenRouterAuthError(OpenRouterAPIError):
@@ -134,6 +141,7 @@ class OpenRouterClient:
         on_delta: Callable[[str, str], None] | None = None,
         on_request: Callable[[str], None] | None = None,
         request_profile: ModelCapabilities | None = None,
+        single_attempt: bool = False,
     ) -> Completion:
         """Request a completion; an isolated job may supply its frozen profile.
 
@@ -194,19 +202,22 @@ class OpenRouterClient:
             # Capture the final request body before transport, without headers.
             on_request(json.dumps(payload, ensure_ascii=False))
         if on_delta is not None:
-            return await self._stream_request(payload, on_delta)
-        raw = await self._request("POST", "/chat/completions", json=payload)
+            return await self._stream_request(payload, on_delta, single_attempt=single_attempt)
+        raw = await self._request("POST", "/chat/completions", single_attempt=single_attempt, json=payload)
         return _parse_completion(raw)
 
-    async def _stream_request(self, payload: dict[str, Any], on_delta: Callable[[str, str], None]) -> Completion:
+    async def _stream_request(self, payload: dict[str, Any], on_delta: Callable[[str, str], None], *, single_attempt: bool = False) -> Completion:
         observed = False
-        for attempt in range(self.retry.max_retries + 1):
+        retries = 0 if single_attempt else self.retry.max_retries
+        for attempt in range(retries + 1):
+            state: _StreamCompletion | None = None
             try:
                 async with self._client.stream("POST", f"{self.base_url}/chat/completions", json=payload) as response:
                     if response.status_code >= 400:
                         await response.aread()
                         error = _build_error(response)
-                        if response.status_code in RETRYABLE_STATUS and attempt < self.retry.max_retries:
+                        error.retry_after = response.headers.get("retry-after")
+                        if response.status_code in RETRYABLE_STATUS and attempt < retries:
                             await asyncio.sleep(self._backoff(attempt, response.headers.get("retry-after")))
                             continue
                         raise error
@@ -238,10 +249,17 @@ class OpenRouterClient:
                             state.add(event)
                     return state.completion()
             except (httpx.TimeoutException, httpx.TransportError) as exc:
-                # Once any chunk arrives, replaying the request could duplicate output.
-                if observed or attempt == self.retry.max_retries:
-                    raise OpenRouterError(f"OpenRouter stream interrupted: {exc}") from exc
+                # Visible partial output needs an agent-level retry notification.
+                if observed or attempt == retries:
+                    error = OpenRouterTransportError(f"OpenRouter stream interrupted: {exc}")
+                    if state is not None:
+                        state.attach_diagnostics(error)
+                    raise error from exc
                 await asyncio.sleep(self._backoff(attempt))
+            except OpenRouterAPIError as exc:
+                if state is not None:
+                    state.attach_diagnostics(exc)
+                raise
         raise OpenRouterError("OpenRouter stream failed after retries")
 
     async def list_models(self) -> list[ModelInfo]:
@@ -316,19 +334,20 @@ class OpenRouterClient:
             raise OpenRouterAPIError(f"OpenRouter returned malformed key information: {exc}") from exc
 
     async def _request(
-        self, method: str, path: str, **kwargs: Any
+        self, method: str, path: str, *, single_attempt: bool = False, **kwargs: Any
     ) -> dict[str, Any]:
         url = f"{self.base_url}{path}"
         last_error: Exception | None = None
 
-        for attempt in range(self.retry.max_retries + 1):
-            is_final = attempt == self.retry.max_retries
+        retries = 0 if single_attempt else self.retry.max_retries
+        for attempt in range(retries + 1):
+            is_final = attempt == retries
             try:
                 response = await self._client.request(method, url, **kwargs)
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 last_error = exc
                 if is_final:
-                    raise OpenRouterError(
+                    raise OpenRouterTransportError(
                         f"Network error talking to OpenRouter after "
                         f"{attempt + 1} attempt(s): {exc}"
                     ) from exc
@@ -339,6 +358,7 @@ class OpenRouterClient:
                 return _decode_json(response)
 
             error = _build_error(response)
+            error.retry_after = response.headers.get("retry-after")
             if response.status_code in RETRYABLE_STATUS and not is_final:
                 last_error = error
                 await asyncio.sleep(self._backoff(attempt, response.headers.get("retry-after")))
@@ -394,6 +414,14 @@ class _StreamCompletion:
         self.reasoning: list[str] = []
         self.function_call: dict[str, Any] = {}
 
+    def attach_diagnostics(self, error: OpenRouterAPIError) -> None:
+        error.partial_response = json.dumps({"content": self.content, "tool_calls": self.calls,
+                                             "reasoning": "".join(self.reasoning)}, ensure_ascii=False)[:16000]
+        try:
+            error.usage = Usage.from_api(self.usage)
+        except (ValueError, TypeError, AttributeError, OverflowError):
+            pass
+
     def _add_reasoning_detail(self, detail: dict[str, Any]) -> None:
         """Reconstruct native blocks only for the response being received.
 
@@ -424,7 +452,9 @@ class _StreamCompletion:
             if raw.get("error"):
                 if _is_context_overflow(str(raw["error"])):
                     raise OpenRouterContextError(f"OpenRouter stream context limit exceeded: {raw['error']}")
-                raise OpenRouterAPIError(f"OpenRouter stream failed: {raw['error']}")
+                code = raw["error"].get("code") if isinstance(raw["error"], dict) else None
+                raise OpenRouterAPIError(f"OpenRouter stream failed: {raw['error']}",
+                                         status_code=code if type(code) is int else None)
             self.model = raw.get("model") or self.model
             if raw.get("usage") is not None:
                 self.usage = raw["usage"]
@@ -434,7 +464,7 @@ class _StreamCompletion:
                 if choice.get("finish_reason"):
                     self.finish_reason = choice["finish_reason"]
                     if self.finish_reason == "error":
-                        raise OpenRouterAPIError("OpenRouter stream ended with a provider error")
+                        raise OpenRouterTransportError("OpenRouter stream ended with a provider error")
                 delta = choice.get("delta") or {}
                 details = delta.get("reasoning_details")
                 if details is not None:
@@ -473,7 +503,7 @@ class _StreamCompletion:
 
     def completion(self) -> Completion:
         if self.finish_reason is None:
-            raise OpenRouterAPIError("OpenRouter stream ended before a complete response")
+            raise OpenRouterTransportError("OpenRouter stream ended before a complete response")
         return _parse_completion({
             "model": self.model, "usage": self.usage,
             "choices": [{"finish_reason": self.finish_reason, "message": {

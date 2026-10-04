@@ -26,7 +26,7 @@ from typing import Any, TextIO
 
 from .agent import Agent, AgentEvent, STEP_LIMIT_NOTICE, build_system_prompt
 from .config import Config, ConfigError, dotenv_path, save_dotenv_value
-from .instructions import load_project_instructions
+from .instructions import load_project_instructions, ProjectInstructions
 from .mcp import MCPManager, MCPError, ServerSpec, config_path, load_servers
 from .openrouter import (
     DEFAULT_TEMPERATURE,
@@ -56,7 +56,7 @@ BANNER = """SlipAgent — OpenRouter coding agent
 Commands: /help  /tools  /model [slug]  /models [filter]  /key [show|status|key]
           /temperature [value]  /cost  /mcp [add|save|remove]
           /task [new]  /reset  /reload  /generations
-          /sessions  /resume id|latest
+          /sessions  /resume id|latest  /requests [attempt]
           /init  /stop  /exit  /quit
 
 Type a task and press Enter. Follow-ups queue while the agent works.
@@ -84,6 +84,7 @@ Commands
   /task new            start a new task with your next prompt; retain history and logs
   /sessions            list saved sessions for this project
   /resume <id|latest>   restore a saved conversation while idle; never replay tools
+  /requests [attempt]  list recent request attempts or inspect an exact saved request
   /mcp                 show MCP servers and their tools
   /mcp add <name> <command> [args...]
                        connect an MCP server over stdio for this session
@@ -103,8 +104,10 @@ Page Up/Down, or Home/End. System prompts appear in yellow.
 
 Ordinary text continues the active task. Use /task new before a separate task.
 Project Python selection is shown in context; --python PATH overrides discovery.
-Sessions and command logs are saved unless --no-session is used.
-The default shared command-log quota is 100 MiB per session."""
+Sessions, command logs, and request diagnostics are saved unless --no-session is used.
+Command logs have a shared 100 MiB quota; request diagnostics have a 32 MiB quota.
+Background commands use command_jobs and read_command_output for control/output.
+/stop leaves those jobs running; /reset and exit stop them."""
 
 # Divider between the working directory and the free-call readout.
 _READOUT_SEP = "  │  "
@@ -337,6 +340,8 @@ class Renderer:
 
         elif event.kind == "warning":
             self.emit(self.style.red(f"  ! {event.text}"), block=self._model_block)
+        elif event.kind == "notice":
+            self.emit(self.style.dim(f"  {event.text}"))
 
         elif event.kind == "step_end":
             if self.verbose and event.usage is not None:
@@ -416,7 +421,7 @@ async def build_session(args: argparse.Namespace) -> Session:
     )
     try:
         workspace = Workspace(config.workspace)
-        project_instructions = load_project_instructions(workspace)
+        load_project_instructions(workspace)
     except WorkspaceError as exc:
         raise ConfigError(str(exc)) from exc
 
@@ -447,7 +452,7 @@ async def build_session(args: argparse.Namespace) -> Session:
             max_tokens=config.max_tokens,
             context_posts=config.context_posts,
             context_tokens=config.context_tokens,
-            system_prompt=build_system_prompt(str(workspace.root), project_instructions=project_instructions),
+            system_prompt=build_system_prompt(str(workspace.root)),
             on_event=lambda event: renderer.handle(event),
         )
 
@@ -1020,6 +1025,20 @@ async def _execute_command(session: Session, line: str) -> bool:
     elif command == "cost":
         usage = session.agent.usage
         print(f"  {usage.summary()} across this session", file=out)
+    elif command == "requests":
+        diagnostics = session.registry.services.get("request_diagnostics")
+        if diagnostics is None:
+            print(style.red("  Request diagnostics are unavailable in this session."), file=out)
+        else:
+            try:
+                if argument:
+                    print(diagnostics.read(int(argument)), file=out)
+                else:
+                    for entry in diagnostics.listing():
+                        print(f"  {entry['attempt']}  post {entry['post']}  {entry['outcome']}  {entry['created']}", file=out)
+                    print(f"  storage: {diagnostics.directory}", file=out)
+            except (ValueError, OSError) as exc:
+                print(style.red(f"  Cannot read request diagnostics: {exc}"), file=out)
     elif command in {"sessions", "resume"}:
         journal = session.registry.services.get("session_journal")
         if journal is None:
@@ -1034,6 +1053,9 @@ async def _execute_command(session: Session, line: str) -> bool:
             try:
                 await session.agent.wait_for_compaction()
                 data = await asyncio.to_thread(journal.load, argument)
+                jobs = session.registry.services.get("command_jobs")
+                if jobs is not None:
+                    await jobs.stop_all()
                 journal.restore(session.agent, data)
                 print(f"  restored {data['id']} as {journal.session_id}; no tools were replayed. Type a task or continue when ready.", file=out)
             except SessionError as exc:
@@ -1061,6 +1083,9 @@ async def _execute_command(session: Session, line: str) -> bool:
     elif command == "mcp":
         await _mcp_command(session, argument, style, out)
     elif command == "reset":
+        jobs = session.registry.services.get("command_jobs")
+        if jobs is not None:
+            await jobs.stop_all()
         session.agent.reset()
         print(style.dim("  conversation cleared"), file=out)
     elif command == "reload":
@@ -1457,10 +1482,9 @@ Not documented yet: repository-specific coding conventions and restrictions.
     else:
         action = "created AGENTS.md"
 
-    prompt = build_system_prompt(
-        str(session.workspace.root),
-        project_instructions=load_project_instructions(session.workspace),
-    )
+    load_project_instructions(session.workspace)
+    session.agent.registry.services.setdefault("project_instructions", ProjectInstructions(session.workspace))
+    prompt = build_system_prompt(str(session.workspace.root))
     session.agent.system_prompt = prompt
     if session.agent.messages and session.agent.messages[0].role == "system":
         session.agent.messages[0] = Message.system(prompt)

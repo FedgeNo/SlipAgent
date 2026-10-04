@@ -109,16 +109,44 @@ def test_initialized_guidance_survives_component_reload(run_copy):
     run_copy('''
         await cli._handle_command(session, '/init')
         guidance = (workspace.root / 'AGENTS.md').read_text()
-        assert guidance in agent.system_prompt
-        assert guidance in agent.messages[0].content
+        assert guidance in (await agent._context_view(registry.specs(), 1))[0].content
         edit('agent.py', 'You are SlipAgent,', 'You are the updated SlipAgent,')
         await frame.checkpoint()
         assert frame.generation == 1, sink.getvalue()
         assert 'You are the updated SlipAgent,' in agent.system_prompt
-        assert guidance in agent.system_prompt
+        assert guidance in (await agent._context_view(registry.specs(), 1))[0].content
         assert agent.messages[0].content == agent.system_prompt
         agent.reset()
-        assert guidance in agent.messages[0].content
+        assert guidance in (await agent._context_view(registry.specs(), 1))[0].content
+    ''')
+
+
+def test_background_jobs_and_request_diagnostics_survive_reload_and_rejection(run_copy):
+    run_copy('''
+        import shlex
+        import sys
+        jobs = registry.services['command_jobs']
+        diagnostics = registry.services['request_diagnostics']
+        request = json.dumps({'model': 'original/model', 'messages': [{'role': 'user', 'content': 'original input'}]})
+        attempt = diagnostics.begin(request, step=1, post=1)
+        diagnostics.finish(attempt, 'request_error', response='partial failed response')
+        command = shlex.join([sys.executable, '-c', 'import time; print("running", flush=True); time.sleep(60)'])
+        result = await registry.invoke('run_command', {'command': command, 'background': True})
+        key = json.loads(result.content.splitlines()[0])['job_id']
+        edit('agent.py', 'You are SlipAgent,', 'You are the updated SlipAgent,')
+        await frame.checkpoint()
+        assert frame.generation == 1, sink.getvalue()
+        assert registry.services['command_jobs'] is jobs and jobs.active
+        assert registry.services['request_diagnostics'] is diagnostics
+        assert request in diagnostics.read(attempt)
+        edit('agent.py', 'You are the updated SlipAgent,', 'You are SlipAgent,')
+        (root / 'broken.py').write_text('invalid Python !!!')
+        await frame.checkpoint()
+        assert frame.generation == 1 and jobs.active
+        stopped = await registry.invoke('command_jobs', {'action': 'stop', 'job_id': key})
+        assert json.loads(stopped.content)['state'] == 'stopped'
+        assert not jobs.active
+        assert 'partial failed response' in diagnostics.read(attempt)
     ''')
 
 

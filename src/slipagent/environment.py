@@ -52,8 +52,8 @@ def load_project_options(workspace: Workspace) -> dict[str, Any]:
         if len(raw) > 16384:
             raise ValueError("settings exceed 16 KiB")
         data = json.loads(raw)
-        if not isinstance(data, dict) or data.keys() - {"python", "log_quota_bytes", "python_syntax", "checks"}:
-            raise ValueError("expected an object with only python, log_quota_bytes, python_syntax and checks settings")
+        if not isinstance(data, dict) or data.keys() - {"python", "log_quota_bytes", "python_syntax", "checks", "language_servers"}:
+            raise ValueError("expected an object with only python, log_quota_bytes, python_syntax, checks and language_servers settings")
         python = data.get("python")
         if python is not None and (not isinstance(python, str) or not python.strip()):
             raise ValueError("python must be a nonempty interpreter path or null for discovery")
@@ -61,7 +61,9 @@ def load_project_options(workspace: Workspace) -> dict[str, Any]:
         if type(quota) is not int or quota < 1:
             raise ValueError("log_quota_bytes must be a positive integer")
         from .checks import validate_checks
+        from .lsp import validate_servers
         validate_checks(data)
+        validate_servers(data.get("language_servers", {}))
         return data
     except (ValueError, UnicodeError) as exc:
         raise ConfigError(f"Invalid {PROJECT_SETTINGS_PATH}: {exc}") from exc

@@ -105,6 +105,9 @@ class SessionJournal:
         self._append("header", version=1, project=self.project, session_id=self.session_id,
                      parent=parent, created=datetime.now(timezone.utc).isoformat())
         agent.session_id = self.session_id
+        diagnostics = agent.registry.services.get("request_diagnostics")
+        if diagnostics is not None:
+            diagnostics.use_directory(self.directory / (self.session_id + "-requests"))
         archive = agent.registry.services.get("command_archive")
         if archive is not None:
             directory = self.directory / (self.session_id + "-logs")
@@ -350,5 +353,6 @@ class SessionJournal:
         agent.registry.context_notes["resume"] = (
             f"Restored session {data['id']}. No tools were replayed. Inspect any interrupted tool's effects before retrying. "
             "The model and request settings are those currently selected; saved usage includes the parent session."
+            " Background jobs from the prior process are not reattached or relaunched; their outcomes may be unknown. Inspect retained logs before rerunning commands."
             + (" A torn final journal entry was ignored; its operation may be uncertain." if data["torn"] else "")
         )

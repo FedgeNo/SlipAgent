@@ -30,11 +30,13 @@ async def test_init_creates_only_project_scaffold_and_applies_it(workspace):
     assert sorted(path.name for path in workspace.root.iterdir()) == ["AGENTS.md"]
     content = (workspace.root / "AGENTS.md").read_text()
     assert "SlipAgent" not in content
-    expected = build_system_prompt(str(workspace.root), project_instructions=load_project_instructions(workspace))
+    expected = build_system_prompt(str(workspace.root))
     assert session.agent.system_prompt == expected
     assert session.agent.messages[0].content == expected
     assert session.agent.messages[1].content == "Keep my conversation."
     assert session.reloader._project_instructions == expected
+    context = await session.agent._context_view(session.agent.registry.specs(), 1)
+    assert content in "\n".join(message.content or "" for message in context)
     session.agent.reset()
     assert session.agent.messages[0].content == expected
 
@@ -45,7 +47,8 @@ async def test_init_preserves_and_loads_existing_user_guidance(workspace):
     session = session_for(workspace)
     await _init_command(session, Style(False), io.StringIO())
     assert path.read_text() == "Custom project instructions.\n"
-    assert "Custom project instructions." in session.agent.system_prompt
+    context = await session.agent._context_view(session.agent.registry.specs(), 1)
+    assert "Custom project instructions." in "\n".join(message.content or "" for message in context)
 
 
 @pytest.mark.parametrize("existing", [False, True])

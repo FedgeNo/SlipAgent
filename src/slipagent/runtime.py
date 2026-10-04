@@ -20,12 +20,13 @@ from typing import TYPE_CHECKING, Any
 
 from .tools.base import Tool, ToolRegistry
 from .types import Message
+from .lifecycle import Lifetime
 
 if TYPE_CHECKING:
     from .cli import Session
 
 # Wire/state contracts and resource owners stay in the running frame.
-CORE_MODULES = frozenset({"", "runtime", "config", "types", "workspace", "tools.base", "mcp"})
+CORE_MODULES = frozenset({"", "runtime", "config", "types", "workspace", "tools.base", "mcp", "lifecycle"})
 POLL_INTERVAL = .5
 _CLASS_INTERNALS = frozenset({
     "__dict__", "__weakref__", "__slots__", "__module__", "__classcell__",
@@ -143,7 +144,7 @@ class RuntimeFrame:
         self._project_instructions = session.agent.system_prompt
         self._read_error: str | None = None
         self._builtin_tools = tuple(
-            tool for tool in session.registry.tools if type(tool).__module__.startswith("slipagent.tools.")
+            tool for tool in session.registry.tools if tool.name in session.registry.builtin_names
         )
         self._terminal_write: Callable[[Any, str], None] = cli_module.TerminalUI.write
         self._component_classes: dict[tuple[str, str], type[Any]] = {}
@@ -337,7 +338,8 @@ class RuntimeFrame:
             replacement_tools[-1].__class__ = classes.get(type(replacement_tools[-1]), type(replacement_tools[-1]))
             ToolRegistry(replacement_tools)  # Check collisions before touching live state.
 
-            # Guidance is pinned for the project. Only the harness prompt changes.
+            # Preserve explicitly supplied legacy suffixes. CLI project guidance
+            # is refreshed separately by the session instruction tracker.
             old_builder = self.cli_module.build_system_prompt
             old_base = old_builder(str(self.session.workspace.root))
             pinned = self._project_instructions or ""
@@ -415,17 +417,20 @@ class RuntimeFrame:
             self._applied = sources
             self._project_instructions = prompt
             self._builtin_tools = tuple(candidate_registry.tools)
+            self.session.registry.builtin_names = candidate_registry.builtin_names
             self._component_classes = {key: classes.get(value, value) for key, value in declared.items()}
             self.generation += 1
             self._notice(f"Applied component reload {self.generation}.")
         finally:
             # Each resource uses the cleanup implementation that created it.
             try:
-                for closer in retired_closers if committed else candidate_closers:
-                    try:
-                        await closer()
-                    except Exception as exc:
-                        self._notice(f"Could not close discarded tool resources: {exc}", error=True)
+                resources = Lifetime("retired generation" if committed else "rejected generation")
+                for closer in reversed(retired_closers if committed else candidate_closers):
+                    resources.defer(closer)
+                try:
+                    await resources.aclose()
+                except Exception as exc:
+                    self._notice(f"Could not close discarded tool resources: {exc}", error=True)
             finally:
                 if not committed:
                     _drop_namespace(prefix)

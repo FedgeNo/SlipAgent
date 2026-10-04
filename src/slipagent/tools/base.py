@@ -19,6 +19,7 @@ from contextvars import ContextVar
 from typing import Any
 
 from ..types import ToolSpec
+from ..lifecycle import Lifetime
 
 # A call ID is unique only within one numbered history post. Context-local
 # provenance also works when callers invoke independent tools concurrently.
@@ -65,6 +66,13 @@ class Tool(ABC):
     description: str
     parameters: dict[str, Any] = {"type": "object", "properties": {}}
     strict_arguments: bool = True
+    concurrent_safe: bool = False
+    instruction_path: str | None = None
+    mutates_workspace: bool = False
+
+    def allows_concurrency(self, arguments: dict[str, Any]) -> bool:
+        """Opt in only when these arguments cannot mutate shared project state."""
+        return self.concurrent_safe
 
     @abstractmethod
     async def run(self, *args: Any, **kwargs: Any) -> ToolResult:
@@ -271,13 +279,17 @@ class ToolRegistry:
     def __init__(self, tools: Iterable[Tool] | None = None, *,
                  services: dict[str, Any] | None = None, owns_services: bool = True) -> None:
         self._tools: dict[str, Tool] = {}
+        self.builtin_names: frozenset[str] = frozenset()
         self.context_notes: dict[str, str] = {}
         self.services = services if services is not None else {}
         self.owns_services = owns_services
+        self._closing: Lifetime | None = None
         for tool in tools or ():
             self.register(tool)
 
     def register(self, tool: Tool) -> None:
+        if self._closing is not None:
+            raise RuntimeError("Tool registry is closing or closed")
         if tool.name in self._tools:
             raise ValueError(f"tool already registered: {tool.name}")
         self._tools[tool.name] = tool
@@ -318,6 +330,8 @@ class ToolRegistry:
     async def invoke(
         self, name: str, raw_arguments: str | dict[str, Any] | None
     ) -> ToolResult:
+        if self._closing is not None:
+            return ToolResult.error("Tool registry is closing or closed")
         tool = self._tools.get(name)
         if tool is None:
             available = ", ".join(self.names) or "(none)"
@@ -325,6 +339,11 @@ class ToolRegistry:
                 f"Unknown tool '{name}'. Available tools: {available}."
             )
         try:
+            instructions = self.services.get("project_instructions")
+            if instructions is not None:
+                problem = instructions.guard(tool, raw_arguments)
+                if problem is not None:
+                    return ToolResult.error(problem)
             result = await tool.invoke(raw_arguments)
             if not isinstance(result, ToolResult):
                 raise TypeError(f"Tool '{name}' did not return a ToolResult")
@@ -337,16 +356,14 @@ class ToolRegistry:
         return [self._tools[name] for name in self.names]
 
     async def aclose(self) -> None:
-        """Close any resources held by tools that own them."""
-        failure: BaseException | None = None
-        owners = [*self.tools, *(self.services.values() if self.owns_services else [])]
-        for tool in owners:
-            closer = getattr(tool, "aclose", None)
-            if closer is not None:
-                try:
-                    await closer()
-                except BaseException as exc:
-                    if failure is None:
-                        failure = exc
-        if failure is not None:
-            raise failure
+        """Drain resources exactly once, including when shutdown is cancelled."""
+        if self._closing is None:
+            self._closing = Lifetime("tool registry")
+            owners = [*self.tools, *(reversed(list(self.services.values())) if self.owns_services else [])]
+            seen: set[int] = set()
+            for owner in reversed(owners):
+                closer = getattr(owner, "aclose", None)
+                if closer is not None and id(owner) not in seen:
+                    seen.add(id(owner))
+                    self._closing.defer(closer)
+        await self._closing.aclose()

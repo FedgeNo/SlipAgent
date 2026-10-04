@@ -20,6 +20,17 @@ a separate heading. `/init` creates a project-notes scaffold only when `AGENTS.m
 is absent, then reloads the project's guidance; it neither overwrites existing
 instructions nor copies generic operating rules into the project file.
 
+`ProjectInstructions` owns the root and visited ancestor scopes. It rereads
+recognized files before each working request and records the exact snapshot
+presented by `on_request`. A context preview never marks instructions delivered.
+File-tool dispatch discovers new scopes; a write/edit is blocked if applicable
+guidance differs from that delivered snapshot. The next request supplies the
+new content, with scope labels and precedence guidance. Removed files disappear
+from the snapshot. Discovery failures remain errors, and mandatory guidance is
+included in the context budget. Shell/MCP paths are not inferred from command
+strings. Legacy explicitly supplied system text remains supported, while CLI
+project guidance comes from this refreshed service rather than a stale suffix.
+
 ## A Request Is the Model's Entire Memory
 
 The transport sends one explicit list of messages plus tool definitions and
@@ -37,9 +48,14 @@ Context construction proceeds in this order:
    assigns sequential post IDs. New user messages are associated with the next
    response post and also registered as active-task source instructions.
 2. System messages are pinned and labelled. The last receives the response
-   contract, current post state, active-task record, environment
-   details, applicable JSON schema, connected MCP guidance, runtime diagnostics,
-   and retry repair details. Project instructions are part of the system prompt.
+   contract and named sections assembled by `PromptSections`: schema/tool/MCP
+   guidance first, then current project instructions, environment, runtime
+   state, and repair details. Current post IDs and task state follow those
+   sections. Names are unique, owners and static/dynamic roles are explicit,
+   and order is deterministic. Section registries belong to one request, so
+   a rejected generation cannot leave global prompt registrations behind.
+   Messages retain their existing provider-compatible placement. The inspector
+   displays the final body rather than reconstructing it separately.
 3. Up to 100 older whole-turn summaries precede the recent full window. Each
    retained turn has one representation: either its complete prompt, response,
    calls and results, or its summary. Budget pressure shrinks the full window by
@@ -154,10 +170,29 @@ executed history. A bounded excerpt and precise diagnosis enter the next request
 as invalid diagnostic data, with their size included in the context budget.
 Three invalid attempts end the run; retries count against usage and the step cap.
 
-Accepted tool calls execute sequentially in declared order. The tool registry
-validates arguments and converts ordinary exceptions into error results.
-`CancelledError` propagates: the agent writes interrupted/not-run observations
-for the remainder of the batch so the transcript still has a result for each call.
+Working calls set `single_attempt=True` on the client. The agent owns bounded
+transport recovery, preventing nested HTTP retries from multiplying requests
+beyond the step budget. The default allows three transient retries; each starts
+with fresh stream accumulators and emits a retry event before interruptible
+backoff. A registry-owned stop event wakes that wait. EOF without a finish marker,
+transport failures, and retryable status codes are distinct from permanent API
+errors. Reported partial usage is retained; unreported usage is not invented.
+Direct metadata and isolated compaction calls retain their own client policy.
+
+No tool runs before response acceptance. Diagnostic request/attempt records
+can preserve failed partial responses, but those records do not enter working
+history or summarization. Cancellation and stream failures end the visible
+reasoning block before a retry begins.
+
+`run_batch` executes up to four adjacent independent read tools concurrently.
+`Tool.allows_concurrency(arguments)` defaults to false; audited file reads,
+directory lists, grep and glob opt in. Writes, shell commands, state changes,
+and unclassified MCP tools remain exclusive barriers. A read-only MCP hint
+alone does not grant concurrency. Results commit in declared order, each with
+its own invocation/log provenance and pre-execution journal marker. The tool
+registry validates arguments and converts ordinary exceptions into error results.
+`CancelledError` drains started tasks before the agent archives interrupted or
+not-run observations, retaining completed results and one observation per call.
 Errors carry explicit status and possible partial effects into model context.
 User messages queued during the batch are appended after all matching results.
 
@@ -273,6 +308,18 @@ same dictionary with `owns_services=False`; they must not create a replacement
 archive or close the live one when staging fails. HTTP clients owned by rebuilt
 web tools have their own lifecycle and are closed when those tools retire.
 
+Session services also own `ProjectInstructions`, `CommandJobs`,
+`RequestDiagnostics`, and `LanguageServers`. `builtin_names` explicitly identifies
+rebuilt tools; module-path guessing cannot distinguish a built-in defined in a
+service module from a retained extension. The stable `Lifetime` primitive owns
+tasks and LIFO cleanup callbacks. Its retained close task drains resources once,
+even if multiple callers close it or a waiter is cancelled repeatedly. Cleanup
+continues after an individual callback fails, then reports the failure.
+Tools close before services; services close in reverse creation order, so jobs
+finish draining before their command archive closes. Captured generation closers
+release the resources they created. MCP disconnect uses the same retained-cleanup
+principle, including cancellation during startup or shutdown.
+
 Project settings come from `.slipagent/project.json` under the selected workspace.
 The interpreter precedence is `--python`, then the explicit `python` setting,
 then a single discovered `.venv` or `venv`. Discovery does not activate PATH or
@@ -330,6 +377,54 @@ most 32 KiB of pending display text and marking omissions. Capture/archive remai
 independent of that display buffer. The renderer escapes terminal controls and
 does not duplicate successful streamed output at completion. Reload occurs only
 after the batch; callbacks finish within their invocation.
+
+## Background Command Ownership
+
+`run_command(background=True)` creates a `CommandLog` with the initiating
+post/call provenance, then hands its execution coroutine to `CommandJobs`.
+The manager owns the process through completion, timeout, cancellation, reset,
+and shutdown; rebuilt shell tools borrow it. Process creation is shielded so
+cancellation cannot lose a child between spawn and handle assignment. Capture
+reuses the foreground implementation and drains pipes after killing descendants.
+
+`command_jobs` provides list/status/wait/stop. Its bounded wait never cancels the
+owned task; output is retrieved incrementally through `read_command_output`.
+Four jobs can run at once and 128 handles are retained, evicting only completed
+handles while preserving archived output. Execution keeps the normal timeout
+limits. Completed jobs are announced once while idle or at an agent boundary, in both a user
+notice and model-visible state, without scheduling another model call.
+`/stop` preserves running jobs. CLI reset/resume drains jobs before clearing the
+archive; direct `Agent.reset` rejects an active job. Shutdown also drains them.
+Resume restores logs but never reconnects or relaunches a process; its recovery
+note makes that uncertainty explicit.
+
+## Optional LSP Ownership
+
+`LanguageServers` owns configured stdio clients across compatible reloads.
+`navigate_code` is registered only when project configuration enables servers;
+manual reload refreshes tool availability. Selection uses configured extensions,
+with an explicit server name for ambiguity. Configuration changes retire affected
+clients before reuse; commands are argv arrays and no installation occurs.
+
+The client implements the [LSP 3.17 lifecycle and message protocol](https://github.com/microsoft/language-server-protocol/blob/gh-pages/_specifications/lsp/3.17/specification.md),
+with bounded Content-Length framing, concurrent response dispatch, stderr tails,
+request cancellation and shutdown/exit followed by forced cleanup if needed.
+Stopped or failed protocol readers are replaced by bounded discard readers
+before process reaping, so a full stdout pipe cannot deadlock shutdown.
+Startup/query deadlines are 30 seconds, writes 5 seconds, shutdown stages 1 second,
+and incoming messages at most 8 MiB. Only UTF-16 wire positions are negotiated;
+tool input uses 1-based Unicode character columns and converts to wire units.
+Returned locations label their 1-based UTF-16 columns explicitly.
+
+Queries serialize document synchronization, open current UTF-8 contents, and
+close after the response. Workspace metadata scans before navigation notify
+servers of changed, created, and deleted files, excluding generated/dependency
+trees through the normal workspace traversal. The current file is always opened
+explicitly even if excluded from recursive traversal. Configuration requests are
+answered from explicit settings. Server-originated workspace edits are refused.
+Locations and symlinks are confined to the workspace; outside results are counted
+and omitted. Hover and location pages are bounded. Errors retire the failed client
+so later explicit calls can start cleanly.
 
 ## Edit Recovery, Checks and Loop Detection
 
@@ -393,10 +488,21 @@ Tests redirect storage to disposable directories, including inherited CLI
 subprocesses. Session persistence is enabled at construction on the next launch;
 compatible edits to its behavior can subsequently reload.
 
+`RequestDiagnostics` uses a sidecar directory attached by `SessionJournal.begin`.
+Each working attempt records its post/step, UTC time, request snapshot reference,
+outcome, reported usage, and bounded response/error excerpts. Exact final request
+JSON is gzip-compressed and deduplicated by SHA-256; no authentication headers are
+captured. Pending records survive a crash and remain visibly unsettled. Atomic
+owner-only writes and fsync preserve earlier records when storage fails. A
+32 MiB quota stops further diagnostic writes with a warning rather than deleting
+old requests or blocking ordinary work. These files are not history posts.
+`/requests [attempt]` inspects current-session records; previous directories remain
+beside their journals after reset/resume. `--no-session` uses temporary storage.
+
 ## Reload Transactions
 
 `runtime.py` is the stable frame. Its `CORE_MODULES` set also pins package root,
-configuration, wire types, workspace, tool base, and MCP connection machinery.
+configuration, wire types, workspace, tool base, MCP connections, and `lifecycle`.
 These classes/state contracts must agree for the session's lifetime. Editing a
 pinned module requires a restart; most agent, tool, UI, API, task, and context
 behavior is reloadable when layouts remain compatible.

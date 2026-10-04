@@ -96,7 +96,9 @@ wrap inside their cells; narrow terminals display each model's fields vertically
 
 SlipAgent is designed around free OpenRouter inference. Model requests are a
 limited resource, so the prompt encourages batching predictable tool calls into
-one response. Calls run in order and all their results return together. A failed
+one response. Up to four independent file/search reads run concurrently. Writes,
+shell commands, state updates, and unclassified MCP tools form ordered barriers;
+all observations return in the model's declared order. A failed
 tool contributes an error result instead of discarding the rest of the batch.
 The model can explain its work alongside those calls.
 
@@ -119,6 +121,12 @@ src/slipagent/
 ├── runtime.py        stable entry point, watcher, transactional reloads
 ├── cli.py            session, commands, one-shot mode, event rendering
 ├── agent.py          model-step logic and harness system prompt
+├── batching.py       bounded read concurrency and ordered observations
+├── lifecycle.py      stable cancellation-safe resource ownership
+├── prompts.py        named, ordered prompt sections
+├── diagnostics.py    exact request snapshots and failed-attempt records
+├── jobs.py           session-owned background commands and job controls
+├── lsp.py            optional configured language-server navigation
 ├── context.py        rolling context, summaries, original-post retrieval
 ├── budget.py         measured input-token calibration
 ├── sessions.py       append-only session journals and safe resume
@@ -212,8 +220,9 @@ This is why the loader uses a whole generation rather than independently
 reloading whichever file changed: related components must agree about the
 version they are running. Preserving class identities means existing session
 objects and exception handlers continue to work. Waiting for a batch boundary
-keeps a tool call from starting under one implementation and finishing under
-another. Rejected reloads preserve running behavior; source edits remain on disk
+keeps foreground tool batches on one implementation. Session-owned background
+jobs keep their process and log owners across compatible reloads. Rejected
+reloads preserve running behavior; source edits remain on disk
 for you or the agent to correct.
 
 ### What Can Change Without a Restart?
@@ -226,11 +235,11 @@ for you or the agent to correct.
 | API behavior | OpenRouter client methods, using the existing client. |
 | Terminal | Layout builders, key bindings, styles, and presentation methods. |
 | Tools | Built-in implementations, added tools, and the default registry builder. |
-| Guidance discovery | Discovery code; already loaded project instruction text stays pinned. |
+| Guidance discovery | Root and visited nested guidance refresh before working requests. |
 
 The persistent frame and shared contracts require a restart:
 `runtime.py`, `config.py`, `types.py`, `workspace.py`, `tools/base.py`,
-`mcp.py`, and the package's root `__init__.py`. Changing startup/lifecycle setup
+`mcp.py`, `lifecycle.py`, and the package's root `__init__.py`. Changing startup/lifecycle setup
 or a constructor does not reinitialize existing persistent objects. Class
 removals and changes to inheritance, slots, or dataclass field layouts also
 require a restart. Use `session.extensions` for additional persistent component
@@ -377,7 +386,8 @@ Saved sessions are retained until you delete their files; the log quota is per
 session, not a global journal-retention limit. `--no-session` opts out of durable
 storage. Existing processes acquire session persistence on their next launch.
 
-The project settings file accepts only the two documented keys and is limited
+The project settings file accepts `python`, `log_quota_bytes`, `python_syntax`,
+`checks`, and the optional `language_servers` map described below. It is limited
 to 16 KiB. `.slipagent/` is ignored in this repository; add it to another project's
 ignore rules if its settings should remain local.
 
@@ -417,6 +427,7 @@ In the REPL:
 | `/task new` | Make the next prompt a new task, retaining previous history and command logs |
 | `/sessions` | List saved sessions for this project's path |
 | `/resume <id>` or `/resume latest` | Restore a saved conversation while idle without replaying tools |
+| `/requests [attempt]` | List the latest 20 request attempts, or inspect one exact request and its outcome |
 | `/mcp` | Show MCP servers, their status, and the tools they contribute |
 | `/mcp add <name> <cmd> [args…]` | Connect a server over stdio for this session only |
 | `/mcp save <name> <cmd> [args…]` | Same, and persist it to `.mcp.json` |
@@ -455,9 +466,16 @@ Before the first model request, SlipAgent reads `CLAUDE.md`, `AGENTS.md`,
 `.github/copilot-instructions.md` from the workspace root when present. It also
 loads rules from `.cursor/rules/**/*.mdc`, `.claude/rules/**/*.md`,
 `.github/instructions/**/*.instructions.md`, `.clinerules/`, and
-`.windsurf/rules/**/*.md`. The contents stay in context after `/reset`; the
-model is instructed to read applicable nested guidance before editing files.
-Unreadable instruction files produce a startup error identifying the path.
+`.windsurf/rules/**/*.md`. Root guidance refreshes before each working request.
+File, directory, and search tools discover guidance in the accessed path's
+ancestors. Visited scopes stay available across turns and reset; changed and
+removed instructions are reflected in the next request. Each scope is labelled;
+the model must still obey a rule file's own path/glob restrictions.
+An edit governed by unseen or changed instructions is blocked until a request
+has presented them to the model. Reading and editing a new scope in the same
+batch therefore cannot bypass its rules. Unreadable guidance reports its path.
+Shell commands and external tools are not parsed for affected file paths, so the
+model must discover applicable instructions before using them to change files.
 
 The startup screen lists the available commands and basic usage. The free-call
 count is fetched from OpenRouter at startup and refreshed every 15 minutes,
@@ -590,6 +608,23 @@ execute examples inside a reply, invent arguments, or repair command strings.
 Three consecutive invalid responses stop the run; retries count against the
 working-request limit. Separate thoughts already streamed remain visible.
 
+Interrupted streams and transient HTTP failures allow up to three transport
+retries with bounded backoff. Every working attempt counts against `--max-steps`;
+there is no hidden second retry loop multiplying that limit. A retry notice
+explains the failure, and `/stop` interrupts its wait. Each attempt starts fresh:
+partial tool arguments and rejected replies never execute or enter accepted history.
+Authentication, credit, and permanent request failures remain errors.
+
+`/requests` lists the latest 20 attempts; `/requests 3` displays attempt 3's
+final request body, outcome, and bounded response/error excerpt. Request JSON
+is deduplicated and gzip-compressed in private files beside the session journal,
+without authentication headers. These diagnostics are never supplied as history
+or sent for compaction. They have a separate **32 MiB per-session quota**; reaching
+it preserves existing files and displays a logging warning. Reset/resume starts
+a new diagnostic directory; earlier files remain beside their original journal.
+`--no-session` uses temporary files removed on reset/exit. Treat request logs as
+private project data, since they contain the same text sent to the model.
+
 Requests set `provider.require_parameters` and restrict routing to compatible
 endpoint providers. Context budgets use their actual context and prompt limits.
 Unsupported reasoning and temperature settings are omitted; requested output
@@ -600,6 +635,8 @@ combination works at every provider.
 `/stop` lets the current response and every tool call in that response finish,
 keeps their results in the conversation, and prevents another working model request. Background summarization of that
 completed turn still runs.
+Managed background commands also continue until completion, their execution
+timeout, or an explicit stop. Their completion cannot restart the agent.
 Queued input does not restart a stopped run automatically. Enter a follow-up
 or `continue` to resume. Ctrl-C uses the same stop behavior while working;
 Ctrl-D, `/exit`, or its alias `/quit` exits the session. Pipes and `TERM=dumb`
@@ -826,7 +863,8 @@ The model gets these built-in tools:
 | `grep` | Regex search across file contents, with an optional glob filter. |
 | `glob` | Find files and directories by name pattern. |
 | `list_dir` | List one directory, directories first. |
-| `run_command` | Run a shell command in the workspace and capture output. |
+| `run_command` | Run a shell command and capture output; `background=true` returns a managed job ID. |
+| `command_jobs` | List, inspect, wait for, or stop managed background commands. |
 | `read_command_output` | Page retained stdout/stderr or read its tail by log ID; list logs by post/call ID. |
 | `git_status` | Show the branch and short repository status. |
 | `git_diff` | Show unstaged changes, or staged changes with `staged=true`; optionally select literal `paths`. |
@@ -837,6 +875,72 @@ The model gets these built-in tools:
 | `fetch_page` | Fetch a URL and return readable text (scripts stripped). |
 | `recall_history` | Search history or retrieve any original parts of a numbered turn, with pagination. |
 | `update_task` | Save the current goal, constraints, facts, unfinished work, and next steps for every working request. |
+| `navigate_code` (configured projects only) | Definitions, references, implementations, and hover via a local language server. |
+
+### Background Commands
+
+Pass `{"command":"your test command","background":true,"timeout":120}` to
+`run_command`. It returns a `job_id` and `log_id`. Use `command_jobs` with
+`{"action":"wait","job_id":"ID_FROM_RESULT","timeout":10}` to wait briefly,
+`action="status"` to inspect, or `action="stop"` to kill the process group.
+`action="list"` lists jobs in pages of 50; follow `next_offset`.
+Use `read_command_output` with the log ID for live pages or tails.
+
+Waits are capped at 30 seconds and never cancel the command. Execution retains
+the normal 120-second default and 600-second maximum timeout. At most four jobs
+run concurrently; the 128 most recent job handles remain addressable. Older
+completed jobs' logs and original tool records remain retrievable. Completion
+notices are delivered once while idle or at an agent boundary and do not spend a model call.
+They do not by themselves establish that tests passed: inspect exit status and output.
+
+Compatible reloads preserve jobs and logs. `/reset`, `/resume`, and shutdown stop
+and drain active jobs before replacing or closing their output archive. Saved
+sessions retain output, but do not reattach to or relaunch prior processes.
+After a crash, inspect recorded output and running processes before rerunning work.
+
+### Optional Language Servers
+
+Configure an already installed **stdio** language server in
+`.slipagent/project.json`, for example:
+
+```json
+{
+  "language_servers": {
+    "python": {
+      "command": ["/absolute/path/to/pyright-langserver", "--stdio"],
+      "extensions": [".py", ".pyi"],
+      "language_id": "python",
+      "initialization_options": {},
+      "settings": {}
+    }
+  }
+}
+```
+
+The command is an argument array, never a shell string. Replace the executable
+with the installed server's actual path; the harness installs nothing. Enable
+the tool at startup or run `/reload` after first adding configuration (restart
+when live reload is disabled). Servers start lazily on the first navigation call.
+Changes to an existing server's command/settings retire its previous process;
+the next query starts the replacement. Removing configuration retires its process
+at the next working step; `/reload` also refreshes tool availability.
+
+`navigate_code` takes `operation` (`definition`, `references`, `implementation`,
+or `hover`), `path`, `line`, and `column`; supply `server` if several match the
+file extension. Input lines/columns are **1-based**, with input columns counting
+Unicode characters. Locations explicitly return `column_utf16`, a 1-based UTF-16
+column, as used by the protocol. ASCII positions are identical; a non-BMP
+character occupies two UTF-16 units. Locations page at 100 items using `offset`;
+hover text is capped at 16,000 characters. Source files must be UTF-8 and at
+most 2 MB. Queries time out after 30 seconds, with bounded startup/shutdown and
+pipe writes. Unsupported operations and missing executables return tool errors.
+
+Each query supplies current file contents and reports workspace file changes
+since the prior query; generated/dependency trees follow the normal search
+exclusions. Results outside the workspace are counted and omitted. Server
+processes have the same OS permissions as shell/MCP processes. Navigation does
+not apply edits requested by a server. Ordinary search/read tools remain useful
+when the language server cannot resolve a symbol.
 
 ### Retrieving Command Output
 

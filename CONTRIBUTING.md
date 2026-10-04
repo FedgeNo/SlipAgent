@@ -102,6 +102,10 @@ without opening network connections, starting background tasks, or mutating the
 workspace: the loader imports candidates before deciding whether to accept them.
 Keep resources in explicit owners with cleanup methods. A reload candidate must
 not close services borrowed from the live session on rejection or retirement.
+Use `Lifetime` for owned tasks and cleanup callbacks; cancellation of a close
+waiter must not abandon cleanup. Declare tools through the default registry so
+its explicit built-in ownership survives reloads, regardless of module location.
+Test an active background operation across both accepted and rejected reloads.
 
 Changes to stable core modules, inheritance, slots, dataclass fields, or removed
 classes require a restart. Editing a constructor does not initialize new attributes
@@ -143,6 +147,15 @@ valid recovery using disposable package copies when modifying this machinery.
   output honestly and distinguish a preview from retained data that can be paged.
 - Supply reload failures, project environment selection, and scoped MCP guidance
   explicitly. Do not depend on the model seeing a terminal-only diagnostic.
+- Project instruction previews do not establish delivery. Preserve the exact
+  request snapshot used by the pre-edit guard; never mark newly read guidance
+  delivered merely because a file tool discovered it during the same batch.
+- Parallel tool safety is opt-in per argument set. Preserve exclusive barriers,
+  ordered observations, journal-before-dispatch, and cancellation cleanup.
+- Keep failed attempts in request diagnostics, outside accepted history. Working
+  retries share the step budget and remain interruptible during backoff.
+- Background jobs and optional language servers belong to session services.
+  Never install a server implicitly or relaunch an archived job on resume.
 - Normalize alternate response formats before validation. Keep native tool IDs,
   batch order, exact arguments, and matching observations intact. Duplicate
   representations must not execute twice; conflicting batches require a retry.

@@ -30,6 +30,7 @@ from typing import Any
 
 from .tools.base import Tool, ToolRegistry, ToolResult, validate_schema_shape
 from .config import save_private_text
+from .lifecycle import finish_cleanup
 
 # Protocol versions this client knows how to speak, newest first.
 MODERN_PROTOCOL_VERSION = "2026-07-28"
@@ -244,6 +245,7 @@ class MCPClient:
         self._stderr_pump: asyncio.Task[None] | None = None
         self._next_id = 0
         self._request_lock = asyncio.Lock()
+        self._disconnect_task: asyncio.Task[None] | None = None
 
     # -- lifecycle ---------------------------------------------------------- #
 
@@ -253,6 +255,9 @@ class MCPClient:
 
     async def connect(self) -> None:
         """Launch the server and negotiate a protocol version."""
+        if self._disconnect_task is not None:
+            await finish_cleanup(self._disconnect_task)
+            self._disconnect_task = None
         if self.connected:
             return
         self._queue = asyncio.Queue()
@@ -287,6 +292,12 @@ class MCPClient:
             raise
 
     async def disconnect(self) -> None:
+        """Retain cleanup ownership until the server and pumps have settled."""
+        if self._disconnect_task is None:
+            self._disconnect_task = asyncio.create_task(self._disconnect())
+        await finish_cleanup(self._disconnect_task)
+
+    async def _disconnect(self) -> None:
         """Close stdin, then escalate to signals if the server lingers."""
         process = self._process
         try:

@@ -27,6 +27,8 @@ def _looks_binary(chunk: bytes) -> bool:
 
 
 class GrepTool(Tool):
+    concurrent_safe = True
+    instruction_path = "path"
     name = "grep"
     description = (
         "Search file contents with a regular expression. Returns matching lines "
@@ -177,6 +179,8 @@ class GrepTool(Tool):
 
 
 class GlobTool(Tool):
+    concurrent_safe = True
+    instruction_path = "path"
     name = "glob"
     description = (
         "Find files and directories by name pattern. Patterns are matched "

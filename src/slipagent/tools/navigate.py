@@ -9,6 +9,8 @@ MAX_ENTRIES = 300
 
 
 class ListDirTool(Tool):
+    concurrent_safe = True
+    instruction_path = "path"
     name = "list_dir"
     description = (
         "List the contents of a directory in the workspace. Directories are "

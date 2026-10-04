@@ -88,6 +88,8 @@ def _atomic_write(workspace: Workspace, target: Path, content: str) -> None:
 
 
 class ReadFileTool(Tool):
+    concurrent_safe = True
+    instruction_path = "path"
     name = "read_file"
     description = (
         "Read a text file from the workspace. Returns numbered lines so they can "
@@ -180,6 +182,8 @@ class ReadFileTool(Tool):
 
 
 class WriteFileTool(Tool):
+    instruction_path = "path"
+    mutates_workspace = True
     name = "write_file"
     description = (
         "Write a file, creating or overwriting it. Parent directories are created "
@@ -224,6 +228,8 @@ class WriteFileTool(Tool):
 
 
 class EditFileTool(Tool):
+    instruction_path = "path"
+    mutates_workspace = True
     name = "edit_file"
     description = (
         "Replace an exact string in a file. old_string must match the file "

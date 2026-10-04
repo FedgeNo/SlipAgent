@@ -8,6 +8,8 @@ import pytest
 
 from slipagent.agent import Agent, build_system_prompt
 from slipagent.instructions import load_project_instructions
+from slipagent.instructions import ProjectInstructions
+from slipagent.tools.files import ReadFileTool, WriteFileTool
 from slipagent.tools import ToolRegistry
 from slipagent.workspace import Workspace, WorkspaceError
 
@@ -117,3 +119,66 @@ def test_unreadable_instruction_file_reports_its_path(workspace, monkeypatch, fa
         monkeypatch.setattr(Path, "read_text", read_text)
     with pytest.raises(WorkspaceError, match="cannot read project instructions AGENTS.md"):
         load_project_instructions(workspace)
+
+
+async def test_new_nested_rules_reach_model_before_any_governed_edit(workspace):
+    folder = workspace.root / "src"
+    folder.mkdir()
+    (folder / "AGENTS.md").write_text("Use explicit types")
+    instructions = ProjectInstructions(workspace)
+    registry = ToolRegistry([ReadFileTool(workspace), WriteFileTool(workspace)],
+                            services={"project_instructions": instructions})
+    instructions.presented(instructions.snapshot())
+    result = await registry.invoke("write_file", {"path": "src/new.py", "content": "x = 1"})
+    assert result.is_error and not (folder / "new.py").exists()
+    assert "Use explicit types" in instructions.render(instructions.snapshot())
+    # Merely previewing instructions does not authorize a previously planned edit.
+    assert (await registry.invoke("write_file", {"path": "src/new.py", "content": "x = 1"})).is_error
+    instructions.presented(instructions.snapshot())
+    assert not (await registry.invoke("write_file", {"path": "src/new.py", "content": "x: int = 1"})).is_error
+    (folder / "AGENTS.md").write_text("Use dataclasses")
+    assert (await registry.invoke("write_file", {"path": "src/new.py", "content": "x = 2"})).is_error
+    assert (folder / "new.py").read_text() == "x: int = 1"
+
+
+def test_removed_root_rules_are_not_retained(workspace):
+    path = workspace.root / "AGENTS.md"
+    path.write_text("Old rule")
+    instructions = ProjectInstructions(workspace)
+    instructions.presented(instructions.snapshot())
+    path.unlink()
+    assert "Old rule" not in instructions.render(instructions.snapshot())
+
+
+def test_nested_instruction_symlinks_can_target_guidance_inside_workspace(workspace):
+    root_rule = workspace.root / "AGENTS.md"
+    root_rule.write_text("Shared project rules")
+    folder = workspace.root / "src"
+    folder.mkdir()
+    (folder / "AGENTS.md").symlink_to(root_rule)
+    instructions = ProjectInstructions(workspace)
+    assert instructions.guard(ReadFileTool(workspace), {"path": "src/module.py"}) is None
+    assert "Shared project rules" in instructions.snapshot()["src"]
+
+
+def test_prompt_sections_have_stable_order_and_reject_duplicate_owners():
+    from slipagent.prompts import PromptSections
+    sections = PromptSections()
+    sections.add("dynamic", "Dynamic", "changes", 20)
+    sections.add("stable", "Stable", "rules", 0)
+    assert sections.render() == "## Stable\nrules\n\n## Dynamic\nchanges"
+    with pytest.raises(ValueError, match="Duplicate"):
+        sections.add("stable", "Duplicate", "bad", 30)
+
+
+async def test_stable_prompt_prefix_survives_new_user_input():
+    from slipagent.types import Message
+    agent = Agent(None, ToolRegistry(), "test", system_prompt="Stable harness instructions")
+    agent.messages.append(Message.user("First task"))
+    first = (await agent._context_view(agent.registry.specs(), 1))[0].content
+    agent.messages.append(Message.user("Additional constraint"))
+    context = await agent._context_view(agent.registry.specs(), 1)
+    second = context[0].content
+    assert first.partition("## Current Turn State")[0] == second.partition("## Current Turn State")[0]
+    assert any("Additional constraint" in (message.content or "") for message in context[1:])
+    assert "Additional constraint" not in first

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import json
 from pathlib import Path
+from typing import Any
 
 from .workspace import Workspace, WorkspaceError
 
@@ -31,20 +33,19 @@ def _present(workspace: Workspace, relative: str) -> bool:
     return True
 
 
-def load_project_instructions(workspace: Workspace) -> str:
+def load_project_instructions(workspace: Workspace, scope: str = ".") -> str:
     """Read root guidance and rule directories, preserving path-labelled text.
 
-    Called at startup and /init. The returned text stays pinned across ordinary
-    turns and reloads; it is not reread on every API request. Nested source-tree
-    instruction files remain the model's responsibility before editing there.
+    Also used by the session instruction tracker before each working request.
     """
     sources: list[str] = []
     seen: set[Path] = set()
+    base = Path(workspace.relative(workspace.resolve(scope)))
 
     def read(relative: str) -> None:
         try:
             path = workspace.resolve(relative)
-            if relative == ".clinerules" and path.is_dir():
+            if Path(relative).name == ".clinerules" and path.is_dir():
                 return
             if not path.is_file():
                 raise WorkspaceError("instruction path must be a regular file")
@@ -56,11 +57,13 @@ def load_project_instructions(workspace: Workspace) -> str:
         seen.add(path)
         sources.append(f"### {relative}\n{content}\n")
 
-    for relative in INSTRUCTION_FILES:
+    for filename in INSTRUCTION_FILES:
+        relative = (base / filename).as_posix()
         if _present(workspace, relative):
             read(relative)
 
-    for relative, pattern in INSTRUCTION_DIRECTORIES:
+    for directory, pattern in INSTRUCTION_DIRECTORIES:
+        relative = (base / directory).as_posix()
         if not _present(workspace, relative):
             continue
         try:
@@ -68,7 +71,7 @@ def load_project_instructions(workspace: Workspace) -> str:
         except (OSError, RuntimeError, WorkspaceError) as exc:
             raise WorkspaceError(f"cannot inspect project instructions {relative}: {exc}") from exc
         if not folder.is_dir():
-            if relative == ".clinerules":
+            if directory == ".clinerules":
                 continue
             raise WorkspaceError(f"project instruction directory is not a directory: {relative}")
 
@@ -84,3 +87,70 @@ def load_project_instructions(workspace: Workspace) -> str:
         for name in sorted(paths):
             read(name)
     return "\n".join(sources)
+
+
+class ProjectInstructions:
+    """Track visited scopes and which exact guidance reached a model request."""
+
+    def __init__(self, workspace: Workspace) -> None:
+        self.workspace = workspace
+        self.scopes: set[str] = {"."}
+        self.delivered: dict[str, str] = {}
+
+    def snapshot(self) -> dict[str, str]:
+        result = {".": load_project_instructions(self.workspace)}
+        for scope in sorted(self.scopes - {"."}):
+            directory = self.workspace.resolve(scope)
+            if directory.exists():
+                # Scope controls applicability, while the original workspace
+                # controls confinement, including links to shared parent rules.
+                result[scope] = load_project_instructions(self.workspace, scope)
+            else:
+                result[scope] = ""
+        return result
+
+    def presented(self, snapshot: dict[str, str]) -> None:
+        self.delivered = dict(snapshot)
+
+    def guard(self, tool: Any, raw: str | dict[str, Any] | None) -> str | None:
+        parameter = tool.instruction_path
+        if parameter is None:
+            return None
+        try:
+            arguments = json.loads(raw) if isinstance(raw, str) else raw or {}
+        except ValueError:
+            return None  # The ordinary argument validator reports syntax errors.
+        if not isinstance(arguments, dict):
+            return None
+        value = arguments.get(parameter) or "."
+        if not isinstance(value, str):
+            return None
+        target = self.workspace.resolve(value)
+        directory = target if target.is_dir() else target.parent
+        relevant = {"."}
+        while directory != self.workspace.root:
+            relevant.add(directory.relative_to(self.workspace.root).as_posix())
+            directory = directory.parent
+        self.scopes.update(relevant)
+        if tool.mutates_workspace:
+            current = self.snapshot()
+            changed = [scope for scope in sorted(relevant)
+                       if current.get(scope, "") != self.delivered.get(scope, "")]
+            if changed:
+                return ("Project instructions are new or changed for: " + ", ".join(changed)
+                        + ". This edit was not executed. The next model request includes the current "
+                        "instructions; review them before requesting the edit again.")
+        return None
+
+    @staticmethod
+    def render(snapshot: dict[str, str]) -> str:
+        sections = []
+        for scope, content in snapshot.items():
+            if content:
+                sections.append(f"### Instruction Scope: {scope}/\n{content}")
+        if not sections:
+            return ""
+        return ("Explicit user instructions take precedence. Apply each file's path and glob restrictions. "
+                "Nested guidance governs only its directory and descendants; more specific guidance takes precedence. "
+                "This is the current complete set for visited scopes; removed instructions are no longer included.\n\n"
+                + "\n".join(sections))

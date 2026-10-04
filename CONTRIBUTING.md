@@ -77,10 +77,31 @@ does not automatically become model knowledge.
    with the implementation rather than leaving incompatible instructions behind.
 
 ```bash
-.venv/bin/python -m pytest -q -p no:cacheprovider tests/test-active-task.py
+.venv/bin/python -m pytest -n 0 -q -p no:cacheprovider tests/test-active-task.py
 .venv/bin/python -m pytest -q -p no:cacheprovider
 .venv/bin/python -m mypy
 ```
+
+The suite uses [pytest-xdist](https://pytest-xdist.readthedocs.io/en/stable/distribution.html)
+with at most four workers and work-stealing
+scheduling by default. Each test still owns its temporary files, ports, session
+storage, and source copies. Use `-n 0` for debugging or a small focused check;
+use `--durations=20` to inspect slow tests. Install the updated `[dev]` extra if
+pytest reports that `-n` is unrecognized.
+
+`tests/offline/sitecustomize.py` blocks external DNS and socket connections in
+pytest and Python subprocesses before I/O occurs. Loopback stub servers remain
+available. The test fixtures replace inherited credentials with a dummy key and
+disable dotenv loading; configuration tests use explicit temporary dotenv files.
+Child environments must preserve the guard directory in `PYTHONPATH` and the
+test's `SLIPAGENT_STATE_DIR`. The guard rejects subprocess environments that
+drop it. Use `cli_environment()` for CLI tests; reload tests add their disposable
+package directory after the guard. Never remove the guard to make a test pass:
+supply a mock transport or local server, including for startup metadata/quota.
+
+Prefer events or controlled deadlines over real sleeps when testing lifecycle
+races. Keep actual process termination/reaping assertions. Stub-server shutdown
+uses a short poll interval so teardown does not add half a second per server.
 
 The focused file above is an example; select tests for the behavior changed.
 Use `tests/test-runtime.py` for live-state changes, `test_cli_e2e.py` for command

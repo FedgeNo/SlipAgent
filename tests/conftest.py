@@ -3,16 +3,25 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 
 import pytest
 
 from slipagent.workspace import Workspace
+from offline.sitecustomize import GUARD_DIRECTORY
 
 
 @pytest.fixture(autouse=True)
 def isolated_session_storage(tmp_path: Path, monkeypatch):
-    """CLI tests and inherited subprocesses must never write the user's sessions."""
+    """Tests and children use dummy credentials, guarded networking and scratch state."""
+    for name in tuple(os.environ):
+        if name.startswith(("OPENROUTER_", "SLIPAGENT_", "EXA_")):
+            monkeypatch.delenv(name)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("SLIPAGENT_NO_DOTENV", "1")
     monkeypatch.setenv("SLIPAGENT_STATE_DIR", str(tmp_path / "session-state"))
+    python_path = [GUARD_DIRECTORY, *os.environ.get("PYTHONPATH", "").split(os.pathsep)]
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join(path for path in python_path if path))
 
 
 @pytest.fixture()

@@ -66,28 +66,22 @@ def test_dotenv_finds_nearest_file_up_the_tree(tmp_path: Path) -> None:
     assert env["OPENROUTER_MODEL"] == "mid"
 
 
-def test_dotenv_falls_back_to_the_install_directory(tmp_path: Path) -> None:
+def test_dotenv_falls_back_to_the_install_directory(tmp_path: Path, monkeypatch) -> None:
     """A `.env` beside the install is used when the cwd has none.
 
     This is what lets one credential work from any project directory.
     """
-    environ: dict[str, str] = {"SLIPAGENT_NO_DOTENV": "0"}
-    # Clear any real value so the fallback is visible.
-    environ.pop("OPENROUTER_API_KEY", None)
-
-    loaded = load_dotenv(tmp_path, environ)
-
-    # Either no `.env` exists at all, or the package-level one was applied.
-    if loaded is not None:
-        assert loaded.parent in _package_chain()
-        assert "OPENROUTER_API_KEY" in environ
-
-
-def _package_chain() -> set[Path]:
     from slipagent import config as config_module
-
-    here = Path(config_module.__file__).resolve().parent
-    return {here, *here.parents}
+    install = tmp_path / "install" / "slipagent"
+    install.mkdir(parents=True)
+    monkeypatch.setattr(config_module, "__file__", str(install / "config.py"))
+    env_file = install.parent / ".env"
+    env_file.write_text("OPENROUTER_API_KEY=install-test-key\n")
+    project = tmp_path / "project"
+    project.mkdir()
+    environ: dict[str, str] = {}
+    assert load_dotenv(project, environ) == env_file
+    assert environ["OPENROUTER_API_KEY"] == "install-test-key"
 
 
 def test_config_requires_a_key() -> None:

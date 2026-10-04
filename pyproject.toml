@@ -15,6 +15,7 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "pytest-xdist>=3.6,<4",
     "mypy>=1.11",
     "types-tabulate>=0.9,<1",
     "pyte>=0.8.2,<1",
@@ -31,6 +32,7 @@ build-backend = "hatchling.build"
 packages = ["src/slipagent"]
 
 [tool.pytest.ini_options]
+addopts = "-n auto --maxprocesses=4 --dist=worksteal"
 testpaths = ["tests"]
 python_files = ["test_*.py", "test-*.py", "*_test.py"]
 asyncio_mode = "auto"

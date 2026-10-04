@@ -84,7 +84,7 @@ async def test_cancel_during_tool_discovery_reaps_server(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("during_startup", [False, True])
 async def test_cancelled_disconnect_retains_ownership_until_server_is_reaped(monkeypatch, during_startup):
-    ready, stopping = asyncio.Event(), asyncio.Event()
+    ready, stopping, grace_expired = asyncio.Event(), asyncio.Event(), asyncio.Event()
     client = MCPClient(ServerSpec("sleep", sys.executable, ["-c", "import time; time.sleep(60)"]))
 
     async def negotiate():
@@ -97,9 +97,17 @@ async def test_cancelled_disconnect_retains_ownership_until_server_is_reaped(mon
     await asyncio.wait_for(ready.wait(), 3)
     process = client._process
     wait = process.wait
+    first_wait = True
 
     async def observed_wait():
-        stopping.set()
+        nonlocal first_wait
+        if first_wait:
+            first_wait = False
+            stopping.set()
+            # Control the grace deadline explicitly. The real signal/kill and
+            # reap path still runs, without waiting five wall-clock seconds.
+            await grace_expired.wait()
+            raise asyncio.TimeoutError
         return await wait()
 
     monkeypatch.setattr(process, "wait", observed_wait)
@@ -111,12 +119,16 @@ async def test_cancelled_disconnect_retains_ownership_until_server_is_reaped(mon
             task = asyncio.create_task(client.disconnect())
         await stopping.wait()
         task.cancel()
+        await asyncio.sleep(0)
+        assert client._process is process and not task.done()
+        grace_expired.set()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(task, 8)
         assert process.returncode is not None
         assert client._process is None
         assert client._pump is None and client._stderr_pump is None
     finally:
+        grace_expired.set()
         if process.returncode is None:
             process.kill()
         await wait()

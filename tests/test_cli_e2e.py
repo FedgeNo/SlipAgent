@@ -13,6 +13,7 @@ import socket
 import subprocess
 import sys
 import threading
+from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ import pytest
 
 from test_agent import structured_message, context_body, summary_response
 from slipagent.config import DEFAULT_MODEL
+from offline.sitecustomize import GUARD_DIRECTORY
 
 
 class StubOpenRouter:
@@ -33,7 +35,11 @@ class StubOpenRouter:
         self.summary_requests: list[dict[str, Any]] = []
         self._server = HTTPServer(("127.0.0.1", 0), self._make_handler())
         self.port = self._server.server_address[1]
-        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        # Teardown should not spend the server's default half-second poll
+        # interval waiting for a request that the test has finished sending.
+        self._thread = threading.Thread(
+            target=self._server.serve_forever, kwargs={"poll_interval": .01}, daemon=True,
+        )
 
     def _make_handler(self) -> type[BaseHTTPRequestHandler]:
         stub = self
@@ -151,6 +157,19 @@ def tool_step(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def cli_environment(**overrides: str) -> dict[str, str]:
+    """Keep child CLIs off real configuration and inside this test's state store."""
+    env = {name: os.environ[name] for name in ("PATH", "SYSTEMROOT", "COMSPEC", "TEMP", "TMP")
+           if name in os.environ}
+    env.update({
+        "OPENROUTER_API_KEY": "test-key", "SLIPAGENT_NO_DOTENV": "1", "NO_COLOR": "1",
+        "SLIPAGENT_STATE_DIR": os.environ["SLIPAGENT_STATE_DIR"],
+        "PYTHONPATH": os.pathsep.join([GUARD_DIRECTORY, str(Path(__file__).resolve().parents[1] / "src")]),
+    })
+    env.update(overrides)
+    return env
+
+
 def run_cli(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-m", "slipagent.cli", *args],
@@ -158,9 +177,7 @@ def run_cli(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         timeout=60,
-        env={"PATH": "/usr/bin:/bin", "OPENROUTER_API_KEY": "test-key",
-             "NO_COLOR": "1", "SLIPAGENT_NO_DOTENV": "1", "HOME": str(cwd),
-             "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")},
+        env=cli_environment(),
     )
 
 
@@ -371,8 +388,7 @@ def test_missing_api_key_exits_with_config_error(project_dir: Path) -> None:
         capture_output=True,
         text=True,
         timeout=60,
-        env={"PATH": "/usr/bin:/bin", "NO_COLOR": "1", "SLIPAGENT_NO_DOTENV": "1",
-             "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")},
+        env=cli_environment(OPENROUTER_API_KEY=""),
     )
 
     assert result.returncode == 2
@@ -418,9 +434,7 @@ def test_repl_handles_slash_commands(project_dir: Path) -> None:
             capture_output=True,
             text=True,
             timeout=60,
-            env={"PATH": "/usr/bin:/bin", "OPENROUTER_API_KEY": "test-key", "SLIPAGENT_NO_DOTENV": "1",
-                 "NO_COLOR": "1",
-                 "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")},
+            env=cli_environment(),
         )
 
     assert proc.returncode == 0, proc.stderr
@@ -438,9 +452,7 @@ def test_repl_prints_the_answer_once_per_turn(project_dir: Path) -> None:
             capture_output=True,
             text=True,
             timeout=60,
-            env={"PATH": "/usr/bin:/bin", "OPENROUTER_API_KEY": "test-key", "SLIPAGENT_NO_DOTENV": "1",
-                 "NO_COLOR": "1",
-                 "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")},
+            env=cli_environment(),
         )
 
     assert proc.returncode == 0, proc.stderr
@@ -463,9 +475,7 @@ def test_repl_reports_api_failure_without_crashing(project_dir: Path) -> None:
         capture_output=True,
         text=True,
         timeout=90,
-        env={"PATH": "/usr/bin:/bin", "OPENROUTER_API_KEY": "test-key", "SLIPAGENT_NO_DOTENV": "1",
-             "NO_COLOR": "1",
-             "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")},
+        env=cli_environment(),
     )
 
     assert proc.returncode == 2, proc.stderr
@@ -488,17 +498,25 @@ MCP_STUB = str(Path(__file__).parent / "mcp_stub_server.py")
 
 
 def run_repl_commands(project_dir: Path, commands: list[str], *extra: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, "-m", "slipagent.cli", *extra],
-        cwd=project_dir,
-        input="\n".join([*commands, "/exit"]) + "\n",
-        capture_output=True,
-        text=True,
-        timeout=120,
-        env={"PATH": "/usr/bin:/bin", "OPENROUTER_API_KEY": "test-key",
-             "SLIPAGENT_NO_DOTENV": "1", "NO_COLOR": "1",
-             "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")},
-    )
+    with ExitStack() as resources:
+        metadata = None
+        if not any(arg == "--base-url" or arg.startswith("--base-url=") for arg in extra):
+            # Slash-command tests still fetch model metadata and quota at
+            # startup. They must use a local server, even without inference.
+            metadata = resources.enter_context(StubOpenRouter([text_step("unused")]))
+            extra = ("--base-url", metadata.base_url, *extra)
+        result = subprocess.run(
+            [sys.executable, "-m", "slipagent.cli", *extra],
+            cwd=project_dir,
+            input="\n".join([*commands, "/exit"]) + "\n",
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=cli_environment(),
+        )
+        if metadata is not None:
+            assert not metadata.requests, "Supply a scripted server for tests that request inference"
+        return result
 
 
 def test_mcp_status_is_empty_without_config(project_dir: Path) -> None:
@@ -622,9 +640,7 @@ def test_repl_never_prints_a_step_counter(project_dir: Path) -> None:
             [sys.executable, "-m", "slipagent.cli", "--base-url", stub.base_url,
              "--model", "stub/model"],
             cwd=project_dir, input="go\n/exit\n", capture_output=True, text=True, timeout=60,
-            env={"PATH": "/usr/bin:/bin", "OPENROUTER_API_KEY": "test-key",
-                 "SLIPAGENT_NO_DOTENV": "1", "NO_COLOR": "1",
-                 "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")},
+            env=cli_environment(),
         )
 
     assert proc.returncode == 0, proc.stderr
@@ -640,9 +656,7 @@ def test_model_reply_starts_with_a_gap_after_tool_output(project_dir: Path) -> N
             [sys.executable, "-m", "slipagent.cli", "--base-url", stub.base_url,
              "--model", "stub/model", "-v"],
             cwd=project_dir, input="go\n/exit\n", capture_output=True, text=True, timeout=60,
-            env={"PATH": "/usr/bin:/bin", "OPENROUTER_API_KEY": "test-key",
-                 "SLIPAGENT_NO_DOTENV": "1", "NO_COLOR": "1",
-                 "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")},
+            env=cli_environment(),
         )
 
     lines = proc.stderr.splitlines()
@@ -704,7 +718,7 @@ def test_prompt_leaves_the_cursor_at_the_marker(project_dir: Path) -> None:
              "--model", "stub/model"],
             cwd=project_dir, input="go\n/exit\n", capture_output=True, text=True,
             timeout=60,
-            env={**os.environ, "COLUMNS": "200"},
+            env=cli_environment(COLUMNS="200"),
         )
 
     assert proc.returncode == 0, proc.stderr
@@ -728,7 +742,7 @@ def test_status_bar_elides_the_cwd_when_the_terminal_is_tight(
              "--model", "stub/model"],
             cwd=project_dir, input="go\n/exit\n", capture_output=True, text=True,
             timeout=60,
-            env={**os.environ, "COLUMNS": "30"},
+            env=cli_environment(COLUMNS="30"),
         )
 
     assert proc.returncode == 0, proc.stderr
@@ -821,7 +835,7 @@ def test_one_shot_step_limit_returns_failure(project_dir: Path) -> None:
 def test_missing_key_for_list_models_is_reported_without_traceback(project_dir: Path) -> None:
     result = subprocess.run([sys.executable, "-m", "slipagent.cli", "--list-models"],
         cwd=project_dir, capture_output=True, text=True, timeout=5,
-        env={"SLIPAGENT_NO_DOTENV": "1", "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")})
+        env=cli_environment(OPENROUTER_API_KEY=""))
     assert result.returncode == 2
     assert "Traceback" not in result.stderr
 
@@ -889,8 +903,7 @@ def test_followup_during_final_response_is_answered(project_dir: Path) -> None:
             [sys.executable, "-m", "slipagent.cli", "--base-url", stub.base_url,
              "--model", "stub/model", "--workspace", str(project_dir)],
             cwd=project_dir, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, env={**os.environ, "OPENROUTER_API_KEY": "test", "SLIPAGENT_NO_DOTENV": "1",
-                            "NO_COLOR": "1", "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")},
+            text=True, env=cli_environment(),
         )
         try:
             proc.stdin.write("go\nfollowup task\n")
@@ -1007,9 +1020,7 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             [sys.executable, "-m", "slipagent.cli", "--base-url", stub.base_url,
              "--workspace", str(project_dir), "--model", "stub/one", "--no-mcp"],
             cwd=project_dir, stdin=slave, stdout=slave, stderr=slave,
-            env={"PATH": "/usr/bin:/bin", "OPENROUTER_API_KEY": "test", "SLIPAGENT_NO_DOTENV": "1",
-                 "TERM": "xterm-256color", "NO_COLOR": "1",
-                 "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")},
+            env=cli_environment(TERM="xterm-256color"),
         )
         def wait_for(predicate):
             deadline = time.monotonic() + 8

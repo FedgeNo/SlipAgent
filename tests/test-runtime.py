@@ -10,6 +10,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from offline.sitecustomize import GUARD_DIRECTORY
 
 
 SETUP = '''
@@ -95,7 +96,7 @@ def run_copy(tmp_path: Path):
 
     def run(body: str) -> None:
         script = SETUP.replace("__BODY__", textwrap.indent(textwrap.dedent(body).strip(), "        "))
-        env = {**os.environ, "PYTHONPATH": str(package_root)}
+        env = {**os.environ, "PYTHONPATH": os.pathsep.join([GUARD_DIRECTORY, str(package_root)])}
         result = subprocess.run(
             [sys.executable, "-c", script], cwd=project, env=env,
             capture_output=True, text=True, timeout=20,
@@ -430,10 +431,20 @@ def test_cli_module_entry_supports_reload_and_disabled_mode(run_copy):
         import runpy
         import sys
         import slipagent.openrouter as router
-        from slipagent.types import KeyInfo
+        from slipagent.capabilities import ModelCapabilities
+        from slipagent.config import DEFAULT_MODEL
+        from slipagent.types import KeyInfo, ModelInfo
         async def quota(self):
             return KeyInfo.from_api({'is_free_tier': True})
+        async def models(self, **kwargs):
+            return [ModelInfo(DEFAULT_MODEL, context_length=1000000)]
+        async def capabilities(self, model, **kwargs):
+            return ModelCapabilities({'id': model, 'context_length': 1000000}, [{
+                'tag': 'stub', 'supported_parameters': ['tools'], 'context_length': 1000000,
+            }])
         router.OpenRouterClient.key_info = quota
+        router.OpenRouterClient.list_models = models
+        router.OpenRouterClient.model_capabilities = capabilities
         sys.argv = ['slipagent', '--api-key', 'test', '--no-mcp', '--no-color'] + sys.argv[1:]
         runpy.run_module('slipagent.cli', run_name='__main__', alter_sys=True)
         """)

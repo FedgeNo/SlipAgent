@@ -1004,7 +1004,8 @@ workspace. The workspace check is not an operating-system sandbox.
 ## Development
 
 ```bash
-.venv/bin/python -m pytest          # test suite, no external network access required
+.venv/bin/python -m pytest          # full suite, up to four parallel workers
+.venv/bin/python -m pytest -n 0     # serial execution for debugging
 .venv/bin/python -m mypy            # strict type checking
 ```
 
@@ -1012,7 +1013,10 @@ The suite covers workspace confinement, tools, context, the model loop, the API
 client, terminal behavior, and live reloads. End-to-end tests drive the installed
 CLI against a local stub OpenRouter server. Reload tests edit disposable package
 copies in isolated interpreters; Git tests stage and commit only in temporary
-repositories. Tests need no real API key or external service.
+repositories. Tests use dummy credentials and block external DNS and socket
+connections, including in Python CLI subprocesses. Local stub servers are
+allowed; the real `.env` and model endpoints are not used. Install the `[dev]`
+extra to include `pytest-xdist`; use `--durations=20` to inspect slow tests.
 
 To watch the harness work without spending tokens, run the demo: it serves a
 scripted fake API in-process and points the real CLI at it, including a

@@ -604,6 +604,14 @@ to the model along with the active generation number.
   Closing the terminal releases both temporary files. These files serve display,
   not conversation persistence or model context. Password entry owns a separate
   history-free buffer/queue, not just a masking processor.
+  `TerminalUI.choose(title, options)` temporarily replaces the six-row footer
+  with a heading, four option rows, and a bottom key legend. A focused menu
+  control owns navigation; the input buffer, history, queue, and transcript stay
+  intact. It returns the selected value or `None` on Escape, Ctrl-C/Ctrl-D, or
+  terminal closure. Cancellation restores input focus, and refresh preserves an
+  open menu's selection. `/menu` dispatches complete command strings through the
+  normal handlers, retaining busy-state checks and background execution for
+  read-only network commands during a turn.
 
 ## Extending the Contracts
 

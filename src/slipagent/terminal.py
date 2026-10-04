@@ -18,6 +18,7 @@ from prompt_toolkit.formatted_text.utils import fragment_list_to_text
 from prompt_toolkit.input import Input
 from prompt_toolkit.history import DummyHistory
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout import Dimension, DynamicContainer, Float, FloatContainer, HSplit, Layout, Window
 from prompt_toolkit.layout.controls import FormattedTextControl, UIContent, UIControl
 from prompt_toolkit.layout.mouse_handlers import MouseHandlers
@@ -188,6 +189,7 @@ class TerminalUI:
     def _layout(self) -> Layout:
         self._ensure_context()
         self._ensure_prompt()
+        self._ensure_menu()
         # Attach during layout rebuilds so existing sessions gain input wrapping.
         processors = self.input.control.input_processors or []
         if not any(isinstance(processor, WordWrapInput) for processor in processors):
@@ -199,6 +201,12 @@ class TerminalUI:
             self.input,
             Window(height=1),
             Window(FormattedTextControl(lambda: self._status(self.output.get_size().columns)),
+                   height=1, style="class:status"),
+        ], height=FOOTER_ROWS)
+        menu_footer = HSplit([
+            Window(FormattedTextControl(lambda: self._menu_title), height=1, style="class:menu-title"),
+            self._menu_window,
+            Window(FormattedTextControl("↑/↓ = move | Enter = select | Esc = back"),
                    height=1, style="class:status"),
         ], height=FOOTER_ROWS)
         context = HSplit([
@@ -213,8 +221,64 @@ class TerminalUI:
         )])
         return Layout(HSplit([
             DynamicContainer(lambda: context if self.context_visible else transcript),
-            Window(height=1), footer,
-        ]), focused_element=self.input)
+            Window(height=1),
+            DynamicContainer(lambda: menu_footer if self._menu_future is not None else footer),
+        ]), focused_element=self._menu_window if self._menu_future is not None else self.input)
+
+    def _ensure_menu(self) -> None:
+        """Add menu state to live instances without replacing the input buffer."""
+        if hasattr(self, "_menu_future"):
+            return
+        self._menu_future: asyncio.Future[str | None] | None = None
+        self._menu_title = ""
+        self._menu_options: list[tuple[str, str]] = []
+        self._menu_index = 0
+        self._menu_window = Window(FormattedTextControl(
+            lambda: self._menu_fragments(), focusable=True, show_cursor=False,
+            get_cursor_position=lambda: Point(x=0, y=self._menu_index),
+        ), height=FOOTER_ROWS - 2, wrap_lines=True)
+
+    def _menu_fragments(self) -> StyleAndTextTuples:
+        fragments: StyleAndTextTuples = []
+        for index, (_, label) in enumerate(self._menu_options):
+            if index:
+                fragments.append(("", "\n"))
+            selected = index == self._menu_index
+            fragments.append(("class:menu-selected" if selected else "",
+                              ("› " if selected else "  ") + label))
+        return fragments
+
+    async def choose(self, title: str, options: list[tuple[str, str]]) -> str | None:
+        """Choose a value/label pair in the footer; cancellation preserves the draft."""
+        self._ensure_menu()
+        if self._menu_future is not None:
+            raise RuntimeError("A menu is already open.")
+        if not options or self._eof:
+            return None
+        future: asyncio.Future[str | None] = asyncio.get_running_loop().create_future()
+        self._menu_future = future
+        self._menu_title = title
+        self._menu_options = [(value, re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", label))
+                              for value, label in options]
+        self._menu_index = 0
+        self._menu_window.vertical_scroll = self._menu_window.vertical_scroll_2 = 0
+        try:
+            self.app.layout.focus(self._menu_window)
+            self.app.invalidate()
+            return await future
+        finally:
+            self._menu_future = None
+            self._menu_options = []
+            self.app.layout.focus(self.input)
+            self.app.invalidate()
+
+    def _move_menu(self, rows: int) -> None:
+        self._menu_index = max(0, min(len(self._menu_options) - 1, self._menu_index + rows))
+        self.app.invalidate()
+
+    def _finish_menu(self, value: str | None) -> None:
+        if self._menu_future is not None and not self._menu_future.done():
+            self._menu_future.set_result(value)
 
     def _ensure_prompt(self) -> None:
         """Migrate header state; prompt locations come from the transcript file."""
@@ -313,6 +377,9 @@ class TerminalUI:
         return self._context_fragments
 
     def _scroll_output(self, rows: int) -> None:
+        if self._menu_future is not None:
+            self._move_menu(rows)
+            return
         window = self.context_window if self.context_visible else self.transcript
         if not self.context_visible and rows:
             self._prompt_pending = False
@@ -321,13 +388,33 @@ class TerminalUI:
 
     def _bindings(self) -> KeyBindings:
         bindings = KeyBindings()
+        in_menu = Condition(lambda: self._menu_future is not None)
 
-        @bindings.add("c-\\")
+        @bindings.add("up", filter=in_menu)
+        @bindings.add("down", filter=in_menu)
+        def move_menu(event: KeyPressEvent) -> None:
+            self._move_menu(-1 if event.key_sequence[-1].key == Keys.Up else 1)
+
+        @bindings.add("enter", filter=in_menu, eager=True)
+        def select_menu(event: KeyPressEvent) -> None:
+            self._finish_menu(self._menu_options[self._menu_index][0])
+
+        @bindings.add("escape", filter=in_menu, eager=True)
+        @bindings.add("c-c", filter=in_menu)
+        @bindings.add("c-d", filter=in_menu)
+        def cancel_menu(event: KeyPressEvent) -> None:
+            self._finish_menu(None)
+
+        @bindings.add(Keys.Any, filter=in_menu)
+        def ignore_menu_text(event: KeyPressEvent) -> None:
+            pass
+
+        @bindings.add("c-\\", filter=~in_menu)
         def toggle_context(event: KeyPressEvent) -> None:
             self.context_visible = not self.context_visible
             self.app.invalidate()
 
-        in_context = Condition(lambda: self.context_visible)
+        in_context = Condition(lambda: self.context_visible) & ~in_menu
 
         @bindings.add("up", filter=in_context)
         @bindings.add("down", filter=in_context)
@@ -359,14 +446,14 @@ class TerminalUI:
         def scroll_down(event: KeyPressEvent) -> None:
             self._scroll_output(3)
 
-        @bindings.add("c-d")
+        @bindings.add("c-d", filter=~in_menu)
         def eof(event: KeyPressEvent) -> None:
             if not event.current_buffer.text:
                 self._end_input()
             else:
                 event.current_buffer.delete()
 
-        @bindings.add("c-c")
+        @bindings.add("c-c", filter=~in_menu)
         def interrupt(event: KeyPressEvent) -> None:
             event.current_buffer.reset()
             if self.working:
@@ -380,6 +467,7 @@ class TerminalUI:
         return Style.from_dict({
             "status": "dim", "pulse": "bold ansicyan", "idle": "dim", "user": "#00ff00",
             "context-system": "#ffff00",
+            "menu-title": "bold", "menu-selected": "reverse bold",
         })
 
     def refresh(self) -> None:
@@ -405,10 +493,12 @@ class TerminalUI:
                 self._scroll_output(-3 if event.event_type == MouseEventType.SCROLL_UP else 3)
                 app.invalidate()
                 return None
+            if self._menu_future is not None:
+                return None  # Keep focus on the menu until selection/cancellation.
             return original.mouse_handlers[event.position.y][event.position.x](event)
 
-        # Wheel events anywhere on screen target the transcript; clicks retain
-        # their normal behavior in the input field.
+        # Wheel events target the active menu or output view. Clicks retain
+        # their normal behavior in the input field when no menu is open.
         handlers = MouseHandlers()
         size = self.output.get_size()
         handlers.set_mouse_handler_for_range(0, size.columns, 0, size.rows, mouse_handler)
@@ -540,6 +630,7 @@ class TerminalUI:
         return await self._lines.get()
 
     def _end_input(self) -> None:
+        self._finish_menu(None)
         self._eof = True
         self._lines.put_nowait(None)
 
@@ -583,6 +674,7 @@ class TerminalUI:
             self._flow.close()
 
     def close(self) -> None:
+        self._finish_menu(None)
         if self.app.is_running:
             self.app.exit()
         else:

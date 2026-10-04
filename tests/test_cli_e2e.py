@@ -942,6 +942,50 @@ async def test_mutating_commands_wait_until_turn_finishes(tmp_path, monkeypatch,
         await _shutdown(session)
 
 
+@pytest.mark.parametrize("selection", [None, "/tools", "/reset", "/quit", "/models"])
+async def test_menu_dispatch_preserves_command_checks(tmp_path, monkeypatch, metadata_server, selection):
+    import asyncio
+    import io
+    from unittest.mock import AsyncMock, Mock
+    from slipagent import cli
+    from slipagent.terminal import TerminalUI
+
+    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    output = io.StringIO()
+    terminal = Mock(spec=TerminalUI)
+    terminal.choose = AsyncMock(return_value=selection)
+    terminal.write.side_effect = lambda text, **kwargs: output.write(text)
+    session.renderer.terminal = terminal
+    models = AsyncMock()
+    monkeypatch.setattr(cli, "_models_command", models)
+    session.agent.running = True
+    try:
+        assert await cli._handle_command(session, "/menu") is (selection == "/quit")
+        terminal.choose.assert_awaited_once_with("Commands", cli.MENU_OPTIONS)
+        if selection == "/tools":
+            assert "read_file" in output.getvalue()
+        elif selection == "/reset":
+            assert "after this turn" in output.getvalue()
+            assert session.agent.messages
+        elif selection == "/models":
+            tasks = list(session.extensions["command_tasks"])
+            assert tasks
+            await asyncio.gather(*tasks)
+            models.assert_awaited_once()
+        else:
+            assert output.getvalue() == ""
+    finally:
+        session.agent.running = False
+        await cli._shutdown(session)
+
+
+def test_menu_without_terminal_reports_how_to_get_commands(project_dir):
+    proc = run_repl_commands(project_dir, ["/menu extra", "/menu"])
+    assert proc.returncode == 0, proc.stderr
+    assert "usage: /menu" in proc.stderr
+    assert "/menu requires an interactive terminal; use /help" in proc.stderr
+
+
 def test_mcp_command_preserves_quoted_arguments() -> None:
     from slipagent.cli import _split_mcp_command
     _, spec, _ = _split_mcp_command('add stub python "path with spaces/server.py"')
@@ -1051,10 +1095,21 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             assert screen.title == f"{project_dir} | SlipAgent"
             assert screen.display[22].strip() == ""
             startup = "\n".join(screen.display[:17])
-            for command in ["/help", "/tools", "/model", "/models", "/key", "/cost", "/mcp", "/rename", "/reset", "/reload", "/generations", "/init", "/stop", "/exit", "/quit"]:
+            for command in ["/help", "/menu", "/tools", "/model", "/models", "/key", "/cost", "/mcp", "/rename", "/reset", "/reload", "/generations", "/init", "/stop", "/exit", "/quit"]:
                 assert command in startup
             assert "Follow-ups queue" in startup
             assert "Ctrl-D quits" in startup
+            os.write(master, b"/menu\r")
+            wait_for(lambda: "Enter = select | Esc = back" in screen.display[23])
+            assert screen.display[18].strip() == "Commands"
+            os.write(master, b"\x1b")
+            wait_for(lambda: "Ready" in screen.display[18])
+            assert not stub.requests
+            os.write(master, b"/menu\r")
+            wait_for(lambda: "Enter = select | Esc = back" in screen.display[23])
+            os.write(master, b"\x1b[B\r")
+            wait_for(lambda: "Ready" in screen.display[18] and "read_file" in "\n".join(screen.display[:17]))
+            assert not stub.requests
             os.write(master, b"go\r")
             wait_for(started.is_set)
             os.write(master, b"/rename Work in progress\r")

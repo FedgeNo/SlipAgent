@@ -412,6 +412,7 @@ In the REPL:
 | Command | Effect |
 | --- | --- |
 | `/help` | Show command help |
+| `/menu` | Open the command menu in the input area; Up/Down move, Enter selects, Escape closes |
 | `/tools` | List available tools |
 | `/model` | Show the active model |
 | `/model <slug>` | Switch model for this session |
@@ -501,6 +502,13 @@ model must discover applicable instructions before using them to change files.
 The startup screen lists the available commands and basic usage. The free-call
 count is fetched from OpenRouter at startup and refreshed every 15 minutes,
 including while idle or working.
+
+`/menu` replaces the six-row input footer with a heading, a scrolling list of
+commands, and `↑/↓ = move | Enter = select | Esc = back` on the bottom line.
+The transcript stays visible above it. Escape closes the menu without running
+anything, preserving your draft and scroll position. Selecting an item runs its
+usual slash command, including the same restrictions while the agent is working.
+Commands that need arguments are still entered at the normal prompt.
 
 Press **Ctrl+backslash (`Ctrl+\`)** to toggle the context view. It shows the
 latest outgoing working request, with every system, user, assistant, and tool

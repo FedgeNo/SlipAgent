@@ -225,6 +225,112 @@ def display():
     return sink, size, output, screen, snapshot
 
 
+async def test_menu_uses_footer_and_scrolls_selection_through_refresh_and_resize(display):
+    sink, size, output, screen, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        task = asyncio.create_task(ui.run())
+        choice = None
+        try:
+            ui.write("Transcript stays visible")
+            await wait_until(lambda: "Ready" in snapshot()[18])
+            before = snapshot()[:18]
+            choice = asyncio.create_task(ui.choose("Commands", [(str(i), f"Option {i}") for i in range(12)]))
+            await wait_until(lambda: "Commands" in snapshot()[18])
+            assert snapshot()[:18] == before
+            assert snapshot()[23].strip() == "↑/↓ = move | Enter = select | Esc = back"
+            assert "› Option 0" in snapshot()[19]
+            pipe.send_text("\x1b[A" + "\x1b[B" * 8)
+            await wait_until(lambda: "› Option 8" in "\n".join(snapshot()[19:23]))
+            assert "Option 0" not in "\n".join(snapshot()[19:23])
+            ui.refresh()
+            size[0] = Size(rows=24, columns=40)
+            screen.resize(lines=24, columns=40)
+            ui.app._on_resize()
+            await wait_until(lambda: "› Option 8" in "\n".join(snapshot()[19:23]))
+            assert "Enter = select | Esc = back" in snapshot()[23]
+            pipe.send_text("\r")
+            assert await asyncio.wait_for(choice, 3) == "8"
+            await wait_until(lambda: "Ready" in snapshot()[18])
+            assert ui._lines.empty()
+        finally:
+            ui.close()
+            if choice is not None:
+                await choice
+            await task
+
+
+@pytest.mark.parametrize("cancel_key", ["\x1b", "\x03", "\x04"])
+async def test_menu_cancellation_preserves_input_history_scroll_and_running_turn(display, cancel_key):
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        task = asyncio.create_task(ui.run())
+        choice = None
+        try:
+            await wait_until(lambda: "Ready" in snapshot()[18])
+            pipe.send_text("previous prompt\r")
+            assert await asyncio.wait_for(ui.read_line(), 3) == "previous prompt"
+            pipe.send_text("draft in progress\x1b[D")
+            await wait_until(lambda: ui.input.buffer.text == "draft in progress" and
+                             ui.input.buffer.cursor_position == len("draft in progres"))
+            history = ui.input.buffer.history.get_strings()
+            cursor = ui.input.buffer.cursor_position
+            ui.write("\n".join(f"line {i}" for i in range(70)))
+            ui.set_working(True)
+            await wait_until(lambda: "line 69" in "\n".join(snapshot()[:17]))
+            ui._scroll_output(-10)
+            await wait_until(lambda: "line 69" not in "\n".join(snapshot()[:17]))
+            before = snapshot()[:18]
+            choice = asyncio.create_task(ui.choose("Commands", [("one", "One"), ("two", "Two")]))
+            await wait_until(lambda: "Commands" in snapshot()[18])
+            pipe.send_text("ignored\x7f\x1b[A\x1c" + cancel_key)
+            assert await asyncio.wait_for(choice, 3) is None
+            await wait_until(lambda: "Working" in snapshot()[18])
+            assert snapshot()[:18] == before
+            assert ui.input.buffer.text == "draft in progress"
+            assert ui.input.buffer.cursor_position == cursor
+            assert ui.input.buffer.history.get_strings() == history
+            assert ui._lines.empty()  # Neither /stop nor EOF was submitted.
+            assert not ui.context_visible
+            pipe.send_text("\r")
+            assert await asyncio.wait_for(ui.read_line(), 3) == "draft in progress"
+        finally:
+            ui.close()
+            if choice is not None:
+                await choice
+            await task
+
+
+@pytest.mark.parametrize("cancel_task", [False, True])
+async def test_menu_releases_waiter_on_close_or_cancellation(display, cancel_task):
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: "Ready" in snapshot()[18])
+            # Refresh migrates terminals created before menus were available.
+            del ui._menu_future
+            ui.refresh()
+            assert await ui.choose("Empty", []) is None
+            choice = asyncio.create_task(ui.choose("Commands", [("one", "One")]))
+            await wait_until(lambda: "Commands" in snapshot()[18])
+            if cancel_task:
+                choice.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await choice
+                await wait_until(lambda: "Ready" in snapshot()[18])
+                pipe.send_text("still usable\r")
+                assert await asyncio.wait_for(ui.read_line(), 3) == "still usable"
+            else:
+                ui.close()
+                assert await asyncio.wait_for(choice, 3) is None
+        finally:
+            ui.close()
+            await task
+
+
 async def test_footer_stays_fixed_while_transcript_scrolls_and_input_survives(display) -> None:
     sink, _, output, _, snapshot = display
     with create_pipe_input() as pipe:
@@ -577,7 +683,7 @@ async def test_input_word_wrap_preserves_editing_submission_and_resize(display) 
 def test_startup_and_help_list_all_commands_with_requested_spacing():
     banner = BANNER.format(model="test/model", workspace="project", tools="read_file", mcp="")
     for command in [
-        "/help", "/tools", "/model", "/models", "/key", "/cost", "/mcp",
+        "/help", "/menu", "/tools", "/model", "/models", "/key", "/cost", "/mcp",
         "/rename", "/reset", "/reload", "/generations", "/init", "/stop", "/exit", "/quit",
     ]:
         assert command in banner

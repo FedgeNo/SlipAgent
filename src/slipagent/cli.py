@@ -58,7 +58,7 @@ Commands: /help  /tools  /model [slug]  /models [filter]  /key [show|status|key]
           /temperature [value]  /cost  /mcp [add|save|remove]
           /task [new]  /rename <name>  /reset  /reload  /generations
           /sessions  /resume id|latest  /requests [attempt]
-          /init  /stop  /exit  /quit
+          /menu  /init  /stop  /exit  /quit
 
 Type a task and press Enter. Follow-ups queue while the agent works.
 /stop finishes this turn and stops. /exit, /quit, or Ctrl-D quits.
@@ -70,6 +70,7 @@ HELP = """\
 Commands
 
   /help                show this help
+  /menu                open the arrow-key command menu; Enter selects, Esc closes
   /tools               list the available tools
   /model               show the active model
   /model <slug>        switch model for this session
@@ -110,6 +111,29 @@ Sessions, command logs, and request diagnostics are saved unless --no-session is
 Command logs have a shared 100 MiB quota; request diagnostics have a 32 MiB quota.
 Background commands use command_jobs and read_command_output for control/output.
 /stop leaves those jobs running; /reset and exit stop them."""
+
+# Each entry is a complete command, dispatched through the same checks as typed
+# input. Commands needing arguments remain available through the ordinary prompt.
+MENU_OPTIONS = [
+    ("/help", "Help"),
+    ("/tools", "Available Tools"),
+    ("/model", "Current Model"),
+    ("/models", "Browse Models"),
+    ("/temperature", "Temperature"),
+    ("/key status", "API Key Status"),
+    ("/cost", "Token Usage and Cost"),
+    ("/task", "Active Task"),
+    ("/sessions", "Saved Sessions"),
+    ("/requests", "Request Diagnostics"),
+    ("/mcp", "MCP Servers"),
+    ("/reload", "Reload Components"),
+    ("/generations", "Reload Generation"),
+    ("/init", "Initialize Project Guidance"),
+    ("/stop", "Stop After This Turn"),
+    ("/task new", "Start a New Task"),
+    ("/reset", "Start a New Conversation"),
+    ("/quit", "Quit"),
+]
 
 # Divider between the working directory and the free-call readout.
 _READOUT_SEP = "  │  "
@@ -1070,6 +1094,21 @@ async def _execute_command(session: Session, line: str) -> bool:
     argument = parts[1].strip() if len(parts) > 1 else ""
     style = session.renderer.style
     out = _RendererStream(session.renderer)
+
+    if command == "menu":
+        terminal = session.renderer.terminal
+        if argument:
+            print(style.red("  usage: /menu"), file=out)
+        elif terminal is None:
+            print(style.red("  /menu requires an interactive terminal; use /help for commands."), file=out)
+        else:
+            selected = await terminal.choose("Commands", MENU_OPTIONS)
+            if selected is not None:
+                if session.agent.running and _background_command(selected):
+                    _start_background_command(session, selected)
+                else:
+                    return await _execute_command(session, selected)
+        return False
 
     mutates_session = command in {"reset", "init", "resume"} or command == "key" and argument.lower() not in {"show", "status"}
     mutates_session = mutates_session or command == "model" and bool(argument) or command == "mcp" and bool(argument)

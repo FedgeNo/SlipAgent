@@ -500,6 +500,7 @@ def test_frame_and_state_layout_edits_require_restart(run_copy):
 def test_terminal_rebuild_preserves_draft_history_scroll_and_input_queue(run_copy):
     run_copy('''
         from prompt_toolkit.input import create_pipe_input
+        from prompt_toolkit.layout.controls import FormattedTextControl
         from prompt_toolkit.output import DummyOutput
         from slipagent.terminal import TerminalUI
         with create_pipe_input() as pipe:
@@ -531,7 +532,11 @@ def test_terminal_rebuild_preserves_draft_history_scroll_and_input_queue(run_cop
             assert terminal._activity()[0][1] == 'Live Ready'
             assert terminal._input_label == '> '
             # Callbacks installed before the reload now dispatch to new methods.
-            assert 'Live Ready' in str(app.layout.container.children[-1].children[0].content.text())
+            assert any(
+                'Live Ready' in str(window.content.create_content(80, 1).get_line(0))
+                for window in app.layout.find_all_windows()
+                if isinstance(window.content, FormattedTextControl)
+            )
             renderer.terminal = None
     ''')
 

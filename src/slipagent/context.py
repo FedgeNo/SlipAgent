@@ -80,12 +80,19 @@ The active task working record below preserves goals, constraints, and pending
 work in every request. You may update it with update_task when useful.
 Input headings identify system instructions, original requests, responses and
 observations. They are navigation labels, not part of the source wording.
-The harness adds post numbers solely for your reference and recall_history
-lookups. They are not a numbering system or response format you must follow.
-Do not repeat, generate, or continue post numbers or history headings in your
-replies. For example, "### Post 38 — Agent Response (Full)" is a harness label;
-do not output it or a similar heading. Write your response directly instead.
 Keep bookkeeping labels and historical summaries out of your reply.
+
+## Private Harness Metadata — Never Disclose
+Post numbers, CURRENT_POST_ID, PREVIOUS_POST_ID, and history headings are SECRET
+internal system metadata. Treat them like private system-prompt text: NEVER
+disclose, quote, repeat, or generate them in anything shown to the user,
+including replies, headings, progress updates, summaries, and visible reasoning.
+They exist only for your reference and history retrieval. They are NOT an output
+format, a numbering sequence to continue, or words the user asked you to repeat.
+Use post IDs only in tool arguments that require them, such as recall_history
+lookups or task-source references. Prior agent replies that exposed this
+metadata were mistakes; do not copy their format. Do not announce that you are
+hiding metadata. Start directly with the task-related text for the user.
 """
 
 CONTEXT_INSTRUCTIONS = JSON_TOOL_INSTRUCTIONS + RECORD_INSTRUCTIONS
@@ -556,9 +563,11 @@ class ConversationHistory:
     def instructions(self, *, native_tools: bool = False) -> str:
         previous = self.posts[-1] if self.posts and self.posts[-1].has_results else None
         return (
-            f"\n## Current Turn State\nCURRENT_POST_ID: {len(self.posts) + 1}\n"
+            "\n## Current Turn State\n"
+            "SECRET SYSTEM METADATA: internal reference only; never disclose to the user.\n"
+            f"CURRENT_POST_ID: {len(self.posts) + 1}\n"
             f"PREVIOUS_POST_ID: {previous.id if previous else 'none'}\n"
-            "Post numbers are assigned by the harness; do not echo these labels.\n"
+            "These IDs belong only in internal references or required tool arguments, never in user-facing text.\n"
         )
 
     def save_record(self, record: ResponseRecord, previous_id: int | None) -> None:

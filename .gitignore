@@ -1,0 +1,24 @@
+# Virtualenvs / build
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# Python caches
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Secrets
+.env
+.env.*
+.mcp.json
+
+# Harness scratch output
+.slipagent/
+
+# Demo workspace created by scripts/demo_run.py
+.demo-workspace/

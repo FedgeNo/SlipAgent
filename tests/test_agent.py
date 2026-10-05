@@ -567,10 +567,11 @@ def test_system_prompt_allows_splitting_on_real_dependencies() -> None:
     assert "Only split a batch when a call genuinely depends" in prompt
 
 
-def test_system_prompt_allows_talking_alongside_batched_tools() -> None:
+def test_system_prompt_requests_output_every_turn_alongside_batched_tools() -> None:
     prompt = build_system_prompt("/tmp/ws")
 
-    assert "Talk alongside your tool calls" in prompt
+    assert "nonempty response for the user on EVERY turn" in prompt
+    assert "Do not take a silent turn" in prompt
     assert "narrating between calls" in prompt
     assert "No preamble" not in prompt
 

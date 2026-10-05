@@ -40,6 +40,12 @@ LEGACY_RESPONSE_HEADINGS = frozenset({
 JSON_TOOL_INSTRUCTIONS = """\
 Replies and Tool Calls:
 
+Provide a useful, nonempty response on EVERY turn, including tool-call turns.
+Put it in response when using a JSON object, or in your accompanying reply text
+when using tagged calls. State findings from any previous results and your
+intentions for any new calls. If there are no previous results, explain your
+next action and purpose. Do not invent results or calls to fill the response.
+
 For a final answer, ordinary plain text is allowed unless a response schema is
 explicitly supplied. To request tools without native API support, return a JSON
 object with response (your accompanying text) and tool_calls (an array).
@@ -57,6 +63,10 @@ Do not put executable calls in examples or surrounding explanation.
 NATIVE_TOOL_INSTRUCTIONS = """\
 Replies and Native Tool Calls:
 
+Provide useful, nonempty assistant reply text on EVERY turn, including turns
+with native tool calls. Tool calls and private reasoning do not replace it.
+If a response schema is supplied, put this text in its response field.
+
 Use the native API tools supplied with this request. Request the whole
 predictable batch together; calls run in order. Their outcomes appear in the next
 request's history_turn.tool_results, matched to tool_calls by call_id.
@@ -66,6 +76,10 @@ available, including the conclusions or decisions based on them. State your
 intentions and purpose for any new tool calls you request. Report findings from
 those new calls only after their results arrive. This response text provides
 memory for future turns; private reasoning is not supplied back to you.
+
+If there are no previous tool results, explain your intended action and purpose.
+If you request no new tools, report your findings, answer, or the specific
+information needed to proceed. Do not invent findings or calls to fill the reply.
 
 Reply in ordinary plain text unless a response
 schema is explicitly supplied. Finish with a reply and no tool calls.

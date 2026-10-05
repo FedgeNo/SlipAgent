@@ -115,11 +115,15 @@ def response_format(has_previous_results: bool, *, native_tools: bool = False) -
         "response": {
             "type": "string",
             "description": (
-                "Plain terminal text for the user.\n\n"
+                "Required useful, nonempty terminal text for the user on EVERY turn, "
+                "including turns requesting tools. Tool calls and private reasoning do not replace this text.\n\n"
                 "Report important findings from any previous tool calls whose results are available, "
                 "including the conclusions or decisions based on them.\n\n"
                 "State your intentions and purpose for any new tool calls you request. "
                 "Report findings from those new calls only after their results arrive.\n\n"
+                "If there are no previous results, explain your intended action and purpose. "
+                "If there are no new calls, report your findings, answer, or the specific information "
+                "needed to proceed. Do not invent findings or calls to fill the response.\n\n"
                 "This response provides memory for future turns; private reasoning is not supplied back to you."
             ),
         },

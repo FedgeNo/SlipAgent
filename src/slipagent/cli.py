@@ -25,7 +25,7 @@ from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any, TextIO
 
-from .agent import Agent, AgentEvent, STEP_LIMIT_NOTICE, build_system_prompt
+from .agent import Agent, AgentEvent, STEP_LIMIT_NOTICE, STOP_NOTICE, build_system_prompt
 from .config import Config, ConfigError, dotenv_path, save_dotenv_value
 from .instructions import load_project_instructions, ProjectInstructions
 from .mcp import MCPManager, MCPError, ServerSpec, config_path, load_servers
@@ -62,6 +62,7 @@ Commands: /help  /tools  /model [slug]  /models [filter]  /key [show|status|key]
           /menu  /danger [on|off|status]  /init  /stop  /exit  /quit
 
 Type a task and press Enter. Follow-ups queue while the agent works.
+Settings changes also queue until the current response and tool batch finish.
 /stop finishes this turn and stops. /exit, /quit, or Ctrl-D quits.
 Use /help for command details. Ctrl+\\ toggles the context view."""
 
@@ -72,8 +73,8 @@ Commands
 
   /help                show this help
   /menu                open the arrow-key command menu; Enter selects, Esc closes
-  /danger [on]         disable workspace path confinement (idle only)
-  /danger off          restore workspace path confinement (idle only)
+  /danger [on]         disable workspace path confinement (queues while working)
+  /danger off          restore workspace path confinement (queues while working)
   /danger status       show whether danger mode is active
   /tools               list the available tools
   /model               show the active model
@@ -90,8 +91,8 @@ Commands
   /task new            start a new task with your next prompt; retain history and logs
   /rename <name>       name this saved conversation and its terminal title
   /sessions            list saved sessions for this project
-  /resume              choose a saved session with Up/Down and Enter (idle only)
-  /resume <id|latest>   restore a saved conversation and scroll to its end (idle only)
+  /resume              choose a saved session with Up/Down and Enter (queues while working)
+  /resume <id|latest>   restore a saved conversation and scroll to its end (queues while working)
   /requests [attempt]  list recent request attempts or inspect an exact saved request
   /mcp                 show MCP servers and their tools
   /mcp add <name> <command> [args...]
@@ -918,6 +919,12 @@ async def _run_turn(session: Session, prompt: str, style: Style) -> bool:
 
             if agent_task in done:
                 answer = agent_task.result()
+                resume, commands_exit = await _apply_deferred_commands(session, exiting=exiting)
+                exiting = exiting or commands_exit
+                if resume and not exiting and answer == STOP_NOTICE:
+                    renderer.emit(style.dim("  Queued commands applied; continuing the current task."))
+                    agent_task = asyncio.create_task(session.agent.run("", continue_run=True))
+                    continue
                 if not exiting and session.agent.pending and answer != STEP_LIMIT_NOTICE and not session.agent.stopped:
                     agent_task = asyncio.create_task(session.agent.run(""))
                     continue
@@ -927,9 +934,13 @@ async def _run_turn(session: Session, prompt: str, style: Style) -> bool:
                 # than cancelling it: a completed answer the user cannot see
                 # because they closed the pipe is a worse outcome than waiting.
                 await agent_task
-    except BaseException:
+    except BaseException as exc:
         agent_task.cancel()
         await _gather_quietly(agent_task)
+        # A failed model request still leaves an idle session where queued
+        # settings can be applied. Cancellation/exit must not start new work.
+        if not isinstance(exc, asyncio.CancelledError):
+            await _apply_deferred_commands(session, exiting=exiting)
         raise
     finally:
         if reader is not None and not reader.done():
@@ -956,6 +967,54 @@ async def _run_turn(session: Session, prompt: str, style: Style) -> bool:
             renderer.emit(style.dim(f"    ({session.agent.usage.summary()})"), separate=False)
 
     return exiting
+
+
+def _changes_session(command: str, argument: str) -> bool:
+    """Commands that cannot share a live model request or tool batch."""
+    return (command in {"reset", "init", "resume"}
+            or command == "key" and argument.lower() not in {"show", "status"}
+            or command in {"model", "mcp", "temperature"} and bool(argument)
+            or command == "task" and argument == "new"
+            or command == "danger" and argument.lower() in {"", "on", "off"})
+
+
+def _queue_command(session: Session, line: str, command: str) -> None:
+    commands = session.extensions.setdefault("deferred_commands", [])
+    if not commands:
+        session.extensions["resume_after_commands"] = not session.agent.stop_requested
+    commands.append(line)
+    session.agent.request_stop()
+    session.renderer.emit(session.renderer.style.dim(
+        f"  Queued /{command}; it will run after the current response and tool batch."
+    ))
+
+
+async def _apply_deferred_commands(session: Session, *, exiting: bool = False) -> tuple[bool, bool]:
+    """Apply FIFO commands while idle; task replacements do not resume old work.
+
+    Command text stays outside model history and journals, including credentials.
+    The active response and every tool have settled before this is called.
+    """
+    commands = session.extensions.pop("deferred_commands", [])
+    resume = session.extensions.pop("resume_after_commands", False)
+    if exiting:
+        if commands:
+            session.renderer.emit(session.renderer.style.dim(
+                f"  {len(commands)} queued command(s) were not run because the session is exiting."
+            ))
+        return False, True
+    for line in commands:
+        parts = line[1:].split(None, 1)
+        command = parts[0].lower()
+        argument = parts[1].strip() if len(parts) > 1 else ""
+        if command in {"reset", "resume"} or command == "task" and argument == "new":
+            resume = False
+        try:
+            if await _handle_command(session, line):
+                return False, True
+        except Exception as exc:
+            session.renderer.emit(session.renderer.style.red(f"  ✗ /{command} failed: {exc}"))
+    return resume, False
 
 
 def _background_command(text: str) -> bool:
@@ -1136,18 +1195,15 @@ async def _execute_command(session: Session, line: str) -> bool:
                     return await _execute_command(session, selected)
         return False
 
-    mutates_session = command in {"reset", "init", "resume"} or command == "key" and argument.lower() not in {"show", "status"}
-    mutates_session = mutates_session or command == "model" and bool(argument) or command == "mcp" and bool(argument)
-    mutates_session = mutates_session or command == "temperature" and bool(argument)
-    mutates_session = mutates_session or command == "task" and bool(argument)
-    mutates_session = mutates_session or command == "danger" and argument.lower() != "status"
-    if session.agent.running and mutates_session:
-        print(style.dim(f"  /{command} changes session state; use it after this turn finishes."), file=out)
+    if _changes_session(command, argument) and (session.agent.running or session.extensions.get("deferred_commands")):
+        _queue_command(session, line, command)
         return False
 
     if command in ("exit", "quit"):
+        session.extensions["resume_after_commands"] = False
         return True
     if command == "stop":
+        session.extensions["resume_after_commands"] = False
         if session.agent.request_stop():
             if session.renderer.terminal is not None:
                 session.renderer.terminal.set_working(True, stopping=True)

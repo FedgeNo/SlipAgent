@@ -20,6 +20,7 @@ def session_for(workspace):
         workspace=workspace, agent=agent,
         renderer=Renderer(Style(False), io.StringIO(), False),
         reloader=SimpleNamespace(_project_instructions=prompt),
+        extensions={},
     )
 
 
@@ -74,4 +75,5 @@ async def test_init_waits_for_active_turn_to_finish(workspace):
     session.agent.running = True
     assert await _execute_command(session, "/init") is False
     assert not (workspace.root / "AGENTS.md").exists()
-    assert "use it after this turn finishes" in session.renderer.stream.getvalue()
+    assert "Queued /init" in session.renderer.stream.getvalue()
+    assert session.extensions["deferred_commands"] == ["/init"]

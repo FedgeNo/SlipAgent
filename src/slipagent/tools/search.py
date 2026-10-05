@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import fnmatch
+import heapq
 import asyncio
 import json
 import os
 import sys
+import threading
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 from ..workspace import Workspace, WorkspaceError
 from .base import Tool, ToolResult
+from .blocking import run_blocking
 from .shell import _kill
 from .grep import worker_source
 
@@ -220,6 +224,11 @@ class GlobTool(Tool):
         path: str | None = None,
         max_results: int = MAX_GLOB_RESULTS,
     ) -> ToolResult:
+        cancelled = threading.Event()
+        return await run_blocking(self._scan, pattern, path, max_results, cancelled, on_cancel=cancelled.set)
+
+    def _scan(self, pattern: str, path: str | None, max_results: int,
+              cancelled: threading.Event) -> ToolResult:
         try:
             base = self.workspace.resolve(path) if path else self.workspace.root
         except WorkspaceError as exc:
@@ -233,25 +242,33 @@ class GlobTool(Tool):
         match_root = self.workspace.root
         if not self.workspace.contains(base):
             match_root = base if base.is_dir() else base.parent
-        matches = [
-            (entry, is_dir)
-            for entry, is_dir in self.workspace.iter_entries(base)
-            if _matches_glob(entry.relative_to(match_root).as_posix(), pattern)
-        ]
-        matches.sort(key=lambda pair: self.workspace.relative(pair[0]))
+        count = 0
 
-        if not matches:
+        def matches() -> Iterator[tuple[str, bool]]:
+            nonlocal count
+            for entry, is_dir in self.workspace.iter_entries(base):
+                if cancelled.is_set():
+                    return
+                if _matches_glob(entry.relative_to(match_root).as_posix(), pattern):
+                    count += 1
+                    yield self.workspace.relative(entry), is_dir
+
+        # Keep only the displayed paths, while retaining the exact total count
+        # and lexicographic order on arbitrarily large directory trees.
+        shown = heapq.nsmallest(min(max_results, MAX_GLOB_RESULTS), matches(), key=lambda pair: pair[0])
+        if cancelled.is_set():
+            return ToolResult.error("Glob scan cancelled.")
+        if not count:
             return ToolResult.ok(
                 f"No paths matching {pattern!r} under {self.workspace.relative(base)}."
             )
 
-        shown = matches[:min(max_results, MAX_GLOB_RESULTS)]
         lines = [
-            self.workspace.relative(entry) + ("/" if is_dir else "")
+            entry + ("/" if is_dir else "")
             for entry, is_dir in shown
         ]
-        header = f"{len(matches)} path(s) matching {pattern!r}"
-        if len(matches) > len(shown):
+        header = f"{count} path(s) matching {pattern!r}"
+        if count > len(shown):
             header += f" (showing first {len(shown)})"
         return ToolResult.ok(header + "\n" + "\n".join(lines))
 

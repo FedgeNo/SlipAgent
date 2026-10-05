@@ -984,7 +984,8 @@ async def test_mutating_commands_wait_until_turn_finishes(tmp_path, monkeypatch,
     session.agent.running = True
     try:
         await _handle_command(session, command)
-        assert "after this turn" in out.getvalue()
+        assert "Queued /" in out.getvalue()
+        assert session.extensions["deferred_commands"] == [command]
         assert session.agent.messages
         assert session.api_key == "test"
     finally:
@@ -1044,7 +1045,7 @@ async def test_menu_dispatch_preserves_command_checks(tmp_path, monkeypatch, met
         if selection == "/tools":
             assert "read_file" in output.getvalue()
         elif selection == "/reset":
-            assert "after this turn" in output.getvalue()
+            assert "Queued /reset" in output.getvalue()
             assert session.agent.messages
         elif selection == "/models":
             tasks = list(session.extensions["command_tasks"])

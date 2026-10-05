@@ -151,6 +151,7 @@ src/slipagent/
 ├── mcp.py            persistent stdio MCP connections
 └── tools/
     ├── base.py       tool contract, argument validation, registry
+    ├── blocking.py   owned worker threads for synchronous filesystem operations
     ├── files.py      read_file, write_file, edit_file
     ├── editing.py    atomic replacement planning, diagnostics, bounded diffs
     ├── search.py     grep, glob
@@ -372,7 +373,8 @@ absolute storage path and saved IDs. `SLIPAGENT_STATE_DIR` overrides the storage
 root. Journals and logs may contain private project text; configuration API
 keys are not included in their metadata.
 
-Use `/resume` while idle to choose a saved session by title and date. Up/Down
+Use `/resume` to choose a saved session by title and date. During work it queues
+until the current response and tool batch finish. Up/Down
 moves through the list, scrolling at either edge; Enter restores the selection
 and Escape cancels. The current session is marked in the list.
 You can also use `/resume <id>` or `/resume latest`, or launch with
@@ -419,8 +421,8 @@ In the REPL:
 | --- | --- |
 | `/help` | Show command help |
 | `/menu` | Open the command menu in the input area; Up/Down move, Enter selects, Escape closes |
-| `/danger` or `/danger on` | Disable workspace path confinement for this process (idle only) |
-| `/danger off` | Restore workspace path confinement (idle only) |
+| `/danger` or `/danger on` | Disable workspace path confinement; queues while working |
+| `/danger off` | Restore workspace path confinement; queues while working |
 | `/danger status` | Show the current access mode |
 | `/tools` | List available tools |
 | `/model` | Show the active model |
@@ -437,8 +439,8 @@ In the REPL:
 | `/task new` | Make the next prompt a new task, retaining previous history and command logs |
 | `/rename <name>` | Save this conversation's name and set its terminal title to `{name} \| SlipAgent` |
 | `/sessions` | List saved sessions for this project's path |
-| `/resume` | Choose a saved session with Up/Down and Enter; Escape cancels (interactive terminal, idle only) |
-| `/resume <id>` or `/resume latest` | Restore a saved conversation and its scrolling transcript at the end, while idle; no tools are replayed |
+| `/resume` | Choose a saved session with Up/Down and Enter; Escape cancels (interactive terminal; queues while working) |
+| `/resume <id>` or `/resume latest` | Restore a saved conversation and its scrolling transcript at the end; queues while working; no tools are replayed |
 | `/requests [attempt]` | List the latest 20 request attempts, or inspect one exact request and its outcome |
 | `/mcp` | Show MCP servers, their status, and the tools they contribute |
 | `/mcp add <name> <cmd> [args…]` | Connect a server over stdio for this session only |
@@ -520,10 +522,17 @@ anything, preserving your draft and scroll position. Selecting an item runs its
 usual slash command, including the same restrictions while the agent is working.
 Commands that need arguments are still entered at the normal prompt.
 
+State-changing commands queue in order while the agent works. They apply after
+the current response and complete tool batch finish. Settings changes then resume
+the task without resetting its request limit. `/stop` prevents automatic
+continuation; reset, resume, and `/task new` replace the task instead of restarting
+the previous work. Slash commands are never sent to the model as user messages.
+
 `/danger` enables access outside the workspace for built-in file, search,
 navigation, and Git tools. `/danger off` restores confinement; `/danger status`
-reports the mode. Changes take effect while idle, so an in-flight tool batch
-keeps one access policy. While active, the bottom readout ends with
+reports the mode. During work, changes queue until the current response and
+complete tool batch finish, keeping that batch on one access policy.
+While active, the bottom readout ends with
 `| Danger Mode` in red. The current mode is supplied to the model on every request.
 The working directory and relative-path base stay the same. OS permissions and
 the tools' validation, atomic writes, and resource limits still apply.

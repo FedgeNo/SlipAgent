@@ -341,7 +341,10 @@ class ToolRegistry:
         try:
             instructions = self.services.get("project_instructions")
             if instructions is not None:
-                problem = instructions.guard(tool, raw_arguments)
+                # Resolve the accepted helper at dispatch: this registry is a
+                # stable contract, while its I/O runner is reloadable behavior.
+                from .blocking import run_blocking
+                problem = await run_blocking(instructions.guard, tool, raw_arguments)
                 if problem is not None:
                     return ToolResult.error(problem)
             result = await tool.invoke(raw_arguments)

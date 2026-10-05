@@ -241,6 +241,20 @@ separate notice chunk and indexed display rows without reformatting surrounding
 history, then adjusts scroll and pinned-prompt indices. Identical queued prompts
 are acknowledged in arrival order. Plain stdout remains an append-only log.
 
+Synchronous file reads, edits, writes, listings, glob scans, and instruction
+preflight checks run in owned worker threads. The terminal event loop remains
+available during filesystem waits. Cancellation drains each worker before
+propagating; glob scans also receive a cooperative cancellation signal. Atomic
+edits finish before their owner releases the batch boundary. Async HTTP, MCP,
+and subprocess operations retain their event-loop resources.
+
+State-changing slash commands queue in FIFO order while work is active. The
+agent finishes its response and whole tool batch, then applies commands while
+idle. Settings changes resume the same work with its original request budget
+and repetition guard. Explicit stop/exit prevents that automatic continuation;
+reset, resume, and starting a new task do not restart the replaced task. Command
+text remains outside model history and session journals.
+
 `/stop` finishes the active response and entire tool batch and prevents another
 working model request. The completed turn can still be summarized in the
 background. It does not kill that batch's processes. `/quit` finishes the active
@@ -250,6 +264,11 @@ prompt on resumption. Timeout cleanup of an individual process is a separate
 mechanism from these session controls.
 
 ## History and Task State
+
+The working prompt asks for explicit findings, evidence, decisions, uncertainties,
+and next steps in each response, including tool-call turns. These responses remain
+in working history and their important conclusions are preserved in summaries.
+Private reasoning is not supplied back to the working model or to the compactor.
 
 `TurnPost` extends `HistoryPost` with independent `user_prompt`, `agent_response`,
 `reasoning`, `tool_calls`, and `tool_results` references, plus one whole-turn `summary` and a
@@ -617,7 +636,8 @@ to the model along with the active generation number.
   The frozen workspace retains its root and owns a mutable `WorkspaceAccess`
   object shared by all tools and session services. `/danger` and `--danger` lift
   only the path boundary; `contains` still answers geometric containment and
-  external display paths remain absolute. Changes are idle-only. Reset, resume,
+  external display paths remain absolute. Changes queue during work and apply
+  after the active response and tool batch finish. Reset, resume,
   and compatible component reloads preserve this process setting; journals do
   not restore it. Each request supplies a current Workspace Access section, and
   the footer reserves room for a red `| Danger Mode` suffix when active.

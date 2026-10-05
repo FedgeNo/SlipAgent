@@ -137,6 +137,21 @@ code to fix. Sequencing is for real dependencies, not caution.
 Keep predictable calls together in the same turn rather than making one call
 per turn and narrating between calls. Split a batch only for a real dependency.
 
+   Report the key findings and conclusions you have reached on each turn,
+including turns that request tools. Be detailed enough to preserve useful
+information: relevant paths and identifiers, evidence, actual tool outcomes,
+decisions, remaining uncertainty, and the next action. Explain what you learned
+and how it changes the approach instead of only saying that you will read or
+inspect something. If there are no findings yet, explain the purpose of the
+requested batch without inventing results.
+
+   Your private reasoning is not supplied back to you on later turns.
+Conclusions left only in that reasoning will be lost. Put task-relevant findings
+in the accompanying response so they are available in the next turn and its
+eventual summary. Preserve the conclusions and supporting facts, not a transcript
+of your private thoughts. Clearly distinguish completed actions from plans and
+tool calls whose results have not arrived.
+
 4. Read project instructions before any other project work: `CLAUDE.md`,
 `AGENTS.md`, `.cursorrules`, and other applicable guidance. Root and visited
 directory instructions refresh before each request. Before changing files in a subdirectory,
@@ -242,7 +257,8 @@ request is ambiguous or destructive.
 - If a tool reports an error, read it and correct course rather than retrying
 the identical call.
 
-- Be clear and concise. Brief explanations alongside tool calls are welcome.
+- Be clear and informative. Give enough detail to preserve the main conclusions
+and key information you gathered each turn, including alongside tool calls.
 """
 
 def build_system_prompt(workspace: str, *, project_instructions: str = "") -> str:
@@ -619,8 +635,8 @@ class Agent:
         if self.on_event is not None:
             self.on_event(event)
 
-    async def run(self, prompt: str) -> str:
-        """Process one user turn to completion and return the final text."""
+    async def run(self, prompt: str, *, continue_run: bool = False) -> str:
+        """Run a task; continue_run retains limits after a settings pause."""
         if self.running:
             raise RuntimeError("agent is already running")
         # Corrections queued before an API/protocol failure are older than this
@@ -628,9 +644,11 @@ class Agent:
         self._drain_pending()
         self.stop_requested = False
         self.stopped = False
-        self._requests = 0
+        if not continue_run:
+            self._requests = 0
         self._stop_event().clear()
-        self._loop_guard().reset()
+        if not continue_run:
+            self._loop_guard().reset()
         self.registry.context_notes.pop("progress", None)
         self.running = True
         try:
@@ -650,7 +668,7 @@ class Agent:
         if prompt:
             self.messages.append(Message.user(prompt))
         self._persist()
-        for step in range(1, self.max_steps + 1):
+        for step in range(self._requests + 1, self.max_steps + 1):
             if self.on_boundary is not None:
                 await self.on_boundary()
             if self.stop_requested:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ..workspace import Workspace, WorkspaceError
 from .base import Tool, ToolResult
+from .blocking import run_blocking
 
 MAX_ENTRIES = 300
 
@@ -31,6 +32,9 @@ class ListDirTool(Tool):
         self.workspace = workspace
 
     async def run(self, path: str | None = None) -> ToolResult:
+        return await run_blocking(self._list, path)
+
+    def _list(self, path: str | None) -> ToolResult:
         try:
             target = self.workspace.resolve(path) if path else self.workspace.root
         except WorkspaceError as exc:

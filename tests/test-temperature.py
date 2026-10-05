@@ -123,6 +123,7 @@ async def test_temperature_changes_wait_for_idle_but_readout_stays_available(tmp
         session.agent.running = True
         await _handle_command(session, "/temperature 0.5")
         assert session.agent.temperature is None
-        assert "use it after this turn finishes" in session.renderer.stream.getvalue()
+        assert "Queued /temperature" in session.renderer.stream.getvalue()
+        assert session.extensions["deferred_commands"] == ["/temperature 0.5"]
         await _handle_command(session, "/temperature")
         assert "temperature: 0.2 (default)" in session.renderer.stream.getvalue()

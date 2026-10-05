@@ -16,6 +16,7 @@ from pathlib import Path
 
 from ..workspace import Workspace, WorkspaceError
 from .base import Tool, ToolResult
+from .blocking import run_blocking
 from .editing import apply_edits, edit_diff
 
 # Guard rails so a stray path or runaway file cannot blow up the context window.
@@ -135,6 +136,9 @@ class ReadFileTool(Tool):
         offset: int = 1,
         limit: int = MAX_READ_LINES,
     ) -> ToolResult:
+        return await run_blocking(self._read, path, offset, limit)
+
+    def _read(self, path: str, offset: int, limit: int) -> ToolResult:
         try:
             target = self.workspace.resolve(path)
         except WorkspaceError as exc:
@@ -211,6 +215,9 @@ class WriteFileTool(Tool):
         self.workspace = workspace
 
     async def run(self, path: str, content: str) -> ToolResult:
+        return await run_blocking(self._write, path, content)
+
+    def _write(self, path: str, content: str) -> ToolResult:
         try:
             target = self.workspace.resolve(path)
         except WorkspaceError as exc:
@@ -291,6 +298,10 @@ class EditFileTool(Tool):
         replace_all: bool = False,
         edits: list[dict[str, str]] | None = None,
     ) -> ToolResult:
+        return await run_blocking(self._edit, path, old_string, new_string, replace_all, edits)
+
+    def _edit(self, path: str, old_string: str | None, new_string: str | None,
+              replace_all: bool, edits: list[dict[str, str]] | None) -> ToolResult:
         if edits is not None:
             if old_string is not None or new_string is not None or replace_all:
                 return ToolResult.error("Use either edits or old_string/new_string/replace_all, never both.")

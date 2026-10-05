@@ -34,6 +34,10 @@ Preserve the user's objective and constraints, important paths/identifiers,
 actions and their actual outcomes, errors, verification, decisions, and any
 unfinished work explicitly stated. Distinguish plans from completed actions.
 
+Preserve key findings and conclusions stated in the agent response, including
+the specific evidence or identifiers needed to continue without rediscovering
+them. Never infer or reconstruct private thoughts that were not supplied.
+
 Do not infer missing history or invent outcomes. Keep short turns very short.
 """
 

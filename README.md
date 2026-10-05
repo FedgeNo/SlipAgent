@@ -53,7 +53,7 @@ slipagent --model nvidia/nemotron-3.5-lightning:free
 For another project or a single task:
 
 ```bash
-slipagent --workspace ~/code/myproject --model nvidia/nemotron-3-super-120b-a12b:free
+slipagent --workspace /absolute/path/to/myproject --model nvidia/nemotron-3.5-lightning:free
 slipagent --model nvidia/nemotron-3.5-lightning:free -p "add type hints to src/parser.py and run the tests"
 ```
 
@@ -128,6 +128,7 @@ src/slipagent/
 ├── jobs.py           session-owned background commands and job controls
 ├── lsp.py            optional configured language-server navigation
 ├── context.py        rolling context, summaries, original-post retrieval
+├── records.py        separate JSON input records for history and current input
 ├── budget.py         measured input-token calibration
 ├── sessions.py       append-only session journals and safe resume
 ├── repomap.py        bounded, cached repository orientation
@@ -136,7 +137,7 @@ src/slipagent/
 ├── activity.py       throttled command-output callbacks
 ├── protocol.py       ordinary replies, optional schemas, call normalization
 ├── compaction.py     isolated background summaries of completed turns
-├── task.py           active goal, constraints, source references, recovery gate
+├── task.py           retained user prompt, active goal, constraints, source references
 ├── environment.py    project settings and Python interpreter validation
 ├── openrouter.py     async API client, retries, model/key information
 ├── capabilities.py   endpoint selection, native tools, JSON/reasoning, limits
@@ -250,7 +251,7 @@ acquiring resources, because candidates execute before acceptance. Terminal
 callbacks should dispatch through current object methods rather than holding
 old bound methods. A reload validates compatibility; it does not prove the new
 code is correct. Run tests and strict type checking before treating a change
-as finished. Read [AGENTS.md](AGENTS.md) for project guidance and the
+as finished. Read any local `AGENTS.md` for project guidance and the
 [contributor guide](CONTRIBUTING.md) and [internal contracts](docs/architecture.md)
 for the implementation workflow, state ownership, and failure behavior.
 
@@ -272,6 +273,7 @@ export OPENROUTER_API_KEY="sk-or-..."
 | `OPENROUTER_REFERER` | — | Optional app-attribution URL. |
 | `OPENROUTER_TITLE` | `slipagent` | Optional app-attribution name. |
 | `SLIPAGENT_WORKSPACE` | `.` | Default project directory. |
+| `SLIPAGENT_STATE_DIR` | Expanded user-home `.SlipAgent` directory | Root for saved sessions, titles, request diagnostics, and command logs. |
 | `SLIPAGENT_NO_DOTENV` | — | Set to `1` to ignore `.env` entirely. |
 
 `.env` is loaded automatically, searched upward from the current directory and
@@ -301,7 +303,7 @@ against the workspace; absolute paths allow an intentionally shared environment.
 On Windows, use a path such as `.venv/Scripts/python.exe`. A startup override wins:
 
 ```bash
-slipagent --workspace ~/code/myproject --python .venv/bin/python
+slipagent --workspace /absolute/path/to/myproject --python .venv/bin/python
 ```
 
 Without an explicit selection, SlipAgent inspects `.venv` and `venv` in the
@@ -407,7 +409,7 @@ Interactive REPL — a multi-turn session with conversation state:
 
 ```bash
 slipagent --model nvidia/nemotron-3.5-lightning:free
-slipagent --workspace ~/code/myproject --model nvidia/nemotron-3-super-120b-a12b:free
+slipagent --workspace /absolute/path/to/myproject --model nvidia/nemotron-3.5-lightning:free
 ```
 
 In the REPL:
@@ -619,17 +621,20 @@ across model switches and applies wherever the selected endpoints support it.
 SlipAgent uses [OpenRouter's native tool-call format](https://openrouter.ai/docs/guides/features/tool-calling)
 when the selected endpoints advertise `tools`. Tool definitions go in the API's
 `tools` parameter; calls arrive in `message.tool_calls`, separately from the
-response text. The harness preserves call IDs and returns one `role: "tool"`
-message with the matching `tool_call_id` for every executed call. It does not
-require calls to be written into a custom response string when native calling
-is available, and it does not force a `tool_choice` setting.
+response text. The harness preserves each call ID and stores its result with
+the matching `call_id` in that turn's `tool_results` array. The next request
+supplies the completed turn as a JSON input record, including each result's
+tool name, success/error status, and content. Native calls remain the model's
+response format; the JSON records describe completed history. SlipAgent does
+not force a `tool_choice` setting.
 
-Startup and every explicit `/model <slug>` selection fetch live catalog and
-endpoint metadata. The selected native-tool mode, JSON mode, reasoning settings,
-and limits are cached between calls. Selection prefers native-capable endpoints;
+The selected response/tool format stays consistent between calls, including
+retries, until another model selection. Endpoint metadata, including reasoning
+support and provider limits, remains cached between selections.
+Selection prefers native-capable endpoints;
 models without them can use the JSON call format below if they support JSON
-output. Their tool definitions and prior tool activity are supplied as text,
-without sending unsupported native tool parameters or message roles.
+output. Their tool definitions enter the system prompt, and their history uses
+the same JSON input records, without unsupported native tool parameters.
 
 **Models without schema support can reply normally.** They receive no
 `response_format` parameter and need no JSON content record. A native tool call
@@ -800,8 +805,9 @@ returns a concise plain-text summary, limited to 6,000 characters. Short turns
 should get short summaries. The working model continues without waiting.
 
 Unseen tool results reach the next working request even if their summary has
-already finished. An oversized new batch uses clearly labelled excerpts with
-retrieval instructions as a last resort. The latest request stays verbatim.
+already finished. An oversized new batch uses JSON excerpt records with separate
+omission metadata and retrieval instructions as a last resort. The latest request
+stays verbatim.
 Neither excerpts nor summaries overwrite any captured originals.
 
 Pending or failed summaries are labelled in context with a retrieval reference.
@@ -1119,7 +1125,7 @@ workspace/configuration and can make real API requests and tool changes.
 [CONTRIBUTING.md](CONTRIBUTING.md) gives humans and agents an end-to-end change
 workflow. [docs/architecture.md](docs/architecture.md) describes lifecycle,
 context ordering, validation, source recovery, storage, and reload contracts.
-Read applicable project instructions, including [AGENTS.md](AGENTS.md), first.
+Read applicable local project instructions, including `AGENTS.md`, first.
 Keep behavior in
 reloadable components, preserve persistent state layouts, and use relative
 imports so a candidate generation stays coherent. Add behavior tests, run the

@@ -80,7 +80,7 @@ async def test_model_switch_omits_unsupported_temperature_and_retains_setting(tm
         await _handle_command(session, "/temperature 0.5")
         assert session.agent.temperature == 0.1
         assert "temperature control is unavailable" in session.renderer.stream.getvalue()
-        assert "\x1b[38;2;255;0;0m" in session.renderer.stream.getvalue()
+        assert "\x1b[38;2;255;102;102m" in session.renderer.stream.getvalue()
         await session.agent.run("First task")
         await _model_command(session, "adjustable", session.renderer.style, io.StringIO())
         await session.agent.run("Second task")

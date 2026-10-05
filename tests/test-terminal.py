@@ -344,7 +344,7 @@ async def test_danger_status_suffix_is_red_last_and_survives_resize(display, tmp
             await wait_until(lambda: snapshot()[23].rstrip().endswith(" | Danger Mode"))
             assert snapshot()[23].index("free: 42") < snapshot()[23].index("Danger Mode")
             start = snapshot()[23].index("Danger Mode")
-            assert all(screen.buffer[23][column].fg == "ff0000" for column in range(start, start + len("Danger Mode")))
+            assert all(screen.buffer[23][column].fg == "ff6666" for column in range(start, start + len("Danger Mode")))
             choice = asyncio.create_task(ui.choose("Commands", [("one", "One")]))
             await wait_until(lambda: "Commands" in snapshot()[18])
             assert snapshot()[23].rstrip().endswith(" | Danger Mode")
@@ -480,7 +480,7 @@ async def test_latest_user_prompt_pins_at_top_and_releases_on_next_prompt(displa
             ui.write("\n".join(f"result {i}" for i in range(50)))
             await wait_until(lambda: snapshot()[0].rstrip() == "> Keep the original task visible")
             assert "result 49" in "\n".join(snapshot()[1:17])
-            assert screen.buffer[0][0].fg == "00ff00"
+            assert screen.buffer[0][0].fg == "66ff66"
             assert "unfinished draft" in snapshot()[19]
             assert "readout" in snapshot()[23]
 
@@ -545,7 +545,7 @@ async def test_pinned_prompt_follows_scrollback_in_both_directions(display):
             # A wheel event on the header crosses back into the previous task.
             pipe.send_text("\x1b[<64;1;1M")
             await wait_until(lambda: snapshot()[0].rstrip() == "> Second task")
-            assert screen.buffer[0][0].fg == "00ff00"
+            assert screen.buffer[0][0].fg == "66ff66"
             pipe.send_text("\x1b[<65;1;1M")
             await wait_until(lambda: snapshot()[0].rstrip() == "> Third task")
 
@@ -578,7 +578,7 @@ async def test_pinned_prompt_truncates_resizes_and_survives_context_view_and_ref
             ui.write("\n".join(f"output {i}" for i in range(50)))
             await wait_until(lambda: snapshot()[0].rstrip() == "> alpha beta gamma…")
             assert snapshot()[1].startswith("output ")
-            assert screen.buffer[0][0].fg == "00ff00"
+            assert screen.buffer[0][0].fg == "66ff66"
             size[0] = Size(rows=24, columns=40)
             screen.resize(lines=24, columns=40)
             ui.app.invalidate()
@@ -659,18 +659,22 @@ def test_pinned_prompt_ellipsis_preserves_words_and_graphemes(display, prompt, w
             ui.close()
 
 
-async def test_pinned_line_requires_green_prompt_prefix_and_survives_reload(display):
+@pytest.mark.parametrize("ansi_color", [
+    pytest.param("38;2;0;255;0", id="saved-green"),
+    pytest.param("38;2;102;255;102", id="light-green"),
+])
+async def test_pinned_line_requires_green_prompt_prefix_and_survives_reload(display, ansi_color):
     sink, _, output, screen, snapshot = display
     with create_pipe_input() as pipe:
         ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
         task = asyncio.create_task(ui.run())
         try:
             # No renderer metadata: selection comes from the styled transcript.
-            ui.write("\x1b[38;2;0;255;0m> Saved task\x1b[0m\n")
-            ui.write("> Ordinary quote\n\x1b[38;2;0;255;0mGreen without marker\x1b[0m\n")
+            ui.write(f"\x1b[{ansi_color}m> Saved task\x1b[0m\n")
+            ui.write(f"> Ordinary quote\n\x1b[{ansi_color}mGreen without marker\x1b[0m\n")
             ui.write("\n".join(f"output {i}" for i in range(40)))
             await wait_until(lambda: snapshot()[0].rstrip() == "> Saved task")
-            assert screen.buffer[0][0].fg == "00ff00"
+            assert screen.buffer[0][0].fg == "66ff66"
             # Rebuild from the file, as for a session without prompt metadata.
             for name in ("_pinned_prompt", "_prompt_pending"):
                 del ui.__dict__[name]
@@ -724,12 +728,12 @@ async def test_restored_transcript_replaces_output_and_scrolls_to_end(display):
             assert "read_file" in recorded and "Saved tool failure" in recorded
             assert '{"status": [], "data": "Legacy tool output"}' in recorded
             assert "\x1b[38;2;255;0;255m" in recorded
-            assert "\x1b[38;2;255;0;0m" in recorded
+            assert "\x1b[38;2;255;102;102m" in recorded
             assert [message.to_api() for message in messages] == original
             ui._scroll_output(-1000)
             await wait_until(lambda: "Saved first answer" in "\n".join(snapshot()[:17]))
             assert snapshot()[0].rstrip() == "> Saved first task"
-            assert screen.buffer[0][0].fg == "00ff00"
+            assert screen.buffer[0][0].fg == "66ff66"
             await renderer.restore_transcript(messages, ["Queued correction"])
             await wait_until(lambda: "> Queued correction" in "\n".join(snapshot()[:17]))
             assert "queued" in "\n".join(snapshot()[:17])
@@ -1199,7 +1203,7 @@ async def test_streaming_chunks_wrap_reflow_and_keep_the_footer_and_draft(displa
             await wait_until(lambda: "Thinking: Starting again." in "\n".join(snapshot()[:17]))
             rows = snapshot()
             row = next(index for index, value in enumerate(rows) if "Response rejected" in value)
-            assert screen.buffer[row][2].fg == "ff0000"
+            assert screen.buffer[row][2].fg == "ff6666"
             assert "draft" in rows[19]
             assert rows[17].strip() == ""
             assert rows[22].strip() == ""
@@ -1222,12 +1226,15 @@ async def test_requested_colors_apply_to_user_input_tool_calls_and_errors(displa
             renderer.handle(AgentEvent(kind="tool_start", tool_call=ToolCall("call", "list_dir")))
             renderer.handle(AgentEvent(kind="tool_end", result=ToolResult.error("tool failed")))
             renderer.handle(AgentEvent(kind="warning", text="request failed"))
+            renderer.emit(renderer.style.dim("muted detail"))
+            renderer.emit("white detail")
             await wait_until(lambda: "request failed" in "\n".join(snapshot()[:17]))
             pipe.send_text("draft")
             await wait_until(lambda: "draft" in snapshot()[19])
             for text, expected in [
-                ("> request", "00ff00"), ("list_dir", "ff00ff"),
-                ("tool failed", "ff0000"), ("request failed", "ff0000"), ("draft", "00ff00"),
+                ("> request", "66ff66"), ("list_dir", "ff00ff"),
+                ("tool failed", "ff6666"), ("request failed", "ff6666"), ("draft", "66ff66"),
+                ("muted detail", "aaaaaa"), ("readout", "aaaaaa"), ("white detail", "default"),
             ]:
                 rows = snapshot()
                 row = next(index for index, value in enumerate(rows) if text in value)

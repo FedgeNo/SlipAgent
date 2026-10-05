@@ -1279,7 +1279,7 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             os.write(master, b"/danger\r")
             wait_for(lambda: screen.display[23].rstrip().endswith(" | Danger Mode"))
             start = screen.display[23].index("Danger Mode")
-            assert all(screen.buffer[23][column].fg == "ff0000" for column in range(start, start + len("Danger Mode")))
+            assert all(screen.buffer[23][column].fg == "ff6666" for column in range(start, start + len("Danger Mode")))
             os.write(master, b"/danger off\r")
             wait_for(lambda: "Danger Mode" not in screen.display[23])
             os.write(master, b"/menu\r")

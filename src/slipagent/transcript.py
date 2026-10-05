@@ -18,6 +18,7 @@ from typing import overload
 
 from prompt_toolkit.formatted_text import ANSI, StyleAndTextTuples
 from wcwidth import width as display_width, wrap
+from .palette import USER_COLOR
 
 
 class TranscriptFile(Sequence[str]):
@@ -154,8 +155,9 @@ class WrappedTranscript:
         self.rows.append(json.dumps(row, ensure_ascii=False))
 
     def _starts_prompt(self) -> bool:
+        # Saved transcripts can still carry the original green palette.
         return bool(self._pending and self._pending[0][1] == ">"
-                    and "#00ff00" in self._pending[0][0].lower().split())
+                    and {USER_COLOR, "#00ff00"}.intersection(self._pending[0][0].lower().split()))
 
     def prompt_at(self, row: int) -> tuple[int, int] | None:
         """Nearest preceding green > line, including all its wrapped rows."""

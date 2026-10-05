@@ -42,6 +42,7 @@ from .tools import build_default_registry
 from .types import KeyInfo, Message, ModelInfo
 from .workspace import Workspace, WorkspaceError
 from .terminal import TerminalUI
+from .palette import ERROR_COLOR, MUTED_COLOR, USER_COLOR, foreground_code
 from .runtime import RuntimeFrame
 from .task import TaskMemory
 from .sessions import SessionJournal, SessionError, session_title
@@ -157,16 +158,16 @@ class Style:
         return f"\033[{code}m{text}\033[0m" if self.enabled else text
 
     def dim(self, text: str) -> str:
-        return self._wrap("2", text)
+        return self._wrap(foreground_code(MUTED_COLOR), text)
 
     def bold(self, text: str) -> str:
         return self._wrap("1", text)
 
     def red(self, text: str) -> str:
-        return self._wrap("38;2;255;0;0", text)
+        return self._wrap(foreground_code(ERROR_COLOR), text)
 
     def green(self, text: str) -> str:
-        return self._wrap("38;2;0;255;0", text)
+        return self._wrap(foreground_code(USER_COLOR), text)
 
     def magenta(self, text: str) -> str:
         return self._wrap("38;2;255;0;255", text)

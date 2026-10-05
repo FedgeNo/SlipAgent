@@ -31,6 +31,7 @@ from prompt_toolkit.widgets import TextArea
 from wcwidth import iter_graphemes, width as display_width, wrap
 
 from .transcript import TranscriptFile, WrappedTranscript
+from .palette import MUTED_COLOR, USER_COLOR
 
 FOOTER_ROWS = 6
 PULSE_FRAMES = ("·", "•", "●", "•")
@@ -492,7 +493,7 @@ class TerminalUI:
 
     def _style(self) -> Style:
         return Style.from_dict({
-            "status": "dim", "pulse": "bold ansicyan", "idle": "dim", "user": "#00ff00",
+            "status": MUTED_COLOR, "pulse": "bold ansicyan", "idle": MUTED_COLOR, "user": USER_COLOR,
             "context-system": "#ffff00",
             "menu-title": "bold", "menu-selected": "reverse bold",
         })

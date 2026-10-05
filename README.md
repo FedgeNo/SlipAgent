@@ -142,6 +142,7 @@ src/slipagent/
 ├── openrouter.py     async API client, retries, model/key information
 ├── capabilities.py   endpoint selection, native tools, JSON/reasoning, limits
 ├── terminal.py       prompt, transcript, layout, key bindings, styles
+├── palette.py        shared terminal colors and ANSI foreground codes
 ├── transcript.py     file-backed transcript and incremental word wrapping
 ├── instructions.py   project guidance discovery before model activity
 ├── config.py         configuration resolution
@@ -588,7 +589,7 @@ external polling can use `run_command` with `poll=true`; command-log polling and
 task bookkeeping do not trigger the guard.
 
 Readable reasoning supplied through a separate provider field streams under a
-dimmed `Thinking:` label. Each response's reasoning is concatenated into one
+gray `Thinking:` label. Each response's reasoning is concatenated into one
 string and saved with that turn's uncompressed originals. Existing history is
 not rewritten. Reasoning is excluded from all working context, including recent
 full turns, and from background compression requests. It remains available through

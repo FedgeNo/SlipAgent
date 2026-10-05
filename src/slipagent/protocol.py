@@ -112,7 +112,17 @@ def response_format(has_previous_results: bool, *, native_tools: bool = False) -
     """Require reply, actions, three summaries, and the active-task record."""
     properties: dict[str, Any] = {
         "task": task_schema(),
-        "response": {"type": "string", "description": "Plain terminal text for the user; empty only when requesting tools."},
+        "response": {
+            "type": "string",
+            "description": (
+                "Plain terminal text for the user.\n\n"
+                "Report important findings from tool results received from the previous turn "
+                "and the conclusions or decisions based on them.\n\n"
+                "When requesting new tools, state the requested actions and their purpose. "
+                "Their findings belong in the next turn, after their results arrive.\n\n"
+                "This response provides memory for future turns; private reasoning is not supplied back to you."
+            ),
+        },
         "tool_calls": {
             "type": "array", "description": "Ordered tools to execute after validation; [] for a final answer.",
             "items": {

@@ -116,10 +116,10 @@ def response_format(has_previous_results: bool, *, native_tools: bool = False) -
             "type": "string",
             "description": (
                 "Plain terminal text for the user.\n\n"
-                "Report important findings from tool results received from the previous turn "
-                "and the conclusions or decisions based on them.\n\n"
-                "When requesting new tools, state the requested actions and their purpose. "
-                "Their findings belong in the next turn, after their results arrive.\n\n"
+                "Report important findings from any previous tool calls whose results are available, "
+                "including the conclusions or decisions based on them.\n\n"
+                "State your intentions and purpose for any new tool calls you request. "
+                "Report findings from those new calls only after their results arrive.\n\n"
                 "This response provides memory for future turns; private reasoning is not supplied back to you."
             ),
         },

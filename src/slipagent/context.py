@@ -61,12 +61,11 @@ Use the native API tools supplied with this request. Request the whole
 predictable batch together; calls run in order. Their outcomes appear in the next
 request's history_turn.tool_results, matched to tool_calls by call_id.
 
-On each turn, report the important findings from tool results received from the
-previous turn and explain any conclusions or decisions based on them. When
-requesting new tools, also state the actions you are requesting and their purpose.
-Those new calls have no results yet; report their findings on the next turn,
-after their results arrive. This response text provides memory for future turns;
-private reasoning is not supplied back to you.
+Report important findings from any previous tool calls whose results are
+available, including the conclusions or decisions based on them. State your
+intentions and purpose for any new tool calls you request. Report findings from
+those new calls only after their results arrive. This response text provides
+memory for future turns; private reasoning is not supplied back to you.
 
 Reply in ordinary plain text unless a response
 schema is explicitly supplied. Finish with a reply and no tool calls.

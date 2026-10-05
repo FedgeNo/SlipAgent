@@ -54,6 +54,10 @@ Context construction proceeds in this order:
    sections. Names are unique, owners and static/dynamic roles are explicit,
    and order is deterministic. Section registries belong to one request, so
    a rejected generation cannot leave global prompt registrations behind.
+   Prompt prose retains real newlines. Blank lines separate headings, topic
+   groups, task fields, tool guidance, examples, and assembled sections; source
+   wrapping must not erase those boundaries with backslash continuations.
+   Loaded instruction-file contents and original conversation text stay intact.
    The input uses a system prefix followed by JSON records. The inspector
    displays the final body rather than reconstructing it separately.
 3. Up to 100 older records precede the recent full window. Each

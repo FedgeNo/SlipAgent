@@ -166,12 +166,13 @@ class ReadCommandOutputTool(Tool):
     name = "read_command_output"
     progress_exempt = True  # Re-reading a log tail is deliberate polling.
     description = (
-        "Read retained shell/Git stdout or stderr without rerunning the command. "
-        "Use log_id from the result; offset counts UTF-8 bytes and limit counts characters. "
-        "Follow next_offset for subsequent pages, or use tail=true for the end. "
-        "Omit log_id to list logs, optionally filtered by post_id and call_id. "
-        "Quota/disk failures report lost bytes explicitly; those bytes cannot be retrieved. "
-        "Logs are saved with persistent sessions. With --no-session, /reset and exit delete them."
+        "Read retained shell/Git stdout or stderr without rerunning the command.\n\n"
+        "Use log_id from the result; offset counts UTF-8 bytes and limit counts characters.\n\n"
+        "Follow next_offset for subsequent pages, or use tail=true for the end.\n\n"
+        "Omit log_id to list logs, optionally filtered by post_id and call_id.\n\n"
+        "Quota/disk failures report lost bytes explicitly; those bytes cannot be retrieved.\n\n"
+        "Logs are saved with persistent sessions.\n\n"
+        "With --no-session, /reset and exit delete them."
     )
     parameters = {"type": "object", "properties": {
         "log_id": {"type": "string"}, "post_id": {"type": "integer", "minimum": 1},

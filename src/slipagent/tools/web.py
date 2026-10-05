@@ -128,10 +128,10 @@ def html_to_text(markup: str, *, base_url: str = "") -> tuple[str, str | None]:
 class WebSearchTool(Tool):
     name = "web_search"
     description = (
-        "Search the web and return ranked results with titles, URLs, and text "
-        "snippets. Use it for library documentation, error messages, API "
-        "references, and anything about code you have not seen before. Prefer "
-        "reading the most relevant result with fetch_page before concluding. "
+        "Search the web and return ranked results with titles, URLs, and text snippets.\n\n"
+        "Use it for library documentation, error messages, API references, and anything about code "
+        "you have not seen before.\n\n"
+        "Prefer reading the most relevant result with fetch_page before concluding.\n\n"
         "Requires an EXA_API_KEY."
     )
     parameters = {
@@ -250,9 +250,10 @@ class _PublicTransport(httpx.AsyncHTTPTransport):
 class FetchPageTool(Tool):
     name = "fetch_page"
     description = (
-        "Fetch a public URL over HTTP(S) and return its readable text, with scripts and "
-        "markup removed. Works on documentation, articles, and raw files; it does not run "
-        "JavaScript, so client-rendered pages may come back thin."
+        "Fetch a public URL over HTTP(S) and return its readable text, with scripts and markup "
+        "removed.\n\n"
+        "Works on documentation, articles, and raw files; it does not run JavaScript, so "
+        "client-rendered pages may come back thin."
     )
     parameters = {
         "type": "object",

@@ -101,7 +101,7 @@ async def check_edit_batch(registry: ToolRegistry, batch: list[tuple[ToolCall, T
             output = (stdout + "\n" + stderr).strip()
             if len(output) > 4000:
                 output = output[:3999] + "…"
-            reports.append(f"{check['name']}: {status}\n{output}" + ("\n" + log.notice() if log is not None else ""))
+            reports.append(f"{check['name']}: {status}\n\n{output}" + ("\n\n" + log.notice() if log is not None else ""))
         return "\n\n".join(reports)
     except Exception as exc:
         # Files have already changed; preserve their results even if settings or

@@ -32,16 +32,19 @@ MAX_OUTPUT_CHARS = 30_000
 class RunCommandTool(Tool):
     name = "run_command"
     description = (
-        "Run a shell command in the workspace root and return its output. Use it "
-        "to run tests, linters, type checkers, and builds, and to inspect files "
-        "that dedicated tools cannot read. The command runs under a non-login "
-        "shell, so prefer explicit paths. Long-running commands are killed at "
-        "the timeout. The observation shows at most 30000 characters per stream, "
-        "retaining the beginning and end. Session command logs retain full decoded "
-        "output within the configured disk quota; read_command_output retrieves "
-        "pages or tails using the returned log ID. Lost bytes are reported explicitly."
-        " Set background=true to return immediately with a managed job_id and log_id; "
-        "use command_jobs to check/wait/stop it. The same execution timeout still applies."
+        "Run a shell command in the workspace root and return its output.\n\n"
+        "Use it to run tests, linters, type checkers, and builds, and to inspect files that "
+        "dedicated tools cannot read.\n\n"
+        "The command runs under a non-login shell, so prefer explicit paths.\n\n"
+        "Long-running commands are killed at the timeout.\n\n"
+        "The observation shows at most 30000 characters per stream, retaining the beginning and "
+        "end.\n\n"
+        "Session command logs retain full decoded output within the configured disk quota; "
+        "read_command_output retrieves pages or tails using the returned log ID.\n\n"
+        "Lost bytes are reported explicitly.\n\n"
+        "Set background=true to return immediately with a managed job_id and log_id; use "
+        "command_jobs to check/wait/stop it.\n\n"
+        "The same execution timeout still applies."
     )
     parameters = {
         "type": "object",

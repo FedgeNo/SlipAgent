@@ -31,10 +31,10 @@ class GrepTool(Tool):
     instruction_path = "path"
     name = "grep"
     description = (
-        "Search file contents with a regular expression. Returns matching lines "
-        "as `path:line: text`. Use `include` as a glob to narrow the file set "
-        "(for example '*.py' or 'src/**/*.ts'). Use glob first to find files by "
-        "name; use grep to find where something is defined or used."
+        "Search file contents with a regular expression.\n\n"
+        "Returns matching lines as `path:line: text`.\n\n"
+        "Use `include` as a glob to narrow the file set (for example '*.py' or 'src/**/*.ts').\n\n"
+        "Use glob first to find files by name; use grep to find where something is defined or used."
     )
     parameters = {
         "type": "object",
@@ -183,10 +183,11 @@ class GlobTool(Tool):
     instruction_path = "path"
     name = "glob"
     description = (
-        "Find files and directories by name pattern. Patterns are matched "
-        "against the workspace-relative path (or relative to the searched directory "
-        "for external paths in danger mode), so '*.py', 'src/**/*.ts', and "
-        "'**/test_*.py' all work. Directories are shown with a trailing '/'."
+        "Find files and directories by name pattern.\n\n"
+        "Patterns are matched against the workspace-relative path (or relative to the searched "
+        "directory for external paths in danger mode), so '*.py', 'src/**/*.ts', and '**/test_*.py'"
+        " all work.\n\n"
+        "Directories are shown with a trailing '/'."
     )
     parameters = {
         "type": "object",

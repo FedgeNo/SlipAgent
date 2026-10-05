@@ -98,9 +98,11 @@ class ReadFileTool(Tool):
     instruction_path = "path"
     name = "read_file"
     description = (
-        "Read a text file allowed by the current Workspace Access mode. Returns numbered lines so they can "
-        "be cited; omit the displayed line numbers when calling edit_file. "
-        "Line endings are displayed as LF. Use offset/limit for large files. "
+        "Read a text file allowed by the current Workspace Access mode.\n\n"
+        "Returns numbered lines so they can be cited; omit the displayed line numbers when calling "
+        "edit_file.\n\n"
+        "Line endings are displayed as LF.\n\n"
+        "Use offset/limit for large files.\n\n"
         "Binary files are rejected."
     )
     parameters = {
@@ -192,9 +194,9 @@ class WriteFileTool(Tool):
     mutates_workspace = True
     name = "write_file"
     description = (
-        "Write a file, creating or overwriting it. Parent directories are created "
-        "automatically. Overwrites the whole file, so prefer edit_file for "
-        "changes to existing code."
+        "Write a file, creating or overwriting it.\n\n"
+        "Parent directories are created automatically.\n\n"
+        "Overwrites the whole file, so prefer edit_file for changes to existing code."
     )
     parameters = {
         "type": "object",
@@ -238,15 +240,16 @@ class EditFileTool(Tool):
     mutates_workspace = True
     name = "edit_file"
     description = (
-        "Replace an exact string in a file. old_string must match the file "
-        "verbatim and must be unique unless replace_all is true; include "
-        "surrounding lines to make it unique. Read the file first so old_string "
-        "is exact. LF in copied text also matches CRLF; existing line endings "
-        "are preserved outside the replacement. Omit read_file's line numbers. "
-        "Alternatively supply edits=[{old_string,new_string}, ...] for several "
-        "unique, non-overlapping replacements in this file. Every edit matches "
-        "the ORIGINAL file; all are validated before one atomic write. Choose "
-        "either edits or the single old_string/new_string pair, never both. "
+        "Replace an exact string in a file. old_string must match the file verbatim and must be "
+        "unique unless replace_all is true; include surrounding lines to make it unique.\n\n"
+        "Read the file first so old_string is exact.\n\n"
+        "LF in copied text also matches CRLF; existing line endings are preserved outside the "
+        "replacement.\n\n"
+        "Omit read_file's line numbers.\n\n"
+        "Alternatively supply edits=[{old_string,new_string}, ...] for several unique, "
+        "non-overlapping replacements in this file.\n\n"
+        "Every edit matches the ORIGINAL file; all are validated before one atomic write.\n\n"
+        "Choose either edits or the single old_string/new_string pair, never both.\n\n"
         "On failure no edits are applied; nearby source is a suggestion only."
     )
     parameters = {

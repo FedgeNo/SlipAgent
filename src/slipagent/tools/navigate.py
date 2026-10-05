@@ -13,9 +13,9 @@ class ListDirTool(Tool):
     instruction_path = "path"
     name = "list_dir"
     description = (
-        "List a directory allowed by the current Workspace Access mode. Directories are "
-        "listed first and marked with a trailing '/'. Use this to orient "
-        "yourself before glob, grep, or read_file."
+        "List a directory allowed by the current Workspace Access mode.\n\n"
+        "Directories are listed first and marked with a trailing '/'.\n\n"
+        "Use this to orient yourself before glob, grep, or read_file."
     )
     parameters = {
         "type": "object",

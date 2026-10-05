@@ -106,10 +106,13 @@ class CommandJobsTool(Tool):
     name = "command_jobs"
     progress_exempt = True
     description = (
-        "Manage commands started with run_command background=true. List/status returns job_id, state, "
-        "exit status and log_id; read_command_output retrieves live pages or tails of either stream. "
-        "Wait waits at most 30 seconds without cancelling the job. Stop kills its process group and drains cleanup. "
-        "Completion does not wake the model; request status/wait when you need the outcome. /stop leaves jobs running."
+        "Manage commands started with run_command background=true.\n\n"
+        "List/status returns job_id, state, exit status and log_id; read_command_output retrieves "
+        "live pages or tails of either stream.\n\n"
+        "Wait waits at most 30 seconds without cancelling the job.\n\n"
+        "Stop kills its process group and drains cleanup.\n\n"
+        "Completion does not wake the model; request status/wait when you need the outcome. /stop "
+        "leaves jobs running."
     )
     parameters = {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["list", "status", "wait", "stop"]},

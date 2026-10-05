@@ -35,7 +35,7 @@ def test_reads_recognized_instruction_files(workspace, name):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("Project rule: preserve existing behavior.", encoding="utf-8")
     content = load_project_instructions(workspace)
-    assert f"Instruction File: {name}\nProject rule: preserve existing behavior." in content
+    assert f"Instruction File: {name}\n\nProject rule: preserve existing behavior." in content
 
 
 @pytest.mark.parametrize("folder, suffix", [
@@ -166,7 +166,7 @@ def test_prompt_sections_have_stable_order_and_reject_duplicate_owners():
     sections = PromptSections()
     sections.add("dynamic", "Dynamic", "changes", 20)
     sections.add("stable", "Stable", "rules", 0)
-    assert sections.render() == "Stable:\nrules\n\nDynamic:\nchanges"
+    assert sections.render() == "Stable:\n\nrules\n\nDynamic:\n\nchanges"
     with pytest.raises(ValueError, match="Duplicate"):
         sections.add("stable", "Duplicate", "bad", 30)
 

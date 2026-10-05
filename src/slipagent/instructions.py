@@ -55,7 +55,7 @@ def load_project_instructions(workspace: Workspace, scope: str = ".") -> str:
         except (OSError, UnicodeError, RuntimeError, WorkspaceError) as exc:
             raise WorkspaceError(f"cannot read project instructions {relative}: {exc}") from exc
         seen.add(path)
-        sources.append(f"Instruction File: {relative}\n{content}\n")
+        sources.append(f"Instruction File: {relative}\n\n{content}\n")
 
     for filename in INSTRUCTION_FILES:
         relative = (base / filename).as_posix()
@@ -86,7 +86,7 @@ def load_project_instructions(workspace: Workspace, scope: str = ".") -> str:
                     paths.append((Path(relative) / suffix).as_posix())
         for name in sorted(paths):
             read(name)
-    return "\n".join(sources)
+    return "\n\n".join(sources)
 
 
 class ProjectInstructions:
@@ -153,10 +153,10 @@ class ProjectInstructions:
         sections = []
         for scope, content in snapshot.items():
             if content:
-                sections.append(f"Instruction Scope: {scope}/\n{content}")
+                sections.append(f"Instruction Scope: {scope}/\n\n{content}")
         if not sections:
             return ""
-        return ("Explicit user instructions take precedence. Apply each file's path and glob restrictions. "
-                "Nested guidance governs only its directory and descendants; more specific guidance takes precedence. "
+        return ("Explicit user instructions take precedence. Apply each file's path and glob restrictions.\n\n"
+                "Nested guidance governs only its directory and descendants; more specific guidance takes precedence.\n\n"
                 "This is the current complete set for visited scopes; removed instructions are no longer included.\n\n"
-                + "\n".join(sections))
+                + "\n\n".join(sections))

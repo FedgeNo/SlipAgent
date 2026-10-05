@@ -71,7 +71,7 @@ async def test_record_ids_remain_usable_for_recall_and_stay_in_the_archive():
 def test_prompt_sections_use_plain_labels_without_rewriting_their_content():
     sections = PromptSections()
     sections.add("project", "Project Instructions", "# User's Markdown\nDo the work.", 1)
-    assert sections.render() == "Project Instructions:\n# User's Markdown\nDo the work."
+    assert sections.render() == "Project Instructions:\n\n# User's Markdown\nDo the work."
 
 
 @pytest.mark.parametrize("context_length", [9000, 1_000_000])

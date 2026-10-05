@@ -50,9 +50,9 @@ class LoopGuard:
         names = ", ".join(record[0] for record in records)
         if self.count == 3:
             return (
-                f"The same tool batch ({names}) returned unchanged results in posts {post_id - 2}–{post_id}. "
+                f"The same tool batch ({names}) returned unchanged results in posts {post_id - 2}–{post_id}.\n\n"
                 "Those tools already ran. Change the approach: inspect the specific error, choose a different "
-                "query or target, or report the blocker. If intentionally polling an external change with "
+                "query or target, or report the blocker.\n\nIf intentionally polling an external change with "
                 "run_command, set poll=true; ordinary retries are not polling.", False,
             )
         return (

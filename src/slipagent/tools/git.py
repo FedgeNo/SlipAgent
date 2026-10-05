@@ -219,8 +219,9 @@ class GitStatusTool(GitTool):
 class GitDiffTool(GitTool):
     name = "git_diff"
     description = (
-        "Show unstaged changes, or staged changes with staged=true. Paths are literal "
-        "and workspace-relative or absolute. External diff/text conversion helpers are disabled."
+        "Show unstaged changes, or staged changes with staged=true.\n\n"
+        "Paths are literal and workspace-relative or absolute.\n\n"
+        "External diff/text conversion helpers are disabled."
     )
     parameters = {
         "type": "object",
@@ -270,7 +271,8 @@ class GitAddTool(GitTool):
     name = "git_add"
     description = (
         "Stage literal workspace-relative or absolute paths, including deletions; paths=['.'] "
-        "stages all in the workspace-root repository. Paths follow the current Workspace Access mode. "
+        "stages all in the workspace-root repository.\n\n"
+        "Paths follow the current Workspace Access mode.\n\n"
         "Active clean/process filters are rejected instead of running external helpers."
     )
     parameters = {
@@ -318,9 +320,9 @@ class GitAddTool(GitTool):
 class GitCommitTool(GitTool):
     name = "git_commit"
     description = (
-        "Commit already staged changes with a message. Does not stage files, amend, "
-        "or push. Hooks and signing are disabled to keep external helpers from "
-        "bypassing workspace checks."
+        "Commit already staged changes with a message.\n\n"
+        "Does not stage files, amend, or push.\n\n"
+        "Hooks and signing are disabled to keep external helpers from bypassing workspace checks."
     )
     parameters = {
         "type": "object",

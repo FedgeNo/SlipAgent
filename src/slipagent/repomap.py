@@ -129,17 +129,17 @@ class RepositoryMap:
             terms = set(re.findall(r"[a-z_][a-z_0-9]{2,}", (name + " " + retained[name][1]).casefold()))
             return -(len(words & terms) * 20 + min(10, all_references.count(Path(name).stem))), name
         header = (
-            "\nRepository Map (Orientation Only):\n"
+            "\n\nRepository Map (Orientation Only):\n\n"
             "Paths and Python definitions with line numbers; signatures omit defaults and annotations. "
-            "Other languages list paths only. Read files before editing. Dependencies, hidden directories, "
-            "symlinks and Git-ignored files are excluded from this map; file tools can still inspect them.\n"
+            "Other languages list paths only.\n\nRead files before editing.\n\nDependencies, hidden directories, "
+            "symlinks and Git-ignored files are excluded from this map; file tools can still inspect them.\n\n"
         )
         partial = "[Partial map: use glob/grep for files or definitions omitted here.]\n"
         if len(header) + len(partial) > limit:
             return ""
         result = header
         for name in sorted(retained, key=rank):
-            entry = name + "\n" + retained[name][1] + "\n"
+            entry = name + "\n" + retained[name][1] + "\n\n"
             if len(result) + len(entry) + len(partial) > limit:
                 incomplete = True
                 continue

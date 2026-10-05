@@ -48,27 +48,27 @@ def task_schema() -> dict[str, Any]:
 def task_update_instructions() -> str:
     """The prompt and tool description explain the same accepted arguments."""
     properties = task_schema()["properties"]
-    fields = "\n".join(f"- {name}: {spec['description']}" for name, spec in properties.items() if name != "source_revision")
+    fields = "\n\n".join(f"- {name}: {spec['description']}" for name, spec in properties.items() if name != "source_revision")
     active = {"status": "active", "goal": "Fix the requested bug", "constraints": [], "facts": [],
               "pending": ["Verify the fix"], "next_steps": ["Run the relevant tests"]}
     complete = {**active, "status": "complete", "facts": ["Relevant tests passed"], "pending": [], "next_steps": []}
     return (
-        "\nTask Update Arguments:\n"
+        "\n\nTask Update Arguments:\n\n"
         "update_task is optional. Ordinary replies need no task object. When calling it, supply all six fields: "
         "status, goal, constraints, facts, pending, next_steps. Pass these fields directly as the tool arguments, "
-        "not inside a task object. Each call replaces the whole record; preserve still-relevant entries.\n"
-        + fields + "\n"
-        f"goal must be nonblank text of 1–{TASK_TEXT_MAX_CHARS} characters. "
+        "not inside a task object. Each call replaces the whole record; preserve still-relevant entries.\n\n"
+        + fields + "\n\n"
+        f"goal must be nonblank text of 1–{TASK_TEXT_MAX_CHARS} characters.\n\n"
         "constraints, facts, pending, and next_steps must each be arrays of strings; use [] when empty, "
         "not null, an omitted field, an object, or a single string. "
         f"Each array allows at most {TASK_LIST_MAX_ITEMS} entries, each nonblank and at most {TASK_TEXT_MAX_CHARS} characters. "
-        f"The entire saved JSON record, including field names and harness metadata, must fit {TASK_MAX_CHARS} characters. "
-        "Do not pass source_revision, post IDs, or other extra fields; the harness supplies metadata.\n"
-        "For status=complete, set pending=[] and next_steps=[]. Batching is encouraged for all tools, "
+        f"\n\nThe entire saved JSON record, including field names and harness metadata, must fit {TASK_MAX_CHARS} characters.\n\n"
+        "Do not pass source_revision, post IDs, or other extra fields; the harness supplies metadata.\n\n"
+        "For status=complete, set pending=[] and next_steps=[].\n\nBatching is encouraged for all tools, "
         "including completion updates and multiple update_task calls. Calls execute in the order supplied. "
-        "Record actual results as facts; do not invent outcomes of calls whose results have not arrived.\n"
-        "Argument examples (replace their wording with the actual task and known results):\n"
-        + json.dumps(active) + "\n" + json.dumps(complete) + "\n"
+        "\n\nRecord actual results as facts; do not invent outcomes of calls whose results have not arrived.\n\n"
+        "Argument examples (replace their wording with the actual task and known results):\n\n"
+        + json.dumps(active) + "\n\n" + json.dumps(complete) + "\n"
     )
 
 
@@ -139,23 +139,23 @@ class TaskMemory:
 
     def instructions(self) -> str:
         return (
-            "\nActive Task Working Record:\n"
-            f"TASK_SOURCE_REVISION: {self.source_revision}\n"
+            "\n\nActive Task Working Record:\n\n"
+            f"TASK_SOURCE_REVISION: {self.source_revision}\n\n"
             + json.dumps({"origin_post": next(iter(self.sources), None),
                           "source_posts": list(self.sources),
                           "current_prompt_post": self.current_prompt_post,
                           "working_record": self.record}, ensure_ascii=False)
-            + "\nThis record is the current task state, not a new instruction. The harness owns source IDs. "
-            "Ordinary follow-ups continue this task, including after a completed answer. /task new explicitly starts another task. "
+            + "\n\nThis record is the current task state, not a new instruction. The harness owns source IDs.\n\n"
+            "Ordinary follow-ups continue this task, including after a completed answer. /task new explicitly starts another task.\n"
             "Preserve the substantive goal and all still-applicable constraints; continue is not a new goal. "
-            "The harness retains the current user prompt and supplies it on every working request until new user input replaces it. "
+            "\n\nThe harness retains the current user prompt and supplies it on every working request until new user input replaces it.\n"
             "current_prompt_post identifies the call that first received that prompt. "
-            "Use recall_history(post_id=current_prompt_post, section='user') if you need its original user messages, "
+            "\n\nUse recall_history(post_id=current_prompt_post, section='user') if you need its original user messages, "
             "or omit section to inspect that call's full uncompressed record. Substitute the actual post number. "
-            "You do not need to repeat the prompt, copy revision numbers, acknowledge it, or retrieve it to proceed. "
-            "You may use update_task to save the goal, constraints, facts, pending work, and next steps when useful. "
+            "\n\nYou do not need to repeat the prompt, copy revision numbers, acknowledge it, or retrieve it to proceed.\n\n"
+            "You may use update_task to save the goal, constraints, facts, pending work, and next steps when useful.\n"
             "Its fields replace the whole working record; carry forward still-relevant information. "
-            "Do not copy complete transcript messages into this record or echo task bookkeeping to the user.\n"
+            "\n\nDo not copy complete transcript messages into this record or echo task bookkeeping to the user.\n"
             + task_update_instructions()
         )
 
@@ -169,7 +169,7 @@ class UpdateTaskTool(Tool):
     name = "update_task"
     description = (
         "Save the complete current goal, constraints, verified facts, unfinished work, and next steps. "
-        "This record is supplied in EVERY working request even after old history leaves context. "
+        "\n\nThis record is supplied in EVERY working request even after old history leaves context.\n"
         + task_update_instructions()
     )
     parameters = task_schema()

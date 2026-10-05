@@ -27,6 +27,6 @@ class PromptSections:
         self.sections[name] = PromptSection(name, title, content, order, owner, dynamic)
 
     def render(self) -> str:
-        return "\n\n".join(f"{section.title}:\n{section.content}" for section in
+        return "\n\n".join(f"{section.title}:\n\n{section.content}" for section in
                            sorted(self.sections.values(), key=lambda item: (item.dynamic, item.order, item.name))
                            if section.content)

@@ -263,6 +263,17 @@ Queued corrections from an earlier failed/stopped run are drained before the new
 prompt on resumption. Timeout cleanup of an individual process is a separate
 mechanism from these session controls.
 
+Outside a chooser, Escape invokes a direct terminal callback instead of enqueuing
+a slash command. The session cancels its active agent/interactive command tasks,
+read-only command tasks, background jobs, and compactor requests. Cleanup is
+retained in `Session.extensions`; repeated Escape does not cancel cleanup itself.
+The cancelled batch drains its tools and records completed, interrupted, and
+unstarted calls in model order. Interrupted archival persists originals without
+starting a summary request. Deferred commands are discarded; queued user prompts
+remain pending and no automatic continuation occurs. Worker-thread operations
+retain their safe drain contract. Chooser bindings capture Escape before the
+interrupt binding, so closing a chooser never interrupts agent work.
+
 ## History and Task State
 
 The working prompt asks for explicit findings, evidence, decisions, uncertainties,

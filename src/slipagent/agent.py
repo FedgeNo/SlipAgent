@@ -388,6 +388,8 @@ class Agent:
         if isinstance(post, TurnPost):
             post.task_record = copy.deepcopy(self.history.task.record)
             self._persist()
+            if self.registry.services.get("interrupt_requested"):
+                return  # Preserve interrupted results without starting new work.
             self._compactor().submit(
                 post, self.client, self.model, capabilities, self.max_tokens,
             )

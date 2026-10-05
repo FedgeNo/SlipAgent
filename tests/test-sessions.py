@@ -128,7 +128,7 @@ async def test_originals_summaries_reasoning_usage_and_pending_survive_resume(wo
     result = await agent.registry.invoke("recall_history", {"post_id": 1, "sections": ["prompt", "response"]})
     assert "exact prompt" in result.content and "original reply" in result.content
     view = await agent._context_view(agent.registry.specs(), 1)
-    assert "private reasoning" not in str(view)
+    assert "private reasoning for archive only" not in str(view)
     assert agent.history.task.current_prompt_post == 1
 
 

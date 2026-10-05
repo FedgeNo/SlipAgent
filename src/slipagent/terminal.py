@@ -433,6 +433,12 @@ class TerminalUI:
         def cancel_menu(event: KeyPressEvent) -> None:
             self._finish_menu(None)
 
+        @bindings.add("escape", filter=~in_menu, eager=True)
+        def stop_now(event: KeyPressEvent) -> None:
+            callback = getattr(self, "_interrupt_callback", None)
+            if callback is not None:
+                callback()
+
         @bindings.add(Keys.Any, filter=in_menu)
         def ignore_menu_text(event: KeyPressEvent) -> None:
             pass
@@ -490,6 +496,10 @@ class TerminalUI:
                 self._end_input()
 
         return bindings
+
+    def set_interrupt_handler(self, callback: Callable[[], None]) -> None:
+        """Interrupt work directly, without submitting or changing the draft."""
+        self._interrupt_callback = callback
 
     def _style(self) -> Style:
         return Style.from_dict({

@@ -28,6 +28,7 @@ from typing import Any, TextIO
 from .agent import Agent, AgentEvent, STEP_LIMIT_NOTICE, STOP_NOTICE, build_system_prompt
 from .config import Config, ConfigError, dotenv_path, save_dotenv_value
 from .instructions import load_project_instructions, ProjectInstructions
+from .lifecycle import finish_cleanup
 from .mcp import MCPManager, MCPError, ServerSpec, config_path, load_servers
 from .openrouter import (
     DEFAULT_TEMPERATURE,
@@ -63,7 +64,7 @@ Commands: /help  /tools  /model [slug]  /models [filter]  /key [show|status|key]
 
 Type a task and press Enter. Follow-ups queue while the agent works.
 Settings changes also queue until the current response and tool batch finish.
-/stop finishes this turn and stops. /exit, /quit, or Ctrl-D quits.
+/stop stops after this turn; Esc interrupts now. /exit, /quit, or Ctrl-D quits.
 Use /help for command details. Ctrl+\\ toggles the context view."""
 
 QUOTA_REFRESH_INTERVAL = 15 * 60
@@ -116,7 +117,9 @@ Project Python selection is shown in context; --python PATH overrides discovery.
 Sessions, command logs, and request diagnostics are saved unless --no-session is used.
 Command logs have a shared 100 MiB quota; request diagnostics have a 32 MiB quota.
 Background commands use command_jobs and read_command_output for control/output.
-/stop leaves those jobs running; /reset and exit stop them."""
+/stop leaves those jobs running; /reset and exit stop them.
+Esc immediately interrupts agent work, active tools, and background jobs.
+Inside a chooser, Esc only closes the chooser. Completed results are preserved."""
 
 # Each entry is a complete command, dispatched through the same checks as typed
 # input. Commands needing arguments remain available through the ordinary prompt.
@@ -655,6 +658,7 @@ async def run_repl(session: Session) -> int:
             status_suffix=lambda: _danger_suffix(session, style),
         )
         renderer.terminal = terminal
+        terminal.set_interrupt_handler(lambda: _request_interrupt(session))
         terminal_task = asyncio.create_task(terminal.run())
     renderer.show_banner(
         model=session.agent.model,
@@ -677,6 +681,7 @@ async def run_repl(session: Session) -> int:
                 break
             if line is None:
                 break
+            await _wait_for_interrupt(session)
             line = line.strip()
 
             if not line:
@@ -684,7 +689,7 @@ async def run_repl(session: Session) -> int:
 
             if line.startswith("/"):
                 try:
-                    if await _handle_command(session, line):
+                    if await _run_interactive_command(session, line):
                         break
                 except Exception as exc:
                     if session.reloader is not None:
@@ -884,9 +889,11 @@ async def _run_turn(session: Session, prompt: str, style: Style) -> bool:
         _read_line(session, style)
     )
     agent_task: asyncio.Task[str] = asyncio.create_task(session.agent.run(prompt))
+    session.extensions["active_agent_task"] = agent_task
     renderer = session.renderer
     exiting = False
     if renderer.terminal is not None:
+        renderer.terminal.set_interrupt_handler(lambda: _request_interrupt(session))
         renderer.terminal.set_working(True)
 
     try:
@@ -918,21 +925,29 @@ async def _run_turn(session: Session, prompt: str, style: Style) -> bool:
                         reader = asyncio.create_task(_read_line(session, style))
 
             if agent_task in done:
+                if session.extensions.get("interrupt_requested"):
+                    await _wait_for_interrupt(session)
+                    break
                 answer = agent_task.result()
                 resume, commands_exit = await _apply_deferred_commands(session, exiting=exiting)
                 exiting = exiting or commands_exit
                 if resume and not exiting and answer == STOP_NOTICE:
                     renderer.emit(style.dim("  Queued commands applied; continuing the current task."))
                     agent_task = asyncio.create_task(session.agent.run("", continue_run=True))
+                    session.extensions["active_agent_task"] = agent_task
                     continue
                 if not exiting and session.agent.pending and answer != STEP_LIMIT_NOTICE and not session.agent.stopped:
                     agent_task = asyncio.create_task(session.agent.run(""))
+                    session.extensions["active_agent_task"] = agent_task
                     continue
                 break
             if reader is None:
                 # No more input to service. Wait for the turn to finish rather
                 # than cancelling it: a completed answer the user cannot see
                 # because they closed the pipe is a worse outcome than waiting.
+                if session.extensions.get("interrupt_requested"):
+                    await _wait_for_interrupt(session)
+                    break
                 await agent_task
     except BaseException as exc:
         agent_task.cancel()
@@ -941,8 +956,12 @@ async def _run_turn(session: Session, prompt: str, style: Style) -> bool:
         # settings can be applied. Cancellation/exit must not start new work.
         if not isinstance(exc, asyncio.CancelledError):
             await _apply_deferred_commands(session, exiting=exiting)
-        raise
+        if isinstance(exc, asyncio.CancelledError) and session.extensions.get("interrupt_requested"):
+            await _wait_for_interrupt(session)
+        else:
+            raise
     finally:
+        session.extensions.pop("active_agent_task", None)
         if reader is not None and not reader.done():
             reader.cancel()
         if reader is not None:
@@ -967,6 +986,69 @@ async def _run_turn(session: Session, prompt: str, style: Style) -> bool:
             renderer.emit(style.dim(f"    ({session.agent.usage.summary()})"), separate=False)
 
     return exiting
+
+
+def _request_interrupt(session: Session) -> None:
+    """Signal cancellation immediately; retain cleanup outside the input loop."""
+    cleanup = session.extensions.get("interrupt_task")
+    if cleanup is not None:
+        return
+    session.extensions["interrupt_requested"] = True
+    session.extensions["interrupt_sequence"] = session.extensions.get("interrupt_sequence", 0) + 1
+    session.registry.services["interrupt_requested"] = True
+    session.extensions.pop("deferred_commands", None)
+    session.extensions["resume_after_commands"] = False
+    session.agent.request_stop()
+    session.agent.stopped = True
+    task = session.extensions.get("active_agent_task")
+    command = session.extensions.get("active_command_task")
+    commands = list(session.extensions.get("command_tasks", ()))
+    for owned in [task, command, *commands]:
+        if owned is not None:
+            owned.cancel()
+    compactor = session.registry.services.get("turn_compactor")
+    if compactor is not None:
+        compactor.reset()
+    session.renderer.emit(session.renderer.style.dim("  Interrupting agent work; cancelling active operations."))
+    if session.renderer.terminal is not None:
+        session.renderer.terminal.set_working(True, stopping=True)
+
+    async def drain() -> None:
+        jobs = session.registry.services.get("command_jobs")
+        job_cleanup = asyncio.create_task(jobs.stop_all()) if jobs is not None else None
+        await _gather_quietly(*[owned for owned in [task, command, *commands, job_cleanup] if owned is not None])
+        if compactor is not None:
+            await compactor.wait()
+        session.registry.services.pop("interrupt_requested", None)
+        session.renderer.emit(session.renderer.style.dim("  Interrupted. Conversation and completed results are preserved."))
+        if session.renderer.terminal is not None:
+            session.renderer.terminal.set_working(False)
+    session.extensions["interrupt_task"] = asyncio.create_task(drain())
+
+
+async def _wait_for_interrupt(session: Session) -> None:
+    task = session.extensions.get("interrupt_task")
+    if task is not None:
+        await finish_cleanup(task)
+        session.extensions.pop("interrupt_task", None)
+        session.extensions.pop("interrupt_requested", None)
+
+
+async def _run_interactive_command(session: Session, line: str) -> bool:
+    """Keep commands such as model selection cancellable from the terminal."""
+    task = asyncio.create_task(_handle_command(session, line))
+    session.extensions["active_command_task"] = task
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        if session.extensions.get("interrupt_requested"):
+            await _wait_for_interrupt(session)
+            return False
+        task.cancel()
+        await _gather_quietly(task)
+        raise
+    finally:
+        session.extensions.pop("active_command_task", None)
 
 
 def _changes_session(command: str, argument: str) -> bool:
@@ -996,6 +1078,7 @@ async def _apply_deferred_commands(session: Session, *, exiting: bool = False) -
     The active response and every tool have settled before this is called.
     """
     commands = session.extensions.pop("deferred_commands", [])
+    interrupt_sequence = session.extensions.get("interrupt_sequence", 0)
     resume = session.extensions.pop("resume_after_commands", False)
     if exiting:
         if commands:
@@ -1010,8 +1093,10 @@ async def _apply_deferred_commands(session: Session, *, exiting: bool = False) -
         if command in {"reset", "resume"} or command == "task" and argument == "new":
             resume = False
         try:
-            if await _handle_command(session, line):
+            if await _run_interactive_command(session, line):
                 return False, True
+            if session.extensions.get("interrupt_sequence", 0) != interrupt_sequence:
+                return False, False
         except Exception as exc:
             session.renderer.emit(session.renderer.style.red(f"  ✗ /{command} failed: {exc}"))
     return resume, False
@@ -1052,6 +1137,7 @@ async def _shutdown(session: Session) -> None:
     Order matters: MCP tools hold references to their clients, so the servers
     are stopped before the registry and HTTP client are closed.
     """
+    await _wait_for_interrupt(session)
     tasks = list(session.extensions.get("command_tasks", ()))
     for task in tasks:
         task.cancel()

@@ -528,6 +528,15 @@ the task without resetting its request limit. `/stop` prevents automatic
 continuation; reset, resume, and `/task new` replace the task instead of restarting
 the previous work. Slash commands are never sent to the model as user messages.
 
+Press Escape outside a chooser to interrupt the active turn immediately. It
+cancels model requests, active tools, background commands, and pending summaries;
+queued settings are discarded and no follow-up turn starts automatically.
+Completed tool results remain stored, while interrupted or unstarted calls are
+recorded explicitly. Queued user messages remain available for later continuation.
+An atomic file operation already running finishes safely before cleanup settles;
+the terminal stays responsive. Escape inside a chooser only closes that chooser
+and leaves agent work running. `/stop` retains its gentler turn-boundary behavior.
+
 `/danger` enables access outside the workspace for built-in file, search,
 navigation, and Git tools. `/danger off` restores confinement; `/danger status`
 reports the mode. During work, changes queue until the current response and

@@ -369,6 +369,8 @@ async def test_menu_cancellation_preserves_input_history_scroll_and_running_turn
     sink, _, output, _, snapshot = display
     with create_pipe_input() as pipe:
         ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        interrupts = []
+        ui.set_interrupt_handler(lambda: interrupts.append(True))
         task = asyncio.create_task(ui.run())
         choice = None
         try:
@@ -396,6 +398,7 @@ async def test_menu_cancellation_preserves_input_history_scroll_and_running_turn
             assert ui.input.buffer.cursor_position == cursor
             assert ui.input.buffer.history.get_strings() == history
             assert ui._lines.empty()  # Neither /stop nor EOF was submitted.
+            assert not interrupts
             assert not ui.context_visible
             pipe.send_text("\r")
             assert await asyncio.wait_for(ui.read_line(), 3) == "draft in progress"
@@ -403,6 +406,27 @@ async def test_menu_cancellation_preserves_input_history_scroll_and_running_turn
             ui.close()
             if choice is not None:
                 await choice
+            await task
+
+
+async def test_escape_interrupts_directly_and_preserves_draft(display):
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        interrupted = asyncio.Event()
+        ui.set_interrupt_handler(interrupted.set)
+        ui.set_working(True)
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: "Working" in snapshot()[18])
+            pipe.send_text("keep this draft")
+            await wait_until(lambda: ui.input.buffer.text == "keep this draft")
+            pipe.send_text("\x1b")
+            await asyncio.wait_for(interrupted.wait(), 2)
+            assert ui.input.buffer.text == "keep this draft"
+            assert ui._lines.empty()
+        finally:
+            ui.close()
             await task
 
 

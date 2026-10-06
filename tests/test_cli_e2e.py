@@ -972,7 +972,7 @@ def test_followup_during_final_response_is_answered(project_dir: Path) -> None:
     assert len(stub.requests) == 2
 
 
-@pytest.mark.parametrize("command", ["/reset", "/resume", "/danger", "/danger off", "/key secret", "/mcp remove stub", "/model new/model"])
+@pytest.mark.parametrize("command", ["/reset", "/resume", "/fork", "/delete", "/danger", "/danger off", "/overthinking on", "/overthinking off", "/key secret", "/mcp remove stub", "/model new/model"])
 async def test_mutating_commands_wait_until_turn_finishes(tmp_path, monkeypatch, command, metadata_server) -> None:
     import io
     from slipagent.cli import build_parser, build_session, _shutdown, _handle_command
@@ -991,6 +991,31 @@ async def test_mutating_commands_wait_until_turn_finishes(tmp_path, monkeypatch,
     finally:
         session.agent.running = False
         await _shutdown(session)
+
+
+async def test_overthinking_commands(tmp_path, metadata_server):
+    import io
+    from slipagent import cli
+    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    output = io.StringIO()
+    session.renderer.stream = output
+    try:
+        assert session.agent.overthinking
+        await cli._handle_command(session, "/overthinking off")
+        assert not session.agent.overthinking
+        await cli._handle_command(session, "/overthinking off")
+        assert not session.agent.overthinking
+        await cli._handle_command(session, "/reset")
+        assert not session.agent.overthinking
+        await cli._handle_command(session, "/overthinking on")
+        assert session.agent.overthinking
+        await cli._handle_command(session, "/overthinking invalid")
+        assert session.agent.overthinking
+        assert "usage: /overthinking on|off" in output.getvalue()
+        assert "Overthinking Mode OFF" in output.getvalue()
+        assert "Overthinking Mode ON" in output.getvalue()
+    finally:
+        await cli._shutdown(session)
 
 
 async def test_danger_commands_preserve_mode_through_reset_and_resume(tmp_path, metadata_server):
@@ -1151,6 +1176,10 @@ async def test_resume_picker_errors_preserve_active_session(tmp_path, monkeypatc
             monkeypatch.setattr(journal, "listing", lambda: [])
         elif scenario == "unreadable":
             monkeypatch.setattr(journal, "listing", Mock(side_effect=SessionError("Cannot list saved sessions: unreadable")))
+        elif scenario == "invalid":
+            monkeypatch.setattr(journal, "listing", lambda: [
+                {"id": "f" * 32, "title": "Missing session", "created": "2026-01-01", "current": "False"}
+            ])
         assert await cli._handle_command(session, "/resume") is False
         expected = {"empty": "no saved sessions", "unreadable": "Cannot list saved sessions",
                     "invalid": "Cannot resume", "disabled": "session persistence is disabled"}
@@ -1171,7 +1200,9 @@ def test_mcp_command_preserves_quoted_arguments() -> None:
 
 
 def test_rename_is_saved_listed_and_restored_in_another_process(project_dir):
-    first = run_repl_commands(project_dir, ["/rename", "/rename Review café changes", "/sessions"])
+    with StubOpenRouter([text_step("done")]) as stub:
+        first = run_repl_commands(project_dir, ["/rename", "/rename Review café changes", "Review changes", "/sessions"],
+                                  "--base-url", stub.base_url)
     assert first.returncode == 0, first.stderr
     assert "usage: /rename <name>" in first.stderr
     assert first.stderr.count("Review café changes | SlipAgent") >= 2

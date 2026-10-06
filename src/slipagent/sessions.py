@@ -113,8 +113,11 @@ class SessionJournal:
     def rename(self, name: str) -> None:
         """Atomically save mutable title metadata without rewriting the journal."""
         title = session_title(name)
-        if self.path is None or self.failed:
+        if self.failed:
             raise SessionError("Session journal is unavailable; the title was not changed.")
+        if self.path is None:
+            self._title = title
+            return
         temporary: Path | None = None
         try:
             fd, filename = tempfile.mkstemp(prefix=".title-", dir=self.directory)
@@ -168,11 +171,17 @@ class SessionJournal:
 
     @staticmethod
     def _message(message: Message) -> dict[str, Any]:
-        # The durable record contains reasoning, although working requests and
-        # compaction deliberately omit it. Keep its originating model as well.
+        # Preserve reasoning independently of working-context retention and
+        # compaction. Keep its originating model as well.
         return {**message.to_api(), "reasoning": message.reasoning, "reasoning_model": message.reasoning_model}
 
     def record(self, agent: Agent) -> None:
+        if self.path is None:
+            # Startup commands and previews do not create empty conversations.
+            if not agent.pending and not any(message.role == "user" for message in agent.messages):
+                return
+            self.begin(agent, title=self.title)
+            return
         if self.cursor > len(agent.messages):
             raise SessionError("Conversation changed without starting a new session journal.")
         if self.cursor and self.last_message != self._message(agent.messages[self.cursor - 1]):
@@ -222,6 +231,27 @@ class SessionJournal:
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             raise SessionError(f"Cannot list saved sessions: {exc}") from exc
         return result
+
+    def delete_current(self) -> None:
+        """Remove the current journal and its sidecars after owners are drained."""
+        if self.path is None:
+            raise SessionError("No current saved session to delete.")
+        try:
+            for suffix in ("-logs", "-requests"):
+                directory = self.directory / (self.session_id + suffix)
+                if directory.exists():
+                    shutil.rmtree(directory)
+            (self.directory / (self.session_id + ".title.json")).unlink(missing_ok=True)
+            self.path.unlink()
+        except OSError as exc:
+            self.failed = True
+            raise SessionError(f"Could not delete session {self.session_id}: {exc}. Some session files may have been removed.") from exc
+        self.path = None
+        self.session_id = ""
+        self.cursor, self.post_count = 0, 0
+        self.last_message, self.system, self.state = None, None, None
+        self.failed = False
+        self._title = session_title(self.project)
 
     def load(self, selected: str) -> dict[str, Any]:
         if selected == "latest":

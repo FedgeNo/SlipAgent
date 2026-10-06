@@ -37,8 +37,13 @@ The transport sends one explicit list of messages plus tool definitions and
 request parameters. No earlier API call, terminal line, file, or archive entry
 is visible unless it is included in that request. Separate reasoning deltas are
 displayed and joined into one string for that response's uncompressed record;
-they are excluded from outgoing working context, compaction, and the active-task
-record. Explicit history retrieval can still access the originals. The context inspector
+Overthinking Mode (enabled by default) includes that string as `reasoning` in
+the latest five completed turns' JSON records, including selected summaries.
+Missing thoughts add no field. The exact JSON participates in context selection
+and token budgeting; omitted turns and budget-limited excerpts omit reasoning.
+Opaque provider metadata is excluded. Disabling the mode excludes all reasoning
+from working context. Compaction and active-task records exclude reasoning in
+either mode. Explicit history retrieval can still access the originals. The context inspector
 captures the final outgoing body after capability settings are applied, without
 the authentication headers.
 
@@ -186,12 +191,13 @@ being received, preserving whitespace and avoiding duplicate copies when a
 delta supplies both a plain reasoning field and reasoning details. JSON
 completions use the same extraction. Each retry starts a fresh accumulator;
 existing history is never reassembled. Accepted messages and `TurnPost.reasoning`
-retain the resulting string. Full-history projections clear reasoning text and
-provider details before budgeting, so thoughts cannot crowd out actual replies
-and tool results. The client also removes both fields from outgoing message
+retain the resulting string. Working JSON records include readable thoughts
+for the latest five completed turns when Overthinking Mode is enabled, with
+their exact token cost included in selection. Provider details stay excluded.
+The client removes native reasoning fields from outgoing message
 dictionaries, covering direct calls and older stored records without mutating
-them. No plaintext, signed, or encrypted reasoning blocks are automatically
-replayed. Reasoning generation and visible streaming remain enabled where supported.
+them. Signed and encrypted provider blocks are never replayed. Reasoning generation
+and visible streaming remain enabled where supported.
 
 The normalization boundary follows the general approach documented by
 [vLLM's tool parsers](https://docs.vllm.ai/en/stable/features/tool_calling/):
@@ -280,7 +286,8 @@ interrupt binding, so closing a chooser never interrupts agent work.
 The working prompt asks for explicit findings, evidence, decisions, uncertainties,
 and next steps in each response, including tool-call turns. These responses remain
 in working history and their important conclusions are preserved in summaries.
-Private reasoning is not supplied back to the working model or to the compactor.
+Overthinking Mode supplies recent readable reasoning to the working model;
+the compactor always excludes it.
 
 `TurnPost` extends `HistoryPost` with independent `user_prompt`, `agent_response`,
 `reasoning`, `tool_calls`, and `tool_results` references, plus one whole-turn `summary` and a
@@ -539,6 +546,12 @@ headers retain that path for identity checks. New directories/files are private.
 Credentials from configuration are not serialized, although user/tool text can
 itself contain sensitive data.
 
+Startup attaches the journal service without beginning a conversation. `record`
+creates the journal on the first user message or queued prompt, before model/tool
+dispatch, and otherwise ignores startup-only state changes. A pre-prompt rename
+keeps its title in memory until the first journal header is written. Resume begins
+its populated fork directly, without an empty startup journal.
+
 The conversation title defaults to the full project path plus ` | SlipAgent`.
 New journal headers carry their initial title. `/rename` atomically replaces a
 private `<session-id>.title.json` file in the same project state directory;
@@ -555,8 +568,9 @@ Messages append as deltas, with explicit replacement records for refreshed syste
 instructions or post-batch check annotations. State records hold task boundaries,
 the working task record, usage, queued input, and selected settings. Post records
 hold summary state and task snapshots, including asynchronous summary completion.
-Reasoning is stored in the original message and remains excluded from context
-and compaction. Writes flush/fsync; an unsavable tool-start marker stops dispatch.
+Reasoning is stored in the original message, included in recent context when
+Overthinking Mode is enabled, and excluded from compaction. Writes flush/fsync;
+an unsavable tool-start marker stops dispatch.
 Complete originals are never rewritten by compression.
 
 Resume reads and validates the journal before changing the active conversation.
@@ -569,6 +583,20 @@ journal. The original remains available. Operating/project instructions and
 model settings come from the current process. Interrupted summaries stay
 labelled; restoration itself performs no model calls.
 
+`/fork` drains compaction and stops jobs, checkpoints the current journal, and
+uses the validated load/restore path to create a populated child. Its parent
+stays immutable after the fork; copied command output remains independently
+available. The transcript stays in place and subsequent work targets the child.
+
+`/delete` requires an interactive Enter/Escape chooser before any deletion.
+After confirmation it drains summaries and jobs, clears the conversation with
+`reset(new_session=False)` to detach log/diagnostic owners, and removes only the
+current journal, title sidecar, log directory, and request-diagnostic directory.
+The journal service returns to its pre-prompt state and the transcript is replaced
+by the startup banner. Other sessions and project files remain untouched.
+Filesystem deletion errors report potentially partial removal and disable further
+writes to that journal. Cancellation preserves the current session.
+
 Interactive restore rebuilds the display from original saved messages and queued
 input through the renderer, replaces the current transcript's temporary files,
 and follows the final row. It retains the input draft/application. Readable
@@ -579,7 +607,7 @@ the REPL terminal exists; one-shot mode continues to print only its new answer.
 This reconstructs the conversation, not transient progress/retry notices that
 were never part of the saved messages.
 
-The CLI exposes `/sessions`, `/resume [id|latest]`, `--resume [id]`, and
+The CLI exposes `/sessions`, `/resume [id|latest]`, `/fork`, `/delete`, `--resume [id]`, and
 `--no-session`. `/reset` starts a new journal while retaining prior sessions.
 On an interactive terminal, bare `/resume` passes saved titles and dates to
 `TerminalUI.choose`, using full session IDs as selection values. The list keeps

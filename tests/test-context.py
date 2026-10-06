@@ -300,14 +300,14 @@ async def test_shrunk_window_has_whole_turn_summary_and_full_latest_turn():
     assert "FULL LARGE TOOL OUTPUT" in (await agent.registry.invoke("recall_history", {"post_id": 1})).content
 
 
-async def test_large_archived_reasoning_does_not_consume_context_headroom():
+async def test_disabled_overthinking_does_not_consume_context_headroom():
     answer = Message.assistant("ACTUAL ANSWER", [ToolCall("a", "record", {})])
     answer.reasoning = "THOUGHTS " * 100000
     answer.reasoning_details = [{"type": "reasoning.encrypted", "data": "OPAQUE " * 100000}]
     messages = [Message.user("Work"), answer, Message.tool_result("a", "ACTUAL RESULT"), Message.user("Continue")]
     history = ConversationHistory()
     view = await history.view(messages, [], keep_posts=50,
-                              context_length=16000, max_output=1000)
+                              context_length=16000, max_output=1000, overthinking=False)
     assert any(context_body(m.content) == "ACTUAL ANSWER" and m.tool_calls for m in unpack_context(view))
     assert any(context_body(m.content) == "ACTUAL RESULT" for m in unpack_context(view))
     assert all(m.reasoning is None and m.reasoning_details is None for m in unpack_context(view))

@@ -156,6 +156,7 @@ class Config:
     temperature: float | None = None
     max_tokens: int | None = None
     context_posts: int = DEFAULT_CONTEXT_POSTS
+    overthinking: bool = True
 
     def __post_init__(self) -> None:
         if self.max_steps < 1:
@@ -179,6 +180,7 @@ class Config:
         temperature: float | None = None,
         max_tokens: int | None = None,
         context_posts: int | None = None,
+        overthinking: bool = True,
         environ: dict[str, str] | None = None,
     ) -> Config:
         env = os.environ if environ is None else environ
@@ -205,6 +207,7 @@ class Config:
             temperature=temperature,
             max_tokens=max_tokens,
             context_posts=context_posts if context_posts is not None else DEFAULT_CONTEXT_POSTS,
+            overthinking=overthinking,
         )
 
     def with_overrides(self, **changes: object) -> Config:

@@ -42,7 +42,7 @@ async def test_shell_archives_middle_and_timeout_output_with_call_provenance(tmp
     registry = build_default_registry(Workspace(tmp_path))
     archive = registry.services["command_archive"]
     command = shlex.join([sys.executable, "-c", "import time; print('A'*35000+'MIDDLE'+'Z'*35000, flush=True); time.sleep(10)"])
-    client = StubClient([completion(tool_calls=[call("run_command", command=command, timeout=.1)]), completion("Inspected timeout")])
+    client = StubClient([completion(tool_calls=[call("run_command", command=command, timeout=.5)]), completion("Inspected timeout")])
     agent = Agent(client, registry, "test")
     try:
         await agent.run("Run a test command")

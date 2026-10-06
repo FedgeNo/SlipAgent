@@ -373,6 +373,10 @@ absolute storage path and saved IDs. `SLIPAGENT_STATE_DIR` overrides the storage
 root. Journals and logs may contain private project text; configuration API
 keys are not included in their metadata.
 
+Startup creates no conversation journal until the first task prompt is entered.
+Help, settings, session listing, and renaming before that prompt do not add an
+empty session. Resuming instead creates the restored conversation's journal.
+
 Use `/resume` to choose a saved session by title and date. During work it queues
 until the current response and tool batch finish. Up/Down
 moves through the list, scrolling at either edge; Enter restores the selection
@@ -385,6 +389,19 @@ refreshed from the running installation. Type `continue` when ready; resume
 does not start model requests or replay tools by itself. A started tool with
 no saved result is marked as having an unknown outcome; an unstarted tool is
 marked as not run. Inspect uncertain effects before retrying.
+
+Use `/fork` to copy the current saved conversation and continue in the new
+session. Its history, summaries, task state, queued input, usage, title, and
+command logs carry over. Further work changes the copy; the original remains
+available through `/resume`. Forking performs no model requests or tool replay.
+
+`/delete` permanently removes the current session's journal, saved title,
+command logs, and request diagnostics. An interactive confirmation dialog opens:
+Enter confirms the selected deletion action; Escape or selecting Cancel leaves
+the session intact. Other saved sessions and project files are preserved.
+After deletion, the start screen returns; the next task prompt creates a new
+session. Deletion requires an interactive terminal. Both `/fork` and `/delete`
+require a current saved session and queue until the active batch finishes.
 
 Journals append and flush each message/state change and tool-start marker.
 A torn final entry can be recovered with an explicit note; malformed complete
@@ -424,6 +441,7 @@ In the REPL:
 | `/danger` or `/danger on` | Disable workspace path confinement; queues while working |
 | `/danger off` | Restore workspace path confinement; queues while working |
 | `/danger status` | Show the current access mode |
+| `/overthinking on\|off` | Enable or disable thoughts in the latest five turns; enabled by default; queues while working |
 | `/tools` | List available tools |
 | `/model` | Show the active model |
 | `/model <slug>` | Switch model for this session |
@@ -441,6 +459,8 @@ In the REPL:
 | `/sessions` | List saved sessions for this project's path |
 | `/resume` | Choose a saved session with Up/Down and Enter; Escape cancels (interactive terminal; queues while working) |
 | `/resume <id>` or `/resume latest` | Restore a saved conversation and its scrolling transcript at the end; queues while working; no tools are replayed |
+| `/fork` | Copy the current saved session and continue in the copy; preserve the original; queues while working |
+| `/delete` | Confirm permanent deletion of the current session and all its logs; return to the start screen; Escape cancels; queues while working |
 | `/requests [attempt]` | List the latest 20 request attempts, or inspect one exact request and its outcome |
 | `/mcp` | Show MCP servers, their status, and the tools they contribute |
 | `/mcp add <name> <cmd> [args…]` | Connect a server over stdio for this session only |
@@ -610,8 +630,13 @@ task bookkeeping do not trigger the guard.
 Readable reasoning supplied through a separate provider field streams under a
 gray `Thinking:` label. Each response's reasoning is concatenated into one
 string and saved with that turn's uncompressed originals. Existing history is
-not rewritten. Reasoning is excluded from all working context, including recent
-full turns, and from background compression requests. It remains available through
+not rewritten. **Overthinking Mode** is enabled by default: the latest five completed
+turns include supplied thoughts as a `reasoning` string in each turn's JSON input
+record. Turns without thoughts gain no extra field. Use `/overthinking off` to
+disable this mode, or `/overthinking on` to enable it. Thoughts count
+toward the context budget; omitted turns and budget-limited excerpts omit them.
+Opaque provider reasoning metadata is never included. Reasoning remains excluded
+from background compression requests and available through
 explicit `recall_history` retrieval; streaming thoughts still appear in the terminal.
 The harness selects the highest reasoning effort
 explicitly listed by the API. When reasoning is supported without listed effort
@@ -797,7 +822,8 @@ Each accepted model response forms one numbered turn: its active user prompt,
 response, requested tool calls, and complete tool results. Those four originals
 are stored separately, alongside the response's reasoning as one string when
 available. Recent turns present the full prompt, response, calls, and results,
-with reasoning excluded. Older turns use their whole-turn summary only when its
+with supplied reasoning included for the latest five turns in Overthinking Mode.
+Older turns use their whole-turn summary only when its
 estimated token cost is smaller than the original; otherwise they retain their
 full prompt, response, tool calls, and results. The comparison includes JSON fields,
 escaped content, and message overhead. Ties retain originals.
@@ -994,7 +1020,7 @@ completed jobs' logs and original tool records remain retrievable. Completion
 notices are delivered once while idle or at an agent boundary and do not spend a model call.
 They do not by themselves establish that tests passed: inspect exit status and output.
 
-Compatible reloads preserve jobs and logs. `/reset`, `/resume`, and shutdown stop
+Compatible reloads preserve jobs and logs. `/reset`, `/resume`, `/fork`, `/delete`, and shutdown stop
 and drain active jobs before replacing or closing their output archive. Saved
 sessions retain output, but do not reattach to or relaunch prior processes.
 After a crash, inspect recorded output and running processes before rerunning work.

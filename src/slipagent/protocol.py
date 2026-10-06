@@ -124,7 +124,7 @@ def response_format(has_previous_results: bool, *, native_tools: bool = False) -
                 "If there are no previous results, explain your intended action and purpose. "
                 "If there are no new calls, report your findings, answer, or the specific information "
                 "needed to proceed. Do not invent findings or calls to fill the response.\n\n"
-                "This response provides memory for future turns; private reasoning is not supplied back to you."
+                "This response provides memory for future turns beyond any limited reasoning retention."
             ),
         },
         "tool_calls": {

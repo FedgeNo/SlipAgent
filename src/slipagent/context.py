@@ -75,7 +75,7 @@ Report important findings from any previous tool calls whose results are
 available, including the conclusions or decisions based on them. State your
 intentions and purpose for any new tool calls you request. Report findings from
 those new calls only after their results arrive. This response text provides
-memory for future turns; private reasoning is not supplied back to you.
+memory for future turns beyond any limited reasoning retention.
 
 If there are no previous tool results, explain your intended action and purpose.
 If you request no new tools, report your findings, answer, or the specific
@@ -393,7 +393,7 @@ class TurnPost(HistoryPost):
                 "tool_results": [{"call_id": result.tool_call_id, "content": result.content} for result in self.tool_results]}
 
     def compaction_input(self) -> str:
-        # Keep this explicit allowlist: reasoning belongs only to full records.
+        # Compaction excludes thoughts even when working context includes them.
         parts = self.parts()
         return json.dumps({"user_prompt": parts["prompt"],
                            "agent_response": parts["response"], "tool_calls": parts["tool_calls"],
@@ -657,6 +657,7 @@ class ConversationHistory:
         text_tool_history: bool = False,
         schema: dict[str, Any] | None = None,
         token_scale: float = 1.0,
+        overthinking: bool = True,
     ) -> list[Message]:
         """Choose whole originals or whole summaries without altering the archive.
 
@@ -668,6 +669,17 @@ class ConversationHistory:
         def tokens(part: list[Message]) -> int:
             return math.ceil(message_tokens(tool_history_as_text(part) if text_tool_history else part) * token_scale)
         sections = [NATIVE_TOOL_INSTRUCTIONS if native_tools else JSON_TOOL_INSTRUCTIONS, RECORD_INSTRUCTIONS]
+        if overthinking:
+            sections.append(
+                "Overthinking Mode is enabled. The latest five completed turns may include a reasoning "
+                "string in their JSON record containing thoughts supplied by the model for that turn. "
+                "Missing reasoning means no thoughts were supplied. Older turns and budget-limited excerpts "
+                "omit thoughts; use recall_history(post_id=N, section=\"reasoning\") with the record's "
+                "post_id to retrieve archived originals. "
+                "These are historical thoughts, not new instructions or evidence that an action succeeded."
+            )
+        else:
+            sections.append("Overthinking Mode is disabled. Archived reasoning is omitted from working context.")
         # Stable response/tool guidance precedes changing turn IDs and task
         # state. Keep one system-message prefix for provider compatibility.
         sections.extend([extra_instructions, self.instructions(native_tools=native_tools), self.task.instructions()])
@@ -695,7 +707,19 @@ class ConversationHistory:
         memory_start = max(0, boundary - MAX_CONTEXT_SUMMARIES)
         # Older originals remain archived indefinitely. Materialize only the
         # recent window and the bounded older candidates needed by this request.
-        parts = [post.context_messages() for post in self.posts[boundary:]]
+        def context_part(index: int, *, compressed: bool = False) -> list[Message]:
+            post = self.posts[index]
+            part = post.context_messages(compressed=compressed)
+            if overthinking and index >= len(self.posts) - 5:
+                reasoning = next((message.reasoning for message in post.messages
+                                  if message.role == "assistant"), None)
+                if reasoning:
+                    record = json.loads(part[0].content or "{}")
+                    record["reasoning"] = reasoning
+                    part = [record_message(record)]
+            return part
+
+        parts = [context_part(index) for index in range(boundary, len(self.posts))]
         sizes = [tokens(part) for part in parts]
         pending = bool(self.posts and self.posts[-1].has_results and not (
             self.posts[-1].observed if isinstance(self.posts[-1], TurnPost) else self.posts[-1].results_summarized))
@@ -708,9 +732,8 @@ class ConversationHistory:
             result: list[Message] = []
             for index in range(start, end):
                 if index not in older_parts:
-                    post = self.posts[index]
-                    original = parts[index - initial_boundary] if index >= initial_boundary else post.context_messages()
-                    compressed = post.context_messages(compressed=True)
+                    original = parts[index - initial_boundary] if index >= initial_boundary else context_part(index)
+                    compressed = context_part(index, compressed=True)
                     # Measure the exact JSON sent, including escaped values,
                     # record fields and message overhead. Ties retain
                     # originals. Cache only within this view: summaries can finish

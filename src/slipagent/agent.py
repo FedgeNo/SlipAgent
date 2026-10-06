@@ -154,8 +154,8 @@ information needed to proceed. Do not invent tool calls or findings just to
 fill the response. Put this text in your response field when using JSON, or in
 your assistant reply text when using native tools or ordinary text.
 
-   Your private reasoning is not supplied back to you on later turns.
-Conclusions left only in that reasoning will be lost. Put task-relevant findings
+   Reasoning retention depends on Overthinking Mode and the context budget.
+Put task-relevant findings
 in the accompanying response so they are available in the next turn and its
 eventual summary. Preserve the conclusions and supporting facts, not a transcript
 of your private thoughts. Clearly distinguish completed actions from plans and
@@ -315,6 +315,7 @@ class Agent:
     messages: list[Message] = field(default_factory=list)
     usage: Usage = field(default_factory=Usage)
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    overthinking: bool = True
     # Text the user typed while the agent was busy. Drained at the end of the
     # step in which it arrived, so it reaches the model as ordinary user input.
     pending: list[str] = field(default_factory=list)
@@ -565,6 +566,7 @@ class Agent:
             repository_map = await self.registry.services["repository_map"].snapshot(query, min(8000, int(length * budget_fraction * .03)))
         view_options: dict[str, Any] = dict(
             keep_posts=self.context_posts,
+            overthinking=self.overthinking,
             context_length=int(length * budget_fraction),
             max_output=self.max_tokens or min(8192, max(256, length // 8)),
             native_tools=native_tools,

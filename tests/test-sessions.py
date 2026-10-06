@@ -14,7 +14,7 @@ from slipagent.tools import build_default_registry
 from slipagent.tools.base import ToolRegistry
 from slipagent.types import Message, ToolCall
 from test_agent import StubClient, RecordingTool, completion
-from test_cli_e2e import StubOpenRouter, run_cli, run_repl_commands, text_step
+from test_cli_e2e import StubOpenRouter, run_cli, run_repl_commands, text_step, metadata_server
 
 
 def attach(agent, workspace, tmp_path):
@@ -22,6 +22,157 @@ def attach(agent, workspace, tmp_path):
     agent.registry.services["session_journal"] = journal
     journal.begin(agent)
     return journal
+
+
+async def test_startup_commands_do_not_create_session_before_prompt(tmp_path, metadata_server):
+    from slipagent import cli
+    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    journal = session.registry.services["session_journal"]
+    try:
+        assert journal.path is None
+        assert journal.listing() == []
+        for command in ("/help", "/sessions", "/overthinking off", "/rename First task"):
+            await cli._handle_command(session, command)
+        assert journal.path is None
+        assert journal.listing() == []
+        session.agent.client = StubClient([completion("Answer")])
+        await session.agent.run("First prompt")
+        await session.agent.wait_for_compaction()
+        assert len(journal.listing()) == 1
+        assert journal.title == "First task | SlipAgent"
+        saved = journal.load(journal.session_id)
+        assert any(message.role == "user" and message.content == "First prompt" for message in saved["messages"])
+    finally:
+        await cli._shutdown(session)
+
+
+@pytest.mark.parametrize("startup_resume", [False, True])
+async def test_startup_and_resume_create_no_empty_session(tmp_path, metadata_server, startup_resume):
+    from slipagent import cli
+    agent = Agent(StubClient([]), ToolRegistry(), "test")
+    journal = SessionJournal(str(tmp_path))
+    agent.messages.append(Message.user("Saved prompt"))
+    journal.begin(agent)
+    parent = journal.session_id
+    original = journal.path.read_bytes()
+    args = ["--no-mcp", "-w", str(tmp_path)]
+    if startup_resume:
+        args += ["--resume", parent]
+    session = await cli.build_session(cli.build_parser().parse_args(args))
+    active = session.registry.services["session_journal"]
+    try:
+        if not startup_resume:
+            assert len(active.listing()) == 1
+            await cli._handle_command(session, f"/resume {parent}")
+        assert len(active.listing()) == 2
+        assert journal.path.read_bytes() == original
+        assert all(any(message.role == "user" for message in active.load(entry["id"])["messages"])
+                   for entry in active.listing())
+    finally:
+        await cli._shutdown(session)
+
+
+async def test_fork_preserves_parent_and_continues_in_new_session(tmp_path, metadata_server):
+    from slipagent import cli
+    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    journal = session.registry.services["session_journal"]
+    session.agent.client = StubClient([completion("First answer"), completion("Fork answer")])
+    try:
+        await session.agent.run("Original prompt")
+        await session.agent.wait_for_compaction()
+        journal.rename("Original title")
+        command = shlex.join([sys.executable, "-c", "print('forked output')"])
+        result = await session.registry.invoke("run_command", {"command": command})
+        assert not result.is_error
+        archive = session.registry.services["command_archive"]
+        log_id = next(iter(archive.logs))
+        parent = journal.session_id
+        parent_path = journal.path
+        original = parent_path.read_bytes()
+        await cli._handle_command(session, "/fork")
+        assert journal.session_id != parent
+        assert journal.title == "Original title | SlipAgent"
+        assert len(journal.listing()) == 2
+        assert journal.load(journal.session_id)["messages"][-1].content == "First answer"
+        retained = await session.registry.invoke("read_command_output", {"log_id": log_id})
+        assert "forked output" in retained.content and not retained.is_error
+        await session.agent.run("New branch prompt")
+        await session.agent.wait_for_compaction()
+        assert parent_path.read_bytes() == original
+        assert any(message.content == "New branch prompt" for message in journal.load(journal.session_id)["messages"])
+        assert all(message.content != "New branch prompt" for message in journal.load(parent)["messages"])
+    finally:
+        await cli._shutdown(session)
+
+
+@pytest.mark.parametrize("confirmation", [None, "cancel", "delete"])
+async def test_delete_confirmation_removes_only_current_session(tmp_path, metadata_server, confirmation):
+    import io
+    from unittest.mock import AsyncMock, Mock
+    from slipagent import cli
+    from slipagent.terminal import TerminalUI
+    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    journal = session.registry.services["session_journal"]
+    session.agent.client = StubClient([completion("Answer")])
+    terminal = Mock(spec=TerminalUI)
+    terminal.choose = AsyncMock(return_value=confirmation)
+    output = io.StringIO()
+    terminal.write.side_effect = lambda text, **kwargs: output.write(text)
+    try:
+        await session.agent.run("Original prompt")
+        await session.agent.wait_for_compaction()
+        parent = journal.session_id
+        parent_path = journal.path
+        original = parent_path.read_bytes()
+        await cli._handle_command(session, "/fork")
+        journal.rename("Delete this copy")
+        current = journal.session_id
+        current_path = journal.path
+        current_original = current_path.read_bytes()
+        # Disposable files stand in for all stored sidecar content.
+        for suffix in ("-logs", "-requests"):
+            directory = journal.directory / (current + suffix)
+            directory.mkdir(exist_ok=True)
+            (directory / "retained-data").write_text("Private session data")
+        session.renderer.terminal = terminal
+        await cli._handle_command(session, "/delete")
+        terminal.choose.assert_awaited_once()
+        assert "Delete this copy" in terminal.choose.call_args.args[0]
+        assert parent_path.read_bytes() == original
+        if confirmation == "delete":
+            assert journal.path is None and journal.session_id == ""
+            assert [entry["id"] for entry in journal.listing()] == [parent]
+            assert not list(journal.directory.glob(current + "*"))
+            assert all(message.role == "system" for message in session.agent.messages)
+            assert not session.agent.pending and not session.agent.history.posts
+            terminal.clear_transcript.assert_called_once()
+            assert "SlipAgent — OpenRouter compatible coding agent" in output.getvalue()
+            await cli._handle_command(session, "/sessions")
+            assert journal.path is None
+        else:
+            assert current_path.read_bytes() == current_original
+            assert journal.session_id == current
+            assert len(journal.listing()) == 2
+            terminal.clear_transcript.assert_not_called()
+    finally:
+        await cli._shutdown(session)
+
+
+async def test_fork_and_delete_require_saved_session_and_delete_requires_terminal(tmp_path, metadata_server):
+    from slipagent import cli
+    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    journal = session.registry.services["session_journal"]
+    try:
+        await cli._handle_command(session, "/fork")
+        await cli._handle_command(session, "/delete")
+        assert journal.path is None
+        session.agent.messages.append(Message.user("Prompt"))
+        session.agent._persist()
+        original = journal.path.read_bytes()
+        await cli._handle_command(session, "/delete")
+        assert journal.path.read_bytes() == original
+    finally:
+        await cli._shutdown(session)
 
 
 def test_session_titles_survive_reopen_resume_and_reset(workspace, tmp_path):
@@ -127,6 +278,9 @@ async def test_originals_summaries_reasoning_usage_and_pending_survive_resume(wo
     assert agent.usage.prompt_tokens > 0
     result = await agent.registry.invoke("recall_history", {"post_id": 1, "sections": ["prompt", "response"]})
     assert "exact prompt" in result.content and "original reply" in result.content
+    view = await agent._context_view(agent.registry.specs(), 1)
+    assert "private reasoning for archive only" in str(view)
+    agent.overthinking = False
     view = await agent._context_view(agent.registry.specs(), 1)
     assert "private reasoning for archive only" not in str(view)
     assert agent.history.task.current_prompt_post == 1

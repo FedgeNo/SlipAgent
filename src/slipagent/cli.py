@@ -59,8 +59,8 @@ BANNER = """SlipAgent — OpenRouter compatible coding agent
 Commands: /help  /tools  /model [slug]  /models [filter]  /key [show|status|key]
           /temperature [value]  /cost  /mcp [add|save|remove]
           /task [new]  /rename <name>  /reset  /reload  /generations
-          /sessions  /resume [id|latest]  /requests [attempt]
-          /menu  /danger [on|off|status]  /init  /stop  /exit  /quit
+          /sessions  /resume [id|latest]  /fork  /delete  /requests [attempt]
+          /menu  /danger [on|off|status]  /overthinking on|off  /init  /stop  /exit  /quit
 
 Type a task and press Enter. Follow-ups queue while the agent works.
 Settings changes also queue until the current response and tool batch finish.
@@ -77,6 +77,7 @@ Commands
   /danger [on]         disable workspace path confinement (queues while working)
   /danger off          restore workspace path confinement (queues while working)
   /danger status       show whether danger mode is active
+  /overthinking on|off  enable or disable thoughts in the latest five turns (queues while working)
   /tools               list the available tools
   /model               show the active model
   /model <slug>        switch model for this session
@@ -92,6 +93,8 @@ Commands
   /task new            start a new task with your next prompt; retain history and logs
   /rename <name>       name this saved conversation and its terminal title
   /sessions            list saved sessions for this project
+  /fork                copy the current saved session and continue in the copy (queues while working)
+  /delete              confirm deletion of the current session and its logs; Esc cancels (queues while working)
   /resume              choose a saved session with Up/Down and Enter (queues while working)
   /resume <id|latest>   restore a saved conversation and scroll to its end (queues while working)
   /requests [attempt]  list recent request attempts or inspect an exact saved request
@@ -134,6 +137,8 @@ MENU_OPTIONS = [
     ("/task", "Active Task"),
     ("/sessions", "Saved Sessions"),
     ("/resume", "Resume Session"),
+    ("/fork", "Fork Current Session"),
+    ("/delete", "Delete Current Session"),
     ("/requests", "Request Diagnostics"),
     ("/mcp", "MCP Servers"),
     ("/reload", "Reload Components"),
@@ -563,6 +568,7 @@ async def build_session(args: argparse.Namespace) -> Session:
             temperature=config.temperature,
             max_tokens=config.max_tokens,
             context_posts=config.context_posts,
+            overthinking=config.overthinking,
             system_prompt=build_system_prompt(str(workspace.root)),
             on_event=lambda event: renderer.handle(event),
         )
@@ -606,8 +612,6 @@ async def build_session(args: argparse.Namespace) -> Session:
                 journal.restore(agent, data)
                 session.extensions["restore_transcript"] = True
                 renderer.emit(f"  Resumed {data['id']} as {journal.session_id}; no tools were replayed.")
-            else:
-                journal.begin(agent)
         if not getattr(args, "no_reload", False):
             frame = RuntimeFrame(session, sys.modules[__name__])
             session.reloader = frame
@@ -1053,11 +1057,12 @@ async def _run_interactive_command(session: Session, line: str) -> bool:
 
 def _changes_session(command: str, argument: str) -> bool:
     """Commands that cannot share a live model request or tool batch."""
-    return (command in {"reset", "init", "resume"}
+    return (command in {"reset", "init", "resume", "fork", "delete"}
             or command == "key" and argument.lower() not in {"show", "status"}
             or command in {"model", "mcp", "temperature"} and bool(argument)
             or command == "task" and argument == "new"
-            or command == "danger" and argument.lower() in {"", "on", "off"})
+            or command == "danger" and argument.lower() in {"", "on", "off"}
+            or command == "overthinking" and argument.lower() in {"on", "off"})
 
 
 def _queue_command(session: Session, line: str, command: str) -> None:
@@ -1090,7 +1095,7 @@ async def _apply_deferred_commands(session: Session, *, exiting: bool = False) -
         parts = line[1:].split(None, 1)
         command = parts[0].lower()
         argument = parts[1].strip() if len(parts) > 1 else ""
-        if command in {"reset", "resume"} or command == "task" and argument == "new":
+        if command in {"reset", "resume", "delete"} or command == "task" and argument == "new":
             resume = False
         try:
             if await _run_interactive_command(session, line):
@@ -1312,6 +1317,12 @@ async def _execute_command(session: Session, line: str) -> bool:
                 print("  Danger mode OFF: workspace path confinement is enabled.", file=out)
             if session.renderer.terminal is not None:
                 session.renderer.terminal.app.invalidate()
+    elif command == "overthinking":
+        if argument.lower() not in {"on", "off"}:
+            print(style.red("  usage: /overthinking on|off"), file=out)
+        else:
+            session.agent.overthinking = argument.lower() == "on"
+            print(f"  Overthinking Mode {'ON' if session.agent.overthinking else 'OFF'}.", file=out)
     elif command == "model":
         await _model_command(session, argument, style, out)
     elif command == "models":
@@ -1390,6 +1401,50 @@ async def _execute_command(session: Session, line: str) -> bool:
                 print(f"  restored {data['id']} as {journal.session_id}; no tools were replayed. Type a task or continue when ready.", file=out)
             except SessionError as exc:
                 print(style.red(f"  {exc}"), file=out)
+    elif command in {"fork", "delete"}:
+        journal = session.registry.services.get("session_journal")
+        if argument:
+            print(style.red(f"  usage: /{command}"), file=out)
+        elif journal is None:
+            print(style.red("  session persistence is disabled; restart without --no-session to enable it."), file=out)
+        elif journal.path is None:
+            print("  no current saved session; enter a task prompt first.", file=out)
+        else:
+            terminal = session.renderer.terminal
+            if command == "delete":
+                if terminal is None:
+                    print(style.red("  /delete requires an interactive terminal for confirmation."), file=out)
+                    return False
+                selected = await terminal.choose(
+                    f"Permanently Delete {journal.title}?",
+                    [("delete", "Delete Current Session and All Logs"), ("cancel", "Cancel")],
+                )
+                if selected != "delete":
+                    return False
+            try:
+                await session.agent.wait_for_compaction()
+                jobs = session.registry.services.get("command_jobs")
+                if jobs is not None:
+                    await jobs.stop_all()
+                session.agent._persist()
+                if command == "fork":
+                    parent = journal.session_id
+                    data = await asyncio.to_thread(journal.load, parent)
+                    journal.restore(session.agent, data)
+                    print(f"  forked {parent} as {journal.session_id}; continuing in the new session.", file=out)
+                else:
+                    session.agent.reset(new_session=False)
+                    await asyncio.to_thread(journal.delete_current)
+                    session.extensions.pop("title", None)
+                    if terminal is not None:
+                        terminal.clear_transcript()
+                    session.renderer.show_banner(
+                        model=session.agent.model, workspace=session.workspace.root,
+                        tools=session.registry.names,
+                    )
+            except SessionError as exc:
+                print(style.red(f"  {exc}"), file=out)
+                return False
     elif command == "task":
         if argument == "new":
             if session.agent.pending:

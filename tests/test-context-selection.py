@@ -161,4 +161,4 @@ async def test_summary_comparison_uses_the_same_json_records_for_all_tool_profil
     for native in (True, False):
         view = await history.view(messages, [], keep_posts=5, context_length=1_000_000, max_output=8192,
                                   native_tools=native, text_tool_history=not native)
-        assert context_records(view)[0] == {"record_type": "history_turn", "representation": "compressed", "summary": post.summary}
+    assert context_records(view)[0] == {"record_type": "history_turn", "representation": "compressed", "post_id": post.id, "summary": post.summary}

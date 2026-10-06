@@ -17,7 +17,7 @@ def record_message(record: dict[str, Any]) -> Message:
 
 
 def turn_record(messages: list[Message], *, current: bool = False,
-                retained_prompt: str = "") -> dict[str, Any]:
+                retained_prompt: str = "", post_id: int | None = None) -> dict[str, Any]:
     prompts = [message.content or "" for message in messages if message.role == "user"]
     calls = [call for message in messages for call in message.tool_calls or []]
     names = {call.id: call.name for call in calls}
@@ -49,4 +49,6 @@ def turn_record(messages: list[Message], *, current: bool = False,
     }
     if current:
         record["continue_current_task"] = not prompts
+    if post_id is not None:
+        record["post_id"] = post_id
     return record

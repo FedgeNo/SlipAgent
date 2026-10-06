@@ -570,12 +570,13 @@ headings are inserted into prompts, replies, or tool content.
 distinguishes `full`, `compressed`, and `excerpt`. Full records have `user_prompt`
 (an array, preserving multiple queued messages), `agent_response`, `tool_calls`,
 and `tool_results`. Calls retain their names, argument objects and IDs; results
-retain the matching IDs, status and content. Compressed records contain only
-their summary. Excerpts carry omission counts and retrieval instructions in
+retain the matching IDs, status and content. Compressed records contain
+their summary and metadata. Every bundle includes a `post_id` metadata field
+for retrieving the original with `recall_history`; it is separate from message
+text. Excerpts carry omission counts and retrieval instructions in
 separate fields, without inserting descriptions into original text.
-The current post number and task-source IDs stay in the system prompt. The last
-historical record is the current post minus one; earlier records can be located
-by counting backward for `recall_history`. The current-turn object identifies
+The current post number and task-source IDs also stay in the system prompt.
+The current-turn object identifies
 continuation requests and retains the active prompt when history lacks a full
 copy. JSON fields and escaping count toward the context budget. This input format
 is separate from the selected model's response contract, which stays consistent

@@ -80,8 +80,9 @@ Context construction proceeds in this order:
    The harness's exact observation envelope is unpacked, while arbitrary JSON
    inside tool output remains content. Unknown legacy status stays `unknown`.
    The selected records form a contiguous suffix of stored history. The current
-   post number remains in the system prompt, so subtracting one for the latest
-   record and counting backward gives each record's exact `recall_history` ID.
+   post number remains in the system prompt. Every full, compressed, excerpt,
+   and current bundle also includes its exact `post_id` as JSON metadata for
+   `recall_history`, separate from the original message strings.
    Description keys never enter actual message strings. Reserved legacy response
    labels are removed from standalone prose
    lines in the context copy and in accepted model replies. Fenced/quoted examples

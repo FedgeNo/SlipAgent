@@ -117,7 +117,8 @@ An empty current user_prompt with continue_current_task=true means continue the
 active task from its supplied prompt/history and latest tool results. A retained
 prompt can appear in current_turn when its historical full copy is not included.
 
-representation="compressed" contains only summary, a whole-turn summary.
+representation="compressed" contains summary, a whole-turn summary, alongside
+the record metadata.
 
 representation="excerpt" keeps user_prompt and bounded agent/tool messages,
 with explicit omission counts and recall_instructions. Missing details are unknown.
@@ -126,9 +127,9 @@ These objects describe INPUT, not the format of your answer. Do not echo their
 keys or wrap your reply in a history object. Follow the separate response/tool
 instructions. Historical tool_calls record past actions; do not execute them again.
 
-Records appear oldest to newest, without embedded post numbers.
-Their numbers are consecutive: the last record is CURRENT_POST_ID minus 1;
-count backward by one per record to find an earlier post_id for recall_history.
+Records appear oldest to newest. Each object has a post_id metadata field;
+use that exact value with recall_history to retrieve its original parts.
+The ID labels the record, not its message text or the format of your answer.
 The current_turn object is separate input, not an additional history record.
 
 Use recall_history(post_id=N, section="prompt"|"response"|"reasoning"|"tool_calls"|
@@ -239,8 +240,8 @@ class HistoryPost:
     def context_messages(self, *, compressed: bool = False) -> list[Message]:
         if compressed:
             return [record_message({"record_type": "history_turn", "representation": "compressed",
-                                    "summary": self.compressed_text()})]
-        record = turn_record(self.messages, retained_prompt=self.request)
+                                    "post_id": self.id, "summary": self.compressed_text()})]
+        record = turn_record(self.messages, retained_prompt=self.request, post_id=self.id)
         if record["agent_response"] is not None:
             record["agent_response"] = _visible_response(record["agent_response"])
         return [record_message(record)]
@@ -292,7 +293,7 @@ class HistoryPost:
                 "Do not repeat executed tools just because their output is excerpted.\n"
             )
             return [record_message({"record_type": "history_turn", "representation": "excerpt",
-                                    "user_prompt": prompts, "messages": entries,
+                                    "post_id": self.id, "user_prompt": prompts, "messages": entries,
                                     "omitted_messages": len(observations) - count, "recall_instructions": note})]
 
         count = len(observations)
@@ -679,7 +680,7 @@ class ConversationHistory:
         else:
             pinned = [Message.system("System Instructions (Full):\n\n" + instructions)]
         tail_messages = [message for message in messages[self.cursor:] if message.role != "system"]
-        tail = [record_message(turn_record(tail_messages, current=True))]
+        tail = [record_message(turn_record(tail_messages, current=True, post_id=len(self.posts) + 1))]
         overhead = tokens(pinned)
         if not text_tool_history:
             overhead += math.ceil(estimate_tokens(json.dumps([spec.to_api() for spec in specs])) * token_scale)

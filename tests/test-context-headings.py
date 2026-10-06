@@ -20,13 +20,13 @@ async def test_full_context_has_one_object_per_turn_and_preserves_original_parts
     assert "CURRENT_POST_ID: 2" in view[0].content
     previous, current = context_records(view)
     assert previous == {
-        "record_type": "history_turn", "representation": "full", "user_prompt": [prompt],
+        "record_type": "history_turn", "representation": "full", "post_id": 1, "user_prompt": [prompt],
         "agent_response": "Reading",
         "tool_calls": [{"call_id": "read-1", "tool_name": "read_file", "arguments": {"path": "notes.md"}}],
         "tool_results": [{"call_id": "read-1", "tool_name": "read_file", "status": "unknown", "content": source}],
     }
     assert current == {
-        "record_type": "current_turn", "representation": "full", "user_prompt": ["Now explain it", "Use ASCII"],
+        "record_type": "current_turn", "representation": "full", "post_id": 2, "user_prompt": ["Now explain it", "Use ASCII"],
         "agent_response": None, "tool_calls": [], "tool_results": [], "continue_current_task": False,
     }
     assert [message.to_api() for message in originals] == before
@@ -43,7 +43,7 @@ async def test_compressed_records_are_separate_objects_without_original_fields()
     messages.append(Message.user("Current task"))
     view = await history.view(messages, [], keep_posts=1, context_length=1_000_000, max_output=8192)
     records = context_records(view)
-    assert records[:2] == [{"record_type": "history_turn", "representation": "compressed", "summary": f"Summary {i}"}
+    assert records[:2] == [{"record_type": "history_turn", "representation": "compressed", "post_id": i, "summary": f"Summary {i}"}
                            for i in (1, 2)]
     assert [record["agent_response"] for record in records[2:-1]] == [f"Answer {i} " * 100 for i in range(3, 8)]
     assert records[-1]["record_type"] == "current_turn"
@@ -58,6 +58,8 @@ async def test_excerpt_omissions_are_fields_instead_of_text_inserted_in_the_outp
     view = await history.view(messages, [], keep_posts=50, context_length=9000, max_output=1000)
     excerpt, current = context_records(view)
     assert excerpt["representation"] == "excerpt"
+    assert excerpt["post_id"] == 1
+    assert current["post_id"] == 2
     result = excerpt["messages"][-1]["content_excerpt"]
     assert source.startswith(result["beginning"]) and source.endswith(result["ending"])
     assert result["omitted_characters"] == len(source) - len(result["beginning"]) - len(result["ending"])

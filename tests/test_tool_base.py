@@ -35,6 +35,23 @@ class EchoTool(Tool):
         return ToolResult.ok(f"echo: {kwargs}")
 
 
+@pytest.mark.parametrize("operation", ["register", "replace"])
+def test_registry_rejects_malformed_schema_without_changing_tools(operation: str) -> None:
+    existing = EchoTool()
+    registry = ToolRegistry([existing])
+    invalid = EchoTool()
+    invalid.name = "invalid"
+    invalid.parameters = {"type": "object", "properties": {"text": {"type": "invalid"}}}
+
+    with pytest.raises(ValueError, match="invalid JSON Schema types"):
+        if operation == "register":
+            registry.register(invalid)
+        else:
+            registry.replace([invalid])
+
+    assert registry.tools == [existing]
+
+
 class BoomTool(Tool):
     name = "boom"
     description = "Always explodes."

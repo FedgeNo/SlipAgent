@@ -15,7 +15,7 @@ from test_agent import StubClient, completion, call
 async def test_complete_output_pages_and_tail_survive_preview_truncation(tmp_path):
     archive = CommandArchive(100_000, directory=tmp_path)
     try:
-        log = archive.start("command", post_id=7, call_id="call/unsafe")
+        log = archive.start("command", step_id=7, call_id="call/unsafe")
         original = "start\n" + "αβ🙂\n" * 6000 + "LAST LINE\n"
         log.write("stdout", original)
         log.finish(0, False)
@@ -30,7 +30,7 @@ async def test_complete_output_pages_and_tail_survive_preview_truncation(tmp_pat
         assert content == original
         tail = json.loads((await tool.run(log_id=log.id, tail=True, limit=10)).content)
         assert tail["content"] == original[-10:]
-        records = json.loads((await tool.run(post_id=7, call_id="call/unsafe")).content)
+        records = json.loads((await tool.run(step_id=7, call_id="call/unsafe")).content)
         assert records["logs"][0]["log_id"] == log.id
         assert not (tmp_path / "unsafe").exists()
     finally:
@@ -47,11 +47,11 @@ async def test_shell_archives_middle_and_timeout_output_with_call_provenance(tmp
     try:
         await agent.run("Run a test command")
         log = next(iter(archive.logs.values()))
-        assert (log.post_id, log.call_id, log.timed_out) == (1, "call_run_command", True)
+        assert (log.step_id, log.call_id, log.timed_out) == (1, "call_run_command", True)
         assert log.streams["stdout"].retained_bytes == 70007
         result = await registry.invoke("read_command_output", {"log_id": log.id, "offset": 34997, "limit": 12})
         assert json.loads(result.content)["content"] == "AAAMIDDLEZZZ"
-        observation = agent.history.posts[0].messages[-1].content
+        observation = agent.history.steps[0].messages[-1].content
         assert log.id in observation and "Effects may be partial" in observation
         directory = archive.directory
         agent.reset()

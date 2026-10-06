@@ -19,10 +19,9 @@ from test_agent import RecordingTool, StubClient, completion, task_record
 from test_cli_e2e import StubOpenRouter, run_cli, text_step, tool_step
 
 
-def reply(post, text, summary="User requested work; model completed it."):
-    return json.dumps({"task": task_record(), "response": text, "tool_calls": [],
-                       "previous_tool_responses_compressed": "Previous tools returned their results." if post > 1 else "",
-                       "user_prompt_compressed": "User requested work.", "agent_response_compressed": summary})
+def reply(step, text, summary="User requested work; model completed it."):
+    return text
+
 
 
 def frame(delta=None, finish=None, **extra):
@@ -204,16 +203,15 @@ async def test_agent_streams_only_thoughts_and_keeps_tools_out_of_compressed_fie
     started, release = asyncio.Event(), asyncio.Event()
     events, requests = [], []
     tool = RecordingTool()
-    record = json.loads(reply(1, "Working.", "User asked inspect; model requested record."))
-    record["tool_calls"] = [{"id": "c", "name": "record", "arguments": '{"value":"A"}'}]
-    content = json.dumps(record)
+    content = "Working."
     class Paused(httpx.AsyncByteStream):
         async def __aiter__(self):
             yield packet(frame({"reasoning": "Inspecting the project."}))
             yield packet(frame({"content": content[:50]}))
             started.set()
             await release.wait()
-            yield packet(frame({"content": content[50:]}, "stop", usage={"total_tokens": 15, "cost": .01}))
+            yield packet(frame({"content": content[50:]}))
+            yield packet(frame({"tool_calls": [{"index": 0, "id": "c", "type": "function", "function": {"name": "record", "arguments": '{"value":"A"}'}}]}, "tool_calls", usage={"total_tokens": 15, "cost": .01}))
             yield packet("[DONE]")
     def handle(request):
         if request.method == "GET":
@@ -237,8 +235,8 @@ async def test_agent_streams_only_thoughts_and_keeps_tools_out_of_compressed_fie
             release.set()
         assert await task == "Done."
     assert tool.seen == [{"value": "A"}]
-    assert TOOL_SUMMARY_KEY not in agent.history.posts[0].full_text()
-    assert agent.history.posts[0].agent_response == "Working."
+    assert TOOL_SUMMARY_KEY not in agent.history.steps[0].full_text()
+    assert agent.history.steps[0].agent_response == "Working."
     assert not any("<slipagent_context>" in e.text for e in events)
     assert "response_format" not in requests[0]
     assert TOOL_SUMMARY_KEY not in tool.parameters["properties"]
@@ -251,7 +249,7 @@ async def test_three_invalid_actions_stop_without_spending_the_200_request_budge
     with pytest.raises(ContextError, match="3 consecutive"):
         await agent.run("work")
     assert len(client.calls) == 3 and tool.seen == []
-    assert agent.history.posts == []
+    assert agent.history.steps == []
 
 
 async def test_invalid_stream_reports_red_error_and_restarts_before_running_tools():
@@ -292,9 +290,15 @@ async def test_invalid_stream_reports_red_error_and_restarts_before_running_tool
     assert "Thinking: Starting again." in sink.getvalue()
     assert "Rejected plan." not in sink.getvalue()
     assert sink.getvalue().index("Response rejected") < sink.getvalue().index("Accepted response.")
-    assert len(agent.history.posts) == 1
-    assert "Rejected plan" not in agent.history.posts[0].full_text()
-    assert requests[0]["messages"][1:] == requests[1]["messages"][1:]
+    assert len(agent.history.steps) == 1
+    assert "Rejected plan" not in agent.history.steps[0].full_text()
+    first = json.loads(requests[0]["messages"][-1]["content"])
+    retry = json.loads(requests[1]["messages"][-1]["content"])
+    corrections = retry.pop("user_prompt")
+    assert corrections[0] == first.pop("user_prompt")[0] == "work"
+    assert len(corrections) == 2 and corrections[1].startswith("Harness tool-use correction:")
+    assert "No tools from it were executed" in corrections[1]
+    assert retry == first
     assert tool.seen == []
 
 
@@ -316,7 +320,7 @@ async def test_streamed_literal_metadata_example_stays_in_one_output_block():
 
 
 def test_reserved_metadata_never_flashes_when_markers_are_split_into_characters():
-    value = 'Visible λ.\n<slipagent_context>{"post":1,"summary":"User requested work; model completed it."}</slipagent_context>'
+    value = 'Visible λ.\n<slipagent_context>{"step":1,"summary":"User requested work; model completed it."}</slipagent_context>'
     output = VisibleStream()
     visible = "".join(output.push(character) for character in value)
     assert visible == "Visible λ."
@@ -357,16 +361,13 @@ def test_one_shot_streams_reply_previews_without_repeating_a_buffered_final_answ
     assert sink.getvalue().splitlines() == ["", "Thinking: Inspecting.", "", "Done."]
 
 
-def test_real_cli_accepts_tool_only_memory_without_regeneration(tmp_path):
-    (tmp_path / "AGENTS.md").write_text("Project notes.\n")
-    updated = "Project notes.\nUse agents/ as a scratch pad for audit reports and notes.\n"
-    edit = tool_step("edit_file", {"path": "AGENTS.md", "old_string": "Project notes.\n", "new_string": updated,
-                                   TOOL_SUMMARY_KEY: "User asked to document agents/ as a scratch pad; model updates AGENTS.md."})
-    with StubOpenRouter([edit, text_step(reply(2, "Updated AGENTS.md."))], include_memory=False) as stub:
-        result = run_cli("-p", "Document agents/ as a scratch pad in AGENTS.md", "--base-url", stub.base_url, cwd=tmp_path)
+def test_real_cli_readonly_call_without_memory_needs_no_regeneration(tmp_path):
+    read = tool_step("list_dir", {"path": "."})
+    read["choices"][0]["message"]["content"] = "Listing the directory."
+    with StubOpenRouter([read, text_step("Done.")], include_memory=False) as stub:
+        result = run_cli("-p", "List the directory", "--base-url", stub.base_url, cwd=tmp_path)
     assert result.returncode == 0, result.stderr
-    assert (tmp_path / "AGENTS.md").read_text() == updated
-    assert result.stdout.strip() == "Updated AGENTS.md."
+    assert result.stdout.strip() == "Done."
     assert len(stub.requests) == 2
     assert TOOL_SUMMARY_KEY not in result.stdout + result.stderr
     assert "Retrying" not in result.stderr

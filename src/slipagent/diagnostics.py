@@ -63,7 +63,7 @@ class RequestDiagnostics:
             if os.path.exists(temporary):
                 os.unlink(temporary)
 
-    def begin(self, request: str, *, step: int, post: int) -> int | None:
+    def begin(self, request: str, *, step: int, step_id: int) -> int | None:
         if self.error:
             return None
         try:
@@ -72,7 +72,7 @@ class RequestDiagnostics:
             if not snapshot.exists():
                 self._write(snapshot, gzip.compress(request.encode("utf-8"), mtime=0))
             self.sequence += 1
-            record = {"version": 1, "attempt": self.sequence, "step": step, "post": post, "request": snapshot.name,
+            record = {"version": 1, "attempt": self.sequence, "step": step, "step_id": step_id, "request": snapshot.name,
                       "created": datetime.now(timezone.utc).isoformat(), "outcome": "pending"}
             self._write(self.directory / f"{self.sequence:08d}.json", json.dumps(record).encode())
             return self.sequence

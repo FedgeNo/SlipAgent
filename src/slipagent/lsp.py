@@ -379,11 +379,11 @@ class NavigateCodeTool(Tool):
     description = (
         "Use an explicitly configured language server for definition, references, implementation, "
         "or hover.\n\n"
-        "Input line/column are 1-based Unicode character positions.\n\n"
+        "Input `line`/`column` are 1-based Unicode character positions.\n\n"
         "Results label UTF-16 columns explicitly.\n\n"
-        "Locations follow the current Workspace Access mode; use offset to page past 100 results.\n\n"
-        "Requires language_servers in .slipagent/project.json and an already installed stdio "
-        "server."
+        "Locations follow the current Workspace Access mode; use `offset` to page past 100 results.\n\n"
+        "Requires `language_servers` in `.slipagent/project.json` and an already installed stdio "
+        "server. Use `grep` and `read_file` for ordinary discovery; follow the explicit position units."
     )
     parameters = {"type": "object", "properties": {
         "operation": {"type": "string", "enum": list(OPERATIONS)}, "path": {"type": "string"},

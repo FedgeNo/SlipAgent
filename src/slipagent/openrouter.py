@@ -21,12 +21,12 @@ import httpx
 
 from .types import Completion, KeyInfo, Message, ModelInfo, ToolSpec, Usage
 from .capabilities import ModelCapabilities
-from .protocol import ResponseFormatError, merge_call_sources, normalize_calls
+from .protocol import ResponseFormatError, normalize_calls
 
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_TIMEOUT = 180.0
 DEFAULT_MAX_RETRIES = 3
-DEFAULT_TEMPERATURE = 0.2
+DEFAULT_TEMPERATURE = 1.0
 
 # Statuses worth another attempt: transient upstream and rate-limit conditions.
 RETRYABLE_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
@@ -142,12 +142,13 @@ class OpenRouterClient:
         on_request: Callable[[str], None] | None = None,
         request_profile: ModelCapabilities | None = None,
         single_attempt: bool = False,
+        disable_timeout: bool = False,
     ) -> Completion:
         """Request a completion; an isolated job may supply its frozen profile.
 
         Ordinary calls use the selected model's cached capabilities. Background
         compaction passes request_profile so later reselection cannot change
-        routing, temperature support, or reasoning for an already archived turn.
+        routing, temperature support, or reasoning for an already archived step.
         """
         if not messages:
             raise OpenRouterError("chat() requires at least one message")
@@ -202,17 +203,19 @@ class OpenRouterClient:
             # Capture the final request body before transport, without headers.
             on_request(json.dumps(payload, ensure_ascii=False))
         if on_delta is not None:
-            return await self._stream_request(payload, on_delta, single_attempt=single_attempt)
-        raw = await self._request("POST", "/chat/completions", single_attempt=single_attempt, json=payload)
+            return await self._stream_request(payload, on_delta, single_attempt=single_attempt, disable_timeout=disable_timeout)
+        transport_options: dict[str, Any] = {"timeout": None} if disable_timeout else {}
+        raw = await self._request("POST", "/chat/completions", single_attempt=single_attempt, json=payload, **transport_options)
         return _parse_completion(raw)
 
-    async def _stream_request(self, payload: dict[str, Any], on_delta: Callable[[str, str], None], *, single_attempt: bool = False) -> Completion:
+    async def _stream_request(self, payload: dict[str, Any], on_delta: Callable[[str, str], None], *, single_attempt: bool = False, disable_timeout: bool = False) -> Completion:
+        transport_options: dict[str, Any] = {"timeout": None} if disable_timeout else {}
         observed = False
         retries = 0 if single_attempt else self.retry.max_retries
         for attempt in range(retries + 1):
             state: _StreamCompletion | None = None
             try:
-                async with self._client.stream("POST", f"{self.base_url}/chat/completions", json=payload) as response:
+                async with self._client.stream("POST", f"{self.base_url}/chat/completions", json=payload, **transport_options) as response:
                     if response.status_code >= 400:
                         await response.aread()
                         error = _build_error(response)
@@ -488,8 +491,14 @@ class _StreamCompletion:
                     if type(index) is not int or index < 0:
                         raise ValueError("tool fragments need a nonnegative index")
                     call = self.calls.setdefault(index, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                    if set(fragment) - {"index", "id", "type", "function"}:
+                        call["invalid_fields"] = True
+                    if "type" in fragment:
+                        call["type"] = fragment["type"]
                     call["id"] += fragment.get("id") or ""
                     function = fragment.get("function") or {}
+                    if set(function) - {"name", "arguments"}:
+                        call["invalid_fields"] = True
                     call["function"]["name"] += function.get("name") or ""
                     call["function"]["arguments"] += function.get("arguments") or ""
                 legacy = delta.get("function_call")
@@ -642,8 +651,23 @@ def _parse_completion(raw: dict[str, Any]) -> Completion:
         response_excerpt = ""
         try:
             content, blocks = _content_parts(wire.get("content"))
-            calls = merge_call_sources(normalize_calls(wire.get("tool_calls")),
-                                       normalize_calls(wire.get("function_call")), normalize_calls(blocks))
+            if wire.get("function_call") is not None or blocks:
+                raise ResponseFormatError("Unexpected tool-call carrier in the API response.")
+            raw_calls = wire.get("tool_calls", [])
+            if raw_calls is None:
+                raw_calls = []
+            if not isinstance(raw_calls, list):
+                raise ResponseFormatError("API tool_calls must be an array.")
+            for call in raw_calls:
+                if (not isinstance(call, dict) or set(call) != {"id", "type", "function"}
+                        or call["type"] != "function" or not isinstance(call["id"], str)
+                        or not call["id"].strip() or not isinstance(call["function"], dict)
+                        or set(call["function"]) != {"name", "arguments"}
+                        or not isinstance(call["function"]["arguments"], str)):
+                    raise ResponseFormatError("API calls require id, type=function, and function with name and JSON-encoded arguments.")
+                if not call["function"]["arguments"].strip():
+                    raise ResponseFormatError("API arguments must be a JSON-encoded object string; use '{}' for no arguments.")
+            calls = normalize_calls(raw_calls)
         except ResponseFormatError as exc:
             response_error = str(exc)
             response_excerpt = json.dumps({"invalid_message_prefix": json.dumps(wire, ensure_ascii=True)[:1500]})

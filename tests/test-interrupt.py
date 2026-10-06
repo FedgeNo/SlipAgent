@@ -1,4 +1,4 @@
-"""Escape ends the turn without discarding results or launching another turn."""
+"""Escape ends the step without discarding results or launching another step."""
 
 import asyncio
 import io
@@ -56,7 +56,7 @@ async def test_interrupt_preserves_results_and_prevents_continuation(tmp_path, m
         await asyncio.Event().wait()
 
     monkeypatch.setattr(cli, "_read_line", read)
-    turn = asyncio.create_task(cli._run_turn(session, "Inspect", session.renderer.style))
+    step = asyncio.create_task(cli._run_request(session, "Inspect", session.renderer.style))
     try:
         await asyncio.wait_for(entered.wait(), 2)
         session.agent.enqueue("Queued follow-up")
@@ -65,13 +65,13 @@ async def test_interrupt_preserves_results_and_prevents_continuation(tmp_path, m
         cleanup = session.extensions["interrupt_task"]
         cli._request_interrupt(session)
         assert session.extensions["interrupt_task"] is cleanup
-        assert await asyncio.wait_for(turn, 3) is False
+        assert await asyncio.wait_for(step, 3) is False
         assert cancelled.is_set()
         assert not session.agent.running
         assert session.agent.pending == ["Queued follow-up"]
         assert not session.workspace.access.danger
         assert not session.extensions.get("deferred_commands")
-        assert not session.registry.services["turn_compactor"].jobs
+        assert not session.registry.services["step_compactor"].jobs
         assert not client.summary_calls
         if phase == "tools":
             assert len(client.calls) == 1
@@ -81,11 +81,11 @@ async def test_interrupt_preserves_results_and_prevents_continuation(tmp_path, m
             assert "Completed done" in results[0].content
             assert "interrupted" in results[1].content
             assert "not run" in results[2].content
-            assert session.agent.history.posts
+            assert session.agent.history.steps
         assert "Interrupted." in session.renderer.stream.getvalue()
     finally:
-        turn.cancel()
-        await asyncio.gather(turn, return_exceptions=True)
+        step.cancel()
+        await asyncio.gather(step, return_exceptions=True)
         await cli._shutdown(session)
 
 
@@ -132,7 +132,7 @@ async def test_interrupt_stops_background_processes_summaries_and_commands(tmp_p
             await asyncio.sleep(.01)
         assert "ready" in output.content
         summary = asyncio.create_task(asyncio.Event().wait())
-        compactor = session.registry.services["turn_compactor"]
+        compactor = session.registry.services["step_compactor"]
         compactor.jobs.add(summary)
         command_task = asyncio.create_task(asyncio.Event().wait())
         session.extensions["command_tasks"] = {command_task}
@@ -190,7 +190,7 @@ async def test_interrupt_as_turn_finishes_does_not_launch_pending_prompt(tmp_pat
     monkeypatch.setattr(type(session.agent), "run", run)
     monkeypatch.setattr(cli, "_read_line", read)
     try:
-        assert await asyncio.wait_for(cli._run_turn(session, "Inspect", session.renderer.style), 2) is False
+        assert await asyncio.wait_for(cli._run_request(session, "Inspect", session.renderer.style), 2) is False
         assert runs == ["Inspect"]
         assert session.agent.pending == ["Pending correction"]
     finally:

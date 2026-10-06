@@ -1,4 +1,4 @@
-"""Normal replies and isolated, asynchronous whole-turn compaction."""
+"""Normal replies and isolated, asynchronous whole-step compaction."""
 
 import asyncio
 import json
@@ -30,7 +30,7 @@ class Client:
 
     async def chat(self, **kwargs):
         messages = kwargs["messages"]
-        if messages[0].content.startswith("Summarize one completed SlipAgent turn"):
+        if messages[0].content.startswith("Summarize one completed SlipAgent step"):
             self.summary_requests.append(kwargs)
             self.started.set()
             await self.release.wait()
@@ -47,14 +47,14 @@ def reply(text=None, calls=None):
 
 async def test_plain_response_and_native_calls_do_not_require_memory_json():
     tool = RecordingTool("ACTUAL OBSERVATION")
-    client = Client([reply(None, [ToolCall("one", "record", {"value": "A"})]), reply("Done.")])
+    client = Client([reply("Reading.", [ToolCall("one", "record", {"value": "A"})]), reply("Done.")])
     agent = Agent(client, ToolRegistry([tool]), "test")
     assert await agent.run("Inspect this project") == "Done."
     await agent.wait_for_compaction()
     assert tool.seen == [{"value": "A"}]
     assert len(client.main_requests) == 2 and len(client.summary_requests) == 2
     assert "response_format" not in client.main_requests[0]["extra_body"]
-    assert all(post.summary for post in agent.history.posts)
+    assert all(step.summary for step in agent.history.steps)
     assert agent.usage.prompt_tokens == 60 and agent.usage.completion_tokens == 30
 
 
@@ -75,11 +75,10 @@ async def test_summary_gets_only_its_completed_turn_and_runs_in_background():
     assert "response_format" not in first.get("extra_body", {})
     assert "OLD UNRELATED" not in json.dumps(source)
     assert "PROJECT INSTRUCTIONS" not in json.dumps(source)
-    assert agent.history.posts[-2].summary is None
+    assert agent.history.steps[-2].summary is None
     client.release.set()
     await agent.wait_for_compaction()
-    assert agent.history.posts[-2].summary.startswith("Inspected the project;")
-    assert "CURRENT_POST_ID: 2" in first["messages"][0].content
+    assert agent.history.steps[-2].summary.startswith("Inspected the project;")
 
 
 async def test_reasoning_is_saved_per_turn_and_recallable_but_never_compacted():
@@ -91,12 +90,12 @@ async def test_reasoning_is_saved_per_turn_and_recallable_but_never_compacted():
     agent = Agent(client, ToolRegistry([RecordingTool("RESULT")]), "test")
     await agent.run("PROMPT")
     await agent.wait_for_compaction()
-    for post, expected in zip(agent.history.posts, [first.message.reasoning, second.message.reasoning]):
-        assert post.reasoning == expected
-        assert json.loads(post.full_text())["reasoning"] == expected
-        result = await agent.registry.invoke("recall_history", {"post_id": post.id, "section": "reasoning"})
+    for step, expected in zip(agent.history.steps, [first.message.reasoning, second.message.reasoning]):
+        assert step.reasoning == expected
+        assert json.loads(step.full_text())["reasoning"] == expected
+        result = await agent.registry.invoke("recall_history", {"step_id": step.id, "section": "reasoning"})
         assert not result.is_error and json.loads(result.content)["content"] == expected
-        assert expected not in str([m.to_api() for m in post.context_messages(compressed=True)])
+        assert expected not in str([m.to_api() for m in step.context_messages(compressed=True)])
     for request in client.main_requests:
         for message in request["messages"]:
             assert "reasoning" not in message.to_api() and "reasoning_details" not in message.to_api()
@@ -108,7 +107,7 @@ async def test_reasoning_is_saved_per_turn_and_recallable_but_never_compacted():
 
 
 async def test_rejected_response_reasoning_does_not_enter_accepted_record():
-    rejected = reply("[Harness context metadata]\nCURRENT_POST_ID: 1\nnone")
+    rejected = reply("[Harness context metadata]\nnone")
     rejected.message.reasoning = "REJECTED THOUGHTS"
     accepted = reply("Done")
     accepted.message.reasoning = "ACCEPTED THOUGHTS"
@@ -116,9 +115,9 @@ async def test_rejected_response_reasoning_does_not_enter_accepted_record():
     agent = Agent(client, ToolRegistry(), "test")
     assert await agent.run("Work") == "Done"
     await agent.wait_for_compaction()
-    assert len(agent.history.posts) == 1
-    assert agent.history.posts[0].reasoning == "ACCEPTED THOUGHTS"
-    assert "REJECTED THOUGHTS" not in agent.history.posts[0].full_text()
+    assert len(agent.history.steps) == 1
+    assert agent.history.steps[0].reasoning == "ACCEPTED THOUGHTS"
+    assert "REJECTED THOUGHTS" not in agent.history.steps[0].full_text()
 
 
 async def test_recall_can_select_one_or_several_original_parts():
@@ -126,29 +125,16 @@ async def test_recall_can_select_one_or_several_original_parts():
     agent = Agent(client, ToolRegistry([RecordingTool("RESULT")]), "test")
     await agent.run("PROMPT")
     await agent.wait_for_compaction()
-    post = agent.history.posts[0]
-    assert post.user_prompt == "PROMPT" and post.agent_response == "Reading."
-    assert post.tool_calls[0].id == "one" and post.tool_results[0].tool_call_id == "one"
+    step = agent.history.steps[0]
+    assert step.user_prompt == "PROMPT" and step.agent_response == "Reading."
+    assert step.tool_calls[0].id == "one" and step.tool_results[0].tool_call_id == "one"
     for section, expected in [("prompt", "PROMPT"), ("response", "Reading."), ("tool_calls", "record"), ("tool_results", "RESULT")]:
-        result = await agent.registry.invoke("recall_history", {"post_id": 1, "section": section})
+        result = await agent.registry.invoke("recall_history", {"step_id": 1, "section": section})
         assert not result.is_error and expected in json.loads(result.content)["content"]
-    result = await agent.registry.invoke("recall_history", {"post_id": 1, "sections": ["prompt", "tool_results"]})
+    result = await agent.registry.invoke("recall_history", {"step_id": 1, "sections": ["prompt", "tool_results"]})
     parts = json.loads(json.loads(result.content)["content"])
     assert set(parts) == {"prompt", "tool_results"}
     assert "Reading." not in json.dumps(parts)
-
-
-async def test_update_task_keeps_goals_in_every_request_without_response_json():
-    task = {"status": "active", "goal": "Build the requested feature", "constraints": ["Do not install globally"],
-            "facts": [], "pending": ["Run project tests"], "next_steps": ["Inspect source"]}
-    client = Client([reply(None, [ToolCall("task", "update_task", task)]), reply("Ready.")])
-    agent = Agent(client, ToolRegistry(), "test")
-    await agent.run("Build the requested feature. Do not install globally.")
-    await agent.wait_for_compaction()
-    assert agent.history.task.record["goal"] == task["goal"]
-    assert agent.history.task.record["constraints"] == task["constraints"]
-    assert "Build the requested feature" in client.main_requests[1]["messages"][0].content
-    assert "Do not install globally" in client.main_requests[1]["messages"][0].content
 
 
 async def test_summary_waits_for_entire_batch_and_preserves_failed_observations():
@@ -167,14 +153,14 @@ async def test_summary_waits_for_entire_batch_and_preserves_failed_observations(
     source = json.loads(client.summary_requests[0]["messages"][1].content)
     assert len(source["tool_calls"]) == len(source["tool_results"]) == 2
     assert all(json.loads(result["content"])["status"] == "error" for result in source["tool_results"])
-    assert not agent.history.posts[0].observed
+    assert not agent.history.steps[0].observed
 
 
 @pytest.mark.parametrize("bad", ["", "x" * 6001, "\ud800", "tools", "cutoff", "exception"])
 async def test_bad_summary_preserves_originals_without_retrying_the_work(bad):
     class BadSummary(Client):
         async def chat(self, **kwargs):
-            if kwargs["messages"][0].content.startswith("Summarize one completed SlipAgent turn"):
+            if kwargs["messages"][0].content.startswith("Summarize one completed SlipAgent step"):
                 if bad == "exception":
                     raise RuntimeError("compaction unavailable")
                 value = reply(bad, [ToolCall("bad", "record", {"value": "NEVER"})] if bad == "tools" else None)
@@ -187,18 +173,18 @@ async def test_bad_summary_preserves_originals_without_retrying_the_work(bad):
     agent = Agent(client, ToolRegistry([tool]), "test", on_event=events.append)
     assert await agent.run("PROMPT") == "ANSWER"
     await agent.wait_for_compaction()
-    post = agent.history.posts[0]
-    assert post.compaction_status == "failed" and post.summary is None
-    assert post.parts()["prompt"] == "PROMPT" and post.parts()["response"] == "ANSWER"
+    step = agent.history.steps[0]
+    assert step.compaction_status == "failed" and step.summary is None
+    assert step.parts()["prompt"] == "PROMPT" and step.parts()["response"] == "ANSWER"
     assert len(client.main_requests) == 1 and not tool.seen
     assert not any(event.kind == "retry" for event in events)
-    assert any(event.kind == "warning" and "Could not summarize post 1" in event.text for event in events)
+    assert any(event.kind == "warning" and "Could not summarize step 1" in event.text for event in events)
 
 
 async def test_reset_discards_late_summary_and_its_usage_even_if_transport_ignores_cancel():
     class LateSummary(Client):
         async def chat(self, **kwargs):
-            if kwargs["messages"][0].content.startswith("Summarize one completed SlipAgent turn"):
+            if kwargs["messages"][0].content.startswith("Summarize one completed SlipAgent step"):
                 if json.loads(kwargs["messages"][1].content)["user_prompt"] == "OLD":
                     self.started.set()
                     try:
@@ -210,7 +196,7 @@ async def test_reset_discards_late_summary_and_its_usage_even_if_transport_ignor
     client = LateSummary([reply("OLD ANSWER"), reply("NEW ANSWER")], pause_summary=True)
     agent = Agent(client, ToolRegistry(), "test")
     await agent.run("OLD")
-    old = agent.history.posts[0]
+    old = agent.history.steps[0]
     await client.started.wait()
     agent.reset()
     await asyncio.sleep(0)
@@ -218,8 +204,8 @@ async def test_reset_discards_late_summary_and_its_usage_even_if_transport_ignor
     await agent.run("NEW")
     await agent.wait_for_compaction()
     assert old.summary is None
-    assert len(agent.history.posts) == 1 and agent.history.posts[0].id == 1
-    assert "OLD SUMMARY" not in agent.history.posts[0].summary
+    assert len(agent.history.steps) == 1 and agent.history.steps[0].id == 1
+    assert "OLD SUMMARY" not in agent.history.steps[0].summary
     assert agent.usage.prompt_tokens == 30
 
 
@@ -230,7 +216,7 @@ async def test_close_cancels_pending_summaries_and_releases_jobs():
     await client.started.wait()
     await asyncio.wait_for(agent.registry.aclose(), 2)
     assert not agent._compactor().jobs
-    assert agent.history.posts[0].compaction_status == "cancelled"
+    assert agent.history.steps[0].compaction_status == "cancelled"
 
 
 async def test_fast_summary_cannot_hide_unseen_tool_results_at_tiny_budget():
@@ -242,7 +228,7 @@ async def test_fast_summary_cannot_hide_unseen_tool_results_at_tiny_budget():
     sent = "\n".join(message.content or "" for message in client.main_requests[1]["messages"])
     assert any(record["representation"] == "excerpt" for record in context_records(client.main_requests[1]["messages"]))
     assert "ACTUAL RESULT" in sent and "Inspected the project;" not in sent
-    assert result in agent.history.posts[0].full_text()
+    assert result in agent.history.steps[0].full_text()
 
 
 @pytest.mark.parametrize("arguments", [
@@ -254,7 +240,7 @@ async def test_fast_summary_cannot_hide_unseen_tool_results_at_tiny_budget():
 async def test_recall_rejects_ambiguous_or_invalid_part_selection(arguments):
     history = ConversationHistory()
     history.sync([Message.user("Question"), Message.assistant("Answer")])
-    assert (await RecallHistoryTool(history).invoke({"post_id": 1, **arguments})).is_error
+    assert (await RecallHistoryTool(history).invoke({"step_id": 1, **arguments})).is_error
 
 
 async def test_selected_parts_page_exactly_and_call_id_selects_original_call():
@@ -264,16 +250,16 @@ async def test_selected_parts_page_exactly_and_call_id_selects_original_call():
     recall = RecallHistoryTool(history)
     offset, chunks = 0, []
     while True:
-        result = await recall.invoke({"post_id": 1, "sections": ["prompt", "tool_results"], "offset": offset, "limit": 200})
+        result = await recall.invoke({"step_id": 1, "sections": ["prompt", "tool_results"], "offset": offset, "limit": 200})
         page = json.loads(result.content)
         chunks.append(page["content"])
         offset = page["next_offset"]
         if offset is None:
             break
     parts = json.loads("".join(chunks))
-    assert parts == {key: history.posts[0].parts()[key] for key in ["prompt", "tool_results"]}
-    call = await recall.invoke({"post_id": 1, "section": "tool_calls", "call_id": "a"})
-    assert json.loads(json.loads(call.content)["content"])[0] == history.posts[0].tool_calls[0].to_api()
+    assert parts == {key: history.steps[0].parts()[key] for key in ["prompt", "tool_results"]}
+    call = await recall.invoke({"step_id": 1, "section": "tool_calls", "call_id": "a"})
+    assert json.loads(json.loads(call.content)["content"])[0] == history.steps[0].tool_calls[0].to_api()
 
 
 @pytest.mark.parametrize("text", ["A normal answer.", '{"example": 42}', 'Example:\n```json\n{"tool_calls": []}\n```'])
@@ -304,7 +290,7 @@ async def test_summary_uses_frozen_capabilities_and_does_not_overwrite_context_s
         history = ConversationHistory()
         history.sync([Message.user("Request"), Message.assistant("Response")])
         agent = Agent(client, ToolRegistry(), "test", on_event=snapshots.append)
-        agent._compactor().submit(history.posts[0], client, "test", old, None)
+        agent._compactor().submit(history.steps[0], client, "test", old, None)
         await agent.wait_for_compaction()
     assert requests[0]["reasoning"]["effort"] == "high"
     assert requests[0]["provider"]["only"] == ["old"] and requests[0]["temperature"] == .2
@@ -313,36 +299,59 @@ async def test_summary_uses_frozen_capabilities_and_does_not_overwrite_context_s
 
 
 async def test_plain_reply_filters_reserved_metadata_without_hiding_examples():
-    client = Client([reply("Done.\n[Harness context metadata]\nCURRENT_POST_ID: 1\nnone")])
+    client = Client([reply("Done.\n[Harness context metadata]\nnone")])
     agent = Agent(client, ToolRegistry(), "test")
     assert await agent.run("Work") == "Done."
-    assert agent.history.posts[0].agent_response == "Done."
+    assert agent.history.steps[0].agent_response == "Done."
+
+
+async def test_compaction_disables_transport_timeout_without_changing_normal_requests():
+    timeouts = []
+
+    def transport(request):
+        timeouts.append(request.extensions["timeout"])
+        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "Summary"}, "finish_reason": "stop"}]})
+
+    async with OpenRouterClient("test", timeout=42, transport=httpx.MockTransport(transport)) as client:
+        history = ConversationHistory()
+        history.sync([Message.user("Request"), Message.assistant("Response")])
+        registry = ToolRegistry()
+        agent = Agent(client, registry, "test")
+        await client.chat(model="test", messages=[Message.user("Before")])
+        agent._compactor().submit(history.steps[0], client, "test", None, None)
+        await agent.wait_for_compaction()
+        await client.chat(model="test", messages=[Message.user("After")])
+        await registry.aclose()
+
+    assert history.steps[0].compaction_status == "complete"
+    assert timeouts[0] == timeouts[2] == {"connect": 42, "read": 42, "write": 42, "pool": 42}
+    assert timeouts[1] == {"connect": None, "read": None, "write": None, "pool": None}
+
+
+async def test_compaction_timeout_preserves_original_and_reports_failure(monkeypatch):
+    monkeypatch.setattr("slipagent.compaction.COMPACTION_TIMEOUT", .01)
+    client = Client([], pause_summary=True)
+    history = ConversationHistory()
+    history.sync([Message.user("Request"), Message.assistant("Response")])
+    original = history.steps[0].full_text()
+    events = []
+    registry = ToolRegistry()
+    agent = Agent(client, registry, "test", on_event=events.append)
+    agent._compactor().submit(history.steps[0], client, "test", None, None)
+    await agent.wait_for_compaction()
+    assert history.steps[0].compaction_status == "failed"
+    assert "TimeoutError" in history.steps[0].compaction_error
+    assert history.steps[0].summary is None
+    assert history.steps[0].full_text() == original
+    assert any("Could not summarize" in event.text for event in events)
+    assert not agent._compactor().jobs
+    await registry.aclose()
 
 
 async def test_bookkeeping_only_reply_retries_instead_of_silently_finishing():
-    client = Client([reply("[Harness context metadata]\nCURRENT_POST_ID: 1\nnone"), reply("Done")])
+    client = Client([reply("[Harness context metadata]\nnone"), reply("Done")])
     events = []
     agent = Agent(client, ToolRegistry(), "test", on_event=events.append)
     assert await agent.run("Work") == "Done"
-    assert len(agent.history.posts) == 1 and len(client.main_requests) == 2
+    assert len(agent.history.steps) == 1 and len(client.main_requests) == 2
     assert any(event.kind == "retry" for event in events)
-
-
-async def test_tool_saved_goals_survive_both_history_windows_with_plain_responses():
-    task = {"status": "active", "goal": "Implement inventory support", "constraints": ["Keep the project environment"],
-            "facts": [], "pending": ["Finish inspection"], "next_steps": ["Inspect files"]}
-    replies = [reply(None, [ToolCall("task", "update_task", task)])]
-    replies += [reply("Inspecting", [ToolCall(str(index), "record", {"value": str(index)})]) for index in range(152)]
-    replies += [reply("Done")]
-    client = Client(replies)
-    agent = Agent(client, ToolRegistry([RecordingTool()]), "test", context_posts=1)
-    assert await agent.run("ORIGINAL TASK WORDING") == "Done"
-    await agent.wait_for_compaction()
-    for request in client.main_requests[1:]:
-        assert "Implement inventory support" in request["messages"][0].content
-        assert "Keep the project environment" in request["messages"][0].content
-    assert agent.history.task.current_prompt_post == 1
-    wire = "\n".join(message.content or "" for message in client.main_requests[-1]["messages"])
-    assert sum(record["representation"] == "compressed" for record in context_records(client.main_requests[-1]["messages"])) == 100
-    assert "Post 1 — Conversation Record" not in wire
-    assert not any(event.get("response_format") for event in client.main_requests)

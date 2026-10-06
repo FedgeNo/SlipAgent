@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from .agent import Agent, AgentEvent, STEP_LIMIT_NOTICE, STOP_NOTICE, build_system_prompt
-from .config import Config, ConfigError, dotenv_path, save_dotenv_value
+from .config import Config, ConfigError, dotenv_path, save_dotenv_value, save_model_choice
 from .instructions import load_project_instructions, ProjectInstructions
 from .lifecycle import finish_cleanup
 from .mcp import MCPManager, MCPError, ServerSpec, config_path, load_servers
@@ -64,7 +64,7 @@ Commands: /help  /tools  /model [slug]  /models [filter]  /key [show|status|key]
 
 Type a task and press Enter. Follow-ups queue while the agent works.
 Settings changes also queue until the current response and tool batch finish.
-/stop stops after this turn; Esc interrupts now. /exit, /quit, or Ctrl-D quits.
+/stop stops after this step; Esc interrupts now. /exit, /quit, or Ctrl-D quits.
 Use /help for command details. Ctrl+\\ toggles the context view."""
 
 QUOTA_REFRESH_INTERVAL = 15 * 60
@@ -77,19 +77,19 @@ Commands
   /danger [on]         disable workspace path confinement (queues while working)
   /danger off          restore workspace path confinement (queues while working)
   /danger status       show whether danger mode is active
-  /overthinking on|off  enable or disable thoughts in the latest five turns (queues while working)
+  /overthinking on|off  enable or disable thoughts in the latest five steps (queues while working)
   /tools               list the available tools
   /model               show the active model
-  /model <slug>        switch model for this session
+  /model <slug>        switch model and remember the choice
   /models [filter]     browse the catalog (e.g. /models gpt, /models free)
   /temperature         show the current temperature and model support
-  /temperature <value> set temperature from 0 to 2 when supported (default 0.2)
+  /temperature <value> set temperature from 0 to 2 when supported (default 1.0)
   /key                 enter a different OpenRouter API key (hidden input)
   /key show            show the current key, masked
   /key status          same as /key show
   /key <key>           use a specific OpenRouter API key
   /cost                show token usage and cost for this session
-  /task                show the active goal, constraints, progress, and source posts
+  /task                show the active goal, constraints, progress, and source steps
   /task new            start a new task with your next prompt; retain history and logs
   /rename <name>       name this saved conversation and its terminal title
   /sessions            list saved sessions for this project
@@ -108,7 +108,7 @@ Commands
   /reload              apply component edits (also watched automatically)
   /generations         show current generation count
   /init                create AGENTS.md if missing and load project guidance
-  /stop                finish this turn and its tools, then stop
+  /stop                finish this step and its tools, then stop
   /exit                quit (also ctrl-d)
   /quit                same as /exit
 
@@ -144,7 +144,7 @@ MENU_OPTIONS = [
     ("/reload", "Reload Components"),
     ("/generations", "Reload Generation"),
     ("/init", "Initialize Project Guidance"),
-    ("/stop", "Stop After This Turn"),
+    ("/stop", "Stop After This Step"),
     ("/task new", "Start a New Task"),
     ("/reset", "Start a New Conversation"),
     ("/quit", "Quit"),
@@ -202,7 +202,7 @@ def _literal_tool_output(text: str) -> str:
 
 
 class Renderer:
-    """Turns AgentEvents into terminal output."""
+    """Steps AgentEvents into terminal output."""
 
     def __init__(self, style: Style, stream: TextIO, verbose: bool) -> None:
         self.style = style
@@ -215,7 +215,7 @@ class Renderer:
         self._model_block = object()
         self._stream_kind: str | None = None
         self._last_output_blank = False
-        # The live prompt line: the text drawn on it, so output arriving mid-turn
+        # The live prompt line: the text drawn on it, so output arriving mid-step
         # can be written around it and the prompt put back. Holding the whole
         # line is what stops a redraw from erasing a line the agent has just
         # written.
@@ -417,7 +417,7 @@ class Renderer:
                 self.emit(self.style.bold(event.text), block=self._model_block)
 
         elif event.kind == "user_message":
-            # Mid-turn input the user typed while the agent was working. It is
+            # Mid-step input the user typed while the agent was working. It is
             # echoed rather than the live prompt, because the prompt they are
             # typing into is still on screen holding the text they just sent.
             self.user_prompt(event.text, queued=True)
@@ -501,7 +501,7 @@ class Session:
         return self._catalog
 
     def use_model(self, slug: str) -> None:
-        """Switch the model for subsequent turns."""
+        """Switch the model for subsequent steps."""
         self.agent.model = slug.strip()
 
     async def use_api_key(self, key: str) -> None:
@@ -534,7 +534,7 @@ async def build_session(args: argparse.Namespace) -> Session:
         max_steps=args.max_steps,
         temperature=args.temperature,
         max_tokens=args.max_tokens,
-        context_posts=args.context_posts,
+        context_steps=args.context_steps,
     )
     try:
         workspace = Workspace(config.workspace, danger=getattr(args, "danger", False))
@@ -567,7 +567,7 @@ async def build_session(args: argparse.Namespace) -> Session:
             max_steps=config.max_steps,
             temperature=config.temperature,
             max_tokens=config.max_tokens,
-            context_posts=config.context_posts,
+            context_steps=config.context_steps,
             overthinking=config.overthinking,
             system_prompt=build_system_prompt(str(workspace.root)),
             on_event=lambda event: renderer.handle(event),
@@ -616,6 +616,11 @@ async def build_session(args: argparse.Namespace) -> Session:
             frame = RuntimeFrame(session, sys.modules[__name__])
             session.reloader = frame
             agent.on_boundary = lambda: frame.checkpoint(boundary=True)
+        if args.model:
+            try:
+                await asyncio.to_thread(save_model_choice, config.model)
+            except (OSError, ConfigError) as exc:
+                renderer.emit(f"  could not remember model choice: {exc}")
         resources.pop_all()
         return session
 
@@ -651,7 +656,7 @@ async def run_repl(session: Session) -> int:
         )
         mcp_line = f"  mcp:       {connected}/{len(session.mcp.servers)} server(s) connected"
     # Prime the free-call count so the status bar is populated on the first
-    # prompt rather than showing a dash until the first turn finishes.
+    # prompt rather than showing a dash until the first step finishes.
     await _refresh_quota(session)
     renderer = session.renderer
     terminal_task: asyncio.Task[None] | None = None
@@ -703,10 +708,10 @@ async def run_repl(session: Session) -> int:
                 continue
 
             # The prompt stays live while the agent works: anything typed in
-            # the meantime is queued onto the turn instead of being ignored.
+            # the meantime is queued onto the step instead of being ignored.
             renderer.user_prompt(line)
             try:
-                if await _run_turn(session, line, style):
+                if await _run_request(session, line, style):
                     break
             except KeyboardInterrupt:
                 # The conversation is still consistent; the model simply has
@@ -779,7 +784,7 @@ async def _read_line(session: Session, style: Style) -> str | None:
         line = ""
     session._input_future = None
     if not renderer.prompt_is_live:
-        # Cancelled mid-read (the turn ended first): leave the prompt as the
+        # Cancelled mid-read (the step ended first): leave the prompt as the
         # last thing on screen rather than ending a repaint another task owns.
         return None
     renderer.end_prompt()
@@ -882,11 +887,11 @@ async def _poll_quota(session: Session) -> None:
             session.renderer.terminal.app.invalidate()
 
 
-async def _run_turn(session: Session, prompt: str, style: Style) -> bool:
-    """Run one turn while keeping the prompt usable in the background.
+async def _run_request(session: Session, prompt: str, style: Style) -> bool:
+    """Run one step while keeping the prompt usable in the background.
 
-    A reader task stays alive for the duration: lines that arrive mid-turn are
-    queued onto the agent, and `/exit` or `/quit` finishes the turn before exiting.
+    A reader task stays alive for the duration: lines that arrive mid-step are
+    queued onto the agent, and `/exit` or `/quit` finishes the step before exiting.
     Returns True when the user asked to exit.
     """
     reader: asyncio.Task[str | None] | None = asyncio.create_task(
@@ -910,17 +915,17 @@ async def _run_turn(session: Session, prompt: str, style: Style) -> bool:
                 line = reader.result()
                 if line is None:
                     # Input ended while the agent was still working. Let the
-                    # turn finish so its answer is not thrown away.
+                    # step finish so its answer is not thrown away.
                     reader = None
                     exiting = True
                 else:
                     text = line.strip()
-                    # Read-only commands stay available during the turn.
+                    # Read-only commands stay available during the step.
                     # /exit lets the current work finish before shutdown.
                     if _background_command(text):
                         _start_background_command(session, text)
                     elif text.startswith("/") and await _handle_command(session, text):
-                        renderer.emit(style.dim("  exiting after this turn."))
+                        renderer.emit(style.dim("  exiting after this step."))
                         exiting = True
                         reader = None
                     elif text and not text.startswith("/"):
@@ -946,7 +951,7 @@ async def _run_turn(session: Session, prompt: str, style: Style) -> bool:
                     continue
                 break
             if reader is None:
-                # No more input to service. Wait for the turn to finish rather
+                # No more input to service. Wait for the step to finish rather
                 # than cancelling it: a completed answer the user cannot see
                 # because they closed the pipe is a worse outcome than waiting.
                 if session.extensions.get("interrupt_requested"):
@@ -1010,7 +1015,7 @@ def _request_interrupt(session: Session) -> None:
     for owned in [task, command, *commands]:
         if owned is not None:
             owned.cancel()
-    compactor = session.registry.services.get("turn_compactor")
+    compactor = session.registry.services.get("step_compactor")
     if compactor is not None:
         compactor.reset()
     session.renderer.emit(session.renderer.style.dim("  Interrupting agent work; cancelling active operations."))
@@ -1108,7 +1113,7 @@ async def _apply_deferred_commands(session: Session, *, exiting: bool = False) -
 
 
 def _background_command(text: str) -> bool:
-    """Only read-only commands may outlive a turn; controls remain immediate."""
+    """Only read-only commands may outlive a step; controls remain immediate."""
     parts = text.split(None, 1)
     command = parts[0].lower() if parts else ""
     argument = parts[1].strip().lower() if len(parts) > 1 else ""
@@ -1298,7 +1303,7 @@ async def _execute_command(session: Session, line: str) -> bool:
         if session.agent.request_stop():
             if session.renderer.terminal is not None:
                 session.renderer.terminal.set_working(True, stopping=True)
-            print(style.dim("  stopping after the current turn and its tool results."), file=out)
+            print(style.dim("  stopping after the current step and its tool results."), file=out)
         else:
             print(style.dim("  already idle."), file=out)
     elif command == "help":
@@ -1358,7 +1363,7 @@ async def _execute_command(session: Session, line: str) -> bool:
                     print(diagnostics.read(int(argument)), file=out)
                 else:
                     for entry in diagnostics.listing():
-                        print(f"  {entry['attempt']}  post {entry['post']}  {entry['outcome']}  {entry['created']}", file=out)
+                        print(f"  {entry['attempt']}  step {entry['step']}  {entry['outcome']}  {entry['created']}", file=out)
                     print(f"  storage: {diagnostics.directory}", file=out)
             except (ValueError, OSError) as exc:
                 print(style.red(f"  Cannot read request diagnostics: {exc}"), file=out)
@@ -1456,15 +1461,10 @@ async def _execute_command(session: Session, line: str) -> bool:
             print(style.red("  usage: /task [new]"), file=out)
         else:
             task = session.agent.history.task
-            print(f"  source posts: {', '.join(map(str, task.sources)) or '(none)'}", file=out)
-            if task.record is None:
-                print("  no accepted task record yet", file=out)
-            else:
-                print(f"  status: {task.record['status']}\n  goal: {task.record['goal']}", file=out)
-                for name in ("constraints", "facts", "pending", "next_steps"):
-                    print(f"  {name.replace('_', ' ')}:", file=out)
-                    for item in task.record[name]:
-                        print(f"    - {item}", file=out)
+            print(f"  source steps: {', '.join(map(str, task.sources)) or '(none)'}", file=out)
+            step_id = task.current_prompt_step
+            for prompt in task.sources.get(step_id, []) if step_id is not None else []:
+                print(f"  {prompt}", file=out)
     elif command == "mcp":
         await _mcp_command(session, argument, style, out)
     elif command == "reset":
@@ -1528,6 +1528,10 @@ async def _model_command(
         return
     session.client.cache_capabilities(argument, capabilities)
     session.use_model(argument)
+    try:
+        await asyncio.to_thread(save_model_choice, argument)
+    except (OSError, ConfigError) as exc:
+        print(style.red(f"  could not remember model choice: {exc}"), file=out)
     entry = next(m for m in catalog if m.id == argument)
     print(f"  switched to {style.cyan(argument)}  {_price_cell(entry.pricing)}/Mtok",
           file=out)
@@ -1843,8 +1847,7 @@ async def _init_command(session: Session, style: Style, out: io.TextIOBase) -> N
     agents_md_path = session.workspace.resolve("AGENTS.md")
     content = """# Project Guidance
 
-Repository-specific development notes. Unfilled sections are placeholders,
-not established facts or runnable commands.
+Repository-specific development notes. Unfilled sections are placeholders, not established facts or runnable commands.
 
 ## Purpose and Architecture
 Not documented yet: project purpose, module responsibilities, and key invariants.
@@ -1954,17 +1957,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("prompt", nargs="*", help="Task to run, then exit.")
     parser.add_argument("-p", "--prompt", dest="prompt_flag",
                         help="Task to run, then exit.")
-    parser.add_argument("-m", "--model", help="Model slug (default: $OPENROUTER_MODEL).")
+    parser.add_argument("-m", "--model", help="Select and remember a model (default: environment, saved choice, then Nemotron Ultra).")
     parser.add_argument("-w", "--workspace", default=None,
                         help="Project root and default path boundary (lifted by --danger). Default: cwd.")
     parser.add_argument("--max-steps", type=int, default=None,
                         help="Cap on model requests per run, including response retries. "
                              "Default: 200, far above what real work needs.")
     parser.add_argument("--temperature", type=float, default=None,
-                        help="Sampling temperature (default 0.2 when supported by the selected model).")
+                        help="Sampling temperature (default 1.0 when supported by the selected model).")
     parser.add_argument("--max-tokens", type=int, default=None,
                         help="Cap on completion tokens per response.")
-    parser.add_argument("--context-posts", type=int, default=None,
+    parser.add_argument("--context-steps", type=int, default=None,
                         help="Recent model calls supplied in full (default: 50, minimum: 5 when context permits).")
     parser.add_argument("--python", default=None,
                         help="Project Python interpreter path, overriding .slipagent/project.json and venv discovery.")

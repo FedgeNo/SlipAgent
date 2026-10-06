@@ -16,13 +16,14 @@ from slipagent.workspace import Workspace, WorkspaceError
 
 def test_harness_operating_guidance_does_not_depend_on_project_notes(workspace):
     prompt = build_system_prompt(str(workspace.root))
-    assert "read_command_output" in prompt and "next_offset" in prompt
+    assert "Tool Call Batches:" in prompt
+    assert "read_command_output" not in prompt and "next_offset" not in prompt
     assert "Project Python Environment" in prompt
     assert "src/slipagent/" not in prompt
     assert "test-runtime.py" not in prompt
     project_guidance = "Project-specific check: run ./verify-project."
     combined = build_system_prompt(str(workspace.root), project_instructions=project_guidance)
-    assert combined.index("read_command_output") < combined.index("Project Instructions:")
+    assert combined.index("Tool Call Batches:") < combined.index("Project Instructions:")
     assert project_guidance in combined
 
 
@@ -70,7 +71,7 @@ def test_rule_content_is_verbatim_and_survives_reset(workspace):
     assert text in prompt
     assert "path and glob restrictions" in prompt
     assert "Explicit user instructions take precedence" in prompt
-    assert "read any nested instruction files" in prompt
+    assert "follow the supplied project instructions within their stated scope" in prompt
     agent = Agent(client=None, registry=ToolRegistry(), model="test", system_prompt=prompt)
     agent.reset()
     assert agent.messages[0].content == prompt
@@ -179,6 +180,8 @@ async def test_stable_prompt_prefix_survives_new_user_input():
     agent.messages.append(Message.user("Additional constraint"))
     context = await agent._context_view(agent.registry.specs(), 1)
     second = context[0].content
-    assert first.partition("Current Turn State:")[0] == second.partition("Current Turn State:")[0]
+    boundary = "User Request for This Run:"
+    assert first.split(boundary)[0] == second.split(boundary)[0]
+    assert "First task" in second and "Additional constraint" in second
     assert any("Additional constraint" in (message.content or "") for message in context[1:])
     assert "Additional constraint" not in first

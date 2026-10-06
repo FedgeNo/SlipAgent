@@ -787,7 +787,7 @@ class MCPManager:
     """Owns the MCP clients for a session and the tools they contribute.
 
     Tools are added to and removed from the shared `ToolRegistry` as servers
-    connect and disconnect, so the model sees the current set on its next turn
+    connect and disconnect, so the model sees the current set on its next step
     without the session being rebuilt.
     """
 

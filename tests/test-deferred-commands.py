@@ -50,7 +50,7 @@ async def test_commands_wait_for_tools_and_preserve_stop_and_request_budget(
         await asyncio.Event().wait()
 
     monkeypatch.setattr(cli, "_read_line", read)
-    turn = asyncio.create_task(cli._run_turn(session, "Inspect the project", session.renderer.style))
+    step = asyncio.create_task(cli._run_request(session, "Inspect the project", session.renderer.style))
     try:
         await asyncio.wait_for(entered.wait(), 2)
         for command in commands:
@@ -59,18 +59,18 @@ async def test_commands_wait_for_tools_and_preserve_stop_and_request_budget(
         if stop:
             await cli._handle_command(session, "/stop")
         release.set()
-        assert await asyncio.wait_for(turn, 5) is False
+        assert await asyncio.wait_for(step, 5) is False
         assert session.workspace.access.danger == expected_danger
         assert len(client.calls) == expected_calls
         assert not session.extensions.get("deferred_commands")
         assert "Queued /" in session.renderer.stream.getvalue()
         if expected_calls == 2:
             system = client.calls[1]["messages"][0].content
-            assert ("Danger mode ON" in system) == expected_danger
+            assert ("Danger Mode ON" in system) == expected_danger
     finally:
         release.set()
-        turn.cancel()
-        await asyncio.gather(turn, return_exceptions=True)
+        step.cancel()
+        await asyncio.gather(step, return_exceptions=True)
         await cli._shutdown(session)
 
 
@@ -96,7 +96,7 @@ async def test_deferred_settings_after_final_failure_or_exit(tmp_path, monkeypat
         await asyncio.Event().wait()
 
     monkeypatch.setattr(cli, "_read_line", read)
-    turn = asyncio.create_task(cli._run_turn(session, "Inspect the project", session.renderer.style))
+    step = asyncio.create_task(cli._run_request(session, "Inspect the project", session.renderer.style))
     try:
         await asyncio.wait_for(entered.wait(), 2)
         await cli._handle_command(session, "/danger")
@@ -108,14 +108,14 @@ async def test_deferred_settings_after_final_failure_or_exit(tmp_path, monkeypat
         release.set()
         if outcome == "failure":
             with pytest.raises(RuntimeError, match="Test request failed"):
-                await asyncio.wait_for(turn, 5)
+                await asyncio.wait_for(step, 5)
         else:
-            assert await asyncio.wait_for(turn, 5) is False
+            assert await asyncio.wait_for(step, 5) is False
         assert session.workspace.access.danger == (outcome != "quit")
         assert len(client.calls) == (0 if outcome == "failure" else 1)
         assert not session.extensions.get("deferred_commands")
     finally:
         release.set()
-        turn.cancel()
-        await asyncio.gather(turn, return_exceptions=True)
+        step.cancel()
+        await asyncio.gather(step, return_exceptions=True)
         await cli._shutdown(session)

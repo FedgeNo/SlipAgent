@@ -56,7 +56,7 @@ async def run_batch(
             result = results.get(index)
             if result is None:
                 detail = ("Tool interrupted; effects may be partial." if index in started else
-                          "Tool was not run because the turn was interrupted.")
+                          "Tool was not run because the step was interrupted.")
                 result = ToolResult.error(detail)
             commit(calls[index], result)
         raise

@@ -1,4 +1,4 @@
-"""Progress reaches the user during execution without requesting another model turn."""
+"""Progress reaches the user during execution without requesting another model step."""
 
 import asyncio
 import io
@@ -16,7 +16,7 @@ from slipagent.progress import LoopGuard
 from slipagent.tools.base import ToolRegistry, ToolResult
 from slipagent.tools.shell import RunCommandTool
 from slipagent.types import ToolCall
-from test_agent import StubClient, RecordingTool, completion
+from test_agent import StubClient, RecordingTool, completion, context_records
 
 
 async def test_shell_streams_before_exit_and_preserves_final_output(workspace):
@@ -94,8 +94,12 @@ async def test_repeated_batches_get_recovery_context_before_stopping():
     agent = Agent(client, ToolRegistry([tool]), "test")
     answer = await agent.run("inspect")
     assert "unchanged results again" in answer
-    assert len(client.calls) == 4 and len(agent.history.posts) == 4
+    assert len(client.calls) == 4 and len(agent.history.steps) == 4
     assert "Change the approach" in client.calls[3]["messages"][0].content
+    current = context_records(client.calls[3]["messages"])[-1]
+    assert any("Change the approach" in prompt for prompt in current["user_prompt"])
+    assert current["is_tool_result_response"] is True
+    assert [message.content for message in agent.messages if message.role == "user"] == ["inspect"]
     assert agent.stopped
     await agent.wait_for_compaction()
 

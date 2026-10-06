@@ -16,12 +16,12 @@ async def test_oversized_new_results_allow_next_request_and_exact_recall():
     sent = "\n".join(m.content or "" for m in client.calls[1]["messages"])
     assert "Excerpt" in sent and "recall_history" in sent
     assert message_tokens(client.calls[1]["messages"]) <= 1_000_000 * .85 - 8192
-    result = await agent.registry.invoke("recall_history", {"post_id": 1, "call_id": "call_record", "offset": 0, "limit": 100})
+    result = await agent.registry.invoke("recall_history", {"step_id": 1, "call_id": "call_record", "offset": 0, "limit": 100})
     page = json.loads(result.content)
     assert page["next_offset"] == 100
-    original = next(m.content for m in agent.history.posts[0].messages if m.role == "tool")
+    original = next(m.content for m in agent.history.steps[0].messages if m.role == "tool")
     assert page["content"] == original[:100]
-    tail = await agent.registry.invoke("recall_history", {"post_id": 1, "call_id": "call_record", "offset": len(original) - 100})
+    tail = await agent.registry.invoke("recall_history", {"step_id": 1, "call_id": "call_record", "offset": len(original) - 100})
     assert "THE EXACT TAIL" in json.loads(tail.content)["content"]
 
 
@@ -30,10 +30,10 @@ async def test_aggregate_batch_is_bounded_and_keeps_current_user_request():
     calls = [ToolCall(str(index), "read_file", {"path": "file"}) for index in range(50)]
     messages = [Message.user("Keep this instruction verbatim"), Message.assistant("Reading", calls),
                 *(Message.tool_result(call.id, "x" * 10_000) for call in calls)]
-    view = await history.view(messages, [], keep_posts=50, context_length=100_000, max_output=1000)
+    view = await history.view(messages, [], keep_steps=50, context_length=100_000, max_output=1000)
     assert message_tokens(view) <= 100_000 * .85 - 1000
     assert any("Keep this instruction verbatim" in (m.content or "") for m in view)
-    assert history.posts[0].messages == messages
+    assert history.steps[0].messages == messages
 
 
 async def test_old_tool_summary_is_sent_once_at_its_own_post():
@@ -43,9 +43,9 @@ async def test_old_tool_summary_is_sent_once_at_its_own_post():
         messages.extend([Message.user("request"), Message.assistant("response", [ToolCall(str(index), "tool", {})]),
                          Message.tool_result(str(index), "original")])
         history.sync(messages)
-        history.posts[-1].summary = f"RESULT SUMMARY {index}"
-    view = await history.view(messages, [], keep_posts=1, context_length=100_000, max_output=1000)
+        history.steps[-1].summary = f"RESULT SUMMARY {index}"
+    view = await history.view(messages, [], keep_steps=1, context_length=100_000, max_output=1000)
     wire = "\n".join(m.content or "" for m in view)
     assert wire.count("RESULT SUMMARY 0") == 1
     assert wire.count("RESULT SUMMARY 1") == 1
-    assert history.posts[1].summary == "RESULT SUMMARY 1"
+    assert history.steps[1].summary == "RESULT SUMMARY 1"

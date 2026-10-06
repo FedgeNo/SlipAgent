@@ -62,7 +62,7 @@ async def test_python_check_uses_final_batch_state_and_does_not_import_code(work
     try:
         agent = Agent(client, registry, "test")
         assert await agent.run("edit") == "Done"
-        results = agent.history.posts[0].parts()["tool_results"]
+        results = agent.history.steps[0].parts()["tool_results"]
         assert "Python syntax: PASSED" in str(results)
         assert "Python syntax: FAILED" not in str(results)
         assert "Python syntax: PASSED" in str(client.calls[1]["messages"])

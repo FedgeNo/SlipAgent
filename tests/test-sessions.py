@@ -24,6 +24,26 @@ def attach(agent, workspace, tmp_path):
     return journal
 
 
+async def test_resume_ignores_legacy_task_snapshot_and_retains_original_prompt(workspace, tmp_path):
+    original = Agent(StubClient([completion("First answer")]), ToolRegistry(), "test")
+    journal = attach(original, workspace, tmp_path)
+    await original.run("Original user request")
+    await original.wait_for_compaction()
+    data = journal.load(journal.session_id)
+    data["state"]["task"] = {"goal": "Obsolete model interpretation"}
+    data["steps"][1]["task"] = {"goal": "Obsolete model interpretation"}
+
+    client = StubClient([completion("Final answer")])
+    restored = Agent(client, ToolRegistry(), "test")
+    journal.restore(restored, data)
+    assert restored.history.task.sources[1] == ["Original user request"]
+    assert await restored.run("") == "Final answer"
+    await restored.wait_for_compaction()
+    system = client.calls[0]["messages"][0].content
+    assert "Original user request" in system
+    assert "Obsolete model interpretation" not in system
+
+
 async def test_startup_commands_do_not_create_session_before_prompt(tmp_path, metadata_server):
     from slipagent import cli
     session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
@@ -144,7 +164,7 @@ async def test_delete_confirmation_removes_only_current_session(tmp_path, metada
             assert [entry["id"] for entry in journal.listing()] == [parent]
             assert not list(journal.directory.glob(current + "*"))
             assert all(message.role == "system" for message in session.agent.messages)
-            assert not session.agent.pending and not session.agent.history.posts
+            assert not session.agent.pending and not session.agent.history.steps
             terminal.clear_transcript.assert_called_once()
             assert "SlipAgent — OpenRouter compatible coding agent" in output.getvalue()
             await cli._handle_command(session, "/sessions")
@@ -254,6 +274,27 @@ def test_invalid_title_metadata_is_reported(workspace, tmp_path, contents):
         journal.listing()
 
 
+async def test_legacy_post_journal_restores_as_steps(workspace, tmp_path):
+    tool = RecordingTool()
+    agent = Agent(StubClient([completion("Reading", [ToolCall("read", "record", {"value": "A"})]), completion("Done")]), ToolRegistry([tool]), "test")
+    journal = attach(agent, workspace, tmp_path)
+    await agent.run("Read the value")
+    await agent.wait_for_compaction()
+    events = [json.loads(line) for line in journal.path.read_text().splitlines()]
+    for event in events:
+        if event["type"] == "step":
+            event["type"] = "post"
+        elif event["type"] == "tool_start":
+            event["post"] = event.pop("step")
+    journal.path.write_text("".join(json.dumps(event) + "\n" for event in events))
+    original = journal.path.read_bytes()
+    loaded = journal.load(journal.session_id)
+    assert len(loaded["history"].steps) == 2
+    assert loaded["history"].steps[0].parts()["tool_calls"][0]["function"]["name"] == "record"
+    assert journal.path.read_bytes() == original
+    assert tool.seen == [{"value": "A"}]
+
+
 async def test_originals_summaries_reasoning_usage_and_pending_survive_resume(workspace, tmp_path):
     reply = completion("original reply")
     reply.message.reasoning = "private reasoning for archive only"
@@ -273,17 +314,17 @@ async def test_originals_summaries_reasoning_usage_and_pending_survive_resume(wo
     assert (journal.directory / (parent + ".jsonl")).read_bytes() == old_bytes
     assert agent.messages[0].content == "current instructions"
     assert agent.pending == ["queued correction"]
-    assert agent.history.posts[0].parts()["reasoning"] == "private reasoning for archive only"
-    assert agent.history.posts[0].summary
+    assert agent.history.steps[0].parts()["reasoning"] == "private reasoning for archive only"
+    assert agent.history.steps[0].summary
     assert agent.usage.prompt_tokens > 0
-    result = await agent.registry.invoke("recall_history", {"post_id": 1, "sections": ["prompt", "response"]})
+    result = await agent.registry.invoke("recall_history", {"step_id": 1, "sections": ["prompt", "response"]})
     assert "exact prompt" in result.content and "original reply" in result.content
     view = await agent._context_view(agent.registry.specs(), 1)
     assert "private reasoning for archive only" in str(view)
     agent.overthinking = False
     view = await agent._context_view(agent.registry.specs(), 1)
     assert "private reasoning for archive only" not in str(view)
-    assert agent.history.task.current_prompt_post == 1
+    assert agent.history.task.current_prompt_step == 1
 
 
 @pytest.mark.parametrize("started", [False, True])
@@ -301,7 +342,7 @@ async def test_interrupted_tools_are_marked_and_never_replayed(workspace, tmp_pa
     assert len(observations) == 2
     assert ("outcome unknown" if started else "not started") in observations[0].content
     assert "not started" in observations[1].content
-    assert len(agent.history.posts) == 1
+    assert len(agent.history.steps) == 1
 
 
 async def test_torn_final_record_recovers_but_complete_corruption_is_rejected(workspace, tmp_path):

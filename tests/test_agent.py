@@ -14,13 +14,13 @@ from slipagent.context import response_memory, tool_response_memory
 
 
 def context_records(messages):
-    """Read the actual one-object-per-turn request format for assertions."""
+    """Read the actual one-object-per-step request format for assertions."""
     records = []
     for message in messages:
         raw = message.to_api() if isinstance(message, Message) else message
         if raw["role"] != "system":
             record = json.loads(raw["content"])
-            assert record["record_type"] in {"history_turn", "current_turn"}
+            assert record["record_type"] in {"history_step", "current_step"}
             records.append(record)
     return records
 
@@ -38,7 +38,7 @@ def unpack_context(messages):
             record = json.loads(message.content or "")
         except ValueError:
             record = None
-        if not isinstance(record, dict) or record.get("record_type") not in {"history_turn", "current_turn"}:
+        if not isinstance(record, dict) or record.get("record_type") not in {"history_step", "current_step"}:
             result.append(message)
             continue
         result.extend(Message.user(text) for text in record.get("user_prompt", []))
@@ -48,7 +48,7 @@ def unpack_context(messages):
             result.append(Message.assistant(json.dumps(record, ensure_ascii=False)))
         else:
             calls = [ToolCall(call["call_id"], call["tool_name"], call["arguments"]) for call in record.get("tool_calls", [])]
-            if record["record_type"] == "history_turn" or record.get("agent_response") is not None or calls:
+            if record["record_type"] == "history_step" or record.get("agent_response") is not None or calls:
                 result.append(Message.assistant(record.get("agent_response"), calls))
             for item in record.get("tool_results", []):
                 content = item["content"]
@@ -74,7 +74,7 @@ def task_record(messages=None, *, revision=1, **changes):
 def context_body(content: str | None) -> str:
     """Read original content inside the harness heading/observation envelope."""
     text = content or ""
-    if text.startswith(("## System Instructions", "## Current User Request", "### Post ",
+    if text.startswith(("## System Instructions", "## Current User Request", "### Step ",
                         "System Instructions (Full):", "Current User Request (Full):",
                         "Conversation Record (Full):", "Conversation Record (Excerpt):",
                         "User Request (Full):", "Agent Response (Full):",
@@ -90,9 +90,9 @@ def context_body(content: str | None) -> str:
 
 
 def summary_response(body):
-    """Serve isolated compaction without consuming the scripted working turns."""
+    """Serve isolated compaction without consuming the scripted working steps."""
     messages = body.get("messages", [])
-    if not messages or not (messages[0].get("content") or "").startswith("Summarize one completed SlipAgent turn"):
+    if not messages or not (messages[0].get("content") or "").startswith("Summarize one completed SlipAgent step"):
         return None
     source = json.loads(messages[1]["content"])
     text = f"User: {source['user_prompt'][:300]}; agent: {source['agent_response'][:300]}; results: {str(source['tool_results'])[:300]}"
@@ -100,30 +100,59 @@ def summary_response(body):
             "usage": {"prompt_tokens": 0, "completion_tokens": 0, "cost": 0}}
 
 
+def context_step_ids(messages):
+    current, previous = None, None
+    for message in messages:
+        if message["role"] != "user":
+            continue
+        try:
+            record = json.loads(message.get("content") or "")
+        except ValueError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        if record.get("record_type") == "current_step":
+            current = record["step_id"]
+        elif record.get("record_type") == "history_step" and record.get("tool_results"):
+            previous = record["step_id"]
+    return current, previous
+
+
 def inline_memory(text: str | None, messages: list[dict[str, Any]]) -> str:
     """Supply legacy envelopes to fixtures exercising older response formats."""
+    current_id, previous_id = context_step_ids(messages)
     messages = unpack_api_context(messages)
     content = text or ""
     if "<slipagent_context>" in content:
         return content
     system = "\n".join(m.get("content") or "" for m in messages if m["role"] == "system")
-    current = re.search(r"CURRENT_POST_ID: (\d+)", system)
-    if current is None:
+    if current_id is None:
         return content
     request = next((context_body(m.get("content")) for m in reversed(messages) if m["role"] == "user"), "continuation")
     record: dict[str, Any] = {
-        "post": int(current[1]),
+        "step": current_id,
         "summary": f"User requested {request[:300]}; model responded {content[:300] or 'with tool calls'}.",
     }
-    previous = re.search(r"PREVIOUS_POST_ID: (\d+)", system)
-    if previous:
+    if previous_id is not None:
         results = " ".join(context_body(m.get("content")) for m in messages if m["role"] == "tool")
-        record["previous"] = {"post": int(previous[1]), "summary": f"User requested {request[:300]}; model ran tools and found {results[:300]}."}
+        record["previous"] = {"step": previous_id, "summary": f"User requested {request[:300]}; model ran tools and found {results[:300]}."}
     return content + "\n<slipagent_context>" + json.dumps(record) + "</slipagent_context>"
 
 
 def structured_message(message: dict[str, Any], messages: list[dict[str, Any]], *, include_memory: bool = True) -> dict[str, Any]:
-    """Translate canned fixtures to the supported legacy response envelope."""
+    """Supply canned replies in the response contract requested by the harness."""
+    system = "\n".join(m.get("content") or "" for m in messages if m["role"] == "system")
+    if "Replies and Native Tool Calls:" in system:
+        text = message.get("content") or "Requesting tools."
+        if text.lstrip().startswith('{"response"'):
+            return message
+        if not text.lstrip().startswith('{"response"'):
+            memory, _ = tool_response_memory(text, [], 1, None)
+            text = memory.text or "Requesting tools."
+        if "Return exactly one JSON object:" in system:
+            return {**message, "content": json.dumps({"response": text})}
+        return {**message, "content": text}
+    current_id, previous_id = context_step_ids(messages)
     messages = unpack_api_context(messages)
     text = message.get("content") or ""
     try:
@@ -133,13 +162,10 @@ def structured_message(message: dict[str, Any], messages: list[dict[str, Any]], 
     if isinstance(existing, dict) and any(key in existing for key in ("response", "agent_response_compressed", "tool_calls")):
         return message
     system = "\n".join(m.get("content") or "" for m in messages if m["role"] == "system")
-    current = re.search(r"CURRENT_POST_ID: (\d+)", system)
-    previous = re.search(r"PREVIOUS_POST_ID: (\d+)", system)
-    post_id = int(current[1]) if current else 1
-    previous_id = int(previous[1]) if previous else None
+    step_id = current_id or 1
     if include_memory:
         text = inline_memory(text, messages)
-    memory, calls = tool_response_memory(text, [ToolCall.from_api(call) for call in message.get("tool_calls") or []], post_id, previous_id)
+    memory, calls = tool_response_memory(text, [ToolCall.from_api(call) for call in message.get("tool_calls") or []], step_id, previous_id)
     request = next((context_body(m.get("content")) for m in reversed(messages) if m["role"] == "user"), "continuation")
     results = " ".join(context_body(m.get("content")) for m in messages if m["role"] == "tool")
     record = {
@@ -167,7 +193,7 @@ class StubClient:
         self.summary_calls: list[dict[str, Any]] = []
 
     async def chat(self, **kwargs: Any) -> Completion:
-        if kwargs["messages"][0].content.startswith("Summarize one completed SlipAgent turn"):
+        if kwargs["messages"][0].content.startswith("Summarize one completed SlipAgent step"):
             self.summary_calls.append(kwargs)
             source = json.loads(kwargs["messages"][1].content)
             return Completion(Message.assistant(f"User: {source['user_prompt'][:300]}; agent: {source['agent_response'][:300]}; results: {str(source['tool_results'])[:300]}"), "stub", usage=Usage(cost=0))
@@ -320,7 +346,7 @@ async def test_tool_result_is_appended_with_matching_id() -> None:
 
 
 async def test_assistant_tool_turn_sends_null_content() -> None:
-    """Tool-call turns must carry null content, not an empty string."""
+    """Tool-call steps must carry null content, not an empty string."""
     agent, _ = build_agent(
         [
             completion(text="thinking out loud", tool_calls=[call(value="x")]),
@@ -369,7 +395,7 @@ async def test_unknown_tool_error_is_fed_back_to_model() -> None:
     assert answer == "recovered"
     tool_message = [m for m in agent.messages if m.role == "tool"][0]
     assert "Unknown tool" in tool_message.content
-    # The model must receive the tool error before its next turn.
+    # The model must receive the tool error before its next step.
     assert unpack_context(client.calls[1]["messages"])[-1].role == "tool"
 
 
@@ -420,12 +446,12 @@ async def test_default_step_budget_is_generous() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Mid-turn input
+# Mid-step input
 # --------------------------------------------------------------------------- #
 
 
 async def test_queued_message_reaches_the_model_as_user_input() -> None:
-    """Text typed mid-turn joins the conversation, clearly separated."""
+    """Text typed mid-step joins the conversation, clearly separated."""
     agent, client = build_agent(
         [completion(tool_calls=[call(value="x")]), completion(text="done")]
     )
@@ -470,7 +496,7 @@ async def test_blank_input_is_not_queued() -> None:
 
 
 async def test_message_typed_during_a_finishing_turn_survives() -> None:
-    """Text arriving on the last step stays queued for the next turn."""
+    """Text arriving on the last step stays queued for the next step."""
     agent, _ = build_agent([completion(text="done")])
     agent.on_event = lambda event: agent.enqueue("one more thing") if event.kind == "assistant_text" and event.step == 1 else None
 
@@ -553,33 +579,32 @@ async def test_a_failing_call_does_not_abort_the_rest_of_the_batch() -> None:
 
 
 def test_system_prompt_asks_for_batched_tool_calls() -> None:
-    """Regression: the model defaults to one call per turn without this."""
+    """Regression: the model defaults to one call per step without this."""
     prompt = build_system_prompt("/tmp/ws")
 
-    assert "Batch your tool calls" in prompt
-    assert "different purposes" in prompt
+    assert "Batch all predictable independent calls in one step" in prompt
+    assert "group independent checks" in prompt
 
 
 def test_system_prompt_allows_splitting_on_real_dependencies() -> None:
     """Batching must not become a rule that breaks read-then-edit work."""
     prompt = build_system_prompt("/tmp/ws")
 
-    assert "Only split a batch when a call genuinely depends" in prompt
+    assert "Reserve sequencing for real dependencies" in prompt
+    assert "reading source before editing it" in prompt
 
 
-def test_system_prompt_requests_output_every_turn_alongside_batched_tools() -> None:
+def test_system_prompt_allows_silent_tool_batches_and_requires_final_output() -> None:
     prompt = build_system_prompt("/tmp/ws")
 
-    assert "nonempty response for the user on EVERY turn" in prompt
-    assert "Do not take a silent turn" in prompt
-    assert "narrating between calls" in prompt
-    assert "No preamble" not in prompt
+    assert "empty text is allowed when requesting tools" in prompt
+    assert "End the run with a useful, nonempty answer and no tool calls" in prompt
 
 
 def test_system_prompt_states_parallel_calls_are_available() -> None:
     prompt = build_system_prompt("/tmp/ws")
 
-    assert "several tools in a single turn" in prompt
+    assert "Batch results arrive together in the supplied call order" in prompt
 
 
 async def test_usage_and_cost_accumulate() -> None:
@@ -632,7 +657,7 @@ async def test_tools_are_advertised_when_present() -> None:
     await agent.run("go")
 
     tools = client.calls[0]["tools"]
-    assert [spec.name for spec in tools] == ["recall_history", "record", "update_task"]
+    assert [spec.name for spec in tools] == ["recall_history", "record"]
 
 
 async def test_session_id_is_stable_across_steps() -> None:

@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from .tools.base import Tool, ToolRegistry
 from .types import Message
-from .lifecycle import Lifetime
+from .lifecycle import Lifetime, finish_cleanup
 
 if TYPE_CHECKING:
     from .cli import Session
@@ -62,6 +62,9 @@ class _SourceLoader(importlib.abc.MetaPathFinder, importlib.abc.Loader):
 
     def create_module(self, spec: Any) -> None:
         return None
+
+    def get_data(self, path: str) -> bytes:
+        return self.sources[str(Path(path).relative_to(self.root))]
 
     def exec_module(self, module: types.ModuleType) -> None:
         assert module.__spec__ is not None
@@ -152,7 +155,9 @@ class RuntimeFrame:
     def _sources(self) -> dict[str, bytes]:
         return {
             str(path.relative_to(self.root)): path.read_bytes()
-            for path in sorted(self.root.rglob("*.py")) if "__pycache__" not in path.parts
+            for path in sorted([*self.root.rglob("*.py"), self.root / "system-prompt.txt",
+                                self.root / "background-summary-prompt.txt"])
+            if "__pycache__" not in path.parts
         }
 
     @staticmethod
@@ -161,6 +166,10 @@ class RuntimeFrame:
         for name, content in sorted(sources.items()):
             digest.update(name.encode() + b"\0" + content + b"\0")
         return digest.digest()
+
+    def _snapshot(self) -> tuple[dict[str, bytes], bytes]:
+        sources = self._sources()
+        return sources, self._signature(sources)
 
     def request(self) -> None:
         self.force = True
@@ -191,9 +200,8 @@ class RuntimeFrame:
         while True:
             await asyncio.sleep(POLL_INTERVAL)
             try:
-                sources = self._sources()
+                sources, signature = await asyncio.to_thread(self._snapshot)
                 self._read_error = None
-                signature = self._signature(sources)
                 # A second observation avoids most half-written editor saves.
                 if signature == self._observed:
                     await self.checkpoint(sources=sources)
@@ -208,19 +216,27 @@ class RuntimeFrame:
     ) -> None:
         if self.reloading or self.busy or self.session.agent.running and not boundary:
             return
-        try:
-            sources = self._sources() if sources is None else sources
-        except OSError as exc:
-            self._notice(f"Reload could not read source: {exc}", error=True)
-            return
-        signature = self._signature(sources)
-        if signature == self._attempted and not self.force:
-            return
-        self.force = False
-        self._attempted = signature
         self.reloading = True
         try:
-            await self._reload(sources)
+            try:
+                if sources is None:
+                    sources, signature = await asyncio.to_thread(self._snapshot)
+                else:
+                    signature = await asyncio.to_thread(self._signature, sources)
+            except OSError as exc:
+                self._notice(f"Reload could not read source: {exc}", error=True)
+                return
+            assert sources is not None
+            if self.busy or self.session.agent.running and not boundary:
+                return
+            if signature == self._attempted and not self.force:
+                return
+            self.force = False
+            self._attempted = signature
+            await self._reload(sources, boundary=boundary)
+        except asyncio.CancelledError:
+            self._attempted = self._signature(self._applied)
+            raise
         except Exception as exc:
             self._notice(f"Reload rejected; previous code remains active: {type(exc).__name__}: {exc}", error=True)
         finally:
@@ -243,7 +259,7 @@ class RuntimeFrame:
         try:
             return {
                 _module_name(filename): importlib.import_module(f"{prefix}.{_module_name(filename)}")
-                for filename in sources if _module_name(filename) not in CORE_MODULES
+                for filename in sources if filename.endswith(".py") and _module_name(filename) not in CORE_MODULES
             }
         finally:
             sys.meta_path.remove(loader)
@@ -281,7 +297,7 @@ class RuntimeFrame:
                 raise ReloadError(f"Restart required: state layout changed for {old_class.__name__}")
         return classes, originals, declared
 
-    async def _reload(self, sources: dict[str, bytes]) -> None:
+    async def _reload(self, sources: dict[str, bytes], *, boundary: bool = False) -> None:
         prefix = "_slipagent_generation_" + uuid.uuid4().hex
         candidate_registry: ToolRegistry | None = None
         old_tools: list[Tool] = []
@@ -290,10 +306,18 @@ class RuntimeFrame:
         previous_namespace: str | None = None
         committed = False
         try:
-            modules = self._stage(sources, prefix)
+            # Imports and compilation run off the input loop. Drain the worker
+            # before removing its namespace if this reload is cancelled.
+            staging = asyncio.create_task(asyncio.to_thread(self._stage, sources, prefix))
+            modules = await finish_cleanup(staging)
+            # Input can start work while staging. Defer the atomic commit until
+            # the session is idle again or paused at its own batch boundary.
+            if self.busy or self.session.agent.running and not boundary:
+                self._attempted = self._signature(self._applied)
+                return
             required = {
                 "agent": ("Agent", "build_system_prompt"), "context": ("ConversationHistory", "RecallHistoryTool"),
-                "cli": ("Renderer", "_execute_command", "_handle_command", "_read_line", "_run_turn", "_refresh_quota", "_shutdown"),
+                "cli": ("Renderer", "_execute_command", "_handle_command", "_read_line", "_run_request", "_refresh_quota", "_shutdown"),
                 "terminal": ("TerminalUI",),
                 "tools": ("build_default_registry",),
             }

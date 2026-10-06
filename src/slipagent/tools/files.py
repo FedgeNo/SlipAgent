@@ -101,9 +101,12 @@ class ReadFileTool(Tool):
     description = (
         "Read a text file allowed by the current Workspace Access mode.\n\n"
         "Returns numbered lines so they can be cited; omit the displayed line numbers when calling "
-        "edit_file.\n\n"
+        "`edit_file`.\n\n"
         "Line endings are displayed as LF.\n\n"
-        "Use offset/limit for large files.\n\n"
+        "Read the code you intend to change before editing it. Include the needed sections of all "
+        "known files in the same read batch.\n\n"
+        "Omit `limit` for ordinary files; for larger files, use `offset`/`limit` and batch ranges "
+        "you already know you need instead of reading consecutive small chunks across steps.\n\n"
         "Binary files are rejected."
     )
     parameters = {
@@ -200,7 +203,7 @@ class WriteFileTool(Tool):
     description = (
         "Write a file, creating or overwriting it.\n\n"
         "Parent directories are created automatically.\n\n"
-        "Overwrites the whole file, so prefer edit_file for changes to existing code."
+        "Overwrites the whole file, so prefer `edit_file` for changes to existing code."
     )
     parameters = {
         "type": "object",
@@ -247,17 +250,20 @@ class EditFileTool(Tool):
     mutates_workspace = True
     name = "edit_file"
     description = (
-        "Replace an exact string in a file. old_string must match the file verbatim and must be "
-        "unique unless replace_all is true; include surrounding lines to make it unique.\n\n"
-        "Read the file first so old_string is exact.\n\n"
+        "Replace an exact substring within a file. `old_string` contains the text to replace with "
+        "`new_string`; it does not need to contain the entire file. It must occur exactly once unless `replace_all=true`; "
+        "include surrounding lines to make it unique.\n\n"
+        "Prefer this tool over `write_file` for changes to existing code. Copy `old_string` from "
+        "a real file read, including indentation.\n\n"
         "LF in copied text also matches CRLF; existing line endings are preserved outside the "
         "replacement.\n\n"
-        "Omit read_file's line numbers.\n\n"
-        "Alternatively supply edits=[{old_string,new_string}, ...] for several unique, "
+        "Omit `read_file`'s line numbers.\n\n"
+        "Alternatively supply `edits=[{old_string,new_string}, ...]` for several unique, "
         "non-overlapping replacements in this file.\n\n"
         "Every edit matches the ORIGINAL file; all are validated before one atomic write.\n\n"
-        "Choose either edits or the single old_string/new_string pair, never both.\n\n"
-        "On failure no edits are applied; nearby source is a suggestion only."
+        "Choose either `edits` or the single `old_string`/`new_string` pair, never both.\n\n"
+        "On failure no edits are applied; nearby source is a suggestion only, not an applied fuzzy match.\n\n"
+        "Read the returned diffs to check the batch's changes."
     )
     parameters = {
         "type": "object",
@@ -265,7 +271,7 @@ class EditFileTool(Tool):
             "path": {"type": "string", "description": "Workspace-relative or absolute path, subject to the current Workspace Access mode."},
             "old_string": {
                 "type": "string",
-                "description": "Exact text to replace, including indentation.",
+                "description": "Exact substring to replace within the file, including indentation; need not contain the entire file.",
             },
             "new_string": {
                 "type": "string",
@@ -280,7 +286,8 @@ class EditFileTool(Tool):
                 "description": "Replacements matched against the original file. Merge overlapping targets.",
                 "items": {"type": "object", "additionalProperties": False,
                           "required": ["old_string", "new_string"],
-                          "properties": {"old_string": {"type": "string", "minLength": 1},
+                          "properties": {"old_string": {"type": "string", "minLength": 1,
+                                                        "description": "Exact substring to replace within the original file, including indentation."},
                                          "new_string": {"type": "string"}}},
             },
         },

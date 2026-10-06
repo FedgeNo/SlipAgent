@@ -1,13 +1,14 @@
 """Configuration resolution.
 
-Precedence: explicit CLI flag > real environment variable > `.env` file >
-built-in default. `.env` is never allowed to shadow a variable the shell
+Model precedence: explicit CLI flag > real environment variable > saved choice
+> `.env` file > built-in default. `.env` never shadows a variable the shell
 already exports, so `OPENROUTER_MODEL=... slipagent` still wins.
 """
 
 from __future__ import annotations
 
 import os
+import json
 import math
 import re
 import tempfile
@@ -15,13 +16,13 @@ from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-DEFAULT_MODEL = "nvidia/nemotron-3.5-lightning:free"
+DEFAULT_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 # Deliberately high: the loop should finish real work, not stop because a task
 # happened to be long. The cap only exists to stop a model that is going in
 # circles.
 DEFAULT_MAX_STEPS = 200
-DEFAULT_CONTEXT_POSTS = 50
+DEFAULT_CONTEXT_STEPS = 50
 
 
 def save_private_text(path: Path, content: str) -> None:
@@ -69,6 +70,32 @@ def dotenv_path(start: Path | None = None) -> Path:
 
 class ConfigError(Exception):
     """Raised when the harness cannot be configured from the environment."""
+
+
+def _preferences_path() -> Path:
+    root = Path(os.environ.get("SLIPAGENT_STATE_DIR") or Path.home() / ".SlipAgent").expanduser()
+    return root / "preferences.json"
+
+
+def _read_preferences() -> dict[str, object]:
+    path = _preferences_path()
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as exc:
+        raise ConfigError(f"could not read model preferences at {path}: {exc}") from exc
+    if not isinstance(value, dict) or ("model" in value and
+            (not isinstance(value["model"], str) or not value["model"].strip())):
+        raise ConfigError(f"invalid model preferences at {path}")
+    return value
+
+
+def save_model_choice(model: str) -> None:
+    """Remember an explicitly selected model across projects and launches."""
+    preferences = _read_preferences()
+    preferences["model"] = model
+    save_private_text(_preferences_path(), json.dumps(preferences) + "\n")
 
 
 def load_dotenv(start: Path | None = None, environ: dict[str, str] | None = None) -> Path | None:
@@ -155,7 +182,7 @@ class Config:
     max_steps: int = DEFAULT_MAX_STEPS
     temperature: float | None = None
     max_tokens: int | None = None
-    context_posts: int = DEFAULT_CONTEXT_POSTS
+    context_steps: int = DEFAULT_CONTEXT_STEPS
     overthinking: bool = True
 
     def __post_init__(self) -> None:
@@ -163,8 +190,8 @@ class Config:
             raise ConfigError("max_steps must be at least 1")
         if self.max_tokens is not None and self.max_tokens < 1:
             raise ConfigError("max_tokens must be at least 1")
-        if self.context_posts < 1:
-            raise ConfigError("context_posts must be at least 1")
+        if self.context_steps < 1:
+            raise ConfigError("context_steps must be at least 1")
         if self.temperature is not None and (not math.isfinite(self.temperature) or self.temperature < 0):
             raise ConfigError("temperature must be a finite non-negative number")
 
@@ -179,11 +206,12 @@ class Config:
         max_steps: int | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
-        context_posts: int | None = None,
+        context_steps: int | None = None,
         overthinking: bool = True,
         environ: dict[str, str] | None = None,
     ) -> Config:
         env = os.environ if environ is None else environ
+        explicit_model = model or env.get("OPENROUTER_MODEL")
         if environ is None:
             load_dotenv()
 
@@ -198,7 +226,7 @@ class Config:
 
         return cls(
             api_key=resolved_key.strip(),
-            model=model or env.get("OPENROUTER_MODEL") or DEFAULT_MODEL,
+            model=explicit_model or str(_read_preferences().get("model") or env.get("OPENROUTER_MODEL") or DEFAULT_MODEL),
             base_url=base_url or env.get("OPENROUTER_BASE_URL") or DEFAULT_BASE_URL,
             http_referer=env.get("OPENROUTER_REFERER") or None,
             app_title=env.get("OPENROUTER_TITLE") or "slipagent",
@@ -206,7 +234,7 @@ class Config:
             max_steps=max_steps if max_steps is not None else DEFAULT_MAX_STEPS,
             temperature=temperature,
             max_tokens=max_tokens,
-            context_posts=context_posts if context_posts is not None else DEFAULT_CONTEXT_POSTS,
+            context_steps=context_steps if context_steps is not None else DEFAULT_CONTEXT_STEPS,
             overthinking=overthinking,
         )
 

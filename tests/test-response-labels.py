@@ -34,7 +34,7 @@ async def test_old_echoes_are_excluded_from_context_but_originals_and_tool_data_
     messages = [Message.user(source), Message.assistant(legacy, calls), Message.tool_result("read", source)]
     history = ConversationHistory()
     original = [message.to_api() for message in messages]
-    view = await history.view(messages, [], keep_posts=50, context_length=1_000_000, max_output=8192,
+    view = await history.view(messages, [], keep_steps=50, context_length=1_000_000, max_output=8192,
                               native_tools=native_tools, text_tool_history=not native_tools)
     if not native_tools:
         view = tool_history_as_text(view)
@@ -43,7 +43,7 @@ async def test_old_echoes_are_excluded_from_context_but_originals_and_tool_data_
     assert response["user_prompt"] == [source]
     assert response["tool_results"][0]["content"] == source
     assert [message.to_api() for message in messages] == original
-    assert json.loads(history.posts[0].full_text())["response"] == legacy
+    assert json.loads(history.steps[0].full_text())["response"] == legacy
 
 
 async def test_native_tool_only_history_has_no_invented_response_text():
@@ -51,7 +51,7 @@ async def test_native_tool_only_history_has_no_invented_response_text():
     history = ConversationHistory()
     view = await history.view([Message.user("Read"), Message.assistant(None, calls),
                                Message.tool_result("read", "file content")], [],
-                              keep_posts=50, context_length=1_000_000, max_output=8192, native_tools=True)
+                              keep_steps=50, context_length=1_000_000, max_output=8192, native_tools=True)
     response = context_records(view)[0]
     assert response["agent_response"] is None
     assert response["tool_calls"] == [{"call_id": "read", "tool_name": "read_file", "arguments": {"path": "notes.md"}}]
@@ -68,8 +68,9 @@ async def test_accepted_replies_and_tool_batches_do_not_emit_or_archive_the_labe
     first = HEADINGS[1] + "\n\nReading."
     last = HEADINGS[0] + "\n\nDone."
     if envelope:
-        first = json.dumps({"response": first})
-        last = json.dumps({"response": last})
+        from slipagent.protocol import parse_agent_response
+        first = parse_agent_response(json.dumps({"response": first}), calls, json_response=True).text
+        last = parse_agent_response(json.dumps({"response": last}), [], json_response=True).text
     client = fixtures.Client([fixtures.reply(first, calls), fixtures.reply(last)])
     events = []
     tool = RecordingTool()
@@ -77,7 +78,7 @@ async def test_accepted_replies_and_tool_batches_do_not_emit_or_archive_the_labe
     assert await agent.run("Inspect") == "Done."
     await agent.wait_for_compaction()
     assert [event.text for event in events if event.kind == "assistant_text"] == ["Reading.", "Done."]
-    assert [post.agent_response for post in agent.history.posts] == ["Reading.", "Done."]
+    assert [step.agent_response for step in agent.history.steps] == ["Reading.", "Done."]
     assert tool.seen == [{"value": HEADINGS[0]}]
     assert [json.loads(request["messages"][1].content)["agent_response"]
             for request in client.summary_requests] == ["Reading.", "Done."]

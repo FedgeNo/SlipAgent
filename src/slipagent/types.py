@@ -80,7 +80,7 @@ class Message:
     tool_call_id: str | None = None
     name: str | None = None
     # Provider reasoning blocks/signatures belong to the originating model.
-    # Keep them opaque when replaying full tool turns; never render signatures.
+    # Keep them opaque when replaying full tool steps; never render signatures.
     reasoning_details: list[dict[str, Any]] | None = None
     reasoning_model: str | None = None
     # Readable reasoning from this response only, concatenated before archival.

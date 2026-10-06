@@ -8,6 +8,7 @@ import pytest
 
 from test_agent import summary_response
 
+from slipagent.capabilities import ModelCapabilities
 from slipagent.agent import Agent
 from slipagent.tools.base import ToolRegistry
 from slipagent.openrouter import OpenRouterClient
@@ -22,11 +23,11 @@ def record(response="Done.", calls=None, previous="", user="User asked to inspec
 
 
 def completion(value):
-    return {"choices": [{"message": {"role": "assistant", "content": json.dumps(value)}, "finish_reason": "stop"}],
+    return {"choices": [{"message": {"role": "assistant", "content": json.dumps({"response": value["response"], "tool_calls": value["tool_calls"]})}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
 
 
-async def test_legacy_json_response_executes_tools_and_archives_original_parts():
+async def test_json_response_executes_tools_and_archives_original_parts():
     requests, events = [], []
     tool = RecordingTool("ACTUAL RESULT")
     first = record("Reading.", [{"id": "c", "name": "record", "arguments": '{"value":"A"}'}],
@@ -41,18 +42,19 @@ async def test_legacy_json_response_executes_tools_and_archives_original_parts()
         requests.append(json.loads(request.content))
         return httpx.Response(200, json=completion(first if len(requests) == 1 else second))
     async with OpenRouterClient("test", transport=httpx.MockTransport(handle)) as client:
+        client.cache_capabilities("test", ModelCapabilities({}, [{"tag": "stub", "supported_parameters": ["response_format"], "context_length": 1000000}]))
         agent = Agent(client, ToolRegistry([tool]), "test", on_event=events.append)
         assert await agent.run("inspect") == "Done."
     assert tool.seen == [{"value": "A"}]
     assert len(requests) == 2
     assert "tool_choice" not in requests[0]
     assert requests[0]["provider"]["require_parameters"] is True
-    assert "response_format" not in requests[0]
-    for post, expected in zip(agent.history.posts, [first, second]):
-        assert post.agent_response == expected["response"]
-        assert post.summary
-        assert "_slipagent_context" not in post.full_text()
-        assert "agent_response_compressed" not in post.full_text()
+    assert requests[0]["response_format"] == {"type": "json_object"}
+    for step, expected in zip(agent.history.steps, [first, second]):
+        assert step.agent_response == expected["response"]
+        assert step.summary
+        assert "_slipagent_context" not in step.full_text()
+        assert "agent_response_compressed" not in step.full_text()
     assert [event.text for event in events if event.kind == "assistant_text"] == ["Reading.", "Done."]
     assert not any(event.kind == "assistant_delta" for event in events)
 
@@ -72,19 +74,20 @@ async def test_missing_legacy_compressed_field_does_not_reject_valid_tools(field
         requests.append(json.loads(request.content))
         return httpx.Response(200, json=completion(bad if len(requests) == 1 else record()))
     async with OpenRouterClient("test", transport=httpx.MockTransport(handle)) as client:
+        client.cache_capabilities("test", ModelCapabilities({}, [{"tag": "stub", "supported_parameters": ["response_format"], "context_length": 1000000}]))
         agent = Agent(client, ToolRegistry([tool]), "test", on_event=events.append)
         assert await agent.run("work") == "Done."
     assert len(requests) == 2 and tool.seen == [{"value": "BAD"}]
     assert [event.text for event in events if event.kind == "assistant_text"] == ["REJECTED", "Done."]
     assert not any(event.kind == "retry" for event in events)
-    assert len(agent.history.posts) == 2
+    assert len(agent.history.steps) == 2
 
 
 async def test_only_separate_reasoning_streams_while_json_and_tools_wait():
     started, release = asyncio.Event(), asyncio.Event()
     requests, events = [], []
     tool = RecordingTool()
-    text = json.dumps(record("Reading.", [{"id": "c", "name": "record", "arguments": '{"value":"A"}'}]))
+    text = json.dumps({"response": "Reading.", "tool_calls": [{"id": "c", "name": "record", "arguments": '{"value":"A"}'}]})
     def frame(delta, finish=None):
         return ("data: " + json.dumps({"choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}) + "\n\n").encode()
     class Paused(httpx.AsyncByteStream):
@@ -106,6 +109,7 @@ async def test_only_separate_reasoning_streams_while_json_and_tools_wait():
             return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Paused())
         return httpx.Response(200, json=completion(record(previous="record returned ok.")))
     async with OpenRouterClient("test", transport=httpx.MockTransport(handle)) as client:
+        client.cache_capabilities("test", ModelCapabilities({}, [{"tag": "stub", "supported_parameters": ["response_format"], "context_length": 1000000}]))
         agent = Agent(client, ToolRegistry([tool]), "test", on_event=events.append)
         task = asyncio.create_task(agent.run("work"))
         await asyncio.wait_for(started.wait(), 3)
@@ -137,7 +141,7 @@ def test_invalid_field_types_values_and_batches_are_rejected(change):
 @pytest.mark.parametrize("text", [
     "prose " + json.dumps(record()),
     json.dumps(record()) + json.dumps(record()),
-    '<slipagent_context>{"post":1,"summary":"old format"}</slipagent_context>',
+    '<slipagent_context>{"step":1,"summary":"old format"}</slipagent_context>',
     json.dumps(record()).replace('"response": "Done."', '"response": "Done.", "response": "duplicate"'),
     json.dumps(record()).replace('"response": "Done."', '"response": NaN'),
 ])

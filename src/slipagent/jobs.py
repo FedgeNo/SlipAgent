@@ -1,4 +1,4 @@
-"""Session-owned command jobs; completion never starts another model turn."""
+"""Session-owned command jobs; completion never starts another model step."""
 
 from __future__ import annotations
 
@@ -106,13 +106,15 @@ class CommandJobsTool(Tool):
     name = "command_jobs"
     progress_exempt = True
     description = (
-        "Manage commands started with run_command background=true.\n\n"
-        "List/status returns job_id, state, exit status and log_id; read_command_output retrieves "
+        "Manage commands started with `run_command` and `background=true`.\n\n"
+        "Use `action=\"list\"` to list jobs, or `action=\"status\"` with `job_id` for one job. "
+        "List/status returns `job_id`, state, exit status and `log_id`; `read_command_output` retrieves "
         "live pages or tails of either stream.\n\n"
-        "Wait waits at most 30 seconds without cancelling the job.\n\n"
-        "Stop kills its process group and drains cleanup.\n\n"
-        "Completion does not wake the model; request status/wait when you need the outcome. /stop "
-        "leaves jobs running."
+        "Use `action=\"wait\"` with `job_id` to wait at most 30 seconds without cancelling the job.\n\n"
+        "Use `action=\"stop\"` with `job_id` to kill its process group and drain cleanup.\n\n"
+        "Starting a job is not evidence that it succeeded. Completion does not wake the model; "
+        "request status/wait when you need the outcome. `/stop` leaves jobs running; reset, resume, "
+        "fork, deletion, and exit stop them."
     )
     parameters = {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["list", "status", "wait", "stop"]},

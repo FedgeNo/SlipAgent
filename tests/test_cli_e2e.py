@@ -228,7 +228,7 @@ def test_danger_flag_controls_unattended_external_write(project_dir, danger):
     assert target.exists() is danger
     assert result.stdout.strip() == "Finished"
     system = "\n".join(m["content"] for m in stub.requests[0]["messages"] if m["role"] == "system")
-    assert ("Danger mode ON" if danger else "Danger mode OFF") in system
+    assert ("Danger Mode ON" if danger else "Danger Mode OFF") in system
     if danger:
         assert target.read_text() == "outside"
     else:
@@ -624,7 +624,7 @@ def test_mcp_bad_usage_explains_itself(project_dir: Path) -> None:
 
 
 def test_mcp_tool_is_callable_by_the_model(project_dir: Path) -> None:
-    """The whole point: a remote tool is usable through a normal agent turn."""
+    """The whole point: a remote tool is usable through a normal agent step."""
     (project_dir / ".mcp.json").write_text(
         json.dumps({"mcpServers": {"stub": {"command": sys.executable, "args": [MCP_STUB, "legacy"]}}}),
         encoding="utf-8",
@@ -1234,12 +1234,12 @@ async def test_interrupted_repl_turn_cancels_agent(tmp_path, monkeypatch, metada
         await asyncio.Event().wait()
     monkeypatch.setattr(cli.Agent, "run", run)
     monkeypatch.setattr(cli, "_read_line", read)
-    turn = asyncio.create_task(cli._run_turn(session, "go", session.renderer.style))
+    step = asyncio.create_task(cli._run_request(session, "go", session.renderer.style))
     try:
         await started.wait()
-        turn.cancel()
+        step.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await turn
+            await step
         assert cancelled.is_set()
     finally:
         for task in running:
@@ -1330,11 +1330,11 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             os.write(master, b"/rename Work in progress\r")
             wait_for(lambda: screen.title == "Work in progress | SlipAgent")
             os.write(master, b"/stop\r")
-            wait_for(lambda: "Stopping After This Turn" in screen.display[18])
+            wait_for(lambda: "Stopping After This Step" in screen.display[18])
             os.write(master, b"queued followup\r")
             wait_for(lambda: "queued followup" in "\n".join(screen.display[:17]))
             release.set()
-            wait_for(lambda: "Stopped after the current turn" in "\n".join(screen.display[:17]) and "Ready" in screen.display[18])
+            wait_for(lambda: "Stopped after the current step" in "\n".join(screen.display[:17]) and "Ready" in screen.display[18])
             assert (project_dir / "finished.txt").read_text() == "completed"
             assert len(stub.requests) == 1
             os.write(master, b"continue\r")

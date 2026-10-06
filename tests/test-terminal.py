@@ -392,7 +392,7 @@ async def test_menu_cancellation_preserves_input_history_scroll_and_running_turn
             await wait_until(lambda: "Commands" in snapshot()[18])
             pipe.send_text("ignored\x7f\x1b[A\x1c" + cancel_key)
             assert await asyncio.wait_for(choice, 3) is None
-            await wait_until(lambda: "Working" in snapshot()[18])
+            await wait_until(lambda: "Working (esc to interrupt)" in snapshot()[18])
             assert snapshot()[:18] == before
             assert ui.input.buffer.text == "draft in progress"
             assert ui.input.buffer.cursor_position == cursor
@@ -777,7 +777,7 @@ async def test_working_indicator_pulses_and_becomes_idle(display) -> None:
             first = snapshot()[18]
             await wait_until(lambda: snapshot()[18] != first)
             ui.set_working(True, stopping=True)
-            await wait_until(lambda: "Stopping After This Turn" in snapshot()[18])
+            await wait_until(lambda: "Stopping After This Step" in snapshot()[18])
             ui.set_working(False)
             await wait_until(lambda: "Ready" in snapshot()[18])
         finally:
@@ -922,7 +922,7 @@ async def test_turn_token_counts_follow_output_without_blank_line(monkeypatch):
                               usage=Usage(prompt_tokens=10, completion_tokens=5, cost=0.0)),
     )
     monkeypatch.setattr(cli, "_read_line", read)
-    assert await cli._run_turn(session, "task", renderer.style) is False
+    assert await cli._run_request(session, "task", renderer.style) is False
     assert "Finished.\n    (in=10 out=5 cost=$0.000000)" in sink.getvalue()
 
 

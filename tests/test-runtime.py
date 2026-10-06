@@ -38,8 +38,8 @@ async def main():
     async def transport(request):
         if request.method == 'POST':
             body = json.loads(request.content)
-            if body['messages'][0]['content'].startswith('Summarize one completed SlipAgent turn'):
-                return httpx.Response(200, json={'choices': [{'message': {'role': 'assistant', 'content': 'Completed demo turn.'}, 'finish_reason': 'stop'}]})
+            if body['messages'][0]['content'].startswith('Summarize one completed SlipAgent step'):
+                return httpx.Response(200, json={'choices': [{'message': {'role': 'assistant', 'content': 'Completed demo step.'}, 'finish_reason': 'stop'}]})
         requests.append(request)
         if request.url.path.endswith('/models'):
             return httpx.Response(200, json={'data': [{'id': 'test/model', 'context_length': 1000000}]})
@@ -48,17 +48,11 @@ async def main():
         body = json.loads(request.content)
         completion = responses.pop(0)
         system = ' '.join(m.get('content') or '' for m in body['messages'] if m['role'] == 'system')
-        post_id = int(re.search(r'CURRENT_POST_ID: ([0-9]+)', system)[1])
+        current_record = json.loads(body['messages'][-1]['content'])
+        step_id = current_record['step_id']
         content = completion.get('content') or ''
-        previous = re.search(r'PREVIOUS_POST_ID: ([0-9]+)', system)
-        record = {'response': content, 'tool_calls': [
-            {'id': call['id'], 'name': call['function']['name'], 'arguments': call['function']['arguments']}
-            for call in completion.get('tool_calls') or []
-        ], 'previous_tool_responses_compressed': 'Previous tools returned actual results.' if previous else '',
-            'user_prompt_compressed': 'User requested work.', 'agent_response_compressed': 'Model responded ' + content[:300]}
-        record['task'] = {'source_revision': int(re.search(r'TASK_SOURCE_REVISION: ([0-9]+)', system)[1]),
-            'status': 'active', 'goal': 'Complete the coding task', 'constraints': [], 'facts': [], 'pending': [], 'next_steps': []}
-        return httpx.Response(200, json={'model': 'test/model', 'choices': [{'message': {'role': 'assistant', 'content': json.dumps(record)}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 10, 'completion_tokens': 5, 'total_tokens': 15, 'cost': .01}})
+        completion['content'] = content or 'Requesting tools.'
+        return httpx.Response(200, json={'model': 'test/model', 'choices': [{'message': completion, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 10, 'completion_tokens': 5, 'total_tokens': 15, 'cost': .01}})
     client = router.OpenRouterClient('test-key', transport=httpx.MockTransport(transport))
     registry = build_default_registry(workspace)
     sink = io.StringIO()
@@ -106,12 +100,33 @@ def run_copy(tmp_path: Path):
     return run
 
 
+def test_prompt_resource_reloads_and_rejects_invalid_template(run_copy):
+    run_copy('''
+        edit('system-prompt.txt', 'You are SlipAgent,', 'You are the updated SlipAgent,')
+        await frame.checkpoint()
+        assert frame.generation == 1, sink.getvalue()
+        accepted = agent.system_prompt
+        assert 'You are the updated SlipAgent,' in accepted
+        edit('system-prompt.txt', '{workspace}', '{unknown_placeholder}')
+        await frame.checkpoint()
+        assert frame.generation == 1 and agent.system_prompt == accepted
+        assert cli.build_system_prompt(str(workspace.root)) in accepted
+        assert 'Reload rejected' in sink.getvalue()
+        edit('system-prompt.txt', '{unknown_placeholder}', '{workspace}')
+        edit('system-prompt.txt', 'You are the updated SlipAgent,', 'You are the recovered SlipAgent,')
+        await frame.checkpoint()
+        assert frame.generation == 2, sink.getvalue()
+        assert 'You are the recovered SlipAgent,' in agent.system_prompt
+        assert agent.messages[0].content == agent.system_prompt
+    ''')
+
+
 def test_initialized_guidance_survives_component_reload(run_copy):
     run_copy('''
         await cli._handle_command(session, '/init')
         guidance = (workspace.root / 'AGENTS.md').read_text()
         assert guidance in (await agent._context_view(registry.specs(), 1))[0].content
-        edit('agent.py', 'You are SlipAgent,', 'You are the updated SlipAgent,')
+        edit('system-prompt.txt', 'You are SlipAgent,', 'You are the updated SlipAgent,')
         await frame.checkpoint()
         assert frame.generation == 1, sink.getvalue()
         assert 'You are the updated SlipAgent,' in agent.system_prompt
@@ -129,18 +144,18 @@ def test_background_jobs_and_request_diagnostics_survive_reload_and_rejection(ru
         jobs = registry.services['command_jobs']
         diagnostics = registry.services['request_diagnostics']
         request = json.dumps({'model': 'original/model', 'messages': [{'role': 'user', 'content': 'original input'}]})
-        attempt = diagnostics.begin(request, step=1, post=1)
+        attempt = diagnostics.begin(request, step=1, step_id=1)
         diagnostics.finish(attempt, 'request_error', response='partial failed response')
         command = shlex.join([sys.executable, '-c', 'import time; print("running", flush=True); time.sleep(60)'])
         result = await registry.invoke('run_command', {'command': command, 'background': True})
         key = json.loads(result.content.splitlines()[0])['job_id']
-        edit('agent.py', 'You are SlipAgent,', 'You are the updated SlipAgent,')
+        edit('system-prompt.txt', 'You are SlipAgent,', 'You are the updated SlipAgent,')
         await frame.checkpoint()
         assert frame.generation == 1, sink.getvalue()
         assert registry.services['command_jobs'] is jobs and jobs.active
         assert registry.services['request_diagnostics'] is diagnostics
         assert request in diagnostics.read(attempt)
-        edit('agent.py', 'You are the updated SlipAgent,', 'You are SlipAgent,')
+        edit('system-prompt.txt', 'You are the updated SlipAgent,', 'You are SlipAgent,')
         (root / 'broken.py').write_text('invalid Python !!!')
         await frame.checkpoint()
         assert frame.generation == 1 and jobs.active
@@ -154,28 +169,25 @@ def test_background_jobs_and_request_diagnostics_survive_reload_and_rejection(ru
 def test_background_memory_service_and_task_tool_survive_reload_and_migrate(run_copy):
     run_copy('''
         # Simulate a live Agent created before the new service/tool existed.
-        registry.services.pop('turn_compactor')
-        registry.unregister('update_task')
-        edit('agent.py', 'You are SlipAgent,', 'You are the updated SlipAgent,')
+        registry.services.pop('step_compactor')
+        edit('system-prompt.txt', 'You are SlipAgent,', 'You are the updated SlipAgent,')
         await frame.checkpoint()
         assert frame.generation == 1, sink.getvalue()
         responses.append({'role': 'assistant', 'content': 'finished'})
         assert await agent.run('Inspect the project.') == 'finished'
         await agent.wait_for_compaction()
-        compactor = registry.services['turn_compactor']
-        assert registry.get('update_task') is not None
-        assert agent.history.posts[0].summary == 'Completed demo turn.'
-        edit('compaction.py', 'Keep short turns very short.', 'Keep brief turns very short.')
+        compactor = registry.services['step_compactor']
+        assert agent.history.steps[0].summary == 'Completed demo step.'
+        edit('background-summary-prompt.txt', 'Keep short summaries short', 'Keep brief summaries brief')
         await frame.checkpoint()
         assert frame.generation == 2, sink.getvalue()
-        assert registry.services['turn_compactor'] is compactor
+        assert registry.services['step_compactor'] is compactor
         responses.append({'role': 'assistant', 'content': 'continued'})
         assert await agent.run('Continue.') == 'continued'
         await agent.wait_for_compaction()
-        assert agent.history.posts[1].summary == 'Completed demo turn.'
+        assert agent.history.steps[1].summary == 'Completed demo step.'
         agent.reset()
         assert not compactor.jobs
-        assert registry.get('update_task').memory() is agent.history.task
     ''')
 
 
@@ -675,6 +687,93 @@ def test_running_terminal_accepts_input_after_component_reload(run_copy):
     ''')
 
 
+def test_keyboard_stays_responsive_during_threaded_staging_and_busy_commit_defers(run_copy):
+    run_copy('''
+        import threading
+        from prompt_toolkit.input import create_pipe_input
+        from prompt_toolkit.output import DummyOutput
+        from slipagent.terminal import TerminalUI
+        started = threading.Event()
+        release = threading.Event()
+        main_thread = threading.get_ident()
+        stage = frame._stage
+        def paused_stage(sources, prefix):
+            assert threading.get_ident() != main_thread
+            started.set()
+            assert release.wait(3)
+            return stage(sources, prefix)
+        frame._stage = paused_stage
+        with create_pipe_input() as pipe:
+            terminal = TerminalUI(lambda columns: 'status', sink, input=pipe, output=DummyOutput())
+            renderer.terminal = terminal
+            app_task = asyncio.create_task(terminal.run())
+            reload_task = None
+            try:
+                async with asyncio.timeout(3):
+                    while not terminal.app.is_running:
+                        await asyncio.sleep(.01)
+                edit('cli.py', '"  current model: ', '"  threaded model: ')
+                reload_task = asyncio.create_task(frame.checkpoint())
+                assert await asyncio.to_thread(started.wait, 3)
+                pipe.send_text('typing during reload')
+                async with asyncio.timeout(2):
+                    while terminal.input.buffer.text != 'typing during reload':
+                        await asyncio.sleep(.01)
+                assert not reload_task.done()
+                frame.busy += 1
+                release.set()
+                await reload_task
+                assert frame.generation == 0
+                frame.busy -= 1
+                await frame.checkpoint()
+                assert frame.generation == 1, sink.getvalue()
+                assert terminal.input.buffer.text == 'typing during reload'
+            finally:
+                release.set()
+                if reload_task is not None:
+                    await asyncio.gather(reload_task, return_exceptions=True)
+                terminal.close()
+                await app_task
+                renderer.terminal = None
+    ''')
+
+
+def test_cancelled_threaded_staging_drains_before_namespace_cleanup(run_copy):
+    run_copy('''
+        import threading
+        import sys
+        started = threading.Event()
+        release = threading.Event()
+        prefixes = []
+        stage = frame._stage
+        def paused_stage(sources, prefix):
+            prefixes.append(prefix)
+            modules = stage(sources, prefix)
+            started.set()
+            assert release.wait(3)
+            return modules
+        frame._stage = paused_stage
+        edit('cli.py', '"  current model: ', '"  cancelled model: ')
+        task = asyncio.create_task(frame.checkpoint())
+        try:
+            assert await asyncio.to_thread(started.wait, 3)
+            task.cancel()
+            await asyncio.sleep(.02)
+            assert not task.done()
+            release.set()
+            result = await asyncio.gather(task, return_exceptions=True)
+            assert isinstance(result[0], asyncio.CancelledError)
+            assert frame.generation == 0 and not frame.reloading
+            assert all(not name.startswith(prefixes[0]) for name in sys.modules)
+            assert all(getattr(loader, 'prefix', None) != prefixes[0] for loader in sys.meta_path)
+            await frame.checkpoint()
+            assert frame.generation == 1, sink.getvalue()
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+    ''')
+
+
 def test_missing_component_entry_rejects_candidate_before_commit(run_copy):
     run_copy('''
         edit('agent.py', 'async def _step(', 'async def _renamed_step(')
@@ -765,7 +864,7 @@ def test_task_environment_and_command_logs_survive_reload_and_rejection(run_copy
         responses.append({'role': 'assistant', 'content': 'task progress'})
         await agent.run('Keep the database intact')
         task = agent.history.task
-        task_record = dict(task.record)
+        sources = dict(task.sources)
         original = (root / 'agent.py').read_text()
         (root / 'agent.py').write_text(original + '\\n# compatible edit\\n')
         await frame.checkpoint()
@@ -773,7 +872,7 @@ def test_task_environment_and_command_logs_survive_reload_and_rejection(run_copy
         assert registry.services['project_environment'] is environment
         assert environment.python_override == sys.executable
         assert registry.services['command_archive'] is archive
-        assert agent.history.task is task and task.record == task_record
+        assert agent.history.task is task and task.sources == sources
         page = await registry.invoke('read_command_output', {'log_id': log.id})
         assert json.loads(page.content)['content'] == 'retained output\\n'
         (root / 'agent.py').write_text('invalid Python !!!')

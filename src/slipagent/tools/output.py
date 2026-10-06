@@ -29,11 +29,11 @@ class OutputStream:
 
 
 class CommandLog:
-    def __init__(self, archive: CommandArchive, command: str, post_id: int | None, call_id: str | None) -> None:
+    def __init__(self, archive: CommandArchive, command: str, step_id: int | None, call_id: str | None) -> None:
         self.archive = archive
         self.id = uuid.uuid4().hex
         self.command = command
-        self.post_id = post_id
+        self.step_id = step_id
         self.call_id = call_id
         self.streams = {name: OutputStream() for name in ("stdout", "stderr")}
         self.returncode: int | None = None
@@ -93,7 +93,7 @@ class CommandLog:
             callback(self)
 
     def metadata(self) -> dict[str, Any]:
-        return {"log_id": self.id, "post_id": self.post_id, "call_id": self.call_id,
+        return {"log_id": self.id, "step_id": self.step_id, "call_id": self.call_id,
                 "command": self.command[:512] + ("…" if len(self.command) > 512 else ""),
                 "command_characters": len(self.command), "returncode": self.returncode,
                 "timed_out": self.timed_out, "finished": self.finished,
@@ -136,11 +136,11 @@ class CommandArchive:
         self._persistent: Path | None = directory
         self.on_log: Callable[[CommandLog], None] | None = on_log
 
-    def start(self, command: str, *, post_id: int | None = None, call_id: str | None = None) -> CommandLog:
+    def start(self, command: str, *, step_id: int | None = None, call_id: str | None = None) -> CommandLog:
         invocation = current_invocation.get()
-        if invocation is not None and post_id is None and call_id is None:
-            post_id, call_id = invocation
-        log = CommandLog(self, command, post_id, call_id)
+        if invocation is not None and step_id is None and call_id is None:
+            step_id, call_id = invocation
+        log = CommandLog(self, command, step_id, call_id)
         self.logs[log.id] = log
         callback = getattr(self, "on_log", None)
         if callback is not None:
@@ -167,15 +167,17 @@ class ReadCommandOutputTool(Tool):
     progress_exempt = True  # Re-reading a log tail is deliberate polling.
     description = (
         "Read retained shell/Git stdout or stderr without rerunning the command.\n\n"
-        "Use log_id from the result; offset counts UTF-8 bytes and limit counts characters.\n\n"
-        "Follow next_offset for subsequent pages, or use tail=true for the end.\n\n"
-        "Omit log_id to list logs, optionally filtered by post_id and call_id.\n\n"
-        "Quota/disk failures report lost bytes explicitly; those bytes cannot be retrieved.\n\n"
+        "Use `log_id` from the result; `offset` counts UTF-8 bytes and `limit` counts characters.\n\n"
+        "Start with `stream=\"stdout\"`, `offset=0`, `limit=8000`; use `stream=\"stderr\"` for "
+        "errors or `tail=true` for the end. Follow `next_offset` until it is `null`.\n\n"
+        "Batch independent output reads together. Polling retained logs is exempt from unchanged-batch detection.\n\n"
+        "Omit `log_id` to list logs, optionally filtered by `step_id` and `call_id`.\n\n"
+        "Quota/disk failures report `lost_bytes` and `retention_error`; missing bytes cannot be retrieved.\n\n"
         "Logs are saved with persistent sessions.\n\n"
-        "With --no-session, /reset and exit delete them."
+        "With `--no-session`, `/reset` and exit delete them."
     )
     parameters = {"type": "object", "properties": {
-        "log_id": {"type": "string"}, "post_id": {"type": "integer", "minimum": 1},
+        "log_id": {"type": "string"}, "step_id": {"type": "integer", "minimum": 1},
         "call_id": {"type": "string"}, "stream": {"type": "string", "enum": ["stdout", "stderr"]},
         "offset": {"type": "integer", "minimum": 0,
                    "description": "UTF-8 byte offset for stream pages; record index when listing logs. Follow next_offset."},
@@ -187,12 +189,12 @@ class ReadCommandOutputTool(Tool):
     def __init__(self, archive: CommandArchive) -> None:
         self.archive = archive
 
-    async def run(self, *, log_id: str | None = None, post_id: int | None = None,
+    async def run(self, *, log_id: str | None = None, step_id: int | None = None,
                   call_id: str | None = None, stream: str = "stdout", offset: int = 0,
                   limit: int = 8000, tail: bool = False) -> ToolResult:
         if log_id is None:
             records = [log.metadata() for log in self.archive.logs.values()
-                       if (post_id is None or log.post_id == post_id) and (call_id is None or log.call_id == call_id)]
+                       if (step_id is None or log.step_id == step_id) and (call_id is None or log.call_id == call_id)]
             # Listing is paged too: long sessions must not create an oversized
             # observation just by asking which logs are available.
             page = records[offset:offset + min(limit, 50)]
@@ -227,7 +229,7 @@ class ReadCommandOutputTool(Tool):
         except (OSError, UnicodeError) as exc:
             return ToolResult.error(f"Cannot read log at byte offset {offset}: {exc}. Use offsets returned by previous pages.")
         end = start + len(content.encode("utf-8"))
-        return ToolResult.ok(json.dumps({"log_id": log.id, "post_id": log.post_id, "call_id": log.call_id,
+        return ToolResult.ok(json.dumps({"log_id": log.id, "step_id": log.step_id, "call_id": log.call_id,
             "stream": stream, "offset": start, "next_offset": end if end < target.retained_bytes else None,
             "offset_unit": "UTF-8 bytes", "limit_unit": "characters",
             "retained_bytes": target.retained_bytes, "lost_bytes": target.lost_bytes,

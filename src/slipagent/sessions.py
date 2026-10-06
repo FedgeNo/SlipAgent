@@ -21,9 +21,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
-from .context import ConversationHistory, TurnPost
+from .context import ConversationHistory, CompletedStep
 from .openrouter import OpenRouterError
-from .task import TaskMemory, validate_task
+from .task import TaskMemory
 from .tools.output import CommandLog, OutputStream
 from .types import Message, Usage
 
@@ -76,7 +76,7 @@ class SessionJournal:
         self.last_message: dict[str, Any] | None = None
         self.system: dict[str, Any] | None = None
         self.state: dict[str, Any] | None = None
-        self.post_count = 0
+        self.step_count = 0
         self.failed = False
         try:
             _private_directory(self.directory)
@@ -147,7 +147,7 @@ class SessionJournal:
         title = session_title(self.project) if title is None else _validate_title(title)
         self.session_id = uuid.uuid4().hex
         self.path = self.directory / (self.session_id + ".jsonl")
-        self.cursor, self.post_count = 0, 0
+        self.cursor, self.step_count = 0, 0
         self.last_message, self.system, self.state = None, None, None
         self.failed = False
         try:
@@ -195,25 +195,24 @@ class SessionJournal:
             self._append("message", message=self._message(message))
             self.cursor += 1
         self.last_message = copy.deepcopy(self._message(agent.messages[-1])) if agent.messages else None
-        state = {"task_start": agent.history.task.start_message, "task": agent.history.task.record,
+        state = {"task_start": agent.history.task.start_message,
                  "usage": asdict(agent.usage), "pending": list(agent.pending),
                  "queued_message_indices": list(agent.queued_messages),
                  "model": agent.model, "temperature": agent.temperature}
         if state != self.state:
             self._append("state", **state)
             self.state = copy.deepcopy(state)
-        for post in agent.history.posts[self.post_count:]:
-            self.post(post)
-        self.post_count = len(agent.history.posts)
+        for step in agent.history.steps[self.step_count:]:
+            self.step(step)
+        self.step_count = len(agent.history.steps)
 
-    def post(self, post: Any) -> None:
-        self._append("post", id=post.id, summary=post.summary,
-                     task=getattr(post, "task_record", None),
-                     compaction_status=getattr(post, "compaction_status", "pending"),
-                     compaction_error=getattr(post, "compaction_error", None))
+    def step(self, step: Any) -> None:
+        self._append("step", id=step.id, summary=step.summary,
+                     compaction_status=getattr(step, "compaction_status", "pending"),
+                     compaction_error=getattr(step, "compaction_error", None))
 
-    def tool_started(self, post_id: int, call_id: str) -> None:
-        self._append("tool_start", post=post_id, call_id=call_id)
+    def tool_started(self, step_id: int, call_id: str) -> None:
+        self._append("tool_start", step=step_id, call_id=call_id)
 
     def log(self, log: CommandLog) -> None:
         self._append("log", metadata={**log.metadata(), "command": log.command})
@@ -248,7 +247,7 @@ class SessionJournal:
             raise SessionError(f"Could not delete session {self.session_id}: {exc}. Some session files may have been removed.") from exc
         self.path = None
         self.session_id = ""
-        self.cursor, self.post_count = 0, 0
+        self.cursor, self.step_count = 0, 0
         self.last_message, self.system, self.state = None, None, None
         self.failed = False
         self._title = session_title(self.project)
@@ -262,7 +261,7 @@ class SessionJournal:
         if not re.fullmatch(r"[0-9a-f]{32}", selected):
             raise SessionError("Session ID must be a complete ID from /sessions, or latest.")
         path = self.directory / (selected + ".jsonl")
-        data: dict[str, Any] = {"messages": [], "state": {}, "posts": {}, "started": set(), "logs": {}, "id": selected, "torn": False}
+        data: dict[str, Any] = {"messages": [], "state": {}, "steps": {}, "started": set(), "logs": {}, "id": selected, "torn": False}
         try:
             with path.open("rb") as source:
                 for index, raw in enumerate(source):
@@ -270,6 +269,15 @@ class SessionJournal:
                         data["torn"] = True
                         break
                     event = json.loads(raw)
+                    # Read journals written before history posts were named steps.
+                    if event.get("type") == "post":
+                        event["type"] = "step"
+                    if event.get("type") == "tool_start" and "post" in event:
+                        event["step"] = event.pop("post")
+                    if event.get("type") == "log":
+                        metadata = event["metadata"]
+                        if "post_id" in metadata:
+                            metadata["step_id"] = metadata.pop("post_id")
                     kind = event["type"]
                     if index == 0:
                         if kind != "header" or event.get("version") != 1 or event.get("project") != self.project or event.get("session_id") != selected:
@@ -283,10 +291,10 @@ class SessionJournal:
                         data["messages"][event["index"]] = event["message"]
                     elif kind == "state":
                         data["state"] = event
-                    elif kind == "post":
-                        data["posts"][event["id"]] = event
+                    elif kind == "step":
+                        data["steps"][event["id"]] = event
                     elif kind == "tool_start":
-                        data["started"].add((event["post"], event["call_id"]))
+                        data["started"].add((event["step"], event["call_id"]))
                     elif kind == "log":
                         data["logs"][event["metadata"]["log_id"]] = event["metadata"]
                     else:
@@ -297,8 +305,6 @@ class SessionJournal:
             state = data["state"]
             if type(state.get("task_start")) is not int or not 0 <= state["task_start"] <= len(data["messages"]):
                 raise ValueError("invalid task start")
-            if state.get("task") is not None and validate_task(state["task"]):
-                raise ValueError("invalid task record")
             if not isinstance(state.get("pending"), list) or any(not isinstance(text, str) for text in state["pending"]):
                 raise ValueError("invalid queued input")
             queued = state.get("queued_message_indices", [])
@@ -320,8 +326,8 @@ class SessionJournal:
                     raise ValueError("invalid command log metadata")
                 if metadata["returncode"] is not None and type(metadata["returncode"]) is not int:
                     raise ValueError("invalid command exit code")
-                if metadata["post_id"] is not None and (type(metadata["post_id"]) is not int or metadata["post_id"] < 1):
-                    raise ValueError("invalid command post ID")
+                if metadata["step_id"] is not None and (type(metadata["step_id"]) is not int or metadata["step_id"] < 1):
+                    raise ValueError("invalid command step ID")
                 if metadata["call_id"] is not None and not isinstance(metadata["call_id"], str):
                     raise ValueError("invalid command call ID")
                 for name in ("stdout", "stderr"):
@@ -331,25 +337,21 @@ class SessionJournal:
             task = TaskMemory(start_message=data["state"]["task_start"])
             history = ConversationHistory(task=task)
             history.sync(data["messages"])
-            for post_id, saved in data["posts"].items():
-                if type(post_id) is not int or not 1 <= post_id <= len(history.posts):
-                    raise ValueError("invalid saved post ID")
+            for step_id, saved in data["steps"].items():
+                if type(step_id) is not int or not 1 <= step_id <= len(history.steps):
+                    raise ValueError("invalid saved step ID")
                 if saved.get("summary") is not None and (not isinstance(saved["summary"], str) or not saved["summary"].strip()):
                     raise ValueError("invalid saved summary")
-                if saved.get("task") is not None and validate_task(saved["task"]):
-                    raise ValueError("invalid saved task snapshot")
-            task.record = data["state"]["task"]
-            for post in history.posts:
-                saved = data["posts"].get(post.id, {})
-                post.summary = saved.get("summary")
-                post.results_summarized = post.summary is not None
-                if isinstance(post, TurnPost):
-                    post.task_record = saved.get("task")
-                    post.compaction_status = saved.get("compaction_status", "interrupted")
-                    if post.compaction_status == "pending":
-                        post.compaction_status = "interrupted"
-                    post.compaction_error = saved.get("compaction_error")
-                    post.observed = post.id < len(history.posts) or not post.has_results
+            for step in history.steps:
+                saved = data["steps"].get(step.id, {})
+                step.summary = saved.get("summary")
+                step.results_summarized = step.summary is not None
+                if isinstance(step, CompletedStep):
+                    step.compaction_status = saved.get("compaction_status", "interrupted")
+                    if step.compaction_status == "pending":
+                        step.compaction_status = "interrupted"
+                    step.compaction_error = saved.get("compaction_error")
+                    step.observed = step.id < len(history.steps) or not step.has_results
             data["history"] = history
             data["usage"] = Usage.from_api(data["state"]["usage"])
             return data
@@ -368,18 +370,18 @@ class SessionJournal:
             messages.append(message)
         # Only the final batch may be incomplete. Fill missing observations
         # explicitly so providers get a valid call/result sequence on resume.
-        index, post = 0, 0
+        index, step = 0, 0
         while index < len(messages):
             message = messages[index]
             index += 1
             if message.role == "assistant":
-                post += 1
+                step += 1
                 for call in message.tool_calls or []:
                     if index < len(messages):
                         if messages[index].role != "tool" or messages[index].tool_call_id != call.id:
                             raise ValueError("broken tool-call/result sequence")
                     else:
-                        detail = "Tool interrupted; outcome unknown and effects may be partial. Inspect before retrying." if (post, call.id) in data["started"] else "Tool was not started before interruption. No automatic replay was performed."
+                        detail = "Tool interrupted; outcome unknown and effects may be partial. Inspect before retrying." if (step, call.id) in data["started"] else "Tool was not started before interruption. No automatic replay was performed."
                         messages.append(Message.tool_result(call.id, json.dumps({"tool": call.name, "call_id": call.id, "status": "error", "content": detail})))
                     index += 1
             elif message.role == "tool":
@@ -398,7 +400,7 @@ class SessionJournal:
             messages[0] = prefix[0]
         agent.messages = messages
         loaded = data["history"]
-        agent.history.posts = loaded.posts
+        agent.history.steps = loaded.steps
         agent.history.cursor = loaded.cursor
         agent.history._request = loaded._request
         agent.history.task = loaded.task
@@ -412,7 +414,7 @@ class SessionJournal:
             for log_id, metadata in data["logs"].items():
                 if not re.fullmatch(r"[0-9a-f]{32}", log_id):
                     raise SessionError("Invalid archived command ID")
-                log = CommandLog(archive, metadata["command"], metadata["post_id"], metadata["call_id"])
+                log = CommandLog(archive, metadata["command"], metadata["step_id"], metadata["call_id"])
                 log.id = log_id
                 log.returncode, log.timed_out = metadata["returncode"], metadata["timed_out"]
                 log.finished = True

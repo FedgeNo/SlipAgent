@@ -21,7 +21,7 @@ from typing import Any
 from ..types import ToolSpec
 from ..lifecycle import Lifetime
 
-# A call ID is unique only within one numbered history post. Context-local
+# A call ID is unique only within one numbered history step. Context-local
 # provenance also works when callers invoke independent tools concurrently.
 current_invocation: ContextVar[tuple[int, str] | None] = ContextVar("slipagent_invocation", default=None)
 
@@ -292,6 +292,7 @@ class ToolRegistry:
             raise RuntimeError("Tool registry is closing or closed")
         if tool.name in self._tools:
             raise ValueError(f"tool already registered: {tool.name}")
+        validate_schema_shape(tool.parameters, f"{tool.name}.parameters")
         self._tools[tool.name] = tool
 
     def replace(self, tools: Iterable[Tool]) -> None:
@@ -300,6 +301,7 @@ class ToolRegistry:
         for tool in tools:
             if tool.name in replacement:
                 raise ValueError(f"tool already registered: {tool.name}")
+            validate_schema_shape(tool.parameters, f"{tool.name}.parameters")
             replacement[tool.name] = tool
         self._tools = replacement
 

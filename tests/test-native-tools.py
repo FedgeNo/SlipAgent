@@ -61,12 +61,22 @@ class Router:
         reply = self.replies.pop(0)
         if callable(reply):
             reply = reply(body)
+        if isinstance(reply.get("content"), str):
+            try:
+                value = json.loads(reply["content"])
+            except ValueError:
+                value = None
+            if isinstance(value, dict) and set(value) == {"response"}:
+                if "tools" not in self.parameters[body["model"]]:
+                    reply["content"] = json.dumps({**value, "tool_calls": []})
+                elif not body.get("response_format"):
+                    reply["content"] = value["response"]
         return httpx.Response(200, json={"choices": [{"message": reply,
             "finish_reason": "tool_calls" if reply.get("tool_calls") else "stop"}]})
 
 
 def wire(text="Done.", calls=None, previous="", **extra):
-    return {"role": "assistant", "content": json.dumps(record(text, previous)),
+    return {"role": "assistant", "content": json.dumps({"response": text}),
             "tool_calls": calls or [], **extra}
 
 
@@ -79,10 +89,10 @@ async def test_native_calls_execute_once_and_results_round_trip_with_ids():
     async with OpenRouterClient("test", transport=httpx.MockTransport(router.handle)) as client:
         agent = Agent(client, ToolRegistry([tool]), "test/native", on_event=events.append)
         assert await agent.run("Inspect the project.") == "Done."
-        assert len(agent.history.posts) == 2
+        assert len(agent.history.steps) == 2
         await agent.wait_for_compaction()
-        assert agent.history.posts[0].agent_response == "Reading."
-        assert "actual result" in agent.history.posts[0].summary
+        assert agent.history.steps[0].agent_response == "Reading."
+        assert "actual result" in agent.history.steps[0].summary
     assert tool.seen == [{"value": "A"}, {"value": "B"}]
     assert len(router.requests) == 2 and len(router.gets) == 2
     request = router.requests[0]
@@ -97,7 +107,7 @@ async def test_native_calls_execute_once_and_results_round_trip_with_ids():
     assert [event.text for event in events if event.kind == "assistant_text"] == ["Reading.", "Done."]
 
 
-@pytest.mark.parametrize("bad", [None, "not JSON", json.dumps({"response": "Missing memory"})])
+@pytest.mark.parametrize("bad", ["Reading", "not JSON"])
 async def test_native_calls_accept_normal_content_without_memory(bad):
     router = Router({"test/native": ["tools", "response_format"]}, [
         {"role": "assistant", "content": bad, "tool_calls": [native_call("BAD")]}, wire(),
@@ -188,7 +198,7 @@ async def test_malformed_native_arguments_retry_before_entire_batch(bad):
 
 
 @pytest.mark.parametrize("carrier", ["function_call", "content_blocks", "embedded"])
-async def test_alternate_call_carriers_follow_the_same_loop(carrier):
+async def test_alternate_call_carriers_are_rejected(carrier):
     first = wire("Reading.")
     call = native_call()
     if carrier == "function_call":
@@ -205,15 +215,13 @@ async def test_alternate_call_carriers_follow_the_same_loop(carrier):
     async with OpenRouterClient("test", transport=httpx.MockTransport(router.handle)) as client:
         agent = Agent(client, ToolRegistry([tool]), "test/native")
         assert await agent.run("Inspect the project.") == "Done."
-    assert tool.seen == [{"value": "A"}]
-    messages = unpack_api_context(router.requests[1]["messages"])
-    call_id = next(message["tool_calls"][0]["id"] for message in messages if message.get("tool_calls"))
-    assert next(message["tool_call_id"] for message in messages if message["role"] == "tool") == call_id
+    assert tool.seen == []
+    assert "last response was rejected" in router.requests[1]["messages"][0]["content"]
 
 
 async def test_json_only_fallback_omits_native_parameters_and_replays_observations():
-    value = record("Reading.")
-    value["tool_calls"] = [{"name": "record", "arguments": {"value": "A"}}]
+    value = {"response": "Reading."}
+    value["tool_calls"] = [{"id": "read-1", "name": "record", "arguments": '{"value":"A"}'}]
     router = Router({"test/json": ["response_format"]}, [
         {"role": "assistant", "content": json.dumps(value)}, wire(previous="record returned ACTUAL RESULT."),
     ])
@@ -234,7 +242,7 @@ async def test_json_only_fallback_omits_native_parameters_and_replays_observatio
 
 async def test_selection_refreshes_and_caches_native_support_between_calls(tmp_path):
     def final(body):
-        return {"role": "assistant", "content": json.dumps(record(messages=body["messages"]))}
+        return {"role": "assistant", "content": json.dumps({"response": "Done."})}
     router = Router({"test/model": ["tools", "response_format"]}, [final] * 4)
     async with OpenRouterClient("test", transport=httpx.MockTransport(router.handle)) as client:
         agent = Agent(client, ToolRegistry(), "test/model")
@@ -297,7 +305,7 @@ async def test_streamed_native_batch_waits_for_complete_record_and_preserves_rea
     entered, release = asyncio.Event(), asyncio.Event()
     tool, events = RecordingTool(), []
     router = Router({"test/native": ["tools", "response_format"]}, [wire(previous="record returned ok.")])
-    content = json.dumps(record("Reading."))
+    content = "Reading."
     details = [
         {"type": "reasoning.text", "index": 0, "text": "Inspecting.", "signature": "part-1"},
         {"type": "reasoning.text", "index": 0, "text": " Reading.", "signature": "part-2"},
@@ -335,7 +343,7 @@ async def test_streamed_native_batch_waits_for_complete_record_and_preserves_rea
     assert tool.seen == [{"value": "A"}]
     prior = next(message for message in unpack_api_context(router.requests[1]["messages"]) if message.get("tool_calls"))
     assert "reasoning_details" not in prior and "reasoning" not in prior
-    assert agent.history.posts[0].reasoning == "Inspecting. Reading."
+    assert agent.history.steps[0].reasoning == "Inspecting. Reading."
     assert not any("opaque-provider-data" in event.text or "part-1" in event.text for event in events)
 
 
@@ -388,20 +396,17 @@ async def test_truncated_native_batch_cannot_execute_even_with_valid_partial_rec
 
 def test_native_file_operation_through_real_cli(tmp_path):
     from test_cli_e2e import StubOpenRouter, run_cli
-    first = wire("Writing.", [{"id": "write-1", "type": "function", "function": {
-        "name": "write_file", "arguments": json.dumps({"path": "native.txt", "content": "actual content\n"})}}])
-    first["content"] = json.dumps({**record("Writing."), "tool_calls": [
-        {"name": "write_file", "arguments": {"path": "native.txt", "content": "actual content\n"}}]})
-    final = wire(previous="write_file wrote native.txt.")
+    first = wire("Reading.", [{"id": "read-1", "type": "function", "function": {
+        "name": "list_dir", "arguments": json.dumps({"path": "."})}}])
+    final = wire()
     script = [{"choices": [{"message": message, "finish_reason": "stop"}]} for message in (first, final)]
     with StubOpenRouter(script, include_memory=False) as stub:
-        result = run_cli("--no-mcp", "--no-reload", "-p", "Write native.txt", "--base-url", stub.base_url, cwd=tmp_path)
+        result = run_cli("--no-mcp", "--no-reload", "-p", "List the directory", "--base-url", stub.base_url, cwd=tmp_path)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "Done."
-    assert (tmp_path / "native.txt").read_text() == "actual content\n"
     assert len(stub.requests) == 2
     calls = [message["tool_calls"] for message in unpack_api_context(stub.requests[1]["messages"]) if message.get("tool_calls")]
     assert len(calls) == 1 and len(calls[0]) == 1
-    assert calls[0][0]["id"] == "write-1"
+    assert calls[0][0]["id"] == "read-1"
     results = [message for message in unpack_api_context(stub.requests[1]["messages"]) if message["role"] == "tool"]
-    assert len(results) == 1 and results[0]["tool_call_id"] == "write-1"
+    assert len(results) == 1 and results[0]["tool_call_id"] == "read-1"

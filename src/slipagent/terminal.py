@@ -550,7 +550,7 @@ class TerminalUI:
         if not self.working:
             return [("class:idle", "Ready")]
         frame = PULSE_FRAMES[int(time.monotonic() * 4) % len(PULSE_FRAMES)]
-        label = "Stopping After This Turn" if self.stopping else "Working"
+        label = "Stopping After This Step" if self.stopping else "Working (esc to interrupt)"
         return [("class:pulse", f"{frame} {label}")]
 
     def set_working(self, working: bool, *, stopping: bool = False) -> None:

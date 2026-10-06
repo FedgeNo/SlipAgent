@@ -38,7 +38,7 @@ class GrepTool(Tool):
         "Search file contents with a regular expression.\n\n"
         "Returns matching lines as `path:line: text`.\n\n"
         "Use `include` as a glob to narrow the file set (for example '*.py' or 'src/**/*.ts').\n\n"
-        "Use glob first to find files by name; use grep to find where something is defined or used."
+        "Use `glob` first to find files by name; use `grep` to find where something is defined or used."
     )
     parameters = {
         "type": "object",
@@ -191,7 +191,8 @@ class GlobTool(Tool):
         "Patterns are matched against the workspace-relative path (or relative to the searched "
         "directory for external paths in danger mode), so '*.py', 'src/**/*.ts', and '**/test_*.py'"
         " all work.\n\n"
-        "Directories are shown with a trailing '/'."
+        "Directories are shown with a trailing '/'. Use this with `list_dir` to understand the "
+        "layout before reading code with `read_file`."
     )
     parameters = {
         "type": "object",

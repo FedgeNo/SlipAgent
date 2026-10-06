@@ -24,6 +24,7 @@ class Stream(httpx.AsyncByteStream):
             yield packet({"tool_calls": [{"index": 0, "id": "a", "function": {"name": "record", "arguments": '{"value":'}}]})
             raise httpx.ReadError("connection dropped")
         if self.calls:
+            yield packet({"content": "Recording the result."})
             yield packet({"tool_calls": [{"index": 0, "id": "a", "function": {"name": "record", "arguments": '{"value":"once"}'}}]}, "tool_calls")
         else:
             yield packet({"content": "done"}, "stop")

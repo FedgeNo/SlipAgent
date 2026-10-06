@@ -126,6 +126,6 @@ async def test_environment_is_explicit_in_json_object_model_context(tmp_path):
         system = "\n".join(message.content or "" for message in view if message.role == "system")
         assert "Project Python Environment" in system
         assert sys.executable in system and "-m pytest" in system
-        assert "ordinary plain text" in system
+        assert "plain assistant reply text" in system
     finally:
         await registry.aclose()

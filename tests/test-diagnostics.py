@@ -9,9 +9,9 @@ def test_exact_request_deduplication_and_failed_attempt_retention(tmp_path):
     archive = RequestDiagnostics()
     archive.use_directory(tmp_path / "requests")
     request = json.dumps({"messages": [{"role": "user", "content": "exact 日本語"}]}, ensure_ascii=False)
-    first = archive.begin(request, step=1, post=1)
+    first = archive.begin(request, step=1, step_id=1)
     archive.finish(first, "request_error", detail="Disconnected", response="partial thoughts")
-    second = archive.begin(request, step=1, post=1)
+    second = archive.begin(request, step=1, step_id=1)
     archive.finish(second, "accepted", response="done")
     files = list(archive.directory.glob("*.gz"))
     assert len(files) == 1 and gzip.decompress(files[0].read_bytes()).decode() == request
@@ -27,9 +27,9 @@ def test_exact_request_deduplication_and_failed_attempt_retention(tmp_path):
 def test_quota_preserves_existing_requests_and_reports_failure(tmp_path):
     archive = RequestDiagnostics(1000)
     archive.use_directory(tmp_path)
-    first = archive.begin("first", step=1, post=1)
+    first = archive.begin("first", step=1, step_id=1)
     assert first == 1
     archive.finish(first, "accepted", response="x" * 4000)
     assert "quota" in archive.error
-    assert archive.begin("later", step=2, post=2) is None
+    assert archive.begin("later", step=2, step_id=2) is None
     assert "first" in archive.read(first)

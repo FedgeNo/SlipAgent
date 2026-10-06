@@ -90,10 +90,10 @@ def structured_message(message: dict, messages: list[dict]) -> dict:
 
 
 def summary_response(request: dict) -> dict | None:
-    if not request["messages"][0]["content"].startswith("Summarize one completed SlipAgent turn"):
+    if not request["messages"][0]["content"].startswith("Summarize one completed SlipAgent step"):
         return None
     source = json.loads(request["messages"][1]["content"])
-    text = f"Demo turn {source['post_id']}: {source['agent_response'][:200]}; {len(source['tool_results'])} tool observations saved."
+    text = f"Demo step {source['step_id']}: {source['agent_response'][:200]}; {len(source['tool_results'])} tool observations saved."
     return {"choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 100, "completion_tokens": 20, "cost": 0}}
 

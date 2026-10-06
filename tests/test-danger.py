@@ -88,7 +88,7 @@ async def test_external_instructions_and_access_mode_reach_each_request(tmp_path
         assert not target.exists()
         view = await agent._context_view(registry.specs(), 1)
         text = "\n".join(message.content or "" for message in view)
-        assert "Danger mode ON" in text and "External rule: preserve CRLF." in text
+        assert "Danger Mode ON" in text and "External rule: preserve CRLF." in text
         tracker = registry.services["project_instructions"]
         tracker.presented(tracker.snapshot())
         result = await registry.invoke("write_file", {"path": str(target), "content": "first"})
@@ -96,7 +96,7 @@ async def test_external_instructions_and_access_mode_reach_each_request(tmp_path
         workspace.access.danger = False
         view = await agent._context_view(registry.specs(), 1)
         text = "\n".join(message.content or "" for message in view)
-        assert "Danger mode OFF" in text and "Danger mode ON" not in text
+        assert "Danger Mode OFF" in text and "Danger Mode ON" not in text
         assert "External rule: preserve CRLF." not in text
         with pytest.raises(WorkspaceError, match="outside the workspace"):
             workspace.resolve(target)

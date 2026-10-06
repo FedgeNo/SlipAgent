@@ -16,8 +16,8 @@ def record_message(record: dict[str, Any]) -> Message:
     return Message.user(json.dumps(record, ensure_ascii=False))
 
 
-def turn_record(messages: list[Message], *, current: bool = False,
-                retained_prompt: str = "", post_id: int | None = None) -> dict[str, Any]:
+def step_record(messages: list[Message], *, current: bool = False,
+                retained_prompt: str = "", step_id: int | None = None) -> dict[str, Any]:
     prompts = [message.content or "" for message in messages if message.role == "user"]
     calls = [call for message in messages for call in message.tool_calls or []]
     names = {call.id: call.name for call in calls}
@@ -40,7 +40,7 @@ def turn_record(messages: list[Message], *, current: bool = False,
             result.update(status=saved["status"], content=saved["content"])
         results.append(result)
     record: dict[str, Any] = {
-        "record_type": "current_turn" if current else "history_turn",
+        "record_type": "current_step" if current else "history_step",
         "representation": "full",
         "user_prompt": prompts or ([retained_prompt] if retained_prompt else []),
         "agent_response": next((message.content for message in messages if message.role == "assistant"), None),
@@ -48,7 +48,8 @@ def turn_record(messages: list[Message], *, current: bool = False,
         "tool_results": results,
     }
     if current:
-        record["continue_current_task"] = not prompts
-    if post_id is not None:
-        record["post_id"] = post_id
+        # This marks the absence of a new user message, not unfinished work.
+        record["is_tool_result_response"] = not prompts
+    if step_id is not None:
+        record["step_id"] = step_id
     return record

@@ -15,6 +15,15 @@ recovery, response formats, and history/task instructions are supplied by those
 system prompts and tool definitions in every workspace. They do not depend on
 the workspace having a copy of SlipAgent's own `AGENTS.md`.
 
+The main system prompt in `src/slipagent/system-prompt.txt` owns general workflow and batch-result interpretation. `prompts.py` loads the packaged UTF-8 template; `agent.py` substitutes the workspace and interpreter. The reload frame captures the text file with Python sources, and candidate modules read that captured resource. Template validation precedes the reload commit, so rejected edits leave the accepted prompt active. The text file is editable without changing Python source; adopting the resource-monitoring frame requires restarting an existing process.
+File reads and edits, command-output recovery, background jobs, Git previews,
+and language-server navigation are described in their respective tool definitions.
+Native-tool requests deliver those contracts through API tool definitions;
+JSON-tool requests include the same definitions in the system's Available Tool
+Definitions section.
+
+The background-summary prompt is in `src/slipagent/background-summary-prompt.txt`. It uses the same packaged resource loader and source-generation capture as the main prompt, without template substitution; `compaction.py` supplies it to isolated summary requests.
+
 Project instruction discovery supplies the selected workspace's documents under
 a separate heading. `/init` creates a project-notes scaffold only when `AGENTS.md`
 is absent, then reloads the project's guidance; it neither overwrites existing
@@ -38,11 +47,11 @@ request parameters. No earlier API call, terminal line, file, or archive entry
 is visible unless it is included in that request. Separate reasoning deltas are
 displayed and joined into one string for that response's uncompressed record;
 Overthinking Mode (enabled by default) includes that string as `reasoning` in
-the latest five completed turns' JSON records, including selected summaries.
+the latest five completed steps' JSON records, including selected summaries.
 Missing thoughts add no field. The exact JSON participates in context selection
-and token budgeting; omitted turns and budget-limited excerpts omit reasoning.
+and token budgeting; omitted steps and budget-limited excerpts omit reasoning.
 Opaque provider metadata is excluded. Disabling the mode excludes all reasoning
-from working context. Compaction and active-task records exclude reasoning in
+from working context. Compaction inputs exclude reasoning in
 either mode. Explicit history retrieval can still access the originals. The context inspector
 captures the final outgoing body after capability settings are applied, without
 the authentication headers.
@@ -50,27 +59,25 @@ the authentication headers.
 Context construction proceeds in this order:
 
 1. `ConversationHistory.sync` recognizes complete assistant/tool batches and
-   assigns sequential post IDs. New user messages are associated with the next
-   response post and also registered as active-task source instructions.
+   assigns sequential step IDs. New user messages are associated with the next
+   response step and also registered as active-task source instructions.
 2. System messages are pinned and labelled. The last receives the response
    contract and named sections assembled by `PromptSections`: schema/tool/MCP
    guidance first, then current project instructions, environment, runtime
-   state, and repair details. Current post IDs and task state follow those
+   state, and repair details. Current step IDs and task state follow those
    sections. Names are unique, owners and static/dynamic roles are explicit,
    and order is deterministic. Section registries belong to one request, so
    a rejected generation cannot leave global prompt registrations behind.
-   Prompt prose retains real newlines. Blank lines separate headings, topic
-   groups, task fields, tool guidance, examples, and assembled sections; source
-   wrapping must not erase those boundaries with backslash continuations.
+   Prompt paragraphs occupy one physical line, without fixed-width wrapping. Two newlines separate paragraphs, headings, topic groups, task fields, tool guidance, examples, and assembled sections. Single newlines remain for meaningful item boundaries, metadata fields, code, and other structured content.
    Loaded instruction-file contents and original conversation text stay intact.
    The input uses a system prefix followed by JSON records. The inspector
    displays the final body rather than reconstructing it separately.
 3. Up to 100 older records precede the recent full window. Each
-   retained turn has one representation: either its complete prompt, response,
+   retained step has one representation: either its complete prompt, response,
    calls and results, or its summary. A summary is selected only if its estimated
    token cost, including JSON fields, escaped values and message overhead, is lower.
    Both native-tool and embedded-tool profiles receive the same record format;
-   ties keep originals, with complete tool batches intact. Every turn has its
+   ties keep originals, with complete tool batches intact. Every step has its
    own JSON object and API user message, including consecutive summaries.
    The full window targets 50 calls by default, with a floor of 5 on the requested
    window size. Under model context pressure, selection drops the oldest older
@@ -78,15 +85,15 @@ Context construction proceeds in this order:
    Boundaries and representation caches belong to one view: later requests can
    restore omitted records as large calls age into smaller summaries. There is
    no persistent omission marker and no separate history token cap.
-   `records.py` encodes full turns with `record_type`, `representation`, `user_prompt`,
+   `records.py` encodes full steps with `record_type`, `representation`, `user_prompt`,
    `agent_response`, `tool_calls`, and `tool_results`. Prompts remain an array so
    queued inputs retain their boundaries. Calls use `call_id`, `tool_name`, and
    argument objects; results use matching IDs, names, status, and content.
    The harness's exact observation envelope is unpacked, while arbitrary JSON
    inside tool output remains content. Unknown legacy status stays `unknown`.
    The selected records form a contiguous suffix of stored history. The current
-   post number remains in the system prompt. Every full, compressed, excerpt,
-   and current bundle also includes its exact `post_id` as JSON metadata for
+   step number remains in the system prompt. Every full, compressed, excerpt,
+   and current bundle also includes its exact `step_id` as JSON metadata for
    `recall_history`, separate from the original message strings.
    Description keys never enter actual message strings. Reserved legacy response
    labels are removed from standalone prose
@@ -94,9 +101,9 @@ Context construction proceeds in this order:
    remain intact; user and tool content, arguments, and archived originals are
    not rewritten. This avoids teaching the reply format through artificial
    assistant-message prefixes, including when resuming an older session.
-4. A final `current_turn` JSON object contains current input verbatim. An empty
-   prompt array with `continue_current_task=true` continues the supplied task.
-   Continuation turns carry the active user
+4. A final `current_step` JSON object contains current input verbatim. An empty
+   prompt array with `is_tool_result_response=true` marks a response to earlier tool results. If the supplied results satisfy the user's request, return the result with no tool calls to finish; request more tools only when necessary work remains.
+   Continuation steps carry the active user
    prompt with their full records. Newly returned results cannot leave the full
    window before the working model receives them, even when their independent
    summary finishes first. Oversized observations use an `excerpt` record with
@@ -104,9 +111,9 @@ Context construction proceeds in this order:
    omitted-character counts occupy separate fields; clipping never splices
    descriptive markers into message text.
 5. `TaskMemory.prompt_supplement` ensures the current user prompt is supplied,
-   even after its original post is compressed. It reuses a full copy already
-   selected or fills the current-turn object's prompt array with the retained
-   original. Its source post ID stays in the system
+   even after its original step is compressed. It reuses a full copy already
+   selected or fills the current-step object's prompt array with the retained
+   original. Its source step ID stays in the system
    task metadata, rather than the user-message label. Supplemental
    input counts against the endpoint budget. The active prompt is independent
    of the historical representation of the call that first received it.
@@ -115,13 +122,12 @@ The selected model's context/prompt limits constrain the whole request. The
 budget reserves output, system instructions, tool definitions, response schema,
 and a 15% estimation margin before fitting history. Text estimates use UTF-8
 size, not a model tokenizer. History uses the remaining model allowance;
-`--context-posts` controls its target full-call count, not a separate token budget.
+`--context-steps` controls its target full-call count, not a separate token budget.
 Selection preflight uses a copy of history/task selection state so an incompatible
 model cannot mutate the active conversation merely by being considered.
 
 `ContextBudget` calibrates estimates against the final working request's measured
-prompt tokens, including its tool/schema overhead. The multiplier can only
-tighten limits and resets on model/profile replacement. It is applied to a fresh
+prompt tokens, including its tool/schema overhead. The multiplier is the mean measured-to-estimated ratio of the latest five valid measurements with a 10% safety margin. It can rise or fall, resets on model/profile replacement, and does not change configured limits. Existing live instances initialize the measurement window at their next observation. It is applied to a fresh
 estimate of each selected view; old absolute usage is never applied to a newly
 compacted history. Compaction requests do not update this calibration.
 The reduced fraction learned during overflow recovery persists until the
@@ -147,52 +153,41 @@ support, independently of their JSON-format support. Startup and explicit model
 selection refresh the profile; ordinary requests reuse it. Native-capable routes
 take priority. Schema-capable endpoints receive a small strict response schema.
 Other endpoints receive no `response_format`; ordinary replies are accepted.
-A JSON-object capability alone does not force JSON responses. Without native
-support, a JSON-capable route uses embedded calls and text tool definitions,
-while allowing plain final replies.
+Native routes without schemas use plain reply text. JSON-only routes require
+exactly `response` and `tool_calls` on every step, including final answers.
 Selection preflight publishes neither the model nor its profile on failure.
 
-`protocol.py` normalizes ordinary text, native calls, and explicit response/call
-envelopes. The optional strict schema requires only `response` for native models,
-or `response` plus `tool_calls` for embedded calls. There is no compressed-field
-or task-field requirement. A null-content native call is valid. Older response
-envelopes remain readable; optional legacy task updates still undergo validation.
+`protocol.py` validates the response against the profile selected before the
+request. Each path advertises only its own contract. Native calls must use API
+`message.tool_calls`: each call has `id`, `type="function"`, and `function`
+containing `name` and JSON-encoded `arguments`. Reply content is plain text or,
+for schema-capable endpoints, exactly an object containing `response`. JSON-only
+responses contain exactly `response` and `tool_calls`; each call contains exactly
+`id`, `name`, and JSON-encoded `arguments`. IDs must be nonempty and unique.
+Every response requires nonempty reply text. No alternate carriers, fences,
+argument aliases, extra fields, inline task records, or compressed fields are
+accepted. Native and embedded batches are never merged. Format violations reject
+the complete response before reply display or tool execution.
+
 The archive retains assistant calls followed by matching `role: tool` results.
-Working requests package each complete turn as one JSON object, regardless of
-native-tool support. The model's new response still uses the selected profile's
-native or embedded call format. JSON history does not change the response schema
-between calls. The budgeter measures the serialized records; recall retains the
-originals, and the current prompt is retained independently of compression.
+Working requests package each complete step as one JSON object, regardless of
+native-tool support. JSON history does not change the selected response contract.
+The budgeter measures serialized records; recall retains originals, and the
+current prompt is retained independently of compression. Legacy archive readers
+remain separate from active response acceptance.
 
-Normalization precedes validation and is independent of the requested mode.
-Accepted call carriers are native OpenAI-style function calls, flat calls in the
-JSON record, legacy `function_call`, text/`tool_use` content blocks, and explicit
-JSON `<tool_call>`/`<function_call>` blocks adjacent to the record. Whole JSON
-code fences are accepted. Arguments may be JSON strings or objects, with
-`arguments`, `input`, or `parameters` as an unambiguous field name. Only absent
-IDs are generated. Exact tool names and argument values are never inferred.
-
-Multiple nonempty call sources must describe the same ordered batch, including
-multiplicity. Native IDs win for identical repeated representations; differing
-batches require a retry. Two intentionally identical calls with distinct IDs in
-one batch remain two calls. JSON canonical comparison distinguishes booleans
-from numbers, unlike Python object equality. Never union alternative batches or
-scan response prose/quoted examples for executable calls.
-
-Malformed or ambiguous executable envelopes, duplicate JSON keys, invalid
-arguments, Unicode, non-finite numbers, and duplicate call IDs are rejected.
-A batch terminated by the output-token limit is rejected before execution.
-No `tool_choice` is forced. Ordinary prose and quoted examples remain text;
-missing inline summaries do not trigger retries. Models that return a task
-record through the legacy envelope must still supply a valid task record.
+Duplicate JSON keys, malformed arguments, invalid Unicode, non-finite numbers,
+and duplicate call IDs are rejected. Output-token truncation rejects tool batches
+before execution. No `tool_choice` is forced. Native prose and quoted examples
+remain text and cannot execute tools.
 
 The transport concatenates readable reasoning only from the response currently
 being received, preserving whitespace and avoiding duplicate copies when a
 delta supplies both a plain reasoning field and reasoning details. JSON
 completions use the same extraction. Each retry starts a fresh accumulator;
-existing history is never reassembled. Accepted messages and `TurnPost.reasoning`
+existing history is never reassembled. Accepted messages and `CompletedStep.reasoning`
 retain the resulting string. Working JSON records include readable thoughts
-for the latest five completed turns when Overthinking Mode is enabled, with
+for the latest five completed steps when Overthinking Mode is enabled, with
 their exact token cost included in selection. Provider details stay excluded.
 The client removes native reasoning fields from outgoing message
 dictionaries, covering direct calls and older stored records without mutating
@@ -263,7 +258,7 @@ reset, resume, and starting a new task do not restart the replaced task. Command
 text remains outside model history and session journals.
 
 `/stop` finishes the active response and entire tool batch and prevents another
-working model request. The completed turn can still be summarized in the
+working model request. The completed step can still be summarized in the
 background. It does not kill that batch's processes. `/quit` finishes the active
 run before closing resources and prevents automatic launch of another queued run.
 Queued corrections from an earlier failed/stopped run are drained before the new
@@ -284,31 +279,33 @@ interrupt binding, so closing a chooser never interrupts agent work.
 ## History and Task State
 
 The working prompt asks for explicit findings, evidence, decisions, uncertainties,
-and next steps in each response, including tool-call turns. These responses remain
+and next steps in each response, including tool-call steps. These responses remain
 in working history and their important conclusions are preserved in summaries.
 Overthinking Mode supplies recent readable reasoning to the working model;
 the compactor always excludes it.
 
-`TurnPost` extends `HistoryPost` with independent `user_prompt`, `agent_response`,
-`reasoning`, `tool_calls`, and `tool_results` references, plus one whole-turn `summary` and a
+`CompletedStep` extends `HistoryStep` with independent `user_prompt`, `agent_response`,
+`reasoning`, `tool_calls`, and `tool_results` references, plus one whole-step `summary` and a
 task-record snapshot. Canonical messages retain their original order and native
 call/result structure. Continuation prompts repeat the active request under an
-explicit heading; that heading cannot acknowledge a new task-source post.
+explicit heading; that heading cannot acknowledge a new task-source step.
 
-After archiving a complete batch, `Agent._archive_turn` submits it to
-`TurnCompactor`, a registry-owned service. It freezes only the original prompt,
+After archiving a complete batch, `Agent._archive_step` submits it to
+`StepCompactor`, a registry-owned service. It freezes only the original prompt,
 response, tool calls and results, the selected model, and its capabilities. Every job starts asynchronously;
 the working loop does not wait. A reply without tools also gets one job. The
 compaction request contains exactly two messages: summarization instructions
-with the post ID as private system metadata, and the JSON serialization of those
-four parts without a post-number field. It contains no thread, prior
+with the step ID as private system metadata, and the JSON serialization of those
+four parts without a step-number field. It contains no thread, prior
 summaries, task state, project guidance, or reasoning. No tools or output schema
 are requested; the reply is a plain summary capped at 6,000 characters. The
 complete input is checked against the frozen endpoint budget without silently
 truncating it. A context overflow or bad summary leaves the originals intact and
-marks the summary failed with a visible warning and a recall reference.
+marks the summary failed with a visible warning and a recall reference. Each
+summary request has a 20-minute overall timeout, including retries; timeout
+failure preserves the originals and follows the same warning path.
 
-Summary completion and observation delivery are independent. `TurnPost.observed`
+Summary completion and observation delivery are independent. `CompletedStep.observed`
 protects the newest tool batch until an accepted working response has received
 it; a fast compactor cannot replace unseen results. No working actions are
 performed by the compactor. It does not emit context-inspector or reasoning
@@ -328,48 +325,18 @@ list/search page includes `total_matches` for the entire filtered result, includ
 empty results and offsets beyond the listing. `next_offset` remains the character
 cursor, and `total_characters` describes the complete listing text. A single `section`
 selects `prompt`, `response`, `reasoning`, `tool_calls`, or `tool_results`; `sections` selects
-several as one JSON object. Without a selector, it returns the full turn with its
-task snapshot. `section="user"` returns only the original new user messages for
+several as one JSON object. Without a selector, it returns the full step with its
+original user prompt. `section="user"` returns only the original new user messages for
 source recovery. `call_id` selects a tool observation by default, or one call
 with `section="tool_calls"`. A batch ID is not session-unique: use
-`(post_id, call_id)` as provenance. Invalid or conflicting selectors return a
+`(step_id, call_id)` as provenance. Invalid or conflicting selectors return a
 tool error. The schema and direct `run` path share the allowed original-part
 names; unknown singular or plural selectors are rejected before accessing the
 record. CLI sessions journal these records by default; `--no-session` keeps them
 only in memory until reset/exit. Embedded Agent callers opt in by attaching a
 `SessionJournal` to registry services.
 
-`TaskMemory` separately owns original user inputs, their post references, source
-revision, and the optional working record. It records the substantive first
-request and later user corrections; “continue” adds a reference without replacing
-the original task identity. `/task new` changes the source boundary at the current
-message index and makes subsequent input a separate task while retaining history.
-Task `complete` is model-reported and requires no pending work or next steps.
-Completion updates can share a batch with any other tools, including further
-task updates. Inline legacy task records follow the same rule. Calls run in the
-declared order. A follow-up can reopen that same task. `blocked` records needed user
-input; it does not start a separate inference loop or bypass normal tool rules.
-
-The latest user input remains available verbatim until new input replaces it.
-Queued messages received together share a post and remain in their original
-order. `current_prompt_post` identifies that source in every working request;
-the model can use the number with `recall_history` for original user messages or
-the whole uncompressed call. No model echo, acknowledgment, task update, or
-mandatory retrieval is needed to keep working. Input is not automatically
-classified as a new idea or an amendment. Earlier inputs remain in normal
-history and the optional working record rather than being forcibly replayed.
-
-`update_task` replaces the bounded working record when task state changes.
-`task_update_instructions()` supplies one shared contract to the system prompt
-and tool description before the first working request. Field descriptions come
-from the schema; schema, validator, and prose share their size-limit constants.
-The contract explains required fields, arrays and empty values, whole-record
-replacement, completion conditions, batching, harness metadata, and examples.
-The harness sets source revision and owns source IDs; the model supplies status,
-goal, constraints, facts, pending work, and next steps. The prompt explains that
-still-relevant entries must survive replacement. The record is pinned in every
-working request, with an 8,000-character total cap, 2,000-character entries, and
-24 entries per list. It is not included in isolated summarization requests.
+`TaskMemory` owns original user inputs and their source step references. The latest user input remains available verbatim until new input replaces it. Queued inputs received together share a source step. `/task` displays original prompts, and `/task new` changes the source boundary without deleting history. Session resume reconstructs prompt retention from original messages and ignores legacy model-maintained task snapshots.
 
 Legacy parsing helpers remain for imported records and compatibility fixtures;
 the active agent never requests inline compressed fields, XML memory envelopes,
@@ -384,7 +351,7 @@ Shutdown cancels command tasks, closes MCP connections, closes tools and registr
 services, closes the API client, and releases the runtime generation.
 
 `ToolRegistry.services` holds the session's `ProjectEnvironment` and
-`CommandArchive`, plus `TurnCompactor` after agent initialization. The loop lazily
+`CommandArchive`, plus `StepCompactor` after agent initialization. The loop lazily
 adds `ContextBudget`, `LoopGuard` and `RepositoryMap`; the CLI adds its optional
 `SessionJournal`. The original
 registry owns them. Reload candidates borrow the
@@ -431,7 +398,7 @@ pipes before reporting partial output. Cancellation also closes the log and reap
 the process. POSIX process groups cover ordinary descendants; shell execution is
 not an operating-system security sandbox.
 
-Each subprocess has a random log ID, with `(post_id, call_id)` copied from a
+Each subprocess has a random log ID, with `(step_id, call_id)` copied from a
 context-local invocation marker set by the agent. One tool can spawn multiple
 subprocesses. The archive uses private generated filenames, never call IDs or
 model-supplied paths. `read_command_output` resolves IDs through its own index.
@@ -465,7 +432,7 @@ after the batch; callbacks finish within their invocation.
 ## Background Command Ownership
 
 `run_command(background=True)` creates a `CommandLog` with the initiating
-post/call provenance, then hands its execution coroutine to `CommandJobs`.
+step/call provenance, then hands its execution coroutine to `CommandJobs`.
 The manager owns the process through completion, timeout, cancellation, reset,
 and shutdown; rebuilt shell tools borrow it. Process creation is shielded so
 cancellation cannot lose a child between spawn and handle assignment. Capture
@@ -565,9 +532,9 @@ OpenRouter attribution setting. Without persistence, the name lives in
 `Session.extensions`. Names cannot contain terminal control characters.
 
 Messages append as deltas, with explicit replacement records for refreshed system
-instructions or post-batch check annotations. State records hold task boundaries,
-the working task record, usage, queued input, and selected settings. Post records
-hold summary state and task snapshots, including asynchronous summary completion.
+instructions or step-batch check annotations. State records hold task boundaries,
+the working task record, usage, queued input, and selected settings. Step records
+hold summary state, including asynchronous summary completion.
 Reasoning is stored in the original message, included in recent context when
 Overthinking Mode is enabled, and excluded from compaction. Writes flush/fsync;
 an unsavable tool-start marker stops dispatch.
@@ -577,7 +544,7 @@ Resume reads and validates the journal before changing the active conversation.
 Only an unterminated final entry is ignored, with a recovery note; malformed
 complete records fail. Missing tool observations are filled explicitly as
 unknown outcomes for started calls and not-run outcomes for unstarted calls.
-No saved tool call executes during restore. Original numbered posts, task
+No saved tool call executes during restore. Original numbered steps, task
 sources, summaries, queued input, usage and command logs are restored to a new
 journal. The original remains available. Operating/project instructions and
 model settings come from the current process. Interrupted summaries stay
@@ -622,13 +589,13 @@ subprocesses. Session persistence is enabled at construction on the next launch;
 compatible edits to its behavior can subsequently reload.
 
 `RequestDiagnostics` uses a sidecar directory attached by `SessionJournal.begin`.
-Each working attempt records its post/step, UTC time, request snapshot reference,
+Each working attempt records its step/step, UTC time, request snapshot reference,
 outcome, reported usage, and bounded response/error excerpts. Exact final request
 JSON is gzip-compressed and deduplicated by SHA-256; no authentication headers are
 captured. Pending records survive a crash and remain visibly unsettled. Atomic
 owner-only writes and fsync preserve earlier records when storage fails. A
 32 MiB quota stops further diagnostic writes with a warning rather than deleting
-old requests or blocking ordinary work. These files are not history posts.
+old requests or blocking ordinary work. These files are not history steps.
 `/requests [attempt]` inspects current-session records; previous directories remain
 beside their journals after reset/resume. `--no-session` uses temporary storage.
 
@@ -640,13 +607,20 @@ These classes/state contracts must agree for the session's lifetime. Editing a
 pinned module requires a restart; most agent, tool, UI, API, task, and context
 behavior is reloadable when layouts remain compatible.
 
-The frame snapshots source bytes, imports a complete candidate namespace through
+The frame snapshots and hashes source bytes in a worker thread, and compiles and
+imports a complete candidate namespace in that thread through
 the snapshot loader, validates required APIs and class layouts, constructs tools
 with borrowed services, and checks name collisions before touching live objects.
 Classes retain identity: new methods/descriptors are rebound to existing classes,
 including `super()` closures. Module globals then point at the accepted generation.
 The terminal rebuilds layout/bindings/styles around its existing application and
 buffers. On failure, class/module/registry/presentation snapshots are restored.
+
+Candidate preparation leaves the terminal input loop responsive. Live-state
+validation and the atomic commit stay on the event-loop thread. If new model/tool
+work or a command starts during preparation, an idle reload discards its candidate
+and retries at a later safe boundary. Cancellation drains the staging thread before
+removing its import namespace. This change to the stable frame requires a restart.
 
 Closers captured from the constructing generation release rejected candidates or
 retired tools after the transaction. Stable services and MCP clients remain alive.
@@ -738,7 +712,7 @@ to the model along with the active generation number.
   terminal closure. Cancellation restores input focus, and refresh preserves an
   open menu's selection. `/menu` dispatches complete command strings through the
   normal handlers, retaining busy-state checks and background execution for
-  read-only network commands during a turn.
+  read-only network commands during a step.
 
 ## Extending the Contracts
 
@@ -748,8 +722,12 @@ whether its resources belong to a rebuilt tool or the session before constructin
 them. Keep remote names scoped so disconnecting one server cannot remove another's
 tools. Update the README tool table when the public tool set changes.
 
+The registry validates parameter-schema structure before registering tools or
+replacing its collection. Invalid schemas leave the existing collection intact;
+remote servers remain responsible for full JSON Schema semantics.
+
 When changing the response schema, update validation, prompt explanations/example,
-post storage, task/context budgets, stub responses, streaming/reload fixtures, and
+step storage, task/context budgets, stub responses, streaming/reload fixtures, and
 offline demos together. When adding a command, update busy-state restrictions,
 help, startup listing, README, and control-flow tests. Read-only network commands
 must not block input processing while `/stop` is waiting.

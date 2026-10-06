@@ -54,7 +54,7 @@ def validate_checks(options: dict[str, Any]) -> None:
             raise ValueError("check timeout must be between 0.1 and 120 seconds")
 
 
-async def check_edit_batch(registry: ToolRegistry, batch: list[tuple[ToolCall, ToolResult]], post_id: int) -> str:
+async def check_edit_batch(registry: ToolRegistry, batch: list[tuple[ToolCall, ToolResult]], step_id: int) -> str:
     from .environment import load_project_options
 
     environment = registry.services.get("project_environment")
@@ -85,7 +85,7 @@ async def check_edit_batch(registry: ToolRegistry, batch: list[tuple[ToolCall, T
                     continue
             argv: list[str] = [value for arg in check["argv"] for value in (selected if arg == "{files}" else [interpreter if arg == "{python}" else arg])]
             archive = registry.services.get("command_archive")
-            log = archive.start(shlex.join(argv), post_id=post_id, call_id="batch-check") if archive is not None else None
+            log = archive.start(shlex.join(argv), step_id=step_id, call_id="batch-check") if archive is not None else None
             try:
                 process = await asyncio.create_subprocess_exec(*argv, cwd=environment.workspace.root,
                     env=_subprocess_env(), stdin=asyncio.subprocess.DEVNULL,
@@ -106,4 +106,4 @@ async def check_edit_batch(registry: ToolRegistry, batch: list[tuple[ToolCall, T
     except Exception as exc:
         # Files have already changed; preserve their results even if settings or
         # check infrastructure fails. Cancellation still propagates to the loop.
-        return f"Post-batch checks unavailable: {type(exc).__name__}: {exc}"
+        return f"Step-batch checks unavailable: {type(exc).__name__}: {exc}"

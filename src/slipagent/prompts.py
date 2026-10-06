@@ -3,6 +3,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+
+
+def _load_prompt(filename: str) -> str:
+    path = Path(__file__).with_name(filename)
+    # Reload candidates read the resource captured with their source generation.
+    get_data = getattr(globals().get("__loader__"), "get_data", None)
+    if callable(get_data):
+        data = get_data(str(path))
+        if not isinstance(data, bytes):
+            raise TypeError("The prompt resource must contain bytes")
+        return data.decode("utf-8")
+    return path.read_text(encoding="utf-8")
+
+
+SYSTEM_PROMPT = _load_prompt("system-prompt.txt")
+COMPACTION_PROMPT = _load_prompt("background-summary-prompt.txt")
 
 
 @dataclass(frozen=True)

@@ -24,7 +24,7 @@ conversation or restarting the terminal.
 - **Coding tools:** file editing, search, shell commands, Git operations, and
   optional web search, with additional tools through MCP.
 - **A responsive terminal:** wrapping output, mouse-wheel scrollback, a fixed
-  prompt/status area, queued follow-ups, and `/stop` at turn boundaries.
+  prompt/status area, queued follow-ups, and `/stop` at step boundaries.
 
 [Quick Start](#quick-start) · [Free Models](#using-free-models) ·
 [Architecture](#architecture) · [Live Development](#editing-the-running-harness) ·
@@ -34,8 +34,33 @@ conversation or restarting the terminal.
 ## Quick Start
 
 Requires **Python 3.11+**, an OpenRouter API key, and Git for the Git tools.
-Clone or download this repository, then run these commands from its root
-(shown for a POSIX shell):
+
+Terminology: a message is one user, assistant, system, or tool message. A step is one model response plus any requested tool batch and its results. A run processes a user request through steps to a final answer with no tool calls. A session is the persistent conversation containing runs. Model context carries separate history-step records, rather than one combined JSON object per run.
+Clone or download this repository, then run the installer from its root:
+
+```bash
+python3 install.py
+```
+
+On Windows, use `py -3 install.py`. No administrator privileges are needed. The installer copies the application source, creates a private virtual environment, installs SlipAgent in editable mode, and places its launcher on your user PATH. It uses `uv` if available, otherwise Python's `venv` and pip. Add `--dev` to include the project's testing and development dependencies.
+
+The same script also updates an existing installation. Download the desired version and run `python3 install.py` from that download (Windows: `py -3 install.py`). It replaces installed application files and refreshes dependencies and the launcher; it does not download updates or run Git commands. Running inside the installed checkout only refreshes dependencies and the launcher. Unchanged installations update without warnings or confirmation. If application files have been modified, added, or deleted, the installer lists every affected path, warns that updating may lose local edits, and asks you to back up changes before confirming with `y` or `yes`. Enter, EOF, or Ctrl+C cancels. A missing or invalid baseline also requires confirmation and lists files to inspect. Changes from separate checkouts are not merged. First installations and `--dry-run` need no confirmation.
+
+The installer compares SHA-256 hashes against `installed-file-hashes.json` in the installation directory, falling back to the checkout's `file-hashes.json` when available. Successful installations or updates from another checkout record the installed file hashes. Running inside the installed checkout retains the existing baseline rather than treating local edits as an unmodified release. Git internals, secrets, virtual environments, and caches are excluded from comparisons; the hash manifest itself is excluded to avoid self-reference.
+
+| OS | Installation directory | PATH launcher |
+| --- | --- | --- |
+| Linux | `$XDG_DATA_HOME/slipagent`, default `~/.local/share/slipagent` | `~/.local/bin/slipagent` |
+| macOS | `~/Library/Application Support/SlipAgent` | `~/.local/bin/slipagent` |
+| Windows | `%LOCALAPPDATA%\SlipAgent` | `%LOCALAPPDATA%\SlipAgent\bin\slipagent.exe` |
+
+Linux and macOS use a symlink. Windows also uses a symlink when permitted, with an executable launcher fallback that does not require elevation. Missing PATH entries are added to bash, zsh, sh, ksh, or fish configuration on Linux/macOS, or to the Windows user PATH. Open a new terminal when PATH changes; other shells receive instructions to add the directory manually. Use `--dry-run` to inspect the destinations, or `--install-dir`, `--bin-dir`, and `--python` to override them.
+
+The installer replaces recognized SlipAgent launchers and saves a backup; it refuses unrelated commands or nonempty unmanaged installation directories. The permanent working checkout lives at `source` inside the installation directory, with its own `.venv`. Initial copies include application files, uncommitted edits, and Git metadata, but exclude existing virtual environments, caches, and secrets. Updates from another checkout replace the application directories and supplied root files while preserving installed Git metadata, the virtual environment, and configuration. Removed application directory contents are removed during updates too. Existing Git history is retained, so new downloaded files appear as working-tree changes. A failed update can leave changed source files or dependencies; the installer does not roll these back. Older release directories are retained during migration. On Linux/macOS, `current` points to `source`; `installation.json` records the source, interpreter, and launcher on all platforms. Edit the permanent checkout for live changes and normal Git development.
+
+An existing checkout `.env` is copied to the private installation directory on the first install, with owner-only permissions on Linux/macOS. Subsequent installs preserve that configuration. The installer does not move or delete the original checkout or project sessions.
+
+For development directly in this checkout instead of a managed installation, use the existing project environment or create one if none exists:
 
 ```bash
 python -m venv .venv
@@ -44,21 +69,21 @@ python -m pip install -e ".[dev]"
 ```
 
 Create an ignored `.env` file containing `OPENROUTER_API_KEY=your-key`. Start with
-NVIDIA Nemotron 3.5 Lightning (free), the default model, selected explicitly:
+NVIDIA Nemotron 3 Ultra (free), the default model, selected explicitly:
 
 ```bash
-slipagent --model nvidia/nemotron-3.5-lightning:free
+slipagent --model nvidia/nemotron-3-ultra-550b-a55b:free
 ```
 
 For another project or a single task:
 
 ```bash
-slipagent --workspace /absolute/path/to/myproject --model nvidia/nemotron-3.5-lightning:free
-slipagent --model nvidia/nemotron-3.5-lightning:free -p "add type hints to src/parser.py and run the tests"
+slipagent --workspace /absolute/path/to/myproject --model nvidia/nemotron-3-ultra-550b-a55b:free
+slipagent --model nvidia/nemotron-3-ultra-550b-a55b:free -p "add type hints to src/parser.py and run the tests"
 ```
 
 The editable install (`-e`) is essential for working on the running harness:
-Python loads the source from this checkout, so edits here reach the source
+Python loads the source from its editable installation, so edits in that source tree reach the source
 watcher. The `[dev]` extra installs the test and type-checking tools; use
 `python -m pip install -e .` if you only need the application.
 
@@ -79,7 +104,7 @@ own harness.
 
 | Recommended Model | OpenRouter Model ID |
 | --- | --- |
-| [NVIDIA Nemotron 3.5 Lightning (free)](https://openrouter.ai/nvidia/nemotron-3.5-lightning:free) (default) | `nvidia/nemotron-3.5-lightning:free` |
+| [NVIDIA Nemotron 3 Ultra (free)](https://openrouter.ai/nvidia/nemotron-3-ultra-550b-a55b:free) (default) | `nvidia/nemotron-3-ultra-550b-a55b:free` |
 | [NVIDIA Nemotron 3 Super (free)](https://openrouter.ai/nvidia/nemotron-3-super-120b-a12b:free) | `nvidia/nemotron-3-super-120b-a12b:free` |
 
 Provider context limits and free availability can change. Check `/models` for
@@ -127,7 +152,7 @@ src/slipagent/
 ├── diagnostics.py    exact request snapshots and failed-attempt records
 ├── jobs.py           session-owned background commands and job controls
 ├── lsp.py            optional configured language-server navigation
-├── context.py        rolling context, summaries, original-post retrieval
+├── context.py        rolling context, summaries, original-step retrieval
 ├── records.py        separate JSON input records for history and current input
 ├── budget.py         measured input-token calibration
 ├── sessions.py       append-only session journals and safe resume
@@ -136,7 +161,7 @@ src/slipagent/
 ├── progress.py       unchanged-action loop detection
 ├── activity.py       throttled command-output callbacks
 ├── protocol.py       ordinary replies, optional schemas, call normalization
-├── compaction.py     isolated background summaries of completed turns
+├── compaction.py     isolated background summaries of completed steps
 ├── task.py           retained user prompt, active goal, constraints, source references
 ├── environment.py    project settings and Python interpreter validation
 ├── openrouter.py     async API client, retries, model/key information
@@ -181,7 +206,7 @@ From an editable checkout, start a session with the harness itself as the
 workspace:
 
 ```bash
-slipagent --workspace . --model nvidia/nemotron-3.5-lightning:free
+slipagent --workspace . --model nvidia/nemotron-3-ultra-550b-a55b:free
 ```
 
 You can then ask it, for example:
@@ -210,7 +235,7 @@ Use `/reload` to force another attempt or `--no-reload` to disable reloading.
    and the terminal rebuilds its presentation around the existing application.
    The next model step gets the current prompt and tool definitions.
 4. **Preserve the session.** Conversation originals and summaries, usage,
-   active-task records, command logs, selected project interpreter, queued
+   retained user prompts, command logs, selected project interpreter, queued
    prompts, model selection, API client/key, quota, and MCP connections
    remain alive. The terminal keeps its draft, input history, transcript, and
    scroll position. Retired built-in tool clients are closed.
@@ -259,6 +284,8 @@ for the implementation workflow, state ownership, and failure behavior.
 
 ## Configure
 
+Successful `--model` and `/model` selections are remembered across projects in `preferences.json` under `SLIPAGENT_STATE_DIR` (default `~/.SlipAgent`). Model selection uses CLI flags first, then exported `OPENROUTER_MODEL`, the remembered choice, `.env`, and the built-in Nemotron Ultra default.
+
 The only required setting is your OpenRouter API key. In addition to `.env`,
 you can supply it through the process environment:
 
@@ -269,7 +296,7 @@ export OPENROUTER_API_KEY="sk-or-..."
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `OPENROUTER_API_KEY` | — | **Required.** Your API key. |
-| `OPENROUTER_MODEL` | `nvidia/nemotron-3.5-lightning:free` | Default model slug. |
+| `OPENROUTER_MODEL` | `nvidia/nemotron-3-ultra-550b-a55b:free` | Default model slug. |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Point at a gateway or mock. |
 | `EXA_API_KEY` | — | Optional. Enables the `web_search` tool. |
 | `OPENROUTER_REFERER` | — | Optional app-attribution URL. |
@@ -421,15 +448,15 @@ ignore rules if its settings should remain local.
 One-shot mode runs a task, prints the final answer, and exits:
 
 ```bash
-slipagent --model nvidia/nemotron-3.5-lightning:free "add type hints to src/parser.py and run the tests"
-slipagent --model nvidia/nemotron-3.5-lightning:free -p "explain what this repo does"
+slipagent --model nvidia/nemotron-3-ultra-550b-a55b:free "add type hints to src/parser.py and run the tests"
+slipagent --model nvidia/nemotron-3-ultra-550b-a55b:free -p "explain what this repo does"
 ```
 
-Interactive REPL — a multi-turn session with conversation state:
+Interactive REPL — a multi-step session with conversation state:
 
 ```bash
-slipagent --model nvidia/nemotron-3.5-lightning:free
-slipagent --workspace /absolute/path/to/myproject --model nvidia/nemotron-3.5-lightning:free
+slipagent --model nvidia/nemotron-3-ultra-550b-a55b:free
+slipagent --workspace /absolute/path/to/myproject --model nvidia/nemotron-3-ultra-550b-a55b:free
 ```
 
 In the REPL:
@@ -441,10 +468,10 @@ In the REPL:
 | `/danger` or `/danger on` | Disable workspace path confinement; queues while working |
 | `/danger off` | Restore workspace path confinement; queues while working |
 | `/danger status` | Show the current access mode |
-| `/overthinking on\|off` | Enable or disable thoughts in the latest five turns; enabled by default; queues while working |
+| `/overthinking on\|off` | Enable or disable thoughts in the latest five steps; enabled by default; queues while working |
 | `/tools` | List available tools |
 | `/model` | Show the active model |
-| `/model <slug>` | Switch model for this session |
+| `/model <slug>` | Switch model and remember the choice for future launches |
 | `/models [filter]` | Browse the catalog with context and pricing |
 | `/models free` | Show zero-cost entries in the model catalog |
 | `/temperature` | Show the effective temperature and whether the selected model supports changing it |
@@ -453,7 +480,7 @@ In the REPL:
 | `/key` | Enter a different key on a terminal (hidden input, verified before use) |
 | `/key <sk-or-v1-...>` | Use a specific key for this session |
 | `/cost` | Session token usage and spend |
-| `/task` | Show the active goal, constraints, facts, pending work, next steps, and source posts |
+| `/task` | Show the active goal, constraints, facts, pending work, next steps, and source steps |
 | `/task new` | Make the next prompt a new task, retaining previous history and command logs |
 | `/rename <name>` | Save this conversation's name and set its terminal title to `{name} \| SlipAgent` |
 | `/sessions` | List saved sessions for this project's path |
@@ -522,7 +549,7 @@ loads rules from `.cursor/rules/**/*.mdc`, `.claude/rules/**/*.md`,
 `.github/instructions/**/*.instructions.md`, `.clinerules/`, and
 `.windsurf/rules/**/*.md`. Root guidance refreshes before each working request.
 File, directory, and search tools discover guidance in the accessed path's
-ancestors. Visited scopes stay available across turns and reset; changed and
+ancestors. Visited scopes stay available across steps and reset; changed and
 removed instructions are reflected in the next request. Each scope is labelled;
 the model must still obey a rule file's own path/glob restrictions.
 An edit governed by unseen or changed instructions is blocked until a request
@@ -548,14 +575,19 @@ the task without resetting its request limit. `/stop` prevents automatic
 continuation; reset, resume, and `/task new` replace the task instead of restarting
 the previous work. Slash commands are never sent to the model as user messages.
 
-Press Escape outside a chooser to interrupt the active turn immediately. It
+The working indicator shows `Working (esc to interrupt)`. Press Escape outside a chooser to interrupt the active step immediately. It
 cancels model requests, active tools, background commands, and pending summaries;
-queued settings are discarded and no follow-up turn starts automatically.
+queued settings are discarded and no follow-up step starts automatically.
 Completed tool results remain stored, while interrupted or unstarted calls are
 recorded explicitly. Queued user messages remain available for later continuation.
 An atomic file operation already running finishes safely before cleanup settles;
 the terminal stays responsive. Escape inside a chooser only closes that chooser
-and leaves agent work running. `/stop` retains its gentler turn-boundary behavior.
+and leaves agent work running. `/stop` retains its gentler step-boundary behavior.
+
+Live reload scans source files and prepares candidate imports in a worker thread,
+so keyboard input remains responsive during preparation. It applies the validated
+generation on the main loop at a safe boundary. Restart after installing this
+change to enable the threaded reload frame.
 
 `/danger` enables access outside the workspace for built-in file, search,
 navigation, and Git tools. `/danger off` restores confinement; `/danger status`
@@ -584,19 +616,19 @@ Before the first working request, the view indicates that none has
 been sent.
 
 After the system instructions, each input message contains exactly one JSON
-object: one per historical turn, followed by one for the current turn. No prose
+object: one per historical step, followed by one for the current step. No prose
 headings are inserted into prompts, replies, or tool content.
-`record_type` distinguishes `history_turn` from `current_turn`; `representation`
+`record_type` distinguishes `history_step` from `current_step`; `representation`
 distinguishes `full`, `compressed`, and `excerpt`. Full records have `user_prompt`
 (an array, preserving multiple queued messages), `agent_response`, `tool_calls`,
 and `tool_results`. Calls retain their names, argument objects and IDs; results
 retain the matching IDs, status and content. Compressed records contain
-their summary and metadata. Every bundle includes a `post_id` metadata field
+their summary and metadata. Every bundle includes a `step_id` metadata field
 for retrieving the original with `recall_history`; it is separate from message
 text. Excerpts carry omission counts and retrieval instructions in
 separate fields, without inserting descriptions into original text.
-The current post number and task-source IDs also stay in the system prompt.
-The current-turn object identifies
+The current step number and task-source IDs also stay in the system prompt.
+The current-step object identifies
 continuation requests and retains the active prompt when history lacks a full
 copy. JSON fields and escaping count toward the context budget. This input format
 is separate from the selected model's response contract, which stays consistent
@@ -629,12 +661,12 @@ task bookkeeping do not trigger the guard.
 
 Readable reasoning supplied through a separate provider field streams under a
 gray `Thinking:` label. Each response's reasoning is concatenated into one
-string and saved with that turn's uncompressed originals. Existing history is
+string and saved with that step's uncompressed originals. Existing history is
 not rewritten. **Overthinking Mode** is enabled by default: the latest five completed
-turns include supplied thoughts as a `reasoning` string in each turn's JSON input
-record. Turns without thoughts gain no extra field. Use `/overthinking off` to
+steps include supplied thoughts as a `reasoning` string in each step's JSON input
+record. Steps without thoughts gain no extra field. Use `/overthinking off` to
 disable this mode, or `/overthinking on` to enable it. Thoughts count
-toward the context budget; omitted turns and budget-limited excerpts omit them.
+toward the context budget; omitted steps and budget-limited excerpts omit them.
 Opaque provider reasoning metadata is never included. Reasoning remains excluded
 from background compression requests and available through
 explicit `recall_history` retrieval; streaming thoughts still appear in the terminal.
@@ -643,12 +675,15 @@ explicitly listed by the API. When reasoning is supported without listed effort
 choices, it enables reasoning; when unsupported, it sends no reasoning setting.
 Reply text and tool calls are buffered until call validation completes. Models
 that expose no separate reasoning use the working indicator while generating.
-The terminal displays the ordinary reply, or the `response` field when an
-optional JSON envelope is used, followed by tool activity. Background summaries
+The terminal displays the reply text defined by the selected response contract, followed by tool activity. Background summaries
 stay out of the transcript. One-shot mode keeps the final answer on stdout,
 with streamed thoughts and tool activity on stderr.
 
 ### Response Protocol
+
+The general system prompt is in `src/slipagent/system-prompt.txt` and the background-summary prompt is in `src/slipagent/background-summary-prompt.txt` for direct human editing. Keep each paragraph on one line, with a blank line between paragraphs; preserve meaningful list and example boundaries. The system template substitutes `{workspace}` and `{interpreter}`; write literal braces there as `{{` and `}}`. The summary prompt is plain text without template substitution. Both files are included in installed packages and monitored by live reload. Valid edits apply between batches; rejected edits retain the previous prompts. Restart an existing process once after installing this update to enable prompt-file monitoring, since the reload frame itself changed.
+
+Runtime guidance distinguishes exploratory questions from authorized implementation and keeps work within the user's requested scope. Background summaries prioritize user requests, corrections, and boundaries over agent plans, preserve source attribution, and distinguish completed or rejected actions from unfinished requested work. Historical reasoning and optional agent suggestions do not authorize additional work.
 
 At startup and every `/model <slug>` selection, including reselection of the
 current model, SlipAgent fetches fresh model and endpoint properties from
@@ -656,9 +691,9 @@ OpenRouter. Subsequent calls use the cached properties until another selection.
 There is no list of model-specific exceptions. A failed or incompatible
 selection reports an error and keeps the current model and conversation.
 
-Temperature defaults to **0.2** for endpoints that advertise support. Use
+Temperature defaults to **1.0** for endpoints that advertise support. Use
 `/temperature` to inspect it and `/temperature 0.1` to change it for subsequent
-turns. Unsupported changes display an error and preserve the existing setting;
+steps. Unsupported changes display an error and preserve the existing setting;
 requests to unsupported endpoints omit temperature and use the provider default.
 `--temperature` overrides the default at startup. The session setting carries
 across model switches and applies wherever the selected endpoints support it.
@@ -667,8 +702,8 @@ SlipAgent uses [OpenRouter's native tool-call format](https://openrouter.ai/docs
 when the selected endpoints advertise `tools`. Tool definitions go in the API's
 `tools` parameter; calls arrive in `message.tool_calls`, separately from the
 response text. The harness preserves each call ID and stores its result with
-the matching `call_id` in that turn's `tool_results` array. The next request
-supplies the completed turn as a JSON input record, including each result's
+the matching `call_id` in that step's `tool_results` array. The next request
+supplies the completed step as a JSON input record, including each result's
 tool name, success/error status, and content. Native calls remain the model's
 response format; the JSON records describe completed history. SlipAgent does
 not force a `tool_choice` setting.
@@ -681,9 +716,11 @@ models without them can use the JSON call format below if they support JSON
 output. Their tool definitions enter the system prompt, and their history uses
 the same JSON input records, without unsupported native tool parameters.
 
-**Models without schema support can reply normally.** They receive no
-`response_format` parameter and need no JSON content record. A native tool call
-with empty/null content is valid. Endpoints advertising `structured_outputs`
+**Native-tool models without schema support use plain reply text.** They receive
+no `response_format` parameter and need no JSON content record. JSON-only models
+receive `response_format: {"type":"json_object"}` when schemas are unavailable.
+Every step requires a nonempty reply, including steps requesting tools.
+Endpoints advertising `structured_outputs`
 receive a small [strict schema](https://openrouter.ai/docs/guides/features/structured-outputs):
 `response` contains the plain terminal reply. Models using embedded calls also
 include `tool_calls`, an ordered array, empty for a final answer. Neither mode
@@ -708,20 +745,20 @@ cases, the accompanying native `message.tool_calls` value can be:
 ]
 ```
 
-When native calls are unavailable, the model can return an object with
-`response` and `tool_calls: [{id, name, arguments}]`. Ordinary final replies are
-still accepted. Arguments may be JSON-encoded object strings or decoded objects.
-The parser also accepts native function-shaped calls inside that envelope,
-legacy `function_call`, text/`tool_use` content blocks, complete JSON fences, and
-explicit `<tool_call>` or `<function_call>` JSON blocks. `input` and `parameters`
-are unambiguous argument aliases. Missing IDs are assigned; supplied IDs stay intact.
+When native calls are unavailable, every response must be exactly one JSON
+object containing `response` and `tool_calls`, including final answers with an
+empty call array. Each call contains exactly `id`, `name`, and `arguments`;
+arguments must be a JSON-encoded object string. IDs must be nonempty and unique.
+No surrounding prose, fences, tagged calls, aliases, or extra fields are accepted.
 
-All supported call formats use the same execution path. Identical ordered
-batches repeated in native calls and content execute once using the native IDs.
-Conflicting batches, malformed arguments, duplicate IDs, invalid Unicode,
-non-finite numbers, and incomplete tool batches require a retry before text is
-displayed or tools execute. The parser does not infer actions from prose,
-execute examples inside a reply, invent arguments, or repair command strings.
+Each request advertises only its selected response contract. Native responses
+use API `message.tool_calls` exclusively and nonempty reply text, or exactly
+`{"response":"..."}` when a strict response schema is supplied. Embedded JSON
+responses cannot use API calls. The parser never merges call carriers or switches
+modes based on the response. Format violations reject the entire batch before
+text is displayed or tools execute. Duplicate keys, malformed arguments,
+invalid Unicode, non-finite numbers, duplicate IDs, and truncated batches are
+also rejected. Plain prose and quoted examples in native reply text never run tools.
 Three consecutive invalid responses stop the run; retries count against the
 working-request limit. Separate thoughts already streamed remain visible.
 
@@ -751,7 +788,7 @@ combination works at every provider.
 
 `/stop` lets the current response and every tool call in that response finish,
 keeps their results in the conversation, and prevents another working model request. Background summarization of that
-completed turn still runs.
+completed step still runs.
 Managed background commands also continue until completion, their execution
 timeout, or an explicit stop. Their completion cannot restart the agent.
 Queued input does not restart a stopped run automatically. Enter a follow-up
@@ -764,53 +801,13 @@ use plain output.
 The model retains nothing between API requests unless SlipAgent sends it again.
 The harness retains the current user prompt independently of compression and
 supplies it verbatim on every working request until new user input replaces it.
-`current_prompt_post` identifies the call that originally received that prompt,
+`current_prompt_step` identifies the call that originally received that prompt,
 so the model can retrieve that call's uncompressed record with `recall_history`.
 An existing full copy in the selected context satisfies this requirement; the
 harness adds a copy only when needed and counts it against the endpoint budget.
 It does not classify new input as a separate idea or an amendment.
 
-An optional working record also accompanies every request, independently of
-which old posts fit the rolling window. The model can update it with `update_task`
-when the goal, constraints, facts, or pending work change. This is a local tool,
-not another inference request. Each post stores a task-record snapshot for
-historical retrieval; those snapshots are not all replayed in context.
-
-The harness records the first task request and subsequent correction/follow-up
-post IDs. Ordinary input continues that task, including `continue` after a final
-answer. `/task new` explicitly starts a separate task with the next prompt;
-previous history stays retrievable. It is available while idle and refuses to
-reassign pending queued input. `/reset` clears both task state and history.
-
-The `update_task` tool replaces the complete working record with these fields:
-
-| Field | Meaning |
-| --- | --- |
-| `status` | `active` while work remains, `blocked` when user input is needed, or `complete` when verified, with `pending=[]` and `next_steps=[]`. All statuses can be batched with other tools. |
-| `goal` | The substantive objective, not the latest word “continue.” |
-| `constraints` | All still-applicable user requirements and corrections. |
-| `facts` | Verified information needed to continue, with useful paths or source references. |
-| `pending` | Unfinished work and tools whose outcomes have not yet arrived. |
-| `next_steps` | Concrete next actions or the exact missing input. |
-
-The harness owns the source revision and post references.
-Before the first call, both the model's instructions and the tool description
-explain all six required fields, array formats, limits, completion conditions,
-and valid examples. Empty lists use `[]`; unknown fields and harness metadata
-are not tool arguments. Batching is encouraged for every tool, including
-completion updates and multiple task updates; calls execute in their supplied order.
-The entire record is capped at **8,000 characters**. Goals and list entries are
-at most 2,000 characters; each list permits at most 24 entries. It describes current
-state rather than copying full transcript messages. Originals already selected
-for context are not inserted a second time just because they are task sources.
-Model-written facts and constraints still need correct reasoning; structural
-validation cannot prove their semantic accuracy. Exact originals remain retrievable.
-
-The model need not repeat the prompt, acknowledge instructions, copy revision
-numbers, or call `recall_history` to satisfy a task-memory gate. Prompt retention
-is handled before the request is sent. Retrieval remains available when the
-model needs details from older calls. `/task` exposes the optional working record
-for human inspection.
+Original user prompts and their source step IDs remain available independently of history compression. `/task` displays these sources and the current original prompt. `/task new` starts a new source boundary with the next prompt while preserving history; `/reset` clears prompt retention and history. Older session task-record snapshots are ignored during resume.
 
 The step limit caps working model requests per user run. Background summary
 requests are separate and their reported usage contributes to session totals. Reaching it preserves the
@@ -818,19 +815,23 @@ conversation for continuation and exits one-shot mode with status 1.
 
 ### Rolling Conversation Context
 
-Each accepted model response forms one numbered turn: its active user prompt,
+Each accepted model response forms one numbered step: its active user prompt,
 response, requested tool calls, and complete tool results. Those four originals
 are stored separately, alongside the response's reasoning as one string when
-available. Recent turns present the full prompt, response, calls, and results,
-with supplied reasoning included for the latest five turns in Overthinking Mode.
-Older turns use their whole-turn summary only when its
+available. Recent steps present the full prompt, response, calls, and results,
+with supplied reasoning included for the latest five steps in Overthinking Mode.
+Older steps use their whole-step summary only when its
 estimated token cost is smaller than the original; otherwise they retain their
 full prompt, response, tool calls, and results. The comparison includes JSON fields,
 escaped content, and message overhead. Ties retain originals.
-A turn never includes both its full original and its summary in the same request.
+A step never includes both its full original and its summary in the same request.
+
+Background compression requests have a 20-minute overall timeout instead of the normal client-side HTTP timeout. Timed-out summaries are marked failed; original steps remain available through `recall_history`. Normal agent requests retain their configured timeout. Session reset and shutdown still cancel pending summaries.
+
+Each working request identifies the user request as the overall goal for that run, possibly issued multiple steps ago, and includes its exact wording in request-only system guidance. Steps after tool batches explicitly explain that control returned automatically without a new user instruction: assess results against that goal and return an answer without tools when it is fulfilled. This guidance is assembled for the outgoing request only; it is not saved in conversation history or background summaries. Historical requests provide background rather than independently requesting more work.
 
 The default recent window is **50 model calls**, with a minimum target of **5**
-even if `--context-posts` is set lower. There is no separate history token cap:
+even if `--context-steps` is set lower. There is no separate history token cap:
 history uses the selected model's live context allowance after reserving space
 for instructions, tools, output, and estimation headroom. At most the **100 newest
 older records** accompany the full window. If the request is too large, the oldest
@@ -840,14 +841,14 @@ Even the five-call minimum can shrink to whatever fits the model allowance.
 Selection starts fresh on every request. As a large call ages out and its smaller
 summary takes its place, previously omitted older history can return within the
 100-record limit. Original records remain retrievable even when omitted. Project
-instructions and the active-task record stay pinned outside this rolling window.
+instructions and the retained user prompt stay pinned outside this rolling window.
 
 **One separate background request starts after each complete tool batch returns**,
-or immediately after a reply without tools. It receives only that turn's prompt,
+or immediately after a reply without tools. It receives only that step's prompt,
 response, calls, and results, plus instructions for summarization. It receives no
 conversation thread, previous summaries, project instructions, task record, or reasoning.
-The summarizer uses the model and endpoint profile selected for that turn and
-returns a concise plain-text summary, limited to 6,000 characters. Short turns
+The summarizer uses the model and endpoint profile selected for that step and
+returns a concise plain-text summary, limited to 6,000 characters. Short steps
 should get short summaries. The working model continues without waiting.
 
 Unseen tool results reach the next working request even if their summary has
@@ -864,16 +865,16 @@ conversation. Session shutdown cancels remaining jobs; one-shot mode waits for
 its summaries before shutting down. These additional requests use the same API
 key and contribute to quota use, session tokens, and reported cost.
 
-The model's `recall_history` tool searches captured originals or reads a post
+The model's `recall_history` tool searches captured originals or reads a step
 by ID, with character pagination for large records. List/search pages include
-`total_matches`, the number of matching posts across all pages (zero when none
+`total_matches`, the number of matching steps across all pages (zero when none
 match). Follow `next_offset` until null; offsets and limits remain character
 counts for both listings and individual records. Select `section="prompt"`,
 `"response"`, `"reasoning"`, `"tool_calls"`, or `"tool_results"` to retrieve one original part;
 `sections=["prompt", "tool_results"]` selects several together. Omit the selector
-for the full turn. `call_id` selects one observation, or a call when paired with
+for the full step. `call_id` selects one observation, or a call when paired with
 `section="tool_calls"`. `section="user"` returns the original new user messages
-associated with that post, for task-source recovery. Shell and Git observations show the
+associated with that step, for task-source recovery. Shell and Git observations show the
 beginning and end of long output, up to 30,000 characters per stream. The full
 decoded streams are retained separately within the session log quota and are
 retrieved with `read_command_output`. Timeout results preserve partial output and
@@ -882,8 +883,7 @@ resume by default; `--no-session` keeps them only in memory until reset/exit.
 The terminal transcript continues to show the full conversation.
 
 Token counts use a UTF-8 size estimate rather than a model-specific tokenizer.
-Reported prompt usage from working requests can tighten that estimate, never
-raise the configured limits. Calibration resets when the model or endpoint
+Reported prompt usage calibrates that estimate using the average measured-to-estimated ratio from the latest five working requests, plus a 10% safety margin. The multiplier can rise or fall as measurements change; the configured context and output limits remain unchanged. Calibration resets when the model or endpoint
 profile changes; background-summary usage does not calibrate working context.
 Explicit provider context overflow triggers up to two retries with smaller
 history budgets, counted against the step limit. An identical, unshrinkable
@@ -916,11 +916,11 @@ Useful flags:
 | --- | --- |
 | `-h, --help` | Show all command-line options and examples. |
 | `-p, --prompt` | Supply a one-shot task instead of positional task text. |
-| `-m, --model` | Model slug for this run. |
+| `-m, --model` | Select and remember a model slug for future launches. |
 | `-w, --workspace` | Project root and default path boundary. |
 | `--danger` | Disable workspace path confinement at startup, including unattended one-shot tasks; no confirmation prompt. |
 | `--max-steps` | Cap working model requests per run, including response retries (default 200); background summaries are separate. |
-| `--context-posts` | Target recent model calls supplied in full (default 50, minimum 5 when context permits). |
+| `--context-steps` | Target recent model calls supplied in full (default 50, minimum 5 when context permits). |
 | `--python` | Explicit project interpreter, overriding project-file settings and discovery. |
 | `--temperature`, `--max-tokens` | Sampling controls. |
 | `-v, --verbose` | Show full tool output and per-step token usage. |
@@ -992,7 +992,7 @@ The model gets these built-in tools:
 | `list_dir` | List one directory, directories first. |
 | `run_command` | Run a shell command and capture output; `background=true` returns a managed job ID. |
 | `command_jobs` | List, inspect, wait for, or stop managed background commands. |
-| `read_command_output` | Page retained stdout/stderr or read its tail by log ID; list logs by post/call ID. |
+| `read_command_output` | Page retained stdout/stderr or read its tail by log ID; list logs by step/call ID. |
 | `git_status` | Show the branch and short repository status. |
 | `git_diff` | Show unstaged changes, or staged changes with `staged=true`; optionally select literal `paths`. |
 | `git_log` | Show recent commit hashes and subjects (`limit=10`, maximum 100). |
@@ -1000,8 +1000,7 @@ The model gets these built-in tools:
 | `git_commit` | Commit already staged changes with a nonempty `message`. |
 | `web_search` | Search the web via Exa. Returns titles, URLs, and snippets. |
 | `fetch_page` | Fetch a URL and return readable text (scripts stripped). |
-| `recall_history` | Search history or retrieve any original parts of a numbered turn, with pagination. |
-| `update_task` | Save the current goal, constraints, facts, unfinished work, and next steps for every working request. |
+| `recall_history` | Search history or retrieve any original parts of a numbered step, with pagination. |
 | `navigate_code` (configured projects only) | Definitions, references, implementations, and hover via a local language server. |
 
 ### Background Commands
@@ -1073,8 +1072,8 @@ when the language server cannot resolve a symbol.
 
 Every shell/Git subprocess in the default registry gets a unique log ID. The tool
 observation reports that ID and concrete retrieval arguments. A tool that runs
-several Git subprocesses can produce several logs; list with `post_id` and
-`call_id` to find them all. Call IDs are unique within a post, not the whole session.
+several Git subprocesses can produce several logs; list with `step_id` and
+`call_id` to find them all. Call IDs are unique within a step, not the whole session.
 
 ```json
 {"log_id": "ID_FROM_RESULT", "stream": "stdout", "offset": 0, "limit": 8000}
@@ -1088,7 +1087,7 @@ storage; this is a text log, not a binary artifact archive.
 
 Omit `log_id` to list logs. For listings, `offset` is a record index and `limit`
 is a record count, capped at 50; commands are shown as bounded previews. Each log
-includes its post/call IDs, exit status, timeout status, retained byte counts,
+includes its step/call IDs, exit status, timeout status, retained byte counts,
 lost byte counts, and any retention error. Log IDs never become user-supplied paths.
 
 When disk quota or storage fails, output pipes continue draining and bounded
@@ -1119,7 +1118,7 @@ Two design choices are worth calling out.
 
 **`edit_file` refuses to guess.** `old_string` must appear in the file and
 appear exactly once, unless `replace_all` is set. This forces the model to have
-actually read the file rather than reconstructing it from memory, and turns a
+actually read the file rather than reconstructing it from memory, and steps a
 mis-targeted edit into a recoverable error message instead of silent
 corruption.
 
@@ -1160,7 +1159,7 @@ paths.
 `scripts/mcp_drive.py` does the same for the `/mcp` command, connecting a
 scripted stub server to a local fake API. `scripts/repl_render_demo.py` also uses
 a local fake API and shows the REPL's spacing,
-mid-turn input, and the prompt line. Run it in a terminal: the prompt draws
+mid-step input, and the prompt line. Run it in a terminal: the prompt draws
 itself, so a captured pipe shows the lines without the redraws.
 These three demos use disposable workspaces and need no real credentials.
 `scripts/repl_drive.py` is a separate **live** manual driver: it uses the current

@@ -20,7 +20,7 @@ class LoopGuard:
         self.count = 0
 
     def observe(self, batch: Sequence[tuple[ToolCall, ToolResult]], registry: ToolRegistry,
-                post_id: int) -> tuple[str, bool]:
+                step_id: int) -> tuple[str, bool]:
         records = []
         for call, result in batch:
             tool = registry.get(call.name)
@@ -34,7 +34,7 @@ class LoopGuard:
                 # Log IDs vary even when stdout/stderr are unchanged. Remove
                 # only the actual archive's exact invocation-specific notice.
                 for log in reversed(list(archive.logs.values())):
-                    if log.post_id == post_id and log.call_id == call.id:
+                    if log.step_id == step_id and log.call_id == call.id:
                         content = content.removesuffix("\n" + log.notice())
                         break
             records.append((call.name, call.arguments, result.is_error, content))
@@ -50,7 +50,7 @@ class LoopGuard:
         names = ", ".join(record[0] for record in records)
         if self.count == 3:
             return (
-                f"The same tool batch ({names}) returned unchanged results in posts {post_id - 2}–{post_id}.\n\n"
+                f"The same tool batch ({names}) returned unchanged results in steps {step_id - 2}–{step_id}.\n\n"
                 "Those tools already ran. Change the approach: inspect the specific error, choose a different "
                 "query or target, or report the blocker.\n\nIf intentionally polling an external change with "
                 "run_command, set poll=true; ordinary retries are not polling.", False,

@@ -29,10 +29,10 @@ from test_agent import StubClient, RecordingTool, completion, structured_message
 from test_cli_e2e import StubOpenRouter, run_cli, text_step, tool_step
 
 
-def reply(post, text, summary, previous=None):
-    record = {"post": post, "summary": summary}
+def reply(step, text, summary, previous=None):
+    record = {"step": step, "summary": summary}
     if previous:
-        record["previous"] = {"post": post - 1, "summary": previous}
+        record["previous"] = {"step": step - 1, "summary": previous}
     return text + "\n" + SUMMARY_START + json.dumps(record) + SUMMARY_END
 
 
@@ -54,7 +54,7 @@ async def test_keeps_recent_full_and_both_sides_in_older_summary():
         completion(first_answer),
         completion(reply(2, "SECOND FULL ANSWER", "User asked second; model answered second.")),
         completion(reply(3, "THIRD FULL ANSWER", "User asked third; model answered third.")),
-    ], context_posts=1)
+    ], context_steps=1)
     events = []
     agent.on_event = events.append
     assert (await agent.run("FIRST FULL QUESTION")).strip() == first_answer.strip()
@@ -63,7 +63,7 @@ async def test_keeps_recent_full_and_both_sides_in_older_summary():
     await agent.run("THIRD FULL QUESTION")
     messages = unpack_context(client.calls[-1]["messages"])
     assert context_body(messages[0].content).startswith("Project instructions stay pinned.")
-    assert agent.history.posts[0].summary in messages[1].content
+    assert agent.history.steps[0].summary in messages[1].content
     assert not any(context_body(m.content).strip() == first_answer.strip() for m in messages)
     assert any(context_body(m.content) == "SECOND FULL QUESTION" for m in messages)
     assert any(context_body(m.content).startswith("SECOND FULL ANSWER") for m in messages)
@@ -71,7 +71,7 @@ async def test_keeps_recent_full_and_both_sides_in_older_summary():
     assert len(client.calls) == 3
     assert not any(SUMMARY_START in e.text for e in events)
     assert agent.messages[2].content.strip() == first_answer.strip()
-    original = json.loads((await agent.registry.invoke("recall_history", {"post_id": 1})).content)
+    original = json.loads((await agent.registry.invoke("recall_history", {"step_id": 1})).content)
     assert "FIRST FULL QUESTION" in original["content"]
     assert "FIRST FULL ANSWER" in original["content"]
 
@@ -80,11 +80,11 @@ async def test_background_summary_is_stored_with_the_first_post():
     summary = "User asked the first question; model gave the first answer."
     agent, client = make_agent([completion(reply(1, "The exact first answer.", summary))])
     await agent.run("The exact first question?")
-    post = agent.history.posts[0]
-    assert post.agent_response == "The exact first answer."
-    assert post.summary and len(client.summary_calls) == 1
-    assert post.results_summarized
-    assert "The exact first answer." in post.full_text()
+    step = agent.history.steps[0]
+    assert step.agent_response == "The exact first answer."
+    assert step.summary and len(client.summary_calls) == 1
+    assert step.results_summarized
+    assert "The exact first answer." in step.full_text()
     assert len(client.calls) == 1
 
 
@@ -99,11 +99,11 @@ async def test_stopped_tool_batch_stores_both_versions_immediately():
             agent.request_stop()
     agent.on_event = stop_after_tool
     assert await agent.run("read both") == STOP_NOTICE
-    post = agent.history.posts[0]
-    assert post.summary is not None
-    assert post.agent_response == "Reading."
-    assert post.results_summarized and not post.observed
-    assert len([m for m in post.messages if m.role == "tool"]) == 2
+    step = agent.history.steps[0]
+    assert step.summary is not None
+    assert step.agent_response == "Reading."
+    assert step.results_summarized and not step.observed
+    assert len([m for m in step.messages if m.role == "tool"]) == 2
     assert len(client.calls) == 1
 
 
@@ -113,7 +113,7 @@ async def test_stopped_tool_post_rolls_with_tool_summary_without_summary_repair(
                    [ToolCall("c", "record", {"value": "v"})]),
         completion(reply(2, "Second.", "User asked next; model answered second.")),
         completion(reply(3, "Third.", "User asked next again; model answered third.")),
-    ], context_posts=1)
+    ], context_steps=1)
     def stop_after_tool(event):
         if event.kind == "tool_end":
             agent.request_stop()
@@ -125,10 +125,10 @@ async def test_stopped_tool_post_rolls_with_tool_summary_without_summary_repair(
     await agent.run("next again")
     wire = "\n".join(m.content or "" for m in unpack_context(client.calls[-1]["messages"]))
     assert any(record["representation"] == "compressed" for record in context_records(client.calls[-1]["messages"]))
-    assert agent.history.posts[0].summary in wire
-    assert "retrieve post 1 with recall_history" not in wire
+    assert agent.history.steps[0].summary in wire
+    assert "retrieve step 1 with recall_history" not in wire
     assert "EXACT TOOL RESULT" in wire
-    assert "EXACT TOOL RESULT" in (await agent.registry.invoke("recall_history", {"post_id": 1})).content
+    assert "EXACT TOOL RESULT" in (await agent.registry.invoke("recall_history", {"step_id": 1})).content
     assert len(client.calls) == 3
 
 
@@ -136,28 +136,28 @@ async def test_stopped_tool_post_rolls_with_tool_summary_without_summary_repair(
 async def test_only_50_full_posts_and_100_older_summaries_are_supplied(total):
     history = ConversationHistory()
     messages = [Message.system("pinned guidance")]
-    for post_id in range(1, total + 1):
-        messages.extend([Message.user(f"FULL_QUESTION_{post_id:03d}"),
-                         Message.assistant(f"FULL_ANSWER_{post_id:03d}")])
+    for step_id in range(1, total + 1):
+        messages.extend([Message.user(f"FULL_QUESTION_{step_id:03d}"),
+                         Message.assistant(f"FULL_ANSWER_{step_id:03d}")])
     history.sync(messages)
-    for post in history.posts:
-        post.summary = f"STORED_SUMMARY_{post.id:03d}"
-        post.results_summarized = True
+    for step in history.steps:
+        step.summary = f"STORED_SUMMARY_{step.id:03d}"
+        step.results_summarized = True
     messages.append(Message.user("current question"))
-    view = await history.view(messages, [], keep_posts=50,
+    view = await history.view(messages, [], keep_steps=50,
                               context_length=1000000, max_output=8192)
     wire = "\n".join(message.content or "" for message in unpack_context(view))
     boundary = max(0, total - 50)
     oldest_summary = max(0, boundary - 100)
-    for post_id in range(1, total + 1):
-        assert (f"FULL_QUESTION_{post_id:03d}" in wire) == (post_id > boundary)
-        assert (f"FULL_ANSWER_{post_id:03d}" in wire) == (post_id > boundary)
-        assert (f"STORED_SUMMARY_{post_id:03d}" in wire) == (oldest_summary < post_id <= boundary)
-    assert len(history.posts) == total
-    original = await RecallHistoryTool(history).invoke({"post_id": 1})
+    for step_id in range(1, total + 1):
+        assert (f"FULL_QUESTION_{step_id:03d}" in wire) == (step_id > boundary)
+        assert (f"FULL_ANSWER_{step_id:03d}" in wire) == (step_id > boundary)
+        assert (f"STORED_SUMMARY_{step_id:03d}" in wire) == (oldest_summary < step_id <= boundary)
+    assert len(history.steps) == total
+    original = await RecallHistoryTool(history).invoke({"step_id": 1})
     assert "FULL_QUESTION_001" in original.content
     assert "FULL_ANSWER_001" in original.content
-    assert history.posts[0].summary == "STORED_SUMMARY_001"
+    assert history.steps[0].summary == "STORED_SUMMARY_001"
 
 
 async def test_background_summary_contains_tool_findings_and_user_prompt():
@@ -166,7 +166,7 @@ async def test_background_summary_contains_tool_findings_and_user_prompt():
         completion(reply(2, "Read done.", "User wanted file read; model confirmed completion.",
                          "User asked read file; model read it and found EXACT TOOL RESULT.")),
         completion(reply(3, "New answer.", "User asked next; model answered next.")),
-    ], context_posts=1)
+    ], context_steps=1)
     await agent.run("read file")
     assert context_body(unpack_context(client.calls[1]["messages"])[-1].content) == "EXACT TOOL RESULT"
     add_intermediate_posts(agent)
@@ -175,8 +175,8 @@ async def test_background_summary_contains_tool_findings_and_user_prompt():
     assert "User: read file" in archived.content
     assert "EXACT TOOL RESULT" in archived.content
     assert not any(m.role == "tool" for m in unpack_context(client.calls[2]["messages"]))
-    assert agent.history.posts[0].results_summarized
-    full = await agent.registry.invoke("recall_history", {"post_id": 1})
+    assert agent.history.steps[0].results_summarized
+    full = await agent.registry.invoke("recall_history", {"step_id": 1})
     assert "EXACT TOOL RESULT" in full.content
 
 
@@ -192,10 +192,10 @@ async def test_over_budget_preserves_recent_tool_batch_without_extra_calls():
     assert await agent.run("read") == "Received excerpts."
     assert len(client.calls) == 2
     assert "Excerpt" in "\n".join(m.content or "" for m in unpack_context(client.calls[1]["messages"]))
-    assert agent.history.posts[0].agent_response == "Read two."
+    assert agent.history.steps[0].agent_response == "Read two."
     assert len(client.summary_calls) == 2
     assert len([m for m in agent.messages if m.role == "tool"]) == 2
-    assert json.loads(agent.history.posts[0].messages[-1].content)["content"] == payload
+    assert json.loads(agent.history.steps[0].messages[-1].content)["content"] == payload
 
 
 async def test_full_window_shrinks_by_whole_posts_at_model_limit():
@@ -213,13 +213,13 @@ async def test_full_window_shrinks_by_whole_posts_at_model_limit():
         else:
             messages.append(Message.assistant(f"FULL RESPONSE {index}"))
     history.sync(messages)
-    for post in history.posts:
-        post.summary = f"User asked request {post.id - 1}; model completed response {post.id - 1}."
-        post.results_summarized = True
+    for step in history.steps:
+        step.summary = f"User asked request {step.id - 1}; model completed response {step.id - 1}."
+        step.results_summarized = True
     messages.append(Message.user("current request"))
     async def unused(source):
         pytest.fail("valid stored summaries should not require another call")
-    view = await history.view(messages, [], keep_posts=50,
+    view = await history.view(messages, [], keep_steps=50,
                               context_length=200000, max_output=8192, summarize=unused)
     wire = "\n".join(message.content or "" for message in unpack_context(view))
     assert [context_body(message.content) for message in unpack_context(view) if message.role == "user"] == [
@@ -228,14 +228,14 @@ async def test_full_window_shrinks_by_whole_posts_at_model_limit():
     ]
     assert "OLD TOOL RESPONSE" not in wire
     assert "LARGE ORIGINAL TOOL OUTPUT" not in wire
-    assert history.posts[1].summary in wire
+    assert history.steps[1].summary in wire
     assert all(f"FULL RESPONSE {index}" in wire for index in range(2, 51))
     assert not any(message.role == "tool" or message.tool_calls for message in unpack_context(view))
-    assert len(history.posts) == 51
-    for index, post in enumerate(history.posts):
-        assert post.messages[0].content == f"FULL USER REQUEST {index}: preserve this exact wording λ"
-        assert post.summary is not None
-    assert "LARGE ORIGINAL TOOL OUTPUT" in history.posts[1].full_text()
+    assert len(history.steps) == 51
+    for index, step in enumerate(history.steps):
+        assert step.messages[0].content == f"FULL USER REQUEST {index}: preserve this exact wording λ"
+        assert step.summary is not None
+    assert "LARGE ORIGINAL TOOL OUTPUT" in history.steps[1].full_text()
 
 
 async def test_small_model_does_not_arbitrarily_halve_the_recent_budget():
@@ -243,8 +243,8 @@ async def test_small_model_does_not_arbitrarily_halve_the_recent_budget():
     answer = "FULL RESPONSE " * 30000
     messages = [Message.user("original request"), Message.assistant(answer), Message.user("next")]
     history.sync(messages)
-    history.posts[0].summary = "Short stored summary."
-    view = await history.view(messages, [], keep_posts=50,
+    history.steps[0].summary = "Short stored summary."
+    view = await history.view(messages, [], keep_steps=50,
                               context_length=262144, max_output=8192)
     assert any(context_body(message.content) == answer for message in unpack_context(view))
     assert not any("Short stored summary." in (message.content or "") for message in unpack_context(view))
@@ -258,10 +258,10 @@ async def test_older_window_uses_original_when_summary_is_larger():
                 *[Message.assistant("Intermediate response") for _ in range(4)],
                 Message.user("current request")]
     history.sync(messages)
-    history.posts[0].summary = "INFLATED SUMMARY " * 300
-    history.posts[1].summary = "Second answer compressed."
-    history.posts[2].summary = "Latest answer compressed."
-    view = await history.view(messages, [], keep_posts=5,
+    history.steps[0].summary = "INFLATED SUMMARY " * 300
+    history.steps[1].summary = "Second answer compressed."
+    history.steps[2].summary = "Latest answer compressed."
+    view = await history.view(messages, [], keep_steps=5,
                               context_length=1000000, max_output=8192)
     wire = "\n".join(message.content or "" for message in unpack_context(view))
     assert "Short exact answer." in wire and "Latest exact answer." in wire
@@ -290,14 +290,14 @@ async def test_shrunk_window_has_whole_turn_summary_and_full_latest_turn():
     assert [context_body(message.content) for message in unpack_context(view) if message.role == "user"] == [
         "Original exact request", "Follow-up exact request",
     ]
-    assert agent.history.posts[0].summary in wire
+    assert agent.history.steps[0].summary in wire
     assert not any(context_body(m.content) == "FULL TOOL RESPONSE" for m in unpack_context(view))
     assert "LATEST FULL ANSWER" in wire
     assert "User requested Original exact request" not in wire
     assert "Assistant completed the request." not in wire
     assert not any(message.role == "tool" or message.tool_calls for message in unpack_context(view))
     assert len(client.calls) == 3
-    assert "FULL LARGE TOOL OUTPUT" in (await agent.registry.invoke("recall_history", {"post_id": 1})).content
+    assert "FULL LARGE TOOL OUTPUT" in (await agent.registry.invoke("recall_history", {"step_id": 1})).content
 
 
 async def test_disabled_overthinking_does_not_consume_context_headroom():
@@ -306,14 +306,14 @@ async def test_disabled_overthinking_does_not_consume_context_headroom():
     answer.reasoning_details = [{"type": "reasoning.encrypted", "data": "OPAQUE " * 100000}]
     messages = [Message.user("Work"), answer, Message.tool_result("a", "ACTUAL RESULT"), Message.user("Continue")]
     history = ConversationHistory()
-    view = await history.view(messages, [], keep_posts=50,
+    view = await history.view(messages, [], keep_steps=50,
                               context_length=16000, max_output=1000, overthinking=False)
     assert any(context_body(m.content) == "ACTUAL ANSWER" and m.tool_calls for m in unpack_context(view))
     assert any(context_body(m.content) == "ACTUAL RESULT" for m in unpack_context(view))
     assert all(m.reasoning is None and m.reasoning_details is None for m in unpack_context(view))
     assert answer.reasoning == "THOUGHTS " * 100000
     assert answer.reasoning_details == [{"type": "reasoning.encrypted", "data": "OPAQUE " * 100000}]
-    assert history.posts[0].reasoning == answer.reasoning
+    assert history.steps[0].reasoning == answer.reasoning
 
 
 async def test_under_budget_keeps_entire_recent_window_in_full():
@@ -323,7 +323,7 @@ async def test_under_budget_keeps_entire_recent_window_in_full():
                 Message.tool_result("c", "full tool result"), Message.user("next")]
     async def unused(source):
         pytest.fail("no compression should run below the budget")
-    view = await history.view(messages, [], keep_posts=50,
+    view = await history.view(messages, [], keep_steps=50,
                               context_length=1000000, max_output=8192, summarize=unused)
     assert [context_body(m.content) for m in unpack_context(view) if m.role == "user"] == ["first question", "second question", "next"]
     assert any(context_body(m.content).startswith("first answer") for m in unpack_context(view))
@@ -339,12 +339,12 @@ async def test_only_posts_outside_window_use_summaries():
                 *[Message.assistant("Intermediate response") for _ in range(3)],
                 Message.user("next question")]
     history.sync(messages)
-    for post in history.posts:
-        post.summary = f"User asked question {post.id}; model answered question {post.id}."
-        post.results_summarized = True
+    for step in history.steps:
+        step.summary = f"User asked question {step.id}; model answered question {step.id}."
+        step.results_summarized = True
     async def unused(source):
         pytest.fail("the oldest stored summary is available")
-    view = await history.view(messages, [], keep_posts=2,
+    view = await history.view(messages, [], keep_steps=2,
                               context_length=1000000, max_output=8192, summarize=unused)
     wire = "\n".join(m.content or "" for m in unpack_context(view))
     assert "OLDEST FULL RESPONSE" not in wire
@@ -354,9 +354,9 @@ async def test_only_posts_outside_window_use_summaries():
     assert [context_body(m.content) for m in unpack_context(view) if m.role == "user"] == [
         "middle question", *("latest question" for _ in range(4)), "next question",
     ]
-    assert history.posts[0].summary in wire
-    assert history.posts[1].summary not in wire
-    assert history.posts[2].summary not in wire
+    assert history.steps[0].summary in wire
+    assert history.steps[1].summary not in wire
+    assert history.steps[2].summary not in wire
 
 
 async def test_missing_archived_summary_is_omitted_without_a_repair_call():
@@ -368,13 +368,13 @@ async def test_missing_archived_summary_is_omitted_without_a_repair_call():
     messages[-1:-1] = [Message.assistant("Intermediate response") for _ in range(4)]
     async def unused(source):
         pytest.fail("missing stored summaries must not trigger additional calls")
-    view = await history.view(messages, [], keep_posts=1,
+    view = await history.view(messages, [], keep_steps=1,
                               context_length=1000000, max_output=8192, summarize=unused)
     assert any(context_body(message.content) == "current request" for message in unpack_context(view))
     assert not any("HUGE TOOL OUTPUT" in (message.content or "") for message in unpack_context(view))
-    assert history.posts[0].messages[0].content == "original request"
-    assert history.posts[0].messages[1].content == "queued correction"
-    assert "HUGE TOOL OUTPUT" in history.posts[0].full_text()
+    assert history.steps[0].messages[0].content == "original request"
+    assert history.steps[0].messages[1].content == "queued correction"
+    assert "HUGE TOOL OUTPUT" in history.steps[0].full_text()
 
 
 async def test_large_old_user_requests_reduce_the_recent_window_without_compression_calls():
@@ -384,12 +384,12 @@ async def test_large_old_user_requests_reduce_the_recent_window_without_compress
                 Message.user(second), Message.assistant("second answer")]
     async def unused(source):
         pytest.fail("compressing responses cannot make the user requests fit")
-    view = await history.view(messages, [], keep_posts=50,
+    view = await history.view(messages, [], keep_steps=50,
                               context_length=9000, max_output=1000, summarize=unused)
     assert [context_body(message.content) for message in unpack_context(view) if message.role == "user"] == [second]
     assert any(context_body(message.content) == "second answer" for message in unpack_context(view))
-    assert history.posts[0].messages[0].content == first
-    assert history.posts[1].messages[0].content == second
+    assert history.steps[0].messages[0].content == first
+    assert history.steps[1].messages[0].content == second
 
 
 async def test_reduced_history_keeps_active_request_and_complete_latest_tool_batch():
@@ -403,13 +403,13 @@ async def test_reduced_history_keeps_active_request_and_complete_latest_tool_bat
                 Message.tool_result("a", "EXACT FIRST RESULT"),
                 Message.tool_result("b", "EXACT SECOND RESULT")]
     history.sync(messages)
-    for post in history.posts:
-        post.user_prompt_compressed = "USER SUMMARY MUST NOT DUPLICATE THE ACTIVE REQUEST"
-        post.agent_response_compressed = "INFLATED RESPONSE SUMMARY " * 500
-        post.previous_tool_responses_compressed = ""
-        post.results_summarized = not post.has_results
-    originals = [post.full_text() for post in history.posts]
-    view = await history.view(messages, [], keep_posts=50,
+    for step in history.steps:
+        step.user_prompt_compressed = "USER SUMMARY MUST NOT DUPLICATE THE ACTIVE REQUEST"
+        step.agent_response_compressed = "INFLATED RESPONSE SUMMARY " * 500
+        step.previous_tool_responses_compressed = ""
+        step.results_summarized = not step.has_results
+    originals = [step.full_text() for step in history.steps]
+    view = await history.view(messages, [], keep_steps=50,
                               context_length=9000, max_output=1000)
     assert [context_body(message.content) for message in unpack_context(view) if message.role == "user"] == [request + "\n" + correction]
     assert [(message.tool_call_id, context_body(message.content)) for message in unpack_context(view) if message.role == "tool"] == [
@@ -419,7 +419,7 @@ async def test_reduced_history_keeps_active_request_and_complete_latest_tool_bat
     wire = "\n".join(message.content or "" for message in unpack_context(view))
     assert "OLD USER REQUEST" not in wire
     assert "USER SUMMARY MUST NOT DUPLICATE THE ACTIVE REQUEST" not in wire
-    assert [post.full_text() for post in history.posts] == originals
+    assert [step.full_text() for step in history.steps] == originals
 
 
 async def test_history_can_be_omitted_entirely_if_even_its_summaries_are_too_large():
@@ -427,11 +427,11 @@ async def test_history_can_be_omitted_entirely_if_even_its_summaries_are_too_lar
     messages = [Message.user("old request"), Message.assistant("OLD RESPONSE " * 3000),
                 Message.user("latest exact request")]
     history.sync(messages)
-    history.posts[0].summary = "INFLATED SUMMARY " * 2000
-    view = await history.view(messages, [], keep_posts=50,
+    history.steps[0].summary = "INFLATED SUMMARY " * 2000
+    view = await history.view(messages, [], keep_steps=50,
                               context_length=8000, max_output=1000)
     assert [context_body(message.content) for message in unpack_context(view) if message.role != "system"] == ["latest exact request"]
-    assert "OLD RESPONSE" in (await RecallHistoryTool(history).invoke({"post_id": 1})).content
+    assert "OLD RESPONSE" in (await RecallHistoryTool(history).invoke({"step_id": 1})).content
 
 
 async def test_background_summaries_have_separate_requests_and_accounting():
@@ -439,14 +439,14 @@ async def test_background_summaries_have_separate_requests_and_accounting():
         completion("Original answer. " * 100),
         completion(reply(2, "Second answer.", "User asked second; model replied.")),
         completion(reply(3, "Third answer.", "User asked third; model replied.")),
-    ], context_posts=1)
+    ], context_steps=1)
     await agent.run("original question")
     add_intermediate_posts(agent)
     await agent.run("second question")
     assert len(client.calls) == 2
     await agent.run("third question")
     assert len(client.calls) == 3
-    assert agent.history.posts[0].summary in client.calls[2]["messages"][1].content
+    assert agent.history.steps[0].summary in client.calls[2]["messages"][1].content
     assert not any(context_body(m.content).strip() == ("Original answer. " * 100).strip() for m in unpack_context(client.calls[2]["messages"]))
     assert len(client.summary_calls) == 3
     assert agent.usage.total_tokens == 45
@@ -461,7 +461,7 @@ async def test_history_compression_does_not_print_a_maintenance_notice(verbose):
         completion(reply(1, "Original answer.", "User asked original question; model gave original answer.")),
         completion(reply(2, "Second answer.", "User asked second; model replied.")),
         completion(reply(3, "Third answer.", "User asked third; model replied.")),
-    ], context_posts=1, on_event=renderer.handle)
+    ], context_steps=1, on_event=renderer.handle)
     await agent.run("original question")
     await agent.run("second question")
     await agent.run("third question")
@@ -470,13 +470,13 @@ async def test_history_compression_does_not_print_a_maintenance_notice(verbose):
     assert "Third answer." in output.getvalue()
     assert len(client.calls) == 3
     assert agent.usage.total_tokens == 45
-    original = await agent.registry.invoke("recall_history", {"post_id": 1})
+    original = await agent.registry.invoke("recall_history", {"step_id": 1})
     assert "original question" in original.content and "Original answer." in original.content
 
 
 @pytest.mark.parametrize("suffix", [
     "", "<slipagent_context>{broken}</slipagent_context>",
-    "<slipagent_context>{\"post\":1", reply(9, "", "wrong ID"),
+    "<slipagent_context>{\"step\":1", reply(9, "", "wrong ID"),
     reply(1, "", ""), reply(1, "", "oversized" * 1000),
 ], ids=["missing", "malformed", "truncated", "wrong-id", "empty", "oversized"])
 async def test_optional_legacy_summary_does_not_gate_the_response(suffix):
@@ -486,8 +486,8 @@ async def test_optional_legacy_summary_does_not_gate_the_response(suffix):
     await agent.wait_for_compaction()
     assert len(client.calls) == 1 and len(client.summary_calls) == 1
     assert not any(event.kind == "retry" for event in events)
-    assert agent.history.posts[0].agent_response == "Accepted answer."
-    assert agent.history.posts[0].summary
+    assert agent.history.steps[0].agent_response == "Accepted answer."
+    assert agent.history.steps[0].summary
 
 
 async def test_invalid_tool_json_retries_before_output_and_actions():
@@ -511,11 +511,11 @@ async def test_invalid_tool_json_retries_before_output_and_actions():
     assert tool.seen == [{"value": "accepted"}]
     assert [event.text for event in events if event.kind == "assistant_text"] == ["Accepted tool plan.", "Done."]
     assert len(client.calls) == 3
-    assert len(agent.history.posts) == 2
-    assert "PREVIOUS TOOL RESULT" in agent.history.posts[0].summary
-    assert "rejected" not in "\n".join(post.full_text() for post in agent.history.posts)
+    assert len(agent.history.steps) == 2
+    assert "PREVIOUS TOOL RESULT" in agent.history.steps[0].summary
+    assert "rejected" not in "\n".join(step.full_text() for step in agent.history.steps)
     assert client.calls[1]["tools"] == client.calls[0]["tools"]
-    assert "CURRENT_POST_ID: 1" in client.calls[1]["messages"][0].content
+    assert context_records(client.calls[1]["messages"])[-1]["step_id"] == 1
 
 
 async def test_repeated_invalid_actions_respect_request_limit():
@@ -525,7 +525,7 @@ async def test_repeated_invalid_actions_respect_request_limit():
     ], include_memory=False, max_steps=3, on_event=events.append)
     assert await agent.run("inspect") == STEP_LIMIT_NOTICE
     assert len(client.calls) == 3
-    assert agent.history.posts == []
+    assert agent.history.steps == []
     assert agent.registry.get("record").seen == []
     assert not any(event.kind in {"assistant_text", "tool_start", "tool_end"} for event in events)
     assert agent.messages[-1].content == "inspect"
@@ -533,7 +533,7 @@ async def test_repeated_invalid_actions_respect_request_limit():
     client.responses.append(completion(reply(1, "Resumed.", "User asked inspect then continue; model resumed.")))
     assert await agent.run("continue") == "Resumed."
     assert len(client.calls) == 4
-    assert agent.history.posts[0].request == "inspect\ncontinue"
+    assert agent.history.steps[0].request == "inspect\ncontinue"
 
 
 async def test_retry_keeps_previous_tool_results_and_current_user_correction():
@@ -550,12 +550,17 @@ async def test_retry_keeps_previous_tool_results_and_current_user_correction():
     agent.on_event = correct
     assert await agent.run("read") == "Corrected."
     assert len(client.calls) == 3
-    for request in client.calls[1:]:
+    for index, request in enumerate(client.calls[1:]):
         assert any(m.role == "tool" and context_body(m.content) == "EXACT TOOL RESULT" for m in unpack_context(request["messages"]))
-        assert context_records(request["messages"])[-1]["user_prompt"] == ["current correction"]
-        assert "CURRENT_POST_ID: 2" in request["messages"][0].content
+        prompts = context_records(request["messages"])[-1]["user_prompt"]
+        assert prompts[0] == "current correction"
+        assert len(prompts) == index + 1
+        if index:
+            assert prompts[1].startswith("Harness tool-use correction:")
+        assert context_records(request["messages"])[-1]["step_id"] == 2
+    assert agent.history.task.sources[2] == ["current correction"]
     assert agent.registry.get("record").seen == [{"value": "v"}]
-    assert agent.history.posts[1].agent_response == "Corrected."
+    assert agent.history.steps[1].agent_response == "Corrected."
 
 
 async def test_stop_during_rejected_response_prevents_retry_and_tool_calls():
@@ -570,7 +575,7 @@ async def test_stop_during_rejected_response_prevents_retry_and_tool_calls():
     agent.on_event = stop
     assert await agent.run("inspect") == STOP_NOTICE
     assert len(client.calls) == 1
-    assert agent.history.posts == []
+    assert agent.history.steps == []
     assert agent.registry.get("record").seen == []
     assert not any(event.kind in {"assistant_text", "tool_start", "tool_end"} for event in events)
 
@@ -586,7 +591,7 @@ async def test_stop_during_response_stores_its_background_summary_and_original()
         completion(reply(1, "Done.", "User asked work; model completed work.")),
         completion(reply(2, "resumed", "User asked resume; model resumed.")),
     ])
-    agent = Agent(client=client, registry=ToolRegistry(), model="test", context_posts=1)
+    agent = Agent(client=client, registry=ToolRegistry(), model="test", context_steps=1)
     task = asyncio.create_task(agent.run("work"))
     await started.wait()
     assert agent.request_stop()
@@ -594,8 +599,8 @@ async def test_stop_during_response_stores_its_background_summary_and_original()
     assert await task == "Done."
     assert agent.stopped
     assert len(client.calls) == 1
-    assert agent.history.posts[0].agent_response == 'Done.'
-    assert "Done." in agent.history.posts[0].full_text()
+    assert agent.history.steps[0].agent_response == 'Done.'
+    assert "Done." in agent.history.steps[0].full_text()
     assert await agent.run("continue") == "resumed"
     assert len(client.calls) == 2
 
@@ -606,14 +611,14 @@ async def test_background_summary_is_saved_at_primary_request_limit():
                    [ToolCall("c", "record", {"value": "v"})]),
         completion(reply(2, "continued", "User asked continue; model continued.",
                          "User asked read; model received EXACT TOOL RESULT.")),
-    ], context_posts=1, max_steps=1)
+    ], context_steps=1, max_steps=1)
     assert await agent.run("read") == STEP_LIMIT_NOTICE
     assert len(client.calls) == 1
-    assert agent.history.posts[0].agent_response == 'Reading.'
-    assert "EXACT TOOL RESULT" in agent.history.posts[0].full_text()
+    assert agent.history.steps[0].agent_response == 'Reading.'
+    assert "EXACT TOOL RESULT" in agent.history.steps[0].full_text()
     assert await agent.run("continue") == "continued"
     assert len(client.calls) == 2
-    assert "EXACT TOOL RESULT" in agent.history.posts[0].summary
+    assert "EXACT TOOL RESULT" in agent.history.steps[0].summary
 
 
 async def test_normal_response_respects_configured_completion_cap():
@@ -627,12 +632,12 @@ async def test_cancel_during_response_preserves_existing_summaries_and_originals
     started = asyncio.Event()
     class BlockingClient(StubClient):
         async def chat(self, **kwargs):
-            if len(self.calls) == 2 and not kwargs["messages"][0].content.startswith("Summarize one completed SlipAgent turn"):
+            if len(self.calls) == 2 and not kwargs["messages"][0].content.startswith("Summarize one completed SlipAgent step"):
                 started.set()
                 await asyncio.Event().wait()
             return await super().chat(**kwargs)
     client = BlockingClient([completion("one"), completion(reply(2, "two", "User asked two; model replied two."))])
-    agent = Agent(client=client, registry=ToolRegistry(), model="test", context_posts=1)
+    agent = Agent(client=client, registry=ToolRegistry(), model="test", context_steps=1)
     await agent.run("one?")
     await agent.run("two?")
     task = asyncio.create_task(agent.run("three?"))
@@ -641,8 +646,8 @@ async def test_cancel_during_response_preserves_existing_summaries_and_originals
     with pytest.raises(asyncio.CancelledError):
         await task
     assert not agent.running
-    assert agent.history.posts[0].summary is not None
-    assert "one?" in agent.history.posts[0].full_text()
+    assert agent.history.steps[0].summary is not None
+    assert "one?" in agent.history.steps[0].full_text()
     assert agent.messages[-1].content == "three?"
 
 
@@ -662,20 +667,20 @@ async def test_cancelled_tool_batch_preserves_valid_summary_and_original():
     with pytest.raises(asyncio.CancelledError):
         await task
     assert len(client.calls) == 1
-    assert agent.history.posts[0].agent_response == 'Reading.'
-    assert "Reading." in agent.history.posts[0].full_text()
-    assert "Tool interrupted" in agent.history.posts[0].full_text()
+    assert agent.history.steps[0].agent_response == 'Reading.'
+    assert "Reading." in agent.history.steps[0].full_text()
+    assert "Tool interrupted" in agent.history.steps[0].full_text()
 
 
 async def test_recall_searches_full_original_and_pages_without_truncation_loss():
     history = ConversationHistory()
     history.sync([Message.user("user needle λ"), Message.assistant("answer " * 500)])
     tool = RecallHistoryTool(history)
-    assert "Post 1" in (await tool.invoke({"query": "NEEDLE"})).content
-    assert "Post 1" in (await tool.invoke({"query": "answer"})).content
+    assert "Step 1" in (await tool.invoke({"query": "NEEDLE"})).content
+    assert "Step 1" in (await tool.invoke({"query": "answer"})).content
     offset, chunks = 0, []
     while True:
-        page = json.loads((await tool.invoke({"post_id": 1, "offset": offset, "limit": 97})).content)
+        page = json.loads((await tool.invoke({"step_id": 1, "offset": offset, "limit": 97})).content)
         chunks.append(page["content"])
         if page["next_offset"] is None:
             break
@@ -683,7 +688,7 @@ async def test_recall_searches_full_original_and_pages_without_truncation_loss()
     full = json.loads("".join(chunks))
     assert full["prompt"] == "user needle λ"
     assert full["response"] == "answer " * 500
-    assert (await tool.invoke({"post_id": 999})).is_error
+    assert (await tool.invoke({"step_id": 999})).is_error
     assert (await tool.invoke({"limit": 16001})).is_error
     assert (await tool.invoke({"offset": -1})).is_error
 
@@ -698,7 +703,7 @@ async def test_recall_listing_reports_total_matches_on_every_character_page(quer
         Message.user("unrelated"), Message.assistant("second answer"),
         Message.user("third request"), Message.assistant("NEEDLE in original response"),
     ])
-    history.posts[1].summary = "summary marker"
+    history.steps[1].summary = "summary marker"
     tool = RecallHistoryTool(history)
     offset, chunks = 0, []
     while True:
@@ -713,7 +718,7 @@ async def test_recall_listing_reports_total_matches_on_every_character_page(quer
         offset = page["next_offset"]
     listing = "".join(chunks)
     assert len(listing) == page["total_characters"]
-    assert [int(value) for value in re.findall(r"^Post (\d+):", listing, re.MULTILINE)] == expected_ids
+    assert [int(value) for value in re.findall(r"^Step (\d+):", listing, re.MULTILINE)] == expected_ids
     beyond = json.loads((await tool.invoke({"query": query, "offset": len(listing) + 1})).content)
     assert beyond["total_matches"] == len(expected_ids)
     assert beyond["content"] == "" and beyond["next_offset"] is None
@@ -724,7 +729,7 @@ async def test_recall_empty_history_reports_zero_matches():
     page = json.loads(result.content)
     assert page["total_matches"] == 0
     assert page["next_offset"] is None
-    assert page["content"] == "No matching history posts."
+    assert page["content"] == "No matching history steps."
 
 
 @pytest.mark.parametrize("arguments", [
@@ -737,7 +742,7 @@ async def test_recall_unknown_parts_return_errors_even_without_schema_validation
     history = ConversationHistory()
     history.sync([Message.user("request"), Message.assistant("response")])
     tool = RecallHistoryTool(history)
-    supplied = {"post_id": 1, **arguments}
+    supplied = {"step_id": 1, **arguments}
     result = await tool.run(**supplied) if direct else await tool.invoke(supplied)
     assert result.is_error
     assert "prompt" in result.content and "tool_results" in result.content
@@ -748,21 +753,21 @@ async def test_reset_clears_both_versions_and_restarts_ids():
                            completion(reply(1, "new", "User asked new; model answered new."))])
     await agent.run("one?")
     agent.reset()
-    assert agent.history.posts == []
+    assert agent.history.steps == []
     assert "No matching" in (await agent.registry.invoke("recall_history", {})).content
     assert agent.messages[0].content == "Project instructions stay pinned."
     await agent.run("new?")
-    assert agent.history.posts[0].id == 1
-    assert agent.history.posts[0].agent_response == 'new'
+    assert agent.history.steps[0].id == 1
+    assert agent.history.steps[0].agent_response == 'new'
 
 
 async def test_imported_conversation_is_archived_with_tool_protocol_intact():
     agent, _ = make_agent([])
     agent.extend([Message.user("restore?"), Message.assistant(None, [ToolCall("c", "record", {})]),
                   Message.tool_result("c", "restored result"), Message.assistant("restored answer")])
-    assert len(agent.history.posts) == 2
-    assert "restored result" in agent.history.posts[0].full_text()
-    assert agent.history.posts[1].request == "restore?"
+    assert len(agent.history.steps) == 2
+    assert "restored result" in agent.history.steps[0].full_text()
+    assert agent.history.steps[1].request == "restore?"
 
 
 async def test_stored_summaries_over_budget_preserve_originals_without_extra_calls():
@@ -771,24 +776,24 @@ async def test_stored_summaries_over_budget_preserve_originals_without_extra_cal
     for i in range(20):
         messages.extend([Message.user(f"question {i}"), Message.assistant(f"answer {i} " * 300)])
     history.sync(messages)
-    for post in history.posts:
-        post.summary = f"User asked question {post.id}; model answered. " + "detail " * 150
-        post.results_summarized = True
+    for step in history.steps:
+        step.summary = f"User asked question {step.id}; model answered. " + "detail " * 150
+        step.results_summarized = True
     messages.append(Message.user("next"))
-    summaries = [post.summary for post in history.posts]
+    summaries = [step.summary for step in history.steps]
     async def unused(source):
         pytest.fail("stored summaries must not trigger an overview request")
-    view = await history.view(messages, [], keep_posts=1,
+    view = await history.view(messages, [], keep_steps=1,
                               context_length=14000, max_output=1000, summarize=unused)
     wire = "\n".join(message.content or "" for message in unpack_context(view))
-    assert history.posts[0].summary not in wire
-    assert history.posts[14].summary in wire
+    assert history.steps[0].summary not in wire
+    assert history.steps[14].summary in wire
     assert any(context_body(message.content) == "answer 19 " * 300 for message in unpack_context(view))
     assert any(context_body(message.content) == "next" for message in unpack_context(view))
-    assert [post.summary for post in history.posts] == summaries
-    assert len(history.posts) == 20
-    assert "question 0" in history.posts[0].full_text()
-    assert "answer 19" in history.posts[-1].full_text()
+    assert [step.summary for step in history.steps] == summaries
+    assert len(history.steps) == 20
+    assert "question 0" in history.steps[0].full_text()
+    assert "answer 19" in history.steps[-1].full_text()
 
 
 async def test_current_input_never_silently_truncates():
@@ -797,13 +802,13 @@ async def test_current_input_never_silently_truncates():
     async def unused(source):
         pytest.fail("should not spend calls summarizing when the current input cannot fit")
     with pytest.raises(ContextError, match="Shorten the input"):
-        await history.view([Message.user(question)], [], keep_posts=50,
+        await history.view([Message.user(question)], [], keep_steps=50,
                            context_length=9000, max_output=1000, summarize=unused)
-    assert not history.posts
+    assert not history.steps
 
 
 @pytest.mark.parametrize("suffix", ["<slipagent_context>{broken}</slipagent_context>",
-                                    "<slipagent_context>{\"post\":1", reply(9, "", "wrong ID")])
+                                    "<slipagent_context>{\"step\":1", reply(9, "", "wrong ID")])
 def test_invalid_or_truncated_envelope_is_not_used_as_memory(suffix):
     memory = response_memory("Visible answer." + suffix, 1, None)
     assert memory.text == "Visible answer."
@@ -817,7 +822,7 @@ def test_memory_envelope_checks_previous_id():
 
 
 @pytest.mark.parametrize("text", [
-    "Example:\n```json\n<slipagent_context>{\"post\":1,\"summary\":\"example\"}</slipagent_context>\n```",
+    "Example:\n```json\n<slipagent_context>{\"step\":1,\"summary\":\"example\"}</slipagent_context>\n```",
     "The <slipagent_context> marker carries metadata.",
     "An example <slipagent_context>{}</slipagent_context> followed by ordinary prose.",
 ])
@@ -833,10 +838,10 @@ def test_summary_can_quote_its_own_markers_without_leaking_metadata():
 
 
 @pytest.mark.parametrize("visible", [
-    "Fixed the bug.\n\n[Harness context metadata]\nCURRENT_POST_ID: 1\nPREVIOUS_POST_ID: none",
+    "Fixed the bug.\n\n[Harness context metadata]",
     "[Harness context metadata]\n1\nnone\n\nFixed the bug.",
-    "[Harness context metadata]\nCURRENT_POST_ID: 1\nPREVIOUS_POST_ID: none\nPrevious post's current summary: internal bookkeeping\n\nFixed the bug.",
-    "Fixed the bug.\nCURRENT_POST_ID: 1\nPREVIOUS_POST_ID: none",
+    "[Harness context metadata]\nPrevious step's current summary: internal bookkeeping\n\nFixed the bug.",
+    "Fixed the bug.",
 ])
 async def test_echoed_bookkeeping_never_reaches_output_or_saved_reply(visible):
     agent, _ = make_agent([completion(reply(1, visible, "User asked for a fix; model fixed the bug."))])
@@ -845,67 +850,61 @@ async def test_echoed_bookkeeping_never_reaches_output_or_saved_reply(visible):
     assert await agent.run("fix the bug") == "Fixed the bug."
     assert [event.text for event in events if event.kind == "assistant_text"] == ["Fixed the bug."]
     assert agent.messages[-1].content == "Fixed the bug."
-    assert agent.history.posts[0].agent_response == 'Fixed the bug.'
+    assert agent.history.steps[0].agent_response == 'Fixed the bug.'
 
 
 def test_bookkeeping_examples_in_code_and_ordinary_numbers_remain_visible():
-    text = "The result is 42.\n\nExample:\n```text\n[Harness context metadata]\nCURRENT_POST_ID: 7\nPREVIOUS_POST_ID: 6\n```\n\n1\n2\n3"
+    text = "The result is 42.\n\nExample:\n```text\n[Harness context metadata]\n```\n\n1\n2\n3"
     assert response_memory(text, 1, None).text == text
 
 
 def test_real_cli_filters_echoed_bookkeeping_from_the_final_answer(tmp_path):
-    text = reply(1, "Fix complete.\n\n[Harness context metadata]\nCURRENT_POST_ID: 1\nPREVIOUS_POST_ID: none",
+    text = reply(1, "Fix complete.\n\n[Harness context metadata]",
                  "User asked for a fix; model confirmed completion.")
     with StubOpenRouter([text_step(text)]) as stub:
         result = run_cli("-p", "fix the bug", "--base-url", stub.base_url, cwd=tmp_path)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "Fix complete."
     assert "[Harness context metadata]" not in result.stderr
-    assert "CURRENT_POST_ID" not in result.stderr
 
 
-def test_real_cli_retries_before_emitting_rejected_text_or_writing_rejected_files(tmp_path):
-    rejected = tool_step("write_file", {"path": "rejected.txt", "content": "rejected"})
-    rejected["choices"][0]["message"] = {"role": "assistant", "content": json.dumps({"response": "Rejected response that must stay hidden.", "tool_calls": [{"name": "write_file", "arguments": "["}]})}
-    accepted = tool_step("write_file", {"path": "accepted.txt", "content": "accepted"})
-    accepted["choices"][0]["message"]["content"] = reply(1, "Writing accepted file.", "User asked write; model requested accepted.txt.")
-    final = text_step(reply(2, "Done.", "User asked write; previous tool wrote accepted.txt; model confirmed completion.",
-                            "User asked write; model wrote accepted.txt successfully."))
+def test_real_cli_rejects_invalid_calls_before_reply_and_readonly_batch(tmp_path):
+    rejected = tool_step("list_dir", {"path": "."})
+    rejected["choices"][0]["message"] = {"role": "assistant", "content": json.dumps({"response": "Rejected response that must stay hidden.", "tool_calls": [{"name": "list_dir", "arguments": "["}]})}
+    accepted = tool_step("list_dir", {"path": "."})
+    accepted["choices"][0]["message"]["content"] = "Listing the directory."
+    final = text_step("Done.")
     with StubOpenRouter([rejected, accepted, final], include_memory=False) as stub:
-        result = run_cli("-p", "write the file", "--base-url", stub.base_url, cwd=tmp_path)
+        result = run_cli("-p", "List the directory", "--base-url", stub.base_url, cwd=tmp_path)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "Done."
-    assert not (tmp_path / "rejected.txt").exists()
-    assert (tmp_path / "accepted.txt").read_text() == "accepted"
     assert "Rejected response" not in result.stdout + result.stderr
-    assert "rejected.txt" not in result.stdout + result.stderr
-    assert "compressed record" not in result.stdout + result.stderr
     assert len(stub.requests) == 3
-    assert context_records(stub.requests[1]["messages"])[-1]["user_prompt"] == ["write the file"]
+    prompts = context_records(stub.requests[1]["messages"])[-1]["user_prompt"]
+    assert prompts[0] == "List the directory"
+    assert len(prompts) == 2 and prompts[1].startswith("Harness tool-use correction:")
+    assert "List the directory" in stub.requests[2]["messages"][0]["content"]
+    assert all(not prompt.startswith("Harness tool-use correction:")
+               for record in context_records(stub.requests[2]["messages"])
+               for prompt in record.get("user_prompt", []))
     assert not any(m.get("tool_calls") for m in stub.requests[1]["messages"])
 
 
-@pytest.mark.parametrize("keep_posts", [1, 50])
-async def test_post_ids_are_internal_and_recent_summaries_are_not_duplicated(keep_posts):
+@pytest.mark.parametrize("keep_steps", [1, 50])
+async def test_post_ids_are_internal_and_recent_summaries_are_not_duplicated(keep_steps):
     agent, client = make_agent([
         completion(reply(1, "First answer.", "User asked first; model answered first.")),
         completion(reply(2, "Reading.", "User asked second; model requested record."),
                    [ToolCall("c", "record", {"value": "v"})]),
         completion(reply(3, "Done.", "User asked second; model confirmed completion.",
                          "User asked second; model read EXACT TOOL RESULT.")),
-    ], context_posts=keep_posts)
+    ], context_steps=keep_steps)
     await agent.run("first")
     await agent.run("second")
     view = client.calls[-1]["messages"]
     system = "\n".join(message.content or "" for message in unpack_context(view) if message.role == "system")
-    assert "CURRENT_POST_ID: 3" in system
-    assert "PREVIOUS_POST_ID: 2" in system
+    assert context_records(view)[-1]["step_id"] == 3
     assert "User asked second; model requested record." not in "\n".join(m.content or "" for m in unpack_context(view))
-    for message in view:
-        if message.role != "system":
-            assert "[Harness context metadata]" not in (message.content or "")
-            assert "CURRENT_POST_ID" not in (message.content or "")
-            assert "PREVIOUS_POST_ID" not in (message.content or "")
 
 
 @pytest.mark.parametrize("has_previous_results", [False, True])
@@ -914,12 +913,12 @@ async def test_memory_prompt_explains_background_summaries_and_retrieval(has_pre
     if has_previous_results:
         messages.extend([Message.assistant("Reading.", [ToolCall("c", "read_file", {"path": "README.md"})]),
                          Message.tool_result("c", "File contents.")])
-    view = await ConversationHistory().view(messages, [], keep_posts=50,
+    view = await ConversationHistory().view(messages, [], keep_steps=50,
                                             context_length=1000000, max_output=8192)
     system = view[0].content
-    assert "ordinary plain text is allowed" in system
-    assert "separately in the background" in system
-    assert "sections=[...]" in system and "update_task" in system
+    assert "Return one JSON object with exactly two fields" in system
+    assert "The harness creates summaries separately" in system
+    assert "recall_history" in system and "next_offset" in system
     assert "ONE JSON object in EVERY response" not in system
     assert "previous_tool_responses_compressed" not in system
 
@@ -939,18 +938,25 @@ async def test_catalog_context_length_limits_full_history_and_is_cached():
             return httpx.Response(200, json=summary)
         requests.append(json.loads(request.content))
         response = responses[len(requests) - 1]
+        # Report a realistic measurement rather than a constant tiny token count.
+        from slipagent.context import estimate_tokens
+        body = requests[-1]
+        measured = sum(estimate_tokens(json.dumps(message, ensure_ascii=False)) for message in body["messages"])
+        measured += sum(estimate_tokens(json.dumps(body[key])) for key in ("tools", "response_format") if key in body)
+        response["usage"]["prompt_tokens"] = measured
         response["choices"][0]["message"] = structured_message(response["choices"][0]["message"], requests[-1]["messages"], include_memory=False)
         return httpx.Response(200, json=response)
     async with OpenRouterClient(api_key="test", transport=httpx.MockTransport(respond)) as client:
         agent = Agent(client=client, registry=ToolRegistry(), model="small/model")
         await agent.run("original question")
+        await agent.wait_for_compaction()
         assert await agent.run("next question") == "next"
     assert len(catalog_calls) == 1
     assert len(requests) == 2
     wire = "\n".join(message.get("content") or "" for message in requests[-1]["messages"])
     assert not any(context_body(m.get("content")) == "UNCOMPRESSED ORIGINAL " * 700 for m in requests[-1]["messages"])
-    assert agent.history.posts[0].summary in wire
-    assert "UNCOMPRESSED ORIGINAL" in agent.history.posts[0].full_text()
+    assert agent.history.steps[0].summary in wire
+    assert "UNCOMPRESSED ORIGINAL" in agent.history.steps[0].full_text()
 
 
 def test_real_cli_hides_memory_rolls_window_and_recalls_originals(tmp_path):
@@ -960,15 +966,15 @@ def test_real_cli_hides_memory_rolls_window_and_recalls_originals(tmp_path):
     second = tool_step("list_dir", {})
     second["choices"][0]["message"]["content"] = reply(2, "Checking layout.", "User asked inspect and report; model requested directory layout.",
                                                          "User asked inspect and report; model read app.py and found original file content.")
-    third = tool_step("recall_history", {"post_id": 1})
-    third["choices"][0]["message"]["content"] = reply(3, "Checking the original record.", "User asked inspect and report; model requested history post 1.",
+    third = tool_step("recall_history", {"step_id": 1})
+    third["choices"][0]["message"]["content"] = reply(3, "Checking the original record.", "User asked inspect and report; model requested history step 1.",
                                                         "User asked inspect and report; model listed the directory and found app.py.")
     for index in range(4):
         (tmp_path / f"directory-{index}").mkdir()
     intermediate = [tool_step("list_dir", {"path": f"directory-{index}"}) for index in range(4)]
     with StubOpenRouter([first, *intermediate, second, third, text_step(reply(8, "Inspection complete.", "User asked inspect and report; model reported completion.",
                                                                "User asked inspect and report; model recalled exact original input, response and file content."))]) as stub:
-        result = run_cli("-p", "inspect and report", "--context-posts", "5",
+        result = run_cli("-p", "inspect and report", "--context-steps", "5",
                          "--base-url", stub.base_url, "--model", "stub/one", cwd=tmp_path)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "Inspection complete."
@@ -976,7 +982,9 @@ def test_real_cli_hides_memory_rolls_window_and_recalls_originals(tmp_path):
     assert "read_file(" in result.stderr
     assert len(stub.requests) == 8
     third_messages = stub.requests[6]["messages"]
-    assert "User: inspect and report" in third_messages[1]["content"]
+    first_record = json.loads(third_messages[1]["content"])
+    assert first_record["step_id"] == 1
+    assert "inspect and report" in third_messages[1]["content"]
     assert not any(call["function"]["name"] == "read_file" for message in third_messages for call in message.get("tool_calls", []))
     recalled = context_records(stub.requests[7]["messages"])[-2]["tool_results"][-1]
     assert recalled["tool_name"] == "recall_history"
@@ -988,12 +996,12 @@ def test_real_cli_hides_memory_rolls_window_and_recalls_originals(tmp_path):
 
 def test_config_and_cli_expose_post_window_without_separate_token_cap():
     config = Config.from_env(environ={"OPENROUTER_API_KEY": "test"})
-    assert config.context_posts == 50
+    assert config.context_steps == 50
     assert not hasattr(config, "context_tokens")
-    args = build_parser().parse_args(["--context-posts", "12"])
+    args = build_parser().parse_args(["--context-steps", "12"])
     config = Config.from_env(environ={"OPENROUTER_API_KEY": "test"},
-                             context_posts=args.context_posts)
-    assert config.context_posts == 12
+                             context_steps=args.context_steps)
+    assert config.context_steps == 12
     with pytest.raises(ConfigError):
-        Config.from_env(environ={"OPENROUTER_API_KEY": "test"}, context_posts=0)
+        Config.from_env(environ={"OPENROUTER_API_KEY": "test"}, context_steps=0)
     assert "--context-tokens" not in build_parser().format_help()

@@ -14,7 +14,6 @@ import uuid
 from typing import Any
 
 from .types import ToolCall
-from .task import task_schema, validate_task
 
 RECORD_MAX_CHARS = 6000
 COMPRESSED_FIELDS = (
@@ -33,25 +32,22 @@ class ResponseFormatError(ValueError):
 
 
 class ResponseRecord:
-    """Accepted reply/actions with independent summaries and a task snapshot."""
+    """Accepted legacy reply/actions with independent summaries."""
 
-    def __init__(self, text: str, calls: list[ToolCall], previous: str, user: str, agent: str,
-                 task: dict[str, Any]) -> None:
+    def __init__(self, text: str, calls: list[ToolCall], previous: str, user: str, agent: str) -> None:
         self.text = text
         self.calls = calls
         self.previous_tool_responses_compressed = previous
         self.user_prompt_compressed = user
         self.agent_response_compressed = agent
-        self.task = task
 
 
 class AgentResponse:
     """Reply and actions, independent of background compaction."""
 
-    def __init__(self, text: str, calls: list[ToolCall], task: dict[str, Any] | None = None) -> None:
+    def __init__(self, text: str, calls: list[ToolCall]) -> None:
         self.text = text
         self.calls = calls
-        self.task = task
 
 
 def agent_response_format(*, native_tools: bool) -> dict[str, Any]:
@@ -64,59 +60,77 @@ def agent_response_format(*, native_tools: bool) -> dict[str, Any]:
     return result
 
 
-def parse_agent_response(text: str, native_calls: list[ToolCall]) -> AgentResponse:
-    """Accept ordinary text or a recognizable response envelope.
+def parse_agent_response(text: str, native_calls: list[ToolCall], *, native_tools: bool = True,
+                         json_response: bool = False) -> AgentResponse:
+    """Validate only the response contract selected before this request."""
+    if native_tools:
+        result = _parse_native_response(text, native_calls, json_response=json_response)
+    else:
+        if native_calls:
+            raise ResponseFormatError("Unexpected call channel for the supplied response contract.")
+        result = _parse_json_response(text)
+    if not isinstance(result.text, str):
+        raise ResponseFormatError("response must be a string.")
+    if not result.text.strip() and not result.calls:
+        raise ResponseFormatError("Provide a nonempty response when no tool calls are requested.")
+    return result
 
-    Plain code/JSON examples remain text. Only explicit response/tool-call
-    envelopes or a whole delimited call are executable content; malformed
-    envelopes are retried rather than shown as successful answers.
-    Old memory fields can be read for migration, but are never required.
-    """
+
+def _parse_json_response(text: str) -> AgentResponse:
+    value = _decode(text)
+    if not isinstance(value, dict) or set(value) != {"response", "tool_calls"}:
+        raise ResponseFormatError("Return exactly response and tool_calls in one JSON object.")
+    raw = value["tool_calls"]
+    if not isinstance(raw, list):
+        raise ResponseFormatError("tool_calls must be an array.")
+    for call in raw:
+        if not isinstance(call, dict) or set(call) != {"id", "name", "arguments"}:
+            raise ResponseFormatError("Each call must contain exactly id, name, and arguments.")
+        if not isinstance(call["id"], str) or not call["id"].strip():
+            raise ResponseFormatError("Each call requires a nonempty id.")
+        if not isinstance(call["arguments"], str) or not isinstance(_decode(call["arguments"]), dict):
+            raise ResponseFormatError("arguments must be a JSON-encoded object string.")
+    return AgentResponse(value["response"], normalize_calls(raw))
+
+
+def _parse_native_response(text: str, native_calls: list[ToolCall], *, json_response: bool) -> AgentResponse:
+    if any(not isinstance(call.id, str) or not call.id.strip() for call in native_calls):
+        raise ResponseFormatError("Each API call requires a nonempty id.")
     calls = normalize_calls([call.to_api() for call in native_calls])
-    stripped = text.strip()
-    candidate = stripped
-    fence = re.fullmatch(r"```(?:json)?\s*\n(.*)\n```", candidate, re.DOTALL | re.IGNORECASE)
-    if fence:
-        candidate = fence[1].strip()
-    envelope = bool(re.match(r'\{\s*"(?:response|tool_calls|function_call|task|previous_tool_responses_compressed|user_prompt_compressed|agent_response_compressed)"\s*:', candidate))
-    tagged = candidate.startswith(("<tool_call>", "<function_call>"))
-    task = None
-    if envelope or tagged:
-        if tagged:
-            # A tools-only tagged message has no public reply. Its calls still
-            # pass the same ambiguity and argument checks as native calls.
-            candidate = '{"response":""}\n' + candidate
-        value, tagged_calls = _response_object(candidate)
-        embedded = merge_call_sources(normalize_calls(value.get("tool_calls")),
-                                      normalize_calls(value.get("function_call")), tagged_calls)
-        calls = merge_call_sources(calls, embedded)
-        reply = value.get("response", "")
-        if reply is None and calls:
-            reply = ""
-        if not isinstance(reply, str):
-            raise ResponseFormatError("response must be text when a response envelope is used.")
-        text = reply
-        if isinstance(value.get("task"), dict):
-            # Existing clients can still provide a task update in their old
-            # envelope. Ordinary replies need no task or memory fields.
-            task = {"source_revision": 0, **value["task"]}
-            problem = validate_task(task)
-            if problem:
-                raise ResponseFormatError(problem)
-    if not calls and not text.strip():
-        raise ResponseFormatError("The model returned neither a reply nor a tool call.")
-    return AgentResponse(text, calls, task)
+    if calls and not text.strip():
+        return AgentResponse("", calls)
+    if json_response:
+        value = _decode(text)
+        if not isinstance(value, dict) or set(value) != {"response"}:
+            raise ResponseFormatError("Return exactly response in one JSON object.")
+        reply = value["response"]
+    else:
+        candidate = text.strip()
+        fence = re.fullmatch(r"```(?:json)?\s*\n(.*)\n```", candidate, re.DOTALL | re.IGNORECASE)
+        if fence:
+            candidate = fence[1].strip()
+        envelope = bool(re.match(r'\{\s*"(?:response|tool_calls|function_call|task)"\s*:', candidate))
+        if candidate.startswith("{"):
+            try:
+                value = _decode(candidate)
+            except ResponseFormatError:
+                pass
+            else:
+                envelope = isinstance(value, dict) and bool(set(value) & {"response", "tool_calls", "function_call", "task"})
+        if envelope or candidate.startswith(("<tool_call>", "<function_call>")):
+            raise ResponseFormatError("Return plain assistant reply text in the supplied reply channel.")
+        reply = text
+    return AgentResponse(reply, calls)
 
 
 def response_format(has_previous_results: bool, *, native_tools: bool = False) -> dict[str, Any]:
-    """Require reply, actions, three summaries, and the active-task record."""
+    """Describe legacy reply, actions, and three summaries."""
     properties: dict[str, Any] = {
-        "task": task_schema(),
         "response": {
             "type": "string",
             "description": (
-                "Required useful, nonempty terminal text for the user on EVERY turn, "
-                "including turns requesting tools. Tool calls and private reasoning do not replace this text.\n\n"
+                "Useful terminal text for the user. Prefer informative text alongside tool batches, "
+                "but an empty string is allowed when requesting tools. Nonempty text is required when no tools are requested.\n\n"
                 "Report important findings from any previous tool calls whose results are available, "
                 "including the conclusions or decisions based on them.\n\n"
                 "State your intentions and purpose for any new tool calls you request. "
@@ -124,7 +138,7 @@ def response_format(has_previous_results: bool, *, native_tools: bool = False) -
                 "If there are no previous results, explain your intended action and purpose. "
                 "If there are no new calls, report your findings, answer, or the specific information "
                 "needed to proceed. Do not invent findings or calls to fill the response.\n\n"
-                "This response provides memory for future turns beyond any limited reasoning retention."
+                "This response provides memory for future steps beyond any limited reasoning retention."
             ),
         },
         "tool_calls": {
@@ -354,13 +368,13 @@ def parse_response(text: str, has_previous_results: bool, *, native_calls: list[
 
 def _parse_response(text: str, has_previous_results: bool, native_calls: list[ToolCall]) -> ResponseRecord:
     value, tagged_calls = _response_object(text)
-    expected = {"response", "task", *COMPRESSED_FIELDS}
+    expected = {"response", *COMPRESSED_FIELDS}
     if not isinstance(value, dict):
         raise ResponseFormatError("Response must be one JSON object.")
     missing = expected - value.keys()
     if missing:
         raise ResponseFormatError("Missing required field(s): " + ", ".join(sorted(missing)) + ".")
-    if value.keys() - {"tool_calls", "function_call"} != expected:
+    if value.keys() - {"tool_calls", "function_call", "task"} != expected:
         raise ResponseFormatError("Unexpected response fields; follow the supplied schema.")
     if not isinstance(value["response"], str):
         raise ResponseFormatError("response must be a string.")
@@ -380,8 +394,5 @@ def _parse_response(text: str, has_previous_results: bool, native_calls: list[To
     )
     if not calls and not value["response"].strip():
         raise ResponseFormatError("A final response must contain an answer.")
-    problem = validate_task(value["task"])
-    if problem:
-        raise ResponseFormatError(problem)
     return ResponseRecord(value["response"], calls, value["previous_tool_responses_compressed"],
-                          value["user_prompt_compressed"], value["agent_response_compressed"], value["task"])
+                          value["user_prompt_compressed"], value["agent_response_compressed"])

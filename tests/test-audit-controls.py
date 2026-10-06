@@ -38,7 +38,7 @@ async def test_slow_catalog_does_not_block_stop(tmp_path, monkeypatch):
         await asyncio.Event().wait()
     monkeypatch.setattr(cli, "_read_line", read)
     monkeypatch.setattr(cli, "_models_command", catalog)
-    task = asyncio.create_task(cli._run_turn(session, "go", session.renderer.style))
+    task = asyncio.create_task(cli._run_request(session, "go", session.renderer.style))
     try:
         await started.wait()
         queue.put_nowait("/models")
@@ -66,7 +66,7 @@ async def test_shutdown_does_not_start_a_queued_run(tmp_path, monkeypatch, exit_
     async def read(*args):
         return await queue.get()
     monkeypatch.setattr(cli, "_read_line", read)
-    task = asyncio.create_task(cli._run_turn(session, "first task", session.renderer.style))
+    task = asyncio.create_task(cli._run_request(session, "first task", session.renderer.style))
     try:
         await started.wait()
         queue.put_nowait("queued followup")

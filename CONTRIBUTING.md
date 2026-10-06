@@ -7,6 +7,8 @@ first. The [README](README.md) covers running the application;
 
 ## Start With the Correct Environment
 
+`python3 install.py --dev` (Windows: `py -3 install.py --dev`) creates a permanent `source` checkout with development dependencies under the OS-specific installation directory documented in the README. Git metadata and uncommitted application edits are included on initial installation. Its source tree and interpreter are recorded in `installation.json`; Linux/macOS also provide a `current` shortcut. Work and commit in that permanent checkout. Back up edits before updating. Run the installer from a fresh download to replace installed application files while retaining installed Git metadata, configuration, and the virtual environment. Alternatively, update the installed checkout using Git and run its installer to refresh dependencies and the launcher. Installer unit checks use pure planning helpers and mocked OS services, without real installs or filesystem-changing tool calls.
+
 Use an editable installation in a project virtual environment. If one already
 exists, inspect and use it; do not replace it or install into the global Python.
 For a new checkout without an environment, create one explicitly:
@@ -53,7 +55,7 @@ file so the model receives it before choosing which source files to inspect.
 
 Read callers and tests before editing a contract. The model only knows the
 instructions, definitions, history, and observations in the outgoing request.
-A terminal notice, an archived post, a local variable, or an earlier API call
+A terminal notice, an archived step, a local variable, or an earlier API call
 does not automatically become model knowledge.
 
 ## Make a Complete Change
@@ -62,7 +64,7 @@ does not automatically become model knowledge.
    observable results: whether a file survives failure, which tools execute,
    what the model receives, or what the user sees.
 2. Change the component that owns the behavior. Keep local paths, call IDs,
-   history post IDs, and provider parameters explicit rather than inferring them
+   history step IDs, and provider parameters explicit rather than inferring them
    from a rendered string when structured state exists.
 3. Spell out model-facing contracts. Explain every required field, whether an
    outcome is known or pending, what was omitted, and the exact recovery call.
@@ -152,13 +154,13 @@ valid recovery using disposable package copies when modifying this machinery.
   state, use the selected project environment, and report skipped/failed checks
   to the model without implying that edits themselves failed.
 - Store the original prompt, reply, tool calls, and results as independently
-  retrievable parts. Recent turns use all originals; older turns use a whole-turn
+  retrievable parts. Recent steps use all originals; older steps use a whole-step
   summary only when it costs fewer tokens, otherwise the original. Never supply
-  both versions of a turn. Use the model allowance without a separate history
+  both versions of a step. Use the model allowance without a separate history
   token cap. Omit older records before reducing the recent window below its
   five-call minimum, and only reduce it when those calls cannot fit. Reconsider
   omitted records on each request so they can return when space becomes available.
-- Summarize each completed turn in a separate background request containing only
+- Summarize each completed step in a separate background request containing only
   those four parts. Never include the thread or project/task state. Test reset,
   cancellation, late results, and model/profile changes. Summary completion must
   not hide tool results before the working model receives them.

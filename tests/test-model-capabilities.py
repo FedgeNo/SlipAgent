@@ -71,6 +71,8 @@ def test_malformed_endpoint_limit_is_rejected(limit):
 
 @pytest.mark.parametrize("context, max_output", [(1, None), (262144, 40000)])
 async def test_infeasible_selection_preserves_active_model(tmp_path, context, max_output):
+    from slipagent.config import Config, save_model_choice
+    save_model_choice("test/current")
     params = ["tools", "response_format", "max_tokens"]
     models = [{"id": "test/new", "supported_parameters": params}]
     requests, gets = [], []
@@ -80,6 +82,7 @@ async def test_infeasible_selection_preserves_active_model(tmp_path, context, ma
         output = io.StringIO()
         await _model_command(session, "test/new", Style(False), output)
         assert agent.model == "test/current"
+        assert Config.from_env(environ={"OPENROUTER_API_KEY": "test"}).model == "test/current"
         assert "could not" in output.getvalue()
         assert "test/new" not in client._capabilities
     assert requests == []
@@ -130,8 +133,16 @@ def transport_for(models, endpoints, requests, gets, replies=None):
             return httpx.Response(200, json=summary)
         requests.append(body)
         content = replies[len(requests)-1] if replies else record()
-        content["task"] = task_record(body["messages"])
-        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": json.dumps(content)}, "finish_reason": "stop"}]})
+        system = body["messages"][0]["content"]
+        native = "Replies and Native Tool Calls:" in system
+        text = json.dumps({"response": content["response"], "tool_calls": content["tool_calls"]})
+        message = {"role": "assistant", "content": text}
+        if native:
+            message["content"] = json.dumps({"response": content["response"]}) if body.get("response_format") else content["response"]
+            message["tool_calls"] = [{"id": call["id"], "type": "function",
+                                      "function": {"name": call["name"], "arguments": call["arguments"]}}
+                                     for call in content["tool_calls"]]
+        return httpx.Response(200, json={"choices": [{"message": message, "finish_reason": "stop"}]})
     return httpx.MockTransport(handle)
 
 
@@ -158,7 +169,7 @@ async def test_reasoning_uses_only_advertised_choices(parameters, efforts, expec
     assert requests[0].get("include_reasoning") is (True if parameters == ["include_reasoning"] else None)
     assert "response_format" not in requests[0]
     assert "user_prompt_compressed" not in requests[0]["messages"][0]["content"]
-    assert "ordinary plain text" in requests[0]["messages"][0]["content"]
+    assert "plain assistant reply text" in requests[0]["messages"][0]["content"]
     assert gets == ["/api/v1/models", "/api/v1/models/test/model/endpoints"]
 
 
@@ -198,6 +209,7 @@ async def test_json_object_retries_before_reply_or_tool_execution():
 
 
 async def test_selection_loads_capabilities_and_switches_without_stale_settings(tmp_path):
+    from slipagent.config import Config
     strict = ["tools", "response_format", "structured_outputs", "reasoning", "reasoning_effort"]
     plain = ["tools", "response_format"]
     models = [{"id": "test/strict", "supported_parameters": strict, "reasoning": {"supported_efforts": ["low", "high"]}},
@@ -208,9 +220,11 @@ async def test_selection_loads_capabilities_and_switches_without_stale_settings(
         renderer = Renderer(Style(False), io.StringIO(), False)
         session = Session(agent, agent.registry, client, renderer, Workspace(tmp_path), "test", client.base_url, None, None)
         await _model_command(session, "test/plain", Style(False), io.StringIO())
+        assert Config.from_env(environ={"OPENROUTER_API_KEY": "test"}).model == "test/plain"
         assert gets[-1].endswith("test/plain/endpoints")
         await agent.run("Do the task.")
         await _model_command(session, "test/strict", Style(False), io.StringIO())
+        assert Config.from_env(environ={"OPENROUTER_API_KEY": "test"}).model == "test/strict"
         await agent.run("Do the task.")
         await _model_command(session, "test/plain", Style(False), io.StringIO())
         await agent.run("Do the task.")
@@ -269,20 +283,26 @@ async def test_failed_reselection_retains_cached_working_properties(tmp_path):
     assert requests[-1]["reasoning"] == {"enabled": True, "exclude": False}
 
 
-async def test_startup_fetches_default_model_properties_without_inference(tmp_path, monkeypatch):
+@pytest.mark.parametrize("selected", [DEFAULT_MODEL, "test/chosen"])
+async def test_startup_fetches_model_properties_and_remembers_explicit_choice(tmp_path, monkeypatch, selected):
+    from slipagent.config import Config
     params = ["tools", "response_format", "reasoning", "reasoning_effort"]
-    models = [{"id": DEFAULT_MODEL, "supported_parameters": params, "reasoning": {"supported_efforts": ["low", "high"]}}]
+    models = [{"id": selected, "supported_parameters": params, "reasoning": {"supported_efforts": ["low", "high"]}}]
     requests, gets = [], []
-    transport = transport_for(models, {DEFAULT_MODEL: [endpoint(params, context=128000)]}, requests, gets)
+    transport = transport_for(models, {selected: [endpoint(params, context=128000)]}, requests, gets)
     original = OpenRouterClient
     monkeypatch.setattr(cli, "OpenRouterClient", lambda **kwargs: original(**kwargs, transport=transport))
     monkeypatch.setenv("SLIPAGENT_NO_DOTENV", "1")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test")
     monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
-    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "--no-reload", "-w", str(tmp_path)]))
+    arguments = ["--no-mcp", "--no-reload", "-w", str(tmp_path)]
+    if selected != DEFAULT_MODEL:
+        arguments.extend(["--model", selected])
+    session = await cli.build_session(cli.build_parser().parse_args(arguments))
     try:
-        assert session.agent.model == DEFAULT_MODEL
-        assert gets == ["/api/v1/models", f"/api/v1/models/{DEFAULT_MODEL}/endpoints"]
+        assert session.agent.model == selected
+        assert Config.from_env(environ={"OPENROUTER_API_KEY": "test"}).model == selected
+        assert gets == ["/api/v1/models", f"/api/v1/models/{selected}/endpoints"]
         assert requests == []
         assert await session.agent._context_length() == 128000
         assert len(gets) == 2

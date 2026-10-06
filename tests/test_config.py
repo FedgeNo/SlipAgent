@@ -109,7 +109,22 @@ def test_config_falls_back_to_env_then_default() -> None:
 
 
 def test_default_model_is_the_configured_one() -> None:
-    assert DEFAULT_MODEL == "nvidia/nemotron-3.5-lightning:free"
+    assert DEFAULT_MODEL == "nvidia/nemotron-3-ultra-550b-a55b:free"
+
+
+def test_saved_model_is_reused_and_explicit_choices_take_precedence():
+    from slipagent.config import save_model_choice
+    save_model_choice("chosen/model")
+    assert Config.from_env(environ={"OPENROUTER_API_KEY": "k"}).model == "chosen/model"
+    assert Config.from_env(model="flag/model", environ={"OPENROUTER_API_KEY": "k"}).model == "flag/model"
+    assert Config.from_env(environ={"OPENROUTER_API_KEY": "k", "OPENROUTER_MODEL": "env/model"}).model == "env/model"
+
+
+def test_saved_model_precedes_dotenv_default(monkeypatch):
+    from slipagent.config import save_model_choice
+    save_model_choice("chosen/model")
+    monkeypatch.setattr("slipagent.config.load_dotenv", lambda: os.environ.setdefault("OPENROUTER_MODEL", "dotenv/model"))
+    assert Config.from_env().model == "chosen/model"
 
 
 # --------------------------------------------------------------------------- #

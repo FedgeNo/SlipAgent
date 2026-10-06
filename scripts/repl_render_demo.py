@@ -1,7 +1,7 @@
 """Dev-only: show the REPL rendering — spacing, queued input, the prompt line.
 
 Runs a scripted fake OpenRouter in a subprocess and points the real CLI at it,
-so the tool calls, the blank line before agent prose, mid-turn input, and the
+so the tool calls, the blank line before agent prose, mid-step input, and the
 prompt line are all visible without spending tokens.
 
 Run this in a terminal. The prompt erases and redraws itself, which only shows
@@ -104,7 +104,7 @@ def main() -> None:
              "--model", "stub/model", "-v",
              "--base-url", f"http://127.0.0.1:{port}/api/v1"],
             cwd=workspace,
-            # Typed slowly enough that the second line lands mid-turn.
+            # Typed slowly enough that the second line lands mid-step.
             input="read the notes\nalso list the dir\n/exit\n",
             capture_output=True,
             text=True,

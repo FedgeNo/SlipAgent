@@ -32,6 +32,13 @@ TIMEOUT_PARAMETER = {
     "description": f"Timeout in seconds (default {DEFAULT_TIMEOUT:g}, max {MAX_TIMEOUT:g}).",
 }
 
+GIT_OUTPUT_GUIDANCE = (
+    "\n\nOutput is a captured preview; long streams retain the beginning and end with an explicit "
+    "truncation marker. Omitted output is not evidence of an empty result or a successful command. "
+    "Use `read_command_output` with the returned `log_id` to inspect omitted text without rerunning "
+    "the command; the observation includes a concrete recovery call."
+)
+
 
 @dataclass(slots=True)
 class GitRepository:
@@ -202,7 +209,7 @@ class GitTool(Tool):
 
 class GitStatusTool(GitTool):
     name = "git_status"
-    description = "Show branch and short Git status for a repository allowed by the current Workspace Access mode."
+    description = "Show branch and short Git status for a repository allowed by the current Workspace Access mode." + GIT_OUTPUT_GUIDANCE
     parameters = {
         "type": "object",
         "properties": {"repo": REPO_PARAMETER, "timeout": TIMEOUT_PARAMETER},
@@ -222,7 +229,7 @@ class GitDiffTool(GitTool):
         "Show unstaged changes, or staged changes with staged=true.\n\n"
         "Paths are literal and workspace-relative or absolute.\n\n"
         "External diff/text conversion helpers are disabled."
-    )
+    ) + GIT_OUTPUT_GUIDANCE
     parameters = {
         "type": "object",
         "properties": {
@@ -248,7 +255,7 @@ class GitDiffTool(GitTool):
 
 class GitLogTool(GitTool):
     name = "git_log"
-    description = "Show recent commits in a repository allowed by Workspace Access mode, newest first (default 10, maximum 100)."
+    description = "Show recent commits in a repository allowed by Workspace Access mode, newest first (default 10, maximum 100)." + GIT_OUTPUT_GUIDANCE
     parameters = {
         "type": "object",
         "properties": {
@@ -274,7 +281,7 @@ class GitAddTool(GitTool):
         "stages all in the workspace-root repository.\n\n"
         "Paths follow the current Workspace Access mode.\n\n"
         "Active clean/process filters are rejected instead of running external helpers."
-    )
+    ) + GIT_OUTPUT_GUIDANCE
     parameters = {
         "type": "object",
         "properties": {
@@ -323,7 +330,7 @@ class GitCommitTool(GitTool):
         "Commit already staged changes with a message.\n\n"
         "Does not stage files, amend, or push.\n\n"
         "Hooks and signing are disabled to keep external helpers from bypassing workspace checks."
-    )
+    ) + GIT_OUTPUT_GUIDANCE
     parameters = {
         "type": "object",
         "properties": {

@@ -44,7 +44,7 @@ def transport(requests, *, broken_metadata=False):
             "user_prompt_compressed": "Do the task", "agent_response_compressed": "Done",
         }
         return httpx.Response(200, json={"choices": [{"message": {
-            "role": "assistant", "content": json.dumps(record),
+            "role": "assistant", "content": record["response"],
         }, "finish_reason": "stop"}]})
 
     return httpx.MockTransport(handle)
@@ -63,12 +63,12 @@ async def test_default_and_command_change_actual_requests(tmp_path):
         session = session_for(client, tmp_path)
         await session.agent.run("First task")
         await _handle_command(session, "/temperature")
-        assert "temperature: 0.2 (default)" in session.renderer.stream.getvalue()
+        assert "temperature: 1 (default)" in session.renderer.stream.getvalue()
         await _handle_command(session, "/temperature 0")
         await session.agent.run("Second task")
         await _handle_command(session, "/temperature 0.1")
         await session.agent.run("Third task")
-    assert [request["temperature"] for request in requests] == [0.2, 0, 0.1]
+    assert [request["temperature"] for request in requests] == [1.0, 0, 0.1]
 
 
 async def test_model_switch_omits_unsupported_temperature_and_retains_setting(tmp_path):
@@ -126,4 +126,4 @@ async def test_temperature_changes_wait_for_idle_but_readout_stays_available(tmp
         assert "Queued /temperature" in session.renderer.stream.getvalue()
         assert session.extensions["deferred_commands"] == ["/temperature 0.5"]
         await _handle_command(session, "/temperature")
-        assert "temperature: 0.2 (default)" in session.renderer.stream.getvalue()
+        assert "temperature: 1 (default)" in session.renderer.stream.getvalue()

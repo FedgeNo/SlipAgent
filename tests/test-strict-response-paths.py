@@ -1,6 +1,7 @@
 """Selected request contracts reject alternate carriers before any effects."""
 
 import json
+import re
 
 import httpx
 import pytest
@@ -114,7 +115,7 @@ async def test_selected_contract_rejects_then_recovers_without_effects(mode, inv
             assert "tagged calls" not in system and "when using JSON" not in system
             assert body["tools"]
         else:
-            assert "native" not in system.lower()
+            assert re.search(r"\bnative\b", system, re.IGNORECASE) is None
             assert "tools" not in body
         assert "Alternatively" not in system
     assert [e.text for e in events if e.kind == "assistant_text"] == ["Reading", "Done"]

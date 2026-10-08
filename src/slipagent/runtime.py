@@ -7,6 +7,7 @@ identity so live state, exception handlers, and transport references survive.
 from __future__ import annotations
 
 import asyncio
+import os
 import hashlib
 import importlib
 import importlib.abc
@@ -153,10 +154,10 @@ class RuntimeFrame:
         self._component_classes: dict[tuple[str, str], type[Any]] = {}
 
     def _sources(self) -> dict[str, bytes]:
+        from .prompts import prompt_directory
         return {
-            str(path.relative_to(self.root)): path.read_bytes()
-            for path in sorted([*self.root.rglob("*.py"), self.root / "system-prompt.txt",
-                                self.root / "background-summary-prompt.txt"])
+            os.path.relpath(path, self.root): path.read_bytes()
+            for path in sorted([*self.root.rglob("*.py"), *prompt_directory().rglob("*.txt"), *prompt_directory().rglob("*.json")])
             if "__pycache__" not in path.parts
         }
 

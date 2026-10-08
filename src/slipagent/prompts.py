@@ -4,22 +4,43 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from string import Template
 
 
-def _load_prompt(filename: str) -> str:
-    path = Path(__file__).with_name(filename)
-    # Reload candidates read the resource captured with their source generation.
-    get_data = getattr(globals().get("__loader__"), "get_data", None)
-    if callable(get_data):
-        data = get_data(str(path))
-        if not isinstance(data, bytes):
-            raise TypeError("The prompt resource must contain bytes")
-        return data.decode("utf-8")
-    return path.read_text(encoding="utf-8")
+class PromptError(RuntimeError):
+    """An editable prompt cannot be loaded."""
 
 
-SYSTEM_PROMPT = _load_prompt("system-prompt.txt")
-COMPACTION_PROMPT = _load_prompt("background-summary-prompt.txt")
+def section_divider(title: str) -> str:
+    """Separate major model-input sections with a prominent plain-text title."""
+    return "=" * 29 + " " + title.upper() + " " + "=" * 30
+
+
+def prompt_directory() -> Path:
+    """Use the checkout's visible folder, or the installed package resources."""
+    package = Path(__file__).resolve().parent
+    checkout = package.parent.parent / "prompts"
+    return checkout if package.parent.name == "src" and (package.parent.parent / "pyproject.toml").is_file() else package / "prompts"
+
+
+def load_prompt(filename: str, **values: object) -> str:
+    """Read and render a prompt with one newline on each side."""
+    path = prompt_directory() / filename
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        raise PromptError(f"Missing prompt file: {path}. Restore this file in the prompts folder.") from None
+    except OSError as exc:
+        raise PromptError(f"Cannot read prompt file: {path}: {exc}") from exc
+    rendered = Template(text).substitute({name: str(value) for name, value in values.items()}) if values else text
+    return "\n" + rendered.strip() + "\n"
+
+
+def __getattr__(name: str) -> str:
+    resources = {"SYSTEM_PROMPT": "system-prompt.txt", "COMPACTION_PROMPT": "background-summary-prompt.txt"}
+    if name not in resources:
+        raise AttributeError(name)
+    return load_prompt(resources[name])
 
 
 @dataclass(frozen=True)
@@ -44,6 +65,6 @@ class PromptSections:
         self.sections[name] = PromptSection(name, title, content, order, owner, dynamic)
 
     def render(self) -> str:
-        return "\n\n".join(f"{section.title}:\n\n{section.content}" for section in
+        return "\n".join(f"{section_divider('BEGIN ' + section.title)}\n\n{section.content.strip()}\n\n{section_divider('END ' + section.title)}\n" for section in
                            sorted(self.sections.values(), key=lambda item: (item.dynamic, item.order, item.name))
                            if section.content)

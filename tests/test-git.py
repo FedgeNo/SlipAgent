@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from slipagent.types import content_text
+
 import asyncio
 import os
 import subprocess
@@ -81,7 +83,7 @@ async def test_danger_repository_discovery_stops_at_filesystem_root(tmp_path, mo
     original = Path.exists
     monkeypatch.setattr(Path, "exists", lambda path: False if path.name == ".git" else original(path))
     result = await tool.invoke({})
-    assert result.is_error and "No Git repository" in result.content
+    assert result.is_error and "No Git repository" in content_text(result.content)
 
 
 async def test_log_never_runs_signature_verification_helper(repository, tmp_path):
@@ -101,7 +103,7 @@ async def test_log_never_runs_signature_verification_helper(repository, tmp_path
     git(root, "update-ref", "HEAD", result.stdout.strip())
     output = await GitLogTool(repository).invoke({})
     assert not output.is_error, output.content
-    assert "Signed fixture" in output.content
+    assert "Signed fixture" in content_text(output.content)
     assert not marker.exists()
 
 
@@ -111,24 +113,24 @@ async def test_status_diff_add_commit_and_log(repository: Workspace) -> None:
     (root / "new.txt").write_text("untracked\n")
     status = await GitStatusTool(repository).invoke({})
     assert not status.is_error
-    assert " M app.txt" in status.content and "?? new.txt" in status.content
+    assert " M app.txt" in content_text(status.content) and "?? new.txt" in content_text(status.content)
     assert not (await GitAddTool(repository).invoke({"paths": ["app.txt"]})).is_error
     (root / "app.txt").write_text("unstaged version\n")
     diff = GitDiffTool(repository)
     staged = await diff.invoke({"staged": True})
     unstaged = await diff.invoke({})
-    assert not staged.is_error and "+staged version" in staged.content
-    assert "+unstaged version" not in staged.content
-    assert not unstaged.is_error and "+unstaged version" in unstaged.content
+    assert not staged.is_error and "+staged version" in content_text(staged.content)
+    assert "+unstaged version" not in content_text(staged.content)
+    assert not unstaged.is_error and "+unstaged version" in content_text(unstaged.content)
     message = "Change text; $(touch unwanted) 'quoted'"
     committed = await GitCommitTool(repository).invoke({"message": message})
     assert not committed.is_error, committed.content
     assert git(root, "show", "HEAD:app.txt") == "staged version\n"
     assert not (root / "unwanted").exists()
     log = await GitLogTool(repository).invoke({"limit": 1})
-    assert not log.is_error and message in log.content
-    assert "Initial commit" not in log.content
-    assert "?? new.txt" in (await GitStatusTool(repository).invoke({})).content
+    assert not log.is_error and message in content_text(log.content)
+    assert "Initial commit" not in content_text(log.content)
+    assert "?? new.txt" in content_text((await GitStatusTool(repository).invoke({})).content)
 
 
 async def test_literal_paths_deletions_and_add_all(repository: Workspace) -> None:
@@ -157,14 +159,14 @@ async def test_nested_repository_and_workspace_relative_paths(repository: Worksp
     assert "file.txt" in git(nested, "diff", "--cached", "--name-only")
     assert not (await GitStatusTool(repository).invoke({"repo": "nested"})).is_error
     wrong = await GitAddTool(repository).invoke({"repo": "nested", "paths": ["app.txt"]})
-    assert wrong.is_error and "outside this repository" in wrong.content
+    assert wrong.is_error and "outside this repository" in content_text(wrong.content)
 
 
 async def test_errors_are_returned(repository: Workspace, tmp_path: Path) -> None:
     commit = GitCommitTool(repository)
     assert (await commit.invoke({"message": "   "})).is_error
     nothing = await commit.invoke({"message": "Nothing"})
-    assert nothing.is_error and "nothing to commit" in nothing.content
+    assert nothing.is_error and "nothing to commit" in content_text(nothing.content)
     git(repository.root, "config", "user.name", "")
     (repository.root / "app.txt").write_text("changed")
     git(repository.root, "add", "app.txt")
@@ -175,7 +177,7 @@ async def test_errors_are_returned(repository: Workspace, tmp_path: Path) -> Non
     empty = tmp_path / "empty"
     empty.mkdir()
     result = await GitStatusTool(Workspace(empty)).invoke({})
-    assert result.is_error and "No Git repository" in result.content
+    assert result.is_error and "No Git repository" in content_text(result.content)
     git(empty, "init", "-q")
     assert (await GitLogTool(Workspace(empty)).invoke({})).is_error
 
@@ -186,8 +188,8 @@ async def test_diff_paths_and_subdirectory_repo(repository: Workspace) -> None:
     (repository.root / "other.txt").write_text("other\n")
     await GitAddTool(repository).invoke({"paths": ["other.txt"]})
     diff = await GitDiffTool(repository).invoke({"paths": ["app.txt"], "repo": "sub"})
-    assert not diff.is_error and "+changed" in diff.content
-    assert "other.txt" not in diff.content
+    assert not diff.is_error and "+changed" in content_text(diff.content)
+    assert "other.txt" not in content_text(diff.content)
 
 
 @pytest.mark.parametrize("tool", [GitStatusTool, GitDiffTool, GitLogTool, GitAddTool, GitCommitTool])
@@ -196,7 +198,7 @@ async def test_reject_parent_repository(repository: Workspace, tool: type) -> No
     child.mkdir()
     args = {"paths": ["."]} if tool is GitAddTool else {"message": "No"} if tool is GitCommitTool else {}
     result = await tool(Workspace(child)).invoke(args)
-    assert result.is_error and "Parent repositories" in result.content
+    assert result.is_error and "Parent repositories" in content_text(result.content)
 
 
 @pytest.mark.parametrize("path", ["../outside.txt", "/tmp", ".git/index"])
@@ -212,7 +214,7 @@ async def test_reject_symlink_escape_in_directory(repository: Workspace, tmp_pat
     (repository.root / "escape").symlink_to(outside)
     for paths in (["escape"], ["."]):
         result = await GitAddTool(repository).invoke({"paths": paths})
-        assert result.is_error and "outside the workspace" in result.content
+        assert result.is_error and "outside the workspace" in content_text(result.content)
     assert git(repository.root, "diff", "--cached", "--name-only") == ""
     assert outside.read_text() == "outside"
 
@@ -224,14 +226,14 @@ async def test_reject_metadata_escape(repository: Workspace, tmp_path: Path, met
     source.rename(target)
     source.symlink_to(target, target_is_directory=target.is_dir())
     result = await GitStatusTool(repository).invoke({})
-    assert result.is_error and "outside the workspace" in result.content
+    assert result.is_error and "outside the workspace" in content_text(result.content)
 
 
 async def test_reject_external_gitdir_and_worktree(repository: Workspace, tmp_path: Path) -> None:
     worktree = tmp_path / "linked"
     git(repository.root, "worktree", "add", "-qb", "linked", str(worktree))
     result = await GitStatusTool(Workspace(worktree)).invoke({})
-    assert result.is_error and "outside the workspace" in result.content
+    assert result.is_error and "outside the workspace" in content_text(result.content)
     marker = repository.root / ".git"
     target = tmp_path / "external-git"
     marker.rename(target)
@@ -252,7 +254,7 @@ async def test_add_directory_rejects_nested_external_metadata(repository: Worksp
     nested.mkdir()
     (nested / ".git").write_text(f"gitdir: {external / '.git'}\n")
     result = await GitAddTool(repository).invoke({"paths": ["."]})
-    assert result.is_error and "outside the workspace" in result.content
+    assert result.is_error and "outside the workspace" in content_text(result.content)
     assert git(repository.root, "diff", "--cached", "--name-only") == ""
 
 
@@ -266,14 +268,14 @@ async def test_internal_metadata_link_cannot_hide_escape(repository: Workspace, 
     outside.write_text("unchanged")
     (moved / "escape").symlink_to(outside)
     result = await GitStatusTool(repository).invoke({})
-    assert result.is_error and "outside the workspace" in result.content
+    assert result.is_error and "outside the workspace" in content_text(result.content)
 
 
 async def test_reject_external_alternate_objects(repository: Workspace, tmp_path: Path) -> None:
     alternates = repository.root / ".git/objects/info/alternates"
     alternates.write_text(str(tmp_path / "external-objects") + "\n")
     result = await GitStatusTool(repository).invoke({})
-    assert result.is_error and "outside the workspace" in result.content
+    assert result.is_error and "outside the workspace" in content_text(result.content)
 
 
 async def test_ignore_environment_and_config_worktree_redirects(repository: Workspace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -323,7 +325,7 @@ async def test_reject_active_filters_without_running_them(repository: Workspace,
     (root / ".gitattributes").write_text("*.txt filter=custom\n")
     (root / "app.txt").write_text("changed")
     result = await GitAddTool(repository).invoke({"paths": ["."]})
-    assert result.is_error and "filter 'custom'" in result.content
+    assert result.is_error and "filter 'custom'" in content_text(result.content)
     assert not (root / "filter-ran").exists()
     assert git(root, "diff", "--cached", "--name-only") == ""
 
@@ -332,7 +334,7 @@ async def test_index_lock_error(repository: Workspace) -> None:
     lock = repository.root / ".git/index.lock"
     lock.write_text("busy")
     result = await GitAddTool(repository).invoke({"paths": ["app.txt"]})
-    assert result.is_error and "index.lock" in result.content
+    assert result.is_error and "index.lock" in content_text(result.content)
     assert lock.read_text() == "busy"
 
 
@@ -360,17 +362,15 @@ async def test_validation_never_uses_truncated_listing(repository: Workspace, mo
         (repository.root / f"file-{number}.txt").write_text("content")
     monkeypatch.setattr(git_module, "MAX_OUTPUT_CHARS", 30)
     result = await GitAddTool(repository).invoke({"paths": ["."]})
-    assert result.is_error and "select fewer paths" in result.content
+    assert result.is_error and "select fewer paths" in content_text(result.content)
     assert git(repository.root, "diff", "--cached", "--name-only") == ""
     monkeypatch.setattr(git_module, "MAX_OUTPUT_CHARS", 10)
     log = await GitLogTool(repository).invoke({})
-    assert "… [output truncated]" in log.content
-
-
+    assert "… [output truncated]" in content_text(log.content)
 async def test_missing_git(repository: Workspace, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PATH", "/missing-git-bin")
     result = await GitStatusTool(repository).invoke({})
-    assert result.is_error and "Git is not installed" in result.content
+    assert result.is_error and "Git is not installed" in content_text(result.content)
 
 
 async def test_timeout_and_cancellation(repository: Workspace, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -384,7 +384,7 @@ async def test_timeout_and_cancellation(repository: Workspace, monkeypatch: pyte
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", sleeping_git)
     result = await GitStatusTool(repository).invoke({"timeout": 0.1})
-    assert result.is_error and "timed out" in result.content
+    assert result.is_error and "timed out" in content_text(result.content)
     assert processes[0].returncode is not None
     task = asyncio.create_task(GitStatusTool(repository).invoke({}))
     while len(processes) < 2:

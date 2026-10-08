@@ -177,7 +177,7 @@ class Config:
     model: str = DEFAULT_MODEL
     base_url: str = field(default=DEFAULT_BASE_URL)
     http_referer: str | None = None
-    app_title: str = "slipagent"
+    app_title: str = "SlipAgent"
     workspace: Path = field(default_factory=lambda: Path.cwd())
     max_steps: int = DEFAULT_MAX_STEPS
     temperature: float | None = None
@@ -229,7 +229,7 @@ class Config:
             model=explicit_model or str(_read_preferences().get("model") or env.get("OPENROUTER_MODEL") or DEFAULT_MODEL),
             base_url=base_url or env.get("OPENROUTER_BASE_URL") or DEFAULT_BASE_URL,
             http_referer=env.get("OPENROUTER_REFERER") or None,
-            app_title=env.get("OPENROUTER_TITLE") or "slipagent",
+            app_title=env.get("OPENROUTER_TITLE") or "SlipAgent",
             workspace=root,
             max_steps=max_steps if max_steps is not None else DEFAULT_MAX_STEPS,
             temperature=temperature,

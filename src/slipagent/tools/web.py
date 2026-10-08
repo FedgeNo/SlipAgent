@@ -7,6 +7,8 @@ instead of silently failing. `fetch_page` needs nothing.
 
 from __future__ import annotations
 
+from ..prompts import load_prompt
+
 import os
 import re
 import asyncio
@@ -126,22 +128,17 @@ def html_to_text(markup: str, *, base_url: str = "") -> tuple[str, str | None]:
 
 
 class WebSearchTool(Tool):
+    parameter_prompts = 'tools/web-search-parameters.json'
     name = "web_search"
-    description = (
-        "Search the web and return ranked results with titles, URLs, and text snippets.\n\n"
-        "Use it for library documentation, error messages, API references, and anything about code "
-        "you have not seen before.\n\n"
-        "Prefer reading the most relevant result with fetch_page before concluding.\n\n"
-        "Requires an EXA_API_KEY."
-    )
+    description_prompt = 'tools/web-search.txt'
+    description = load_prompt(description_prompt)
     parameters = {
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": "Search query."},
+            "query": {"type": "string", "description": ""},
             "num_results": {
                 "type": "integer",
-                "description": f"Number of results (1-{MAX_SEARCH_RESULTS}). "
-                               f"Defaults to 5.",
+                "description": "",
                 "minimum": 1,
             },
         },
@@ -248,21 +245,17 @@ class _PublicTransport(httpx.AsyncHTTPTransport):
 
 
 class FetchPageTool(Tool):
+    parameter_prompts = 'tools/fetch-page-parameters.json'
     name = "fetch_page"
-    description = (
-        "Fetch a public URL over HTTP(S) and return its readable text, with scripts and markup "
-        "removed.\n\n"
-        "Works on documentation, articles, and raw files; it does not run JavaScript, so "
-        "client-rendered pages may come back thin."
-    )
+    description_prompt = 'tools/fetch-page.txt'
+    description = load_prompt(description_prompt)
     parameters = {
         "type": "object",
         "properties": {
-            "url": {"type": "string", "description": "Absolute http:// or https:// URL."},
+            "url": {"type": "string", "description": ""},
             "max_chars": {
                 "type": "integer",
-                "description": f"Truncate output to this many characters "
-                               f"(default {MAX_PAGE_CHARS}).",
+                "description": "",
                 "minimum": 500,
             },
         },

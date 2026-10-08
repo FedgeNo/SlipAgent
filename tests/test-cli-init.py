@@ -1,5 +1,7 @@
 """Initialization creates only confined guidance and applies it to the session."""
 
+from slipagent.types import content_text
+
 import io
 from types import SimpleNamespace
 
@@ -37,7 +39,7 @@ async def test_init_creates_only_project_scaffold_and_applies_it(workspace):
     assert session.agent.messages[1].content == "Keep my conversation."
     assert session.reloader._project_instructions == expected
     context = await session.agent._context_view(session.agent.registry.specs(), 1)
-    assert content in "\n".join(message.content or "" for message in context)
+    assert content in "\n".join(content_text(message.content) for message in context)
     session.agent.reset()
     assert session.agent.messages[0].content == expected
 
@@ -49,7 +51,7 @@ async def test_init_preserves_and_loads_existing_user_guidance(workspace):
     await _init_command(session, Style(False), io.StringIO())
     assert path.read_text() == "Custom project instructions.\n"
     context = await session.agent._context_view(session.agent.registry.specs(), 1)
-    assert "Custom project instructions." in "\n".join(message.content or "" for message in context)
+    assert "Custom project instructions." in "\n".join(content_text(message.content) for message in context)
 
 
 @pytest.mark.parametrize("existing", [False, True])
@@ -68,6 +70,18 @@ async def test_init_rejects_outside_guidance_symlink(tmp_path, existing):
     if existing:
         assert target.read_text() == "Outside instructions."
     assert session.agent.system_prompt == original
+
+
+async def test_config_show_uses_active_model_without_disclosing_dotenv(workspace, monkeypatch):
+    monkeypatch.chdir(workspace.root)
+    (workspace.root / ".env").write_text("OPENROUTER_API_KEY=private-test-key\nOPENROUTER_MODEL=old/model\n")
+    session = session_for(workspace)
+    session.agent.model = "selected/model"
+    assert await _execute_command(session, "/config-show") is False
+    output = session.renderer.stream.getvalue()
+    assert "selected/model" in output
+    assert "private-test-key" not in output
+    assert "old/model" not in output
 
 
 async def test_init_waits_for_active_turn_to_finish(workspace):

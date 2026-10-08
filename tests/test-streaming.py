@@ -308,7 +308,7 @@ async def test_streamed_literal_metadata_example_stays_in_one_output_block():
     text = "Example:\n```\n[Harness context metadata]\n```"
     def handle(request):
         if request.method == "GET":
-            return httpx.Response(200, json={"data": []})
+            return httpx.Response(200, json={"data": [{"id": "test"}]})
         summary = summary_response(json.loads(request.content))
         if summary is not None:
             return httpx.Response(200, json=summary)
@@ -316,7 +316,7 @@ async def test_streamed_literal_metadata_example_stays_in_one_output_block():
     async with OpenRouterClient("test", transport=httpx.MockTransport(handle)) as client:
         agent = Agent(client, ToolRegistry(), "test", on_event=renderer.handle)
         assert await agent.run("show a literal example") == text
-    assert sink.getvalue() == "\n" + text + "\n"
+    assert sink.getvalue() == "\nExample:\n[Harness context metadata]\n"
 
 
 def test_reserved_metadata_never_flashes_when_markers_are_split_into_characters():

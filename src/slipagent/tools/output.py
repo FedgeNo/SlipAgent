@@ -8,6 +8,8 @@ bytes have already been replaced by the capture decoder before arriving here.
 
 from __future__ import annotations
 
+from ..prompts import load_prompt
+
 import json
 import os
 import tempfile
@@ -105,9 +107,9 @@ class CommandLog:
         errors = " ".join(f"{name}: {stream.error} Lost {stream.lost_bytes} UTF-8 bytes."
                           for name, stream in self.streams.items() if stream.error)
         arguments = json.dumps({"log_id": self.id, "stream": "stdout", "offset": 0, "limit": 8000})
-        return (f"Command log {self.id}: read_command_output with arguments {arguments}. "
-                "Change stream to stderr to read errors, or set tail=true for the end. "
-                + ("Saved with this session. " if getattr(self.archive, "_persistent", None) else "Retained until /reset or session exit. ") + errors).rstrip()
+        return load_prompt("command-output-recovery.txt", log_id=self.id, arguments=arguments,
+            retention=load_prompt("command-output-saved.txt" if getattr(self.archive, "_persistent", None) else "command-output-temporary.txt"),
+            errors=errors).rstrip()
 
 
 class CommandArchive:
@@ -163,27 +165,19 @@ class CommandArchive:
 
 
 class ReadCommandOutputTool(Tool):
+    parameter_prompts = 'tools/read-command-output-parameters.json'
     name = "read_command_output"
     progress_exempt = True  # Re-reading a log tail is deliberate polling.
-    description = (
-        "Read retained shell/Git stdout or stderr without rerunning the command.\n\n"
-        "Use `log_id` from the result; `offset` counts UTF-8 bytes and `limit` counts characters.\n\n"
-        "Start with `stream=\"stdout\"`, `offset=0`, `limit=8000`; use `stream=\"stderr\"` for "
-        "errors or `tail=true` for the end. Follow `next_offset` until it is `null`.\n\n"
-        "Batch independent output reads together. Polling retained logs is exempt from unchanged-batch detection.\n\n"
-        "Omit `log_id` to list logs, optionally filtered by `step_id` and `call_id`.\n\n"
-        "Quota/disk failures report `lost_bytes` and `retention_error`; missing bytes cannot be retrieved.\n\n"
-        "Logs are saved with persistent sessions.\n\n"
-        "With `--no-session`, `/reset` and exit delete them."
-    )
+    description_prompt = 'tools/read-command-output.txt'
+    description = load_prompt(description_prompt)
     parameters = {"type": "object", "properties": {
         "log_id": {"type": "string"}, "step_id": {"type": "integer", "minimum": 1},
         "call_id": {"type": "string"}, "stream": {"type": "string", "enum": ["stdout", "stderr"]},
         "offset": {"type": "integer", "minimum": 0,
-                   "description": "UTF-8 byte offset for stream pages; record index when listing logs. Follow next_offset."},
+                   "description": ""},
         "limit": {"type": "integer", "minimum": 1, "maximum": 16000,
-                  "description": "Characters per stream page (default 8000); number of records when listing, capped at 50."},
-        "tail": {"type": "boolean", "description": "With log_id, return the last limit characters, ignoring offset."},
+                  "description": ""},
+        "tail": {"type": "boolean", "description": ""},
     }}
 
     def __init__(self, archive: CommandArchive) -> None:
@@ -199,9 +193,9 @@ class ReadCommandOutputTool(Tool):
             # observation just by asking which logs are available.
             page = records[offset:offset + min(limit, 50)]
             end = offset + len(page)
-            return ToolResult.ok(json.dumps({"logs": page, "total_logs": len(records),
+            return ToolResult.ok({"logs": page, "total_logs": len(records),
                                             "offset_unit": "records", "limit_unit": "records",
-                                            "next_offset": end if end < len(records) else None}))
+                                            "next_offset": end if end < len(records) else None})
         log = self.archive.logs.get(log_id)
         if log is None:
             return ToolResult.error("Unknown command log in this session. Omit log_id to list available logs.")
@@ -229,9 +223,9 @@ class ReadCommandOutputTool(Tool):
         except (OSError, UnicodeError) as exc:
             return ToolResult.error(f"Cannot read log at byte offset {offset}: {exc}. Use offsets returned by previous pages.")
         end = start + len(content.encode("utf-8"))
-        return ToolResult.ok(json.dumps({"log_id": log.id, "step_id": log.step_id, "call_id": log.call_id,
+        return ToolResult.ok({"log_id": log.id, "step_id": log.step_id, "call_id": log.call_id,
             "stream": stream, "offset": start, "next_offset": end if end < target.retained_bytes else None,
             "offset_unit": "UTF-8 bytes", "limit_unit": "characters",
             "retained_bytes": target.retained_bytes, "lost_bytes": target.lost_bytes,
             "retention_error": target.error, "finished": log.finished, "returncode": log.returncode,
-            "timed_out": log.timed_out, "content": content}, ensure_ascii=False))
+            "timed_out": log.timed_out, "content": content})

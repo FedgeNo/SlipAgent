@@ -1,5 +1,7 @@
 """Danger mode changes path access, using only disposable files and repositories."""
 
+from slipagent.types import content_text
+
 from pathlib import Path
 
 import pytest
@@ -32,7 +34,7 @@ async def test_danger_allows_external_file_tools_and_can_restore_confinement(tmp
         assert target.read_text() == "updated"
         assert target.stat().st_mode & 0o777 == 0o640
         result = await registry.invoke("read_file", {"path": path})
-        assert not result.is_error and "updated" in result.content
+        assert not result.is_error and "updated" in content_text(result.content)
         assert workspace.root == root and not workspace.contains(target)
         assert workspace.relative(target) == str(target)
         workspace.access.danger = False
@@ -61,9 +63,9 @@ async def test_danger_searches_outside_and_through_file_symlinks(tmp_path):
             ("grep", {"path": str(outside), "pattern": "needle"}),
         ]:
             result = await registry.invoke(tool, arguments)
-            assert not result.is_error and str(target) in result.content, result.content
+            assert not result.is_error and str(target) in content_text(result.content), result.content
         result = await registry.invoke("grep", {"pattern": "needle"})
-        assert not result.is_error and "linked.py" in result.content
+        assert not result.is_error and "linked.py" in content_text(result.content)
         assert root / "linked.py" in list(workspace.iter_files())
         workspace.access.danger = False
         assert root / "linked.py" not in list(workspace.iter_files())
@@ -84,10 +86,10 @@ async def test_external_instructions_and_access_mode_reach_each_request(tmp_path
     try:
         target = outside / "new.txt"
         result = await registry.invoke("write_file", {"path": str(target), "content": "first"})
-        assert result.is_error and "instructions" in result.content
+        assert result.is_error and "instructions" in content_text(result.content)
         assert not target.exists()
         view = await agent._context_view(registry.specs(), 1)
-        text = "\n".join(message.content or "" for message in view)
+        text = "\n".join(content_text(message.content) for message in view)
         assert "Danger Mode ON" in text and "External rule: preserve CRLF." in text
         tracker = registry.services["project_instructions"]
         tracker.presented(tracker.snapshot())
@@ -95,7 +97,7 @@ async def test_external_instructions_and_access_mode_reach_each_request(tmp_path
         assert not result.is_error, result.content
         workspace.access.danger = False
         view = await agent._context_view(registry.specs(), 1)
-        text = "\n".join(message.content or "" for message in view)
+        text = "\n".join(content_text(message.content) for message in view)
         assert "Danger Mode OFF" in text and "Danger Mode ON" not in text
         assert "External rule: preserve CRLF." not in text
         with pytest.raises(WorkspaceError, match="outside the workspace"):

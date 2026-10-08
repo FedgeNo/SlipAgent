@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..prompts import load_prompt
+
 import fnmatch
 import heapq
 import asyncio
@@ -31,32 +33,28 @@ def _looks_binary(chunk: bytes) -> bool:
 
 
 class GrepTool(Tool):
+    parameter_prompts = 'tools/grep-parameters.json'
     concurrent_safe = True
     instruction_path = "path"
     name = "grep"
-    description = (
-        "Search file contents with a regular expression.\n\n"
-        "Returns matching lines as `path:line: text`.\n\n"
-        "Use `include` as a glob to narrow the file set (for example '*.py' or 'src/**/*.ts').\n\n"
-        "Use `glob` first to find files by name; use `grep` to find where something is defined or used."
-    )
+    description_prompt = 'tools/grep.txt'
+    description = load_prompt(description_prompt)
     parameters = {
         "type": "object",
         "properties": {
-            "pattern": {"type": "string", "description": "Python regular expression."},
+            "pattern": {"type": "string", "description": ""},
             "path": {
                 "type": "string",
-                "description": "File or directory to search. Defaults to the workspace root.",
+                "description": "",
             },
             "include": {
                 "type": "string",
-                "description": "Glob filter applied to file paths, e.g. '*.py'.",
+                "description": "",
             },
-            "ignore_case": {"type": "boolean", "description": "Case-insensitive match."},
+            "ignore_case": {"type": "boolean", "description": ""},
             "max_results": {
                 "type": "integer",
-                "description": f"Maximum matching lines to return. Defaults to and is "
-                               f"capped at {MAX_GREP_RESULTS}.",
+                "description": "",
                 "minimum": 1,
                 "maximum": MAX_GREP_RESULTS,
             },
@@ -183,32 +181,26 @@ class GrepTool(Tool):
 
 
 class GlobTool(Tool):
+    parameter_prompts = 'tools/glob-parameters.json'
     concurrent_safe = True
     instruction_path = "path"
     name = "glob"
-    description = (
-        "Find files and directories by name pattern.\n\n"
-        "Patterns are matched against the workspace-relative path (or relative to the searched "
-        "directory for external paths in danger mode), so '*.py', 'src/**/*.ts', and '**/test_*.py'"
-        " all work.\n\n"
-        "Directories are shown with a trailing '/'. Use this with `list_dir` to understand the "
-        "layout before reading code with `read_file`."
-    )
+    description_prompt = 'tools/glob.txt'
+    description = load_prompt(description_prompt)
     parameters = {
         "type": "object",
         "properties": {
             "pattern": {
                 "type": "string",
-                "description": "Filename glob, e.g. '**/*.py'.",
+                "description": "",
             },
             "path": {
                 "type": "string",
-                "description": "Directory to search. Defaults to the workspace root.",
+                "description": "",
             },
             "max_results": {
                 "type": "integer",
-                "description": f"Maximum entries to return. Defaults to and is "
-                               f"capped at {MAX_GLOB_RESULTS}.",
+                "description": "",
                 "minimum": 1,
                 "maximum": MAX_GLOB_RESULTS,
             },

@@ -1,0 +1,17 @@
+Replace an exact substring within a file. `old_string` contains the text to replace with `new_string`; it does not need to contain the entire file. It must occur exactly once unless `replace_all=true`; include surrounding lines to make it unique.
+
+Prefer this tool over `write_file` for changes to existing code. Copy `old_string` from a real file read, including indentation.
+
+LF in copied text also matches CRLF; existing line endings are preserved outside the replacement.
+
+Omit `read_file`'s line numbers.
+
+Alternatively supply `edits=[{old_string,new_string}, ...]` for several unique, non-overlapping replacements in this file.
+
+Every edit matches the ORIGINAL file; all are validated before one atomic write.
+
+Choose either `edits` or the single `old_string`/`new_string` pair, never both.
+
+On failure no edits are applied; nearby source is a suggestion only, not an applied fuzzy match.
+
+Read the returned diffs to check the batch's changes.

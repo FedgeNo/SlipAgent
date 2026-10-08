@@ -41,7 +41,7 @@ async def test_tool_guidance_reaches_actual_request_body(workspace, native):
         else:
             assert "tools" not in body
             system = body["messages"][0]["content"]
-            definitions = json.loads(system.split("Available Tool Definitions:\n\n", 1)[1].split("\n\n", 1)[0])
+            definitions = json.loads(system.split("============================= BEGIN AVAILABLE TOOL DEFINITIONS ==============================\n\n", 1)[1].split("\n\n", 1)[0])
         descriptions = {item["function"]["name"]: item["function"]["description"] for item in definitions}
         assert "substring" in descriptions["edit_file"] and "`old_string`" in descriptions["edit_file"]
         assert "same read batch" in descriptions["read_file"]

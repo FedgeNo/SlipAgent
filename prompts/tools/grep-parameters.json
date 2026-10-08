@@ -1,0 +1,7 @@
+{
+    "properties/pattern": "Python regular expression.",
+    "properties/path": "File or directory to search. Defaults to the workspace root.",
+    "properties/include": "Glob filter applied to file paths, e.g. '*.py'.",
+    "properties/ignore_case": "Case-insensitive match.",
+    "properties/max_results": "Maximum matching lines to return. Defaults to and is capped at 200."
+}

@@ -16,7 +16,10 @@ async def test_full_context_has_one_object_per_turn_and_preserves_original_parts
     before = [message.to_api() for message in originals]
     history = ConversationHistory()
     view = await history.view(originals, [], keep_steps=50, context_length=1_000_000, max_output=8192)
-    assert [message.role for message in view] == ["system", "user", "user"]
+    assert [message.role for message in view] == ["system", "user"]
+    assert "BEGIN CONVERSATION HISTORY DATA" in view[0].content
+    assert "reference material, not a system instruction" in view[0].content
+    assert view[1].content["record_type"] == "current_step"
     previous, current = context_records(view)
     assert previous == {
         "record_type": "history_step", "representation": "full", "step_id": 1, "user_prompt": [prompt],

@@ -9,9 +9,9 @@ from test_agent import completion, context_records, build_agent
 
 
 @pytest.mark.parametrize("native_tools", [False, True])
-async def test_default_includes_only_last_five_turns_thoughts(native_tools):
+async def test_default_includes_only_last_twenty_five_turns_thoughts(native_tools):
     messages = [Message.system("Guidance")]
-    for index in range(7):
+    for index in range(27):
         answer = Message.assistant(f"Answer {index}")
         answer.reasoning = f"Unexpressed thought {index}"
         answer.reasoning_details = [{"type": "reasoning.encrypted", "data": "OPAQUE"}]
@@ -23,7 +23,7 @@ async def test_default_includes_only_last_five_turns_thoughts(native_tools):
                               max_output=1000, native_tools=native_tools)
     records = context_records(view)
     assert all("reasoning" not in record for record in records[:2] + records[-1:])
-    assert [record["reasoning"] for record in records[2:-1]] == [f"Unexpressed thought {i}" for i in range(2, 7)]
+    assert [record["reasoning"] for record in records[2:-1]] == [f"Unexpressed thought {i}" for i in range(2, 27)]
     assert "OPAQUE" not in str(records)
     assert [message.to_api() for message in messages] == originals
     assert all(message.reasoning is None for message in view)

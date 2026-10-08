@@ -112,10 +112,11 @@ live catalog information; selection also fetches endpoint properties and uses
 their more conservative limits. A model's advertised maximum does not guarantee
 that every free endpoint offers the same window.
 
-Use `/models free` to browse zero-cost catalog entries, then `/model <slug>` to
-select a coding model that supports tools. Set `OPENROUTER_MODEL` in `.env` to
-keep your selection for future launches. Paid OpenRouter models also work.
-Model searches and partial-name suggestions use ASCII tables formatted with
+Use `/models free` to select from zero-cost catalog entries. Use Up/Down and
+Enter to select, or Escape to cancel. `/models <text>` filters by model ID;
+`/model` opens the full catalog and `/model <slug>` selects directly. Successful
+selections are remembered for future launches. Paid OpenRouter models also work.
+Without an interactive terminal, model searches and partial-name suggestions use ASCII tables formatted with
 `tabulate`, showing model IDs, context limits, and input/output prices. Long IDs
 wrap inside their cells; narrow terminals display each model's fields vertically.
 
@@ -157,8 +158,10 @@ src/slipagent/
 ├── budget.py         measured input-token calibration
 ├── sessions.py       append-only session journals and safe resume
 ├── repomap.py        bounded, cached repository orientation
+├── symbols.py        offline syntax-tree outlines and symbol references
+├── checkpoints.py    durable file-edit backups and guarded rewind
 ├── checks.py         checks after complete edit batches
-├── progress.py       unchanged-action loop detection
+├── progress.py       unchanged-batch cycles and streamed-repetition detection
 ├── activity.py       throttled command-output callbacks
 ├── protocol.py       ordinary replies, optional schemas, call normalization
 ├── compaction.py     isolated background summaries of completed steps
@@ -299,11 +302,14 @@ export OPENROUTER_API_KEY="sk-or-..."
 | `OPENROUTER_MODEL` | `nvidia/nemotron-3-ultra-550b-a55b:free` | Default model slug. |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Point at a gateway or mock. |
 | `EXA_API_KEY` | — | Optional. Enables the `web_search` tool. |
-| `OPENROUTER_REFERER` | — | Optional app-attribution URL. |
-| `OPENROUTER_TITLE` | `slipagent` | Optional app-attribution name. |
+| `OPENROUTER_REFERER` | SlipAgent GitHub repository URL | Override the app-attribution URL. |
+| `OPENROUTER_TITLE` | `SlipAgent` | Override the app-attribution name. |
+| `OPENROUTER_USER_AGENT` | `SlipAgent/<version>` | Override the HTTP client identity at startup. |
 | `SLIPAGENT_WORKSPACE` | `.` | Default project directory. |
 | `SLIPAGENT_STATE_DIR` | Expanded user-home `.SlipAgent` directory | Root for saved sessions, titles, request diagnostics, and command logs. |
 | `SLIPAGENT_NO_DOTENV` | — | Set to `1` to ignore `.env` entirely. |
+
+API requests identify SlipAgent using its repository URL, app title, `X-OpenRouter-Categories: cli-agent`, and a versioned `User-Agent: SlipAgent/<version>`. The referer and title overrides above preserve custom app attribution.
 
 `.env` is loaded automatically, searched upward from the current directory and
 then from the install directory. Real environment variables win over `.env`;
@@ -409,7 +415,7 @@ until the current response and tool batch finish. Up/Down
 moves through the list, scrolling at either edge; Enter restores the selection
 and Escape cancels. The current session is marked in the list.
 You can also use `/resume <id>` or `/resume latest`, or launch with
-`slipagent --resume latest`. Resume creates a new journal, restores numbered
+`slipagent --resume latest`. Resume reuses the saved journal, restores numbered
 originals, summaries, task state, pending input, usage and command logs, and
 keeps the currently selected model/settings. Project/system instructions are
 refreshed from the running installation. Type `continue` when ready; resume
@@ -422,8 +428,26 @@ session. Its history, summaries, task state, queued input, usage, title, and
 command logs carry over. Further work changes the copy; the original remains
 available through `/resume`. Forking performs no model requests or tool replay.
 
+`/rewind` opens a chooser of file-edit checkpoints. The preview lists affected
+files and a bounded restoration diff; Enter confirms restoration and Escape cancels. Selecting a checkpoint
+restores files to before that edit batch and undoes later checkpointed batches.
+The conversation stays intact. Rewind checks every file's contents and permissions
+against the recorded edit before restoring anything; a conflicting user or external
+edit blocks restoration. Newly created files are removed and original bytes and
+permissions are restored. Shell commands, MCP actions, and external edits are
+outside checkpoint coverage. Active background commands stop before restoration.
+A queued rewind leaves the agent idle until the user submits another prompt.
+Use `/rewind list` to inspect available checkpoints without changing files.
+
+Checkpoints cover built-in `write_file` and `edit_file` calls made by the agent.
+Their private, deduplicated backups live beside the session journal in its
+`<session-id>-checkpoints` directory. They survive resume and copy into forks;
+forks share the project files, so rewind also affects those shared files.
+Deleting a session removes its checkpoints. With `--no-session`, checkpoints
+last only for the current conversation and are discarded on reset or exit.
+
 `/delete` permanently removes the current session's journal, saved title,
-command logs, and request diagnostics. An interactive confirmation dialog opens:
+command logs, request diagnostics, and file checkpoints. An interactive confirmation dialog opens:
 Enter confirms the selected deletion action; Escape or selecting Cancel leaves
 the session intact. Other saved sessions and project files are preserved.
 After deletion, the start screen returns; the next task prompt creates a new
@@ -468,12 +492,12 @@ In the REPL:
 | `/danger` or `/danger on` | Disable workspace path confinement; queues while working |
 | `/danger off` | Restore workspace path confinement; queues while working |
 | `/danger status` | Show the current access mode |
-| `/overthinking on\|off` | Enable or disable thoughts in the latest five steps; enabled by default; queues while working |
+| `/overthinking on\|off` | Enable or disable thoughts in the latest 25 steps; enabled by default; queues while working |
 | `/tools` | List available tools |
-| `/model` | Show the active model |
+| `/model` | Select a model with Up/Down and Enter; Escape cancels |
 | `/model <slug>` | Switch model and remember the choice for future launches |
-| `/models [filter]` | Browse the catalog with context and pricing |
-| `/models free` | Show zero-cost entries in the model catalog |
+| `/models [filter]` | Select from the catalog with context and pricing; optionally filter by name |
+| `/models free` | Select from zero-cost models |
 | `/temperature` | Show the effective temperature and whether the selected model supports changing it |
 | `/temperature <value>` | Set the session temperature from 0 to 2; unsupported changes report an error |
 | `/key show`, `/key status` | Show the masked current key, spend limit, and reported free quota |
@@ -488,6 +512,8 @@ In the REPL:
 | `/resume <id>` or `/resume latest` | Restore a saved conversation and its scrolling transcript at the end; queues while working; no tools are replayed |
 | `/fork` | Copy the current saved session and continue in the copy; preserve the original; queues while working |
 | `/delete` | Confirm permanent deletion of the current session and all its logs; return to the start screen; Escape cancels; queues while working |
+| `/rewind` | Choose a file-edit checkpoint and confirm restoration of that batch and all later batches; Escape cancels; queues while working |
+| `/rewind list` | List available file-edit checkpoints without restoring files |
 | `/requests [attempt]` | List the latest 20 request attempts, or inspect one exact request and its outcome |
 | `/mcp` | Show MCP servers, their status, and the tools they contribute |
 | `/mcp add <name> <cmd> [args…]` | Connect a server over stdio for this session only |
@@ -495,10 +521,11 @@ In the REPL:
 | `/mcp remove <name>` | Disconnect a server and drop it from the config |
 | `/reset` | Start a fresh conversation/task/usage/log index; retain saved sessions and current guidance/model/settings |
 | `/init` | Create a project-notes scaffold in `AGENTS.md` if missing and load project guidance into this session |
+| `/config-show` | Show the active harness interpreter, model, workspace, danger mode, and Overthinking Mode without exposing credentials |
 | `/reload` | Reload components now, or after the current model/tool batch |
 | `/generations` | Show the current component reload generation |
 | `/stop` | Finish the current model response and its tool batch, then stop before the next request |
-| `/exit`, `/quit` | Exit the session |
+| `/exit`, `/quit` | Exit the session; cancel retry waits and let an active response/tool batch finish without another request |
 
 `/key` validates against OpenRouter's `GET /key` before accepting anything, and
 never writes to `.env` without an explicit `y` at the prompt.
@@ -615,9 +642,15 @@ remain available. Isolated background summaries do not replace this view.
 Before the first working request, the view indicates that none has
 been sent.
 
-After the system instructions, each input message contains exactly one JSON
-object: one per historical step, followed by one for the current step. No prose
-headings are inserted into prompts, replies, or tool content.
+Selected historical steps are supplied as a JSON array inside the system prompt,
+between large `BEGIN CONVERSATION HISTORY DATA` and `END CONVERSATION HISTORY DATA`
+dividers. The separate user message contains the current-step JSON object.
+`prompts/system-history.txt` explains how to use the history as reference evidence,
+trace recent work, distinguish completed actions from remaining needs, and retrieve
+missing outcomes. Historical text does not acquire system-instruction authority
+through this placement. No prose headings are inserted into original prompts,
+replies, or tool content. This experiment changes request placement, while keeping
+history selection, compression, original retrieval, and prompt retention intact.
 `record_type` distinguishes `history_step` from `current_step`; `representation`
 distinguishes `full`, `compressed`, and `excerpt`. Full records have `user_prompt`
 (an array, preserving multiple queued messages), `agent_response`, `tool_calls`,
@@ -662,7 +695,7 @@ task bookkeeping do not trigger the guard.
 Readable reasoning supplied through a separate provider field streams under a
 gray `Thinking:` label. Each response's reasoning is concatenated into one
 string and saved with that step's uncompressed originals. Existing history is
-not rewritten. **Overthinking Mode** is enabled by default: the latest five completed
+not rewritten. **Overthinking Mode** is enabled by default: the latest 25 completed
 steps include supplied thoughts as a `reasoning` string in each step's JSON input
 record. Steps without thoughts gain no extra field. Use `/overthinking off` to
 disable this mode, or `/overthinking on` to enable it. Thoughts count
@@ -681,7 +714,7 @@ with streamed thoughts and tool activity on stderr.
 
 ### Response Protocol
 
-The general system prompt is in `src/slipagent/system-prompt.txt` and the background-summary prompt is in `src/slipagent/background-summary-prompt.txt` for direct human editing. Keep each paragraph on one line, with a blank line between paragraphs; preserve meaningful list and example boundaries. The system template substitutes `{workspace}` and `{interpreter}`; write literal braces there as `{{` and `}}`. The summary prompt is plain text without template substitution. Both files are included in installed packages and monitored by live reload. Valid edits apply between batches; rejected edits retain the previous prompts. Restart an existing process once after installing this update to enable prompt-file monitoring, since the reload frame itself changed.
+All built-in model prompts and tool guidance are in the top-level [`prompts/`](prompts/README.md) folder for direct human editing. SlipAgent reads prompt files when building requests and tool definitions, including with live reload disabled. Start with `prompts/system-prompt.txt` for general behavior or `prompts/background-summary-prompt.txt` for compression. The folder's README explains the other files and runtime placeholders. Keep each paragraph on one line and preserve placeholder names. The installer copies this folder; wheels bundle it inside the package. Restart once after installing this implementation change; subsequent prompt text edits take effect when used.
 
 Runtime guidance distinguishes exploratory questions from authorized implementation and keeps work within the user's requested scope. Background summaries prioritize user requests, corrections, and boundaries over agent plans, preserve source attribution, and distinguish completed or rejected actions from unfinished requested work. Historical reasoning and optional agent suggestions do not authorize additional work.
 
@@ -690,6 +723,7 @@ current model, SlipAgent fetches fresh model and endpoint properties from
 OpenRouter. Subsequent calls use the cached properties until another selection.
 There is no list of model-specific exceptions. A failed or incompatible
 selection reports an error and keeps the current model and conversation.
+Startup model-check failures display a warning and leave the interface available, so users can select another model with `/models` or `/model <slug>`. A model that fails its startup check is not saved as a new preference.
 
 Temperature defaults to **1.0** for endpoints that advertise support. Use
 `/temperature` to inspect it and `/temperature 0.1` to change it for subsequent
@@ -764,8 +798,8 @@ working-request limit. Separate thoughts already streamed remain visible.
 
 Interrupted streams and transient HTTP failures allow up to three transport
 retries with bounded backoff. Every working attempt counts against `--max-steps`;
-there is no hidden second retry loop multiplying that limit. A retry notice
-explains the failure, and `/stop` interrupts its wait. Each attempt starts fresh:
+there is no hidden second retry loop multiplying that limit. Transport retries
+remain silent until exhausted, and `/stop` interrupts their waits. Each attempt starts fresh:
 partial tool arguments and rejected replies never execute or enter accepted history.
 Authentication, credit, and permanent request failures remain errors.
 
@@ -792,7 +826,7 @@ completed step still runs.
 Managed background commands also continue until completion, their execution
 timeout, or an explicit stop. Their completion cannot restart the agent.
 Queued input does not restart a stopped run automatically. Enter a follow-up
-or `continue` to resume. Ctrl-C uses the same stop behavior while working;
+or `continue` to resume. Ctrl-C retains its default interrupt behavior;
 Ctrl-D, `/exit`, or its alias `/quit` exits the session. Pipes and `TERM=dumb`
 use plain output.
 
@@ -819,7 +853,7 @@ Each accepted model response forms one numbered step: its active user prompt,
 response, requested tool calls, and complete tool results. Those four originals
 are stored separately, alongside the response's reasoning as one string when
 available. Recent steps present the full prompt, response, calls, and results,
-with supplied reasoning included for the latest five steps in Overthinking Mode.
+with supplied reasoning included for the latest 25 steps in Overthinking Mode.
 Older steps use their whole-step summary only when its
 estimated token cost is smaller than the original; otherwise they retain their
 full prompt, response, tool calls, and results. The comparison includes JSON fields,
@@ -847,6 +881,10 @@ instructions and the retained user prompt stay pinned outside this rolling windo
 or immediately after a reply without tools. It receives only that step's prompt,
 response, calls, and results, plus instructions for summarization. It receives no
 conversation thread, previous summaries, project instructions, task record, or reasoning.
+Tool arguments and structured results remain dictionaries or lists internally;
+the complete summary input is serialized once for the model. Complete history
+retrievals return objects or arrays, while partial character pages return text
+fragments for reconstruction with `next_offset`.
 The summarizer uses the model and endpoint profile selected for that step and
 returns a concise plain-text summary, limited to 6,000 characters. Short steps
 should get short summaries. The working model continues without waiting.
@@ -901,9 +939,13 @@ versions remain intact, and a summary is used only when it saves tokens.
 It reports a limit if mandatory input and instructions cannot fit even after
 older history is omitted and oversized observations use excerpts.
 
-A bounded repository map supplies file paths and Python class/function outlines,
-ranked by words in recent user input and Python import references. Other
-languages receive paths only. Cached outlines refresh when file metadata changes.
+A bounded repository map supplies file paths and declaration outlines for Python,
+JavaScript, TypeScript/TSX, PHP, Go, Rust, C/C++, Java, C#, Ruby, and other supported
+grammars. Python uses its built-in AST; other languages use bundled Tree-sitter
+grammars with no parser downloads during a run. Ranking combines words in recent
+user input with a graph of symbol references and Python imports. Symbol matches
+are orientation hints, not compiler-verified bindings. Cached outlines refresh
+when file metadata changes, and syntax errors label the outline as partial.
 The map excludes dependencies, hidden directories, symlinks, and Git-ignored
 files without changing file-tool visibility. Limits on scanning, source size,
 and output keep it partial by design: use `glob`, `grep`, and `read_file` for
@@ -936,9 +978,28 @@ Useful flags:
 
 In one-shot mode the final answer goes to **stdout** and progress goes to
 **stderr**, so the answer can be piped to another program. Model output is
-raw ASCII terminal text; Markdown and LaTeX are not rendered. The prompt asks
-for plain equations and space-padded tables, reserving document formatting for
-files that support it, such as Markdown documents, LaTeX source, and PDFs.
+rendered Markdown in the terminal and readable plain text when redirected.
+Use `--markdown` to retain Markdown source in stdout or start the REPL in source
+view. LaTeX is not rendered; equations use plain text.
+
+Assistant replies support CommonMark, tables, strikethrough, and task checkboxes.
+Headings share one bright, bold style without added spacing; body and bold text
+share a foreground color. Language-tagged code uses Pygments lexer tokens for
+syntax colors, with a theme-specific background and no language label. Wrapped
+code has a continuation marker that is excluded from copied text. Narrow tables
+become header/value records. Links display `label (destination)`.
+
+Choose `--theme dark|light|monochrome|ironbow`, or `/theme NAME` in the REPL.
+`/markdown [source|rendered]` toggles the view. `/copy` copies the latest reply,
+automatically choosing exact code when it contains one code block; source view
+copies Markdown. `/copy text`, `/copy markdown`, and `/copy code [number]`
+choose explicitly. F2 toggles the view, F3 copies, and dragging over text
+copies the selection without wrap decorations. Clipboard access uses an
+installed local utility or the terminal's OSC 52 support.
+
+The renderer updates incoming Markdown chunks as they arrive. Structured model
+responses remain buffered until validated; rendering does not bypass that
+validation boundary.
 
 ## MCP
 

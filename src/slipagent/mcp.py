@@ -699,7 +699,6 @@ class MCPClient:
         if structured is not None:
             if not isinstance(structured, dict):
                 return ToolResult.error(f"MCP tool '{name}' returned malformed structuredContent")
-            encoded = json.dumps(structured, ensure_ascii=False)
             # Servers often repeat the same JSON in a text block for legacy
             # clients. Keep other commentary, but do not duplicate that object.
             remaining = []
@@ -711,7 +710,8 @@ class MCPClient:
                     except (ValueError, TypeError):
                         pass
                 remaining.append(item)
-            text = (flatten_content(remaining) + "\n" if remaining else "") + "Structured content:\n" + encoded
+            return ToolResult({"content": flatten_content(remaining) if remaining else "", "structuredContent": structured},
+                              bool(result.get("isError")))
         is_error = bool(result.get("isError"))
         return ToolResult(text, is_error)
 

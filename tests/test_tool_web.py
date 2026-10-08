@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from slipagent.types import content_text
+
 import httpx
 import pytest
 
@@ -104,9 +106,9 @@ async def test_fetch_page_returns_readable_text() -> None:
     await tool.aclose()
 
     assert not result.is_error
-    assert "Example Page — https://example.com/page" in result.content
-    assert "First paragraph." in result.content
-    assert "tracking" not in result.content
+    assert "Example Page — https://example.com/page" in content_text(result.content)
+    assert "First paragraph." in content_text(result.content)
+    assert "tracking" not in content_text(result.content)
 
 
 async def test_fetch_page_passes_through_json() -> None:
@@ -119,8 +121,8 @@ async def test_fetch_page_passes_through_json() -> None:
     result = await tool.invoke({"url": "https://api.example.com/v1"})
     await tool.aclose()
 
-    assert "application/json" in result.content
-    assert "1.2.3" in result.content
+    assert "application/json" in content_text(result.content)
+    assert "1.2.3" in content_text(result.content)
 
 
 async def test_fetch_page_passes_through_plain_text() -> None:
@@ -132,7 +134,7 @@ async def test_fetch_page_passes_through_plain_text() -> None:
     result = await tool.invoke({"url": "https://example.com/f.txt"})
     await tool.aclose()
 
-    assert "key = value" in result.content
+    assert "key = value" in content_text(result.content)
 
 
 async def test_fetch_page_truncates() -> None:
@@ -145,7 +147,7 @@ async def test_fetch_page_truncates() -> None:
     result = await tool.invoke({"url": "https://example.com/big", "max_chars": 600})
     await tool.aclose()
 
-    assert "[truncated]" in result.content
+    assert "[truncated]" in content_text(result.content)
     assert len(result.content) < 1200
 
 
@@ -153,7 +155,7 @@ async def test_fetch_page_rejects_bad_scheme() -> None:
     result = await FetchPageTool().invoke({"url": "ftp://example.com"})
 
     assert result.is_error
-    assert "must start with http" in result.content
+    assert "must start with http" in content_text(result.content)
 
 
 async def test_fetch_page_reports_http_error() -> None:
@@ -164,7 +166,7 @@ async def test_fetch_page_reports_http_error() -> None:
     await tool.aclose()
 
     assert result.is_error
-    assert "404" in result.content
+    assert "404" in content_text(result.content)
 
 
 async def test_fetch_page_reports_network_error() -> None:
@@ -178,7 +180,7 @@ async def test_fetch_page_reports_network_error() -> None:
     await tool.aclose()
 
     assert result.is_error
-    assert "Could not fetch" in result.content
+    assert "Could not fetch" in content_text(result.content)
 
 
 async def test_fetch_page_reports_javascript_only_page() -> None:
@@ -192,7 +194,7 @@ async def test_fetch_page_reports_javascript_only_page() -> None:
     await tool.aclose()
 
     assert result.is_error
-    assert "JavaScript-rendered" in result.content
+    assert "JavaScript-rendered" in content_text(result.content)
 
 
 # --------------------------------------------------------------------------- #
@@ -225,18 +227,18 @@ async def test_web_search_formats_results() -> None:
     await tool.aclose()
 
     assert not result.is_error
-    assert "[1] asyncio — Python docs" in result.content
-    assert "https://docs.python.org/3/library/asyncio.html" in result.content
-    assert "[2] Real Python: asyncio" in result.content
-    assert "Use fetch_page" in result.content
+    assert "[1] asyncio — Python docs" in content_text(result.content)
+    assert "https://docs.python.org/3/library/asyncio.html" in content_text(result.content)
+    assert "[2] Real Python: asyncio" in content_text(result.content)
+    assert "Use fetch_page" in content_text(result.content)
 
 
 async def test_web_search_requires_api_key() -> None:
     result = await WebSearchTool(api_key=None).invoke({"query": "anything"})
 
     assert result.is_error
-    assert "EXA_API_KEY" in result.content
-    assert "fetch_page still works" in result.content
+    assert "EXA_API_KEY" in content_text(result.content)
+    assert "fetch_page still works" in content_text(result.content)
 
 
 async def test_web_search_reports_bad_key() -> None:
@@ -249,7 +251,7 @@ async def test_web_search_reports_bad_key() -> None:
     await tool.aclose()
 
     assert result.is_error
-    assert "Check that EXA_API_KEY is valid" in result.content
+    assert "Check that EXA_API_KEY is valid" in content_text(result.content)
 
 
 async def test_web_search_reports_rate_limit() -> None:
@@ -260,7 +262,7 @@ async def test_web_search_reports_rate_limit() -> None:
     await tool.aclose()
 
     assert result.is_error
-    assert "credits exhausted" in result.content
+    assert "credits exhausted" in content_text(result.content)
 
 
 async def test_web_search_handles_no_results() -> None:
@@ -271,7 +273,7 @@ async def test_web_search_handles_no_results() -> None:
     await tool.aclose()
 
     assert not result.is_error
-    assert "No results" in result.content
+    assert "No results" in content_text(result.content)
 
 
 async def test_web_search_rejects_empty_query() -> None:
@@ -325,7 +327,7 @@ async def test_fetch_json_obeys_character_limit() -> None:
     rebind(tool, lambda r: httpx.Response(200, json={"text": "x" * 4000}))
     try:
         result = await tool.invoke({"url": "https://example.com", "max_chars": 500})
-        assert "[truncated]" in result.content
+        assert "[truncated]" in content_text(result.content)
         assert len(result.content) < 800
     finally:
         await tool.aclose()
@@ -345,7 +347,7 @@ async def test_fetch_stops_reading_at_byte_limit(monkeypatch) -> None:
     try:
         result = await tool.invoke({"url": "https://example.com"})
         assert not result.is_error
-        assert "[truncated]" in result.content
+        assert "[truncated]" in content_text(result.content)
     finally:
         await tool.aclose()
 

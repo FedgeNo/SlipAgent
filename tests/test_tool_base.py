@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from slipagent.types import content_text
+
 from typing import Any
 
 import pytest
@@ -156,28 +158,28 @@ async def test_invoke_treats_empty_string_as_no_arguments() -> None:
     # Missing the required `text`, reported as a validation error rather than
     # a crash.
     assert result.is_error
-    assert "missing required argument" in result.content
+    assert "missing required argument" in content_text(result.content)
 
 
 async def test_invoke_reports_invalid_json() -> None:
     result = await EchoTool().invoke("{not json")
 
     assert result.is_error
-    assert "Invalid JSON" in result.content
+    assert "Invalid JSON" in content_text(result.content)
 
 
 async def test_invoke_reports_non_object_json() -> None:
     result = await EchoTool().invoke("[1, 2, 3]")
 
     assert result.is_error
-    assert "expected a JSON object" in result.content
+    assert "expected a JSON object" in content_text(result.content)
 
 
 async def test_invoke_converts_exception_to_error_result() -> None:
     result = await BoomTool().invoke({})
 
     assert result.is_error
-    assert "RuntimeError: kaboom" in result.content
+    assert "RuntimeError: kaboom" in content_text(result.content)
 
 
 async def test_invoke_reports_a_type_error_from_inside_run_as_a_tool_fault() -> None:
@@ -189,8 +191,8 @@ async def test_invoke_reports_a_type_error_from_inside_run_as_a_tool_fault() -> 
     result = await TypeErrorTool().invoke({"text": "hi"})
 
     assert result.is_error
-    assert "TypeError:" in result.content
-    assert "Invalid arguments" not in result.content
+    assert "TypeError:" in content_text(result.content)
+    assert "Invalid arguments" not in content_text(result.content)
 
 
 async def test_invoke_reports_arguments_that_cannot_bind_to_run() -> None:
@@ -200,7 +202,7 @@ async def test_invoke_reports_arguments_that_cannot_bind_to_run() -> None:
     result = await tool.invoke({"not_a_parameter": 1})
 
     assert result.is_error
-    assert "Invalid arguments" in result.content
+    assert "Invalid arguments" in content_text(result.content)
     assert tool.seen == []
 
 
@@ -255,8 +257,8 @@ async def test_registry_reports_unknown_tool() -> None:
     result = await registry.invoke("nope", {})
 
     assert result.is_error
-    assert "Unknown tool 'nope'" in result.content
-    assert "echo" in result.content
+    assert "Unknown tool 'nope'" in content_text(result.content)
+    assert "echo" in content_text(result.content)
 
 
 # --------------------------------------------------------------------------- #
@@ -268,15 +270,15 @@ async def test_command_runs_in_workspace_root(project: Workspace) -> None:
     result = await RunCommandTool(project).invoke({"command": "pwd"})
 
     assert not result.is_error
-    assert str(project.root) in result.content
-    assert "exit code: 0" in result.content
+    assert str(project.root) in content_text(result.content)
+    assert "exit code: 0" in content_text(result.content)
 
 
 async def test_command_failure_is_an_error_result(project: Workspace) -> None:
     result = await RunCommandTool(project).invoke({"command": "exit 3"})
 
     assert result.is_error
-    assert "exit code: 3" in result.content
+    assert "exit code: 3" in content_text(result.content)
 
 
 async def test_command_captures_stdout_and_stderr(project: Workspace) -> None:
@@ -284,8 +286,8 @@ async def test_command_captures_stdout_and_stderr(project: Workspace) -> None:
         {"command": "echo out; echo err >&2"}
     )
 
-    assert "--- stdout ---\nout" in result.content
-    assert "--- stderr ---\nerr" in result.content
+    assert "--- stdout ---\nout" in content_text(result.content)
+    assert "--- stderr ---\nerr" in content_text(result.content)
 
 
 async def test_command_can_write_inside_workspace(project: Workspace) -> None:
@@ -303,23 +305,23 @@ async def test_command_timeout_is_reported(project: Workspace) -> None:
     )
 
     assert result.is_error
-    assert "timed out" in result.content
+    assert "timed out" in content_text(result.content)
 
 
 async def test_timeout_keeps_partial_stdout_and_stderr(project):
     result = await RunCommandTool(project).invoke({
         "command": "echo reached-checkpoint; echo failed-checkpoint >&2; sleep 5", "timeout": .1,
     })
-    assert result.is_error and "timed out" in result.content
-    assert "reached-checkpoint" in result.content and "failed-checkpoint" in result.content
-    assert "partial" in result.content
+    assert result.is_error and "timed out" in content_text(result.content)
+    assert "reached-checkpoint" in content_text(result.content) and "failed-checkpoint" in content_text(result.content)
+    assert "partial" in content_text(result.content)
 
 
 async def test_command_rejects_blank(project: Workspace) -> None:
     result = await RunCommandTool(project).invoke({"command": "   "})
 
     assert result.is_error
-    assert "must not be empty" in result.content
+    assert "must not be empty" in content_text(result.content)
 
 
 async def test_command_output_is_truncated(project: Workspace) -> None:
@@ -327,7 +329,7 @@ async def test_command_output_is_truncated(project: Workspace) -> None:
         {"command": "python3 -c \"print('x' * 100000)\""}
     )
 
-    assert "[output truncated at 30000 chars]" in result.content
+    assert "[output truncated at 30000 chars]" in content_text(result.content)
 
 
 async def test_large_command_preserves_beginning_and_final_diagnostic(workspace):

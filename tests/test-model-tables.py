@@ -1,23 +1,24 @@
 """Model search tables preserve columns and full identifiers at terminal widths."""
 
 import io
+import os
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
-from prompt_toolkit.data_structures import Size
 
 from slipagent.cli import Renderer, Style, _model_command, _models_command
 from slipagent.types import ModelInfo
 
 
 @pytest.mark.parametrize("width", [20, 40, 80, 120])
-async def test_models_search_renders_ascii_tables_that_fit(width):
+async def test_models_search_renders_ascii_tables_that_fit(width, monkeypatch):
     model = ModelInfo("nvidia/nemotron-3-super-120b-a12b:free", context_length=262144)
     async def catalog(refresh=False):
         return [model, ModelInfo(model.id + "-long-identifier" * 10, context_length=1000000),
                 ModelInfo("other/model", context_length=10000)]
     renderer = Renderer(Style(False), io.StringIO(), False)
-    renderer.terminal = SimpleNamespace(output=SimpleNamespace(get_size=lambda: Size(rows=24, columns=width)))
+    monkeypatch.setattr("slipagent.cli.shutil.get_terminal_size", lambda fallback: os.terminal_size((width, 24)))
     session = SimpleNamespace(renderer=renderer, catalog=catalog)
     out = io.StringIO()
     await _models_command(session, "nemotron", Style(False), out)
@@ -56,3 +57,36 @@ async def test_models_displays_every_matching_catalog_entry(argument):
     assert "75 shown of 75" in output
     assert "narrow with a filter" not in output
     assert output.index(models[0].id) < output.index(models[-1].id)
+
+
+@pytest.mark.parametrize("selection", [None, "test/free"])
+async def test_free_model_selector_filters_and_switches_only_on_selection(monkeypatch, selection):
+    from slipagent import cli
+    models = [ModelInfo("test/paid", pricing={"prompt": "0.01", "completion": "0.01"}),
+              ModelInfo("test/free")]
+    catalog = AsyncMock(return_value=models)
+    choose = AsyncMock(return_value=selection)
+    renderer = Renderer(Style(False), io.StringIO(), False)
+    renderer.terminal = SimpleNamespace(choose=choose)
+    session = SimpleNamespace(renderer=renderer, catalog=catalog, agent=SimpleNamespace(model="test/free"))
+    switch = AsyncMock()
+    monkeypatch.setattr(cli, "_model_command", switch)
+    await _models_command(session, "free", Style(False), io.StringIO())
+    title, options = choose.call_args.args
+    assert title == "Select Model"
+    assert [value for value, label in options] == ["test/free"]
+    assert "(current)" in options[0][1]
+    if selection is None:
+        switch.assert_not_awaited()
+    else:
+        assert switch.call_args.args[1] == selection
+
+
+async def test_model_without_slug_opens_selector(monkeypatch):
+    from slipagent import cli
+    browse = AsyncMock()
+    monkeypatch.setattr(cli, "_models_command", browse)
+    session = SimpleNamespace(renderer=SimpleNamespace(terminal=object()))
+    out = io.StringIO()
+    await _model_command(session, "", Style(False), out)
+    assert browse.call_args.args[1] == ""

@@ -1,0 +1,6 @@
+{
+    "properties/command": "The shell command to run.",
+    "properties/timeout": "Timeout in seconds (default 120, max 600).",
+    "properties/poll": "True only when deliberately polling for an external change; exempts unchanged results from loop detection. Default false.",
+    "properties/background": "Run as a managed background command (default false)."
+}

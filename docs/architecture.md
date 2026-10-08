@@ -15,14 +15,14 @@ recovery, response formats, and history/task instructions are supplied by those
 system prompts and tool definitions in every workspace. They do not depend on
 the workspace having a copy of SlipAgent's own `AGENTS.md`.
 
-The main system prompt in `src/slipagent/system-prompt.txt` owns general workflow and batch-result interpretation. `prompts.py` loads the packaged UTF-8 template; `agent.py` substitutes the workspace and interpreter. The reload frame captures the text file with Python sources, and candidate modules read that captured resource. Template validation precedes the reload commit, so rejected edits leave the accepted prompt active. The text file is editable without changing Python source; adopting the resource-monitoring frame requires restarting an existing process.
+The built-in model instructions and tool descriptions live in the checkout's top-level `prompts/` folder. Wheel builds include that folder as `slipagent/prompts`. `prompts.py` locates the application resources independently of the working project and reads UTF-8 text at use time. `agent.py` renders the main template's workspace and interpreter and refreshes it before each CLI model request, including with live reload disabled. Other dynamic templates use explicit `${name}` substitutions without interpreting inserted data as templates. The reload frame monitors these resources along with Python sources; compatible source reloads preserve their service owners. Missing resources and invalid templates report errors.
 File reads and edits, command-output recovery, background jobs, Git previews,
 and language-server navigation are described in their respective tool definitions.
 Native-tool requests deliver those contracts through API tool definitions;
 JSON-tool requests include the same definitions in the system's Available Tool
 Definitions section.
 
-The background-summary prompt is in `src/slipagent/background-summary-prompt.txt`. It uses the same packaged resource loader and source-generation capture as the main prompt, without template substitution; `compaction.py` supplies it to isolated summary requests.
+The background-summary prompt is in `prompts/background-summary-prompt.txt`. `compaction.py` reads it when building each isolated summary request. Protocol, history, environment, recovery, and tool guidance use the same loader. Tool specs read descriptions and argument-description mappings on each access; argument schemas and behavior remain in Python. See `prompts/README.md` for the editable file map.
 
 Project instruction discovery supplies the selected workspace's documents under
 a separate heading. `/init` creates a project-notes scaffold only when `AGENTS.md`
@@ -42,12 +42,20 @@ project guidance comes from this refreshed service rather than a stale suffix.
 
 ## A Request Is the Model's Entire Memory
 
+Tool-call arguments, structured tool results, observation envelopes, input records,
+and frozen compaction inputs remain dictionaries or lists internally. External JSON
+text is decoded at entry. File contents and command output remain literal string
+fields. API messages, terminal rendering, and journals serialize data at their
+destination boundaries. Complete history selections return structured content;
+partial character pages return fragments of its serialized representation. Resume
+accepts both legacy text observations and structured journal observations.
+
 The transport sends one explicit list of messages plus tool definitions and
 request parameters. No earlier API call, terminal line, file, or archive entry
 is visible unless it is included in that request. Separate reasoning deltas are
 displayed and joined into one string for that response's uncompressed record;
 Overthinking Mode (enabled by default) includes that string as `reasoning` in
-the latest five completed steps' JSON records, including selected summaries.
+the latest 25 completed steps' JSON records, including selected summaries.
 Missing thoughts add no field. The exact JSON participates in context selection
 and token budgeting; omitted steps and budget-limited excerpts omit reasoning.
 Opaque provider metadata is excluded. Disabling the mode excludes all reasoning
@@ -139,14 +147,32 @@ apply. If the next request would be identical, recovery reports that it cannot
 shrink further instead of resending it.
 
 `RepositoryMap` adds optional, budgeted orientation. Files are bounded by count,
-traversal time, source bytes and output characters. Python ASTs supply definitions
-without executing code; other supported source suffixes supply paths. Metadata
-stamps invalidate cached outlines. Ranking combines task words and Python import
-references. Git owns ignore-rule interpretation. Hidden/dependency directories
+traversal time, source bytes and output characters. Python ASTs and bundled
+Tree-sitter grammars supply declaration outlines without executing code or fetching
+parsers. `symbols.py` bounds traversal and labels incomplete syntax trees. Metadata
+stamps invalidate cached outlines. Ranking combines task words with a personalized
+reference graph; each file contributes at most 512 reference tags and roughly
+256 target files. Symbol-name matches are hints rather than resolved bindings.
+Git owns ignore-rule interpretation. Hidden/dependency directories
 and symlinks are excluded only from this map. If orientation prevents fitting
 mandatory input, selection retries without the map.
 
 ## Response Acceptance and Tool Execution
+
+`LoopGuard` fingerprints tool names, arguments, status, and actual results while
+ignoring invocation-specific command-log notices. A batch or cycle of up to six
+batches receives recovery guidance after three repetitions and stops after four.
+Explicit polling and progress-exempt tools do not establish repetition. Changed
+results break the repeated cycle; new user input resets detection.
+
+Each working response uses a fresh `StreamLoopGuard`. Six exact repetitions of
+a prose segment of 80–2048 characters stop the response before any of its tools
+execute. Detection operates on whitespace-normalized text, separately for content
+and reasoning, with bounded buffers and chunk-independent comparisons. Content
+code fences, tables, lists, and indented code are excluded. Rejected partial
+responses stay in request diagnostics, outside accepted history, and are not
+automatically retried. Stream closure and usage accounting follow the ordinary
+request-error path. Background summaries do not use this working-response guard.
 
 `capabilities.py` selects native tool calling from the live endpoints' `tools`
 support, independently of their JSON-format support. Startup and explicit model
@@ -187,7 +213,7 @@ delta supplies both a plain reasoning field and reasoning details. JSON
 completions use the same extraction. Each retry starts a fresh accumulator;
 existing history is never reassembled. Accepted messages and `CompletedStep.reasoning`
 retain the resulting string. Working JSON records include readable thoughts
-for the latest five completed steps when Overthinking Mode is enabled, with
+for the latest 25 completed steps when Overthinking Mode is enabled, with
 their exact token cost included in selection. Provider details stay excluded.
 The client removes native reasoning fields from outgoing message
 dictionaries, covering direct calls and older stored records without mutating
@@ -211,8 +237,8 @@ Three invalid attempts end the run; retries count against usage and the step cap
 Working calls set `single_attempt=True` on the client. The agent owns bounded
 transport recovery, preventing nested HTTP retries from multiplying requests
 beyond the step budget. The default allows three transient retries; each starts
-with fresh stream accumulators and emits a retry event before interruptible
-backoff. A registry-owned stop event wakes that wait. EOF without a finish marker,
+with fresh stream accumulators and uses silent, interruptible backoff. Exhausted
+retries report the failure. A registry-owned stop event wakes the wait. EOF without a finish marker,
 transport failures, and retryable status codes are distinct from permanent API
 errors. Reported partial usage is retained; unreported usage is not invented.
 Direct metadata and isolated compaction calls retain their own client policy.
@@ -516,8 +542,8 @@ itself contain sensitive data.
 Startup attaches the journal service without beginning a conversation. `record`
 creates the journal on the first user message or queued prompt, before model/tool
 dispatch, and otherwise ignores startup-only state changes. A pre-prompt rename
-keeps its title in memory until the first journal header is written. Resume begins
-its populated fork directly, without an empty startup journal.
+keeps its title in memory until the first journal header is written. Resume reopens
+the selected journal; only `/fork` creates a populated child journal.
 
 The conversation title defaults to the full project path plus ` | SlipAgent`.
 New journal headers carry their initial title. `/rename` atomically replaces a
@@ -525,8 +551,8 @@ private `<session-id>.title.json` file in the same project state directory;
 the sidecar overrides the header without rewriting conversation records.
 Listings read headers and title metadata only, rather than scanning each journal.
 Malformed metadata reports an error; legacy journals without titles use their
-project path. Resume embeds the restored title in the new journal's header,
-so subsequent renames leave the parent untouched. Reset gets the default title.
+project path. Resume retains the saved title and its sidecar. Fork embeds that
+title in the child header, so renaming a fork leaves the parent untouched. Reset gets the default title.
 The CLI uses that same title for terminal output; `Session.app_title` remains the
 OpenRouter attribution setting. Without persistence, the name lives in
 `Session.extensions`. Names cannot contain terminal control characters.
@@ -574,7 +600,27 @@ the REPL terminal exists; one-shot mode continues to print only its new answer.
 This reconstructs the conversation, not transient progress/retry notices that
 were never part of the saved messages.
 
-The CLI exposes `/sessions`, `/resume [id|latest]`, `/fork`, `/delete`, `--resume [id]`, and
+`FileCheckpoints` is a session service, created lazily and retained across component
+reloads. The agent binds it through a context variable for each complete tool
+batch. Built-in atomic writes durably save original bytes and intended result
+hashes before publication, then record successful completion. Failed and interrupted
+writes remain distinguishable; a pending write can be restored only when its actual
+contents match its recorded original or intended result. Backups are SHA-256 blobs
+with private permissions; checkpoint indexes use atomic, flushed writes.
+
+`/rewind` restores the selected batch and all subsequent active checkpoints. It
+validates every affected file and backup before the first mutation, and checks
+again before individual writes. Conflicts preserve the workspace. I/O failure
+during restoration reports any files already restored. Original bytes and modes
+are restored; files originally absent are removed. The conversation is retained,
+and a factual context notice identifies restored files. Resume restores checkpoint
+storage and notices; fork copies backups and indexes into its own sidecar directory.
+Project files remain shared between forks. Shell/MCP effects and external edits
+are not checkpointed. Reset detaches storage; deletion removes the selected sidecar.
+Without journals, temporary storage lasts until reset or shutdown. Queued rewind
+never resumes the interrupted run automatically.
+
+The CLI exposes `/sessions`, `/resume [id|latest]`, `/fork`, `/delete`, `/rewind`, `--resume [id]`, and
 `--no-session`. `/reset` starts a new journal while retaining prior sessions.
 On an interactive terminal, bare `/resume` passes saved titles and dates to
 `TerminalUI.choose`, using full session IDs as selection values. The list keeps
@@ -639,7 +685,9 @@ to the model along with the active generation number.
 
 - **Provider routing:** aggregate endpoint rows with the same routing tag, use
   their shared capabilities/minimum limits, and exclude incompatible variants
-  when a selected base tag can match them. Missing effort choices mean “enable
+  when a selected base tag can match them. Endpoint status values do not filter
+  the chosen model's providers; actual request results establish availability.
+  Missing effort choices mean “enable
   when supported”; an explicitly disabled list must not become “enabled.” Stage
   profiles and preflight before publishing a model switch.
 - **File/Git operations:** resolve paths against the workspace; writes publish
@@ -673,7 +721,17 @@ to the model along with the active generation number.
 - **Web:** validate every resolved destination and redirect, and pin the chosen
   public address while preserving Host/TLS identity. HTML extraction preserves
   code whitespace and link destinations. Fetching does not execute JavaScript.
-- **Terminal:** `transcript.py` stores original chunks and completed styled rows
+- **Terminal:** `markdown.py` parses assistant replies independently of literal harness
+  output. CommonMark tokens become semantic terminal fragments; Pygments lexer
+  tokens provide code syntax roles without using its output formatters. Themes
+  choose role-specific colors and backgrounds. Source and rendered views replay
+  the same originals. Incremental Markdown keeps a bounded mutable preview and
+  reconciles the complete response at finalization, including reference links.
+  A separate copy sidecar maps visible character boundaries to readable text,
+  excluding code wrap markers and background padding. Clipboard commands can
+  copy readable replies, Markdown source, or exact fenced code bodies.
+  Structured model responses retain their validation boundary before display.
+  `transcript.py` also stores original literal chunks and completed styled rows
   in separate private session files, indexed by byte offsets. Block boundaries
   retain the renderer's spacing and ANSI resets. The ANSI decoder carries style
   and partial escapes across chunks. Wrapping retains the last two rows plus any

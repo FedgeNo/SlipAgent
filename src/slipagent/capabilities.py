@@ -25,7 +25,8 @@ class ModelCapabilities:
         # A routing tag can cover several endpoint records. It cannot select
         # one of those records independently, so use their common capabilities.
         grouped = _endpoint_groups(model, endpoints)
-        available = [entry for entry in grouped if entry.get("status", 0) == 0]
+        # Status metadata is advisory; the API request establishes availability.
+        available = grouped
         native = [entry for entry in available if "tools" in entry.get("supported_parameters", [])]
         # Prefer the model's trained tool channel. JSON formatting is a separate
         # capability: endpoints without schemas use ordinary text replies.
@@ -40,7 +41,7 @@ class ModelCapabilities:
             compatible = native
             self.format = None
         if not compatible:
-            raise ValueError("No available endpoint supports native tools or JSON output.")
+            raise ValueError("No endpoint advertises native tools or JSON output.")
         reasoning = [entry for entry in compatible if _reasoning_allowed(entry)
                      and (entry["efforts"] is None or any(effort in EFFORT_ORDER for effort in entry["efforts"]))]
         self.reasoning: dict[str, Any] | None = None
@@ -136,19 +137,15 @@ def _endpoint_groups(model: dict[str, Any], endpoints: list[dict[str, Any]]) -> 
         groups.setdefault(tag, []).append(entry)
     result = []
     for tag, entries in groups.items():
-        active = [entry for entry in entries if entry.get("status", 0) == 0]
-        if not active:
-            result.append({"tag": tag, "status": 1})
-            continue
-        parameters = set.intersection(*(set(entry.get("supported_parameters", [])) for entry in active))
-        choices = [_efforts(entry, model) for entry in active]
+        parameters = set.intersection(*(set(entry.get("supported_parameters", [])) for entry in entries))
+        choices = [_efforts(entry, model) for entry in entries]
         shared: list[str] | None = None
         if any(choice is not None for choice in choices):
             shared = sorted(set.intersection(*(set(choice or []) for choice in choices)))
-        group: dict[str, Any] = {"tag": tag, "status": 0, "supported_parameters": parameters, "efforts": shared}
+        group: dict[str, Any] = {"tag": tag, "supported_parameters": parameters, "efforts": shared}
         for field in ("context_length", "max_prompt_tokens", "max_completion_tokens"):
             values = []
-            for entry in active:
+            for entry in entries:
                 value = entry.get(field)
                 if value is None:
                     value = model.get(field)
@@ -156,7 +153,7 @@ def _endpoint_groups(model: dict[str, Any], endpoints: list[dict[str, Any]]) -> 
                     raise ValueError(f"No context_length was supplied for endpoint {tag} or its model.")
                 values.append({field: value})
             group[field] = _limit(values, field)
-        tool_choices = [entry.get("supports_tool_choice") for entry in active]
+        tool_choices = [entry.get("supports_tool_choice") for entry in entries]
         explicit = [value for value in tool_choices if isinstance(value, dict)]
         if explicit:
             keys = set().union(*(value.keys() for value in explicit))

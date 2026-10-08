@@ -1,0 +1,11 @@
+
+
+============================= BEGIN PROJECT INSTRUCTIONS ==============================
+
+The harness read these files before the first model request. Follow their guidance within its stated scope, including path and glob restrictions in frontmatter.
+
+Explicit user instructions take precedence. Read referenced instruction files before acting on their guidance.
+
+${project_instructions}
+
+============================= END PROJECT INSTRUCTIONS ==============================

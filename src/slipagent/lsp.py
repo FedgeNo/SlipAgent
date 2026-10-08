@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .prompts import load_prompt
+
 import asyncio
 import json
 import os
@@ -358,10 +360,10 @@ class LanguageServers:
                 raise LSPError("Navigation location has an invalid position")
             result.append({"path": self.workspace.relative(target), "line": start["line"] + 1,
                            "column_utf16": start["character"] + 1})
-        return ToolResult.ok(json.dumps({"locations": result[offset:offset + 100], "total": len(result),
+        return ToolResult.ok({"locations": result[offset:offset + 100], "total": len(result),
                                         "excluded_outside_workspace": excluded,
                                         "next_offset": offset + 100 if offset + 100 < len(result) else None,
-                                        "position_units": "1-based lines and UTF-16 columns"}, ensure_ascii=False))
+                                        "position_units": "1-based lines and UTF-16 columns"})
 
     async def aclose(self) -> None:
         async def close() -> None:
@@ -376,15 +378,8 @@ class LanguageServers:
 class NavigateCodeTool(Tool):
     name = "navigate_code"
     instruction_path = "path"
-    description = (
-        "Use an explicitly configured language server for definition, references, implementation, "
-        "or hover.\n\n"
-        "Input `line`/`column` are 1-based Unicode character positions.\n\n"
-        "Results label UTF-16 columns explicitly.\n\n"
-        "Locations follow the current Workspace Access mode; use `offset` to page past 100 results.\n\n"
-        "Requires `language_servers` in `.slipagent/project.json` and an already installed stdio "
-        "server. Use `grep` and `read_file` for ordinary discovery; follow the explicit position units."
-    )
+    description_prompt = 'tools/navigate-code.txt'
+    description = load_prompt(description_prompt)
     parameters = {"type": "object", "properties": {
         "operation": {"type": "string", "enum": list(OPERATIONS)}, "path": {"type": "string"},
         "line": {"type": "integer", "minimum": 1}, "column": {"type": "integer", "minimum": 1},

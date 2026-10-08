@@ -6,6 +6,8 @@ through these tools; they would bypass the filesystem boundary.
 
 from __future__ import annotations
 
+from ..prompts import load_prompt
+
 import asyncio
 import os
 import shlex
@@ -19,25 +21,19 @@ from .shell import DEFAULT_TIMEOUT, MAX_OUTPUT_CHARS, MAX_TIMEOUT, capture_proce
 
 REPO_PARAMETER = {
     "type": "string",
-    "description": "Repository directory, workspace-relative or absolute (default '.'); follows Workspace Access mode.",
+    "description": "",
 }
 PATHS_PARAMETER = {
     "type": "array",
     "items": {"type": "string"},
-    "description": "Literal workspace-relative or absolute file/directory paths; use ['.'] for all workspace files. Paths must belong to the selected repository.",
+    "description": "",
 }
 TIMEOUT_PARAMETER = {
     "type": "number",
     "minimum": 0.1,
-    "description": f"Timeout in seconds (default {DEFAULT_TIMEOUT:g}, max {MAX_TIMEOUT:g}).",
+    "description": "",
 }
 
-GIT_OUTPUT_GUIDANCE = (
-    "\n\nOutput is a captured preview; long streams retain the beginning and end with an explicit "
-    "truncation marker. Omitted output is not evidence of an empty result or a successful command. "
-    "Use `read_command_output` with the returned `log_id` to inspect omitted text without rerunning "
-    "the command; the observation includes a concrete recovery call."
-)
 
 
 @dataclass(slots=True)
@@ -208,8 +204,10 @@ class GitTool(Tool):
 
 
 class GitStatusTool(GitTool):
+    parameter_prompts = 'tools/git-status-parameters.json'
     name = "git_status"
-    description = "Show branch and short Git status for a repository allowed by the current Workspace Access mode." + GIT_OUTPUT_GUIDANCE
+    description_prompt = 'tools/git-status.txt'
+    description = load_prompt(description_prompt)
     parameters = {
         "type": "object",
         "properties": {"repo": REPO_PARAMETER, "timeout": TIMEOUT_PARAMETER},
@@ -224,17 +222,15 @@ class GitStatusTool(GitTool):
 
 
 class GitDiffTool(GitTool):
+    parameter_prompts = 'tools/git-diff-parameters.json'
     name = "git_diff"
-    description = (
-        "Show unstaged changes, or staged changes with staged=true.\n\n"
-        "Paths are literal and workspace-relative or absolute.\n\n"
-        "External diff/text conversion helpers are disabled."
-    ) + GIT_OUTPUT_GUIDANCE
+    description_prompt = 'tools/git-diff.txt'
+    description = load_prompt(description_prompt)
     parameters = {
         "type": "object",
         "properties": {
             "repo": REPO_PARAMETER, "timeout": TIMEOUT_PARAMETER,
-            "staged": {"type": "boolean", "description": "Show staged/index changes (default false)."},
+            "staged": {"type": "boolean", "description": ""},
             "paths": PATHS_PARAMETER,
         },
     }
@@ -254,8 +250,10 @@ class GitDiffTool(GitTool):
 
 
 class GitLogTool(GitTool):
+    parameter_prompts = 'tools/git-log-parameters.json'
     name = "git_log"
-    description = "Show recent commits in a repository allowed by Workspace Access mode, newest first (default 10, maximum 100)." + GIT_OUTPUT_GUIDANCE
+    description_prompt = 'tools/git-log.txt'
+    description = load_prompt(description_prompt)
     parameters = {
         "type": "object",
         "properties": {
@@ -275,13 +273,10 @@ class GitLogTool(GitTool):
 
 
 class GitAddTool(GitTool):
+    parameter_prompts = 'tools/git-add-parameters.json'
     name = "git_add"
-    description = (
-        "Stage literal workspace-relative or absolute paths, including deletions; paths=['.'] "
-        "stages all in the workspace-root repository.\n\n"
-        "Paths follow the current Workspace Access mode.\n\n"
-        "Active clean/process filters are rejected instead of running external helpers."
-    ) + GIT_OUTPUT_GUIDANCE
+    description_prompt = 'tools/git-add.txt'
+    description = load_prompt(description_prompt)
     parameters = {
         "type": "object",
         "properties": {
@@ -325,17 +320,15 @@ class GitAddTool(GitTool):
 
 
 class GitCommitTool(GitTool):
+    parameter_prompts = 'tools/git-commit-parameters.json'
     name = "git_commit"
-    description = (
-        "Commit already staged changes with a message.\n\n"
-        "Does not stage files, amend, or push.\n\n"
-        "Hooks and signing are disabled to keep external helpers from bypassing workspace checks."
-    ) + GIT_OUTPUT_GUIDANCE
+    description_prompt = 'tools/git-commit.txt'
+    description = load_prompt(description_prompt)
     parameters = {
         "type": "object",
         "properties": {
             "repo": REPO_PARAMETER, "timeout": TIMEOUT_PARAMETER,
-            "message": {"type": "string", "description": "Commit message (must not be blank)."},
+            "message": {"type": "string", "description": ""},
         },
         "required": ["message"],
     }

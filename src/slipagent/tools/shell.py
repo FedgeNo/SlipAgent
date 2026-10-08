@@ -8,6 +8,8 @@ writes its full decoded streams to the shared quota-limited session archive.
 
 from __future__ import annotations
 
+from ..prompts import load_prompt
+
 import asyncio
 import codecs
 import os
@@ -30,41 +32,23 @@ MAX_OUTPUT_CHARS = 30_000
 
 
 class RunCommandTool(Tool):
+    parameter_prompts = 'tools/run-command-parameters.json'
     name = "run_command"
-    description = (
-        "Run a shell command in the workspace root and return its output.\n\n"
-        "Use it to run tests, linters, type checkers, and builds, and to inspect files that "
-        "dedicated tools cannot read.\n\n"
-        "The command runs under a non-login shell and inherits `PATH`; it does not activate a "
-        "project environment. Prefer explicit paths and use the selected project interpreter.\n\n"
-        "Commands have the harness process's permissions; their access is not confined to the workspace.\n\n"
-        "Long-running commands are killed at the timeout.\n\n"
-        "The observation shows at most 30000 characters per stream, retaining the beginning and "
-        "end. Omitted output is not evidence of an empty result or a successful command.\n\n"
-        "Session command logs retain full decoded output within the configured disk quota; "
-        "`read_command_output` retrieves pages or tails using the returned log ID without rerunning "
-        "the command. The observation includes a concrete recovery call.\n\n"
-        "Lost bytes are reported explicitly.\n\n"
-        "For intentional polling of external state, set `poll=true`. Do not mark ordinary failed "
-        "retries as polling.\n\n"
-        "Set `background=true` to return immediately with a managed `job_id` and `log_id`; use "
-        "`command_jobs` to check/wait/stop it and `read_command_output` for live output.\n\n"
-        "At most four jobs run concurrently. The same execution timeout still applies (default "
-        "120 seconds, maximum 600). Starting a job is not evidence that it succeeded."
-    )
+    description_prompt = 'tools/run-command.txt'
+    description = load_prompt(description_prompt)
     parameters = {
         "type": "object",
         "properties": {
-            "command": {"type": "string", "description": "The shell command to run."},
+            "command": {"type": "string", "description": ""},
             "timeout": {
                 "type": "number",
                 "description": (
-                    f"Timeout in seconds (default {DEFAULT_TIMEOUT:g}, max {MAX_TIMEOUT:g})."
+                    ""
                 ),
                 "minimum": 0.1,
             },
-            "poll": {"type": "boolean", "description": "True only when deliberately polling for an external change; exempts unchanged results from loop detection. Default false."},
-            "background": {"type": "boolean", "description": "Run as a managed background command (default false)."},
+            "poll": {"type": "boolean", "description": ""},
+            "background": {"type": "boolean", "description": ""},
         },
         "required": ["command"],
     }
@@ -94,7 +78,7 @@ class RunCommandTool(Tool):
             job = self.jobs.start(log, lambda: self._execute(command, limit, log, background=True))
             # Ensure subprocess ownership is established before a following stop.
             await asyncio.sleep(0)
-            return ToolResult.ok(json.dumps(job.metadata()) + "\n" + log.notice())
+            return ToolResult.ok({**job.metadata(), "notice": log.notice()})
         return await self._execute(command, limit, log)
 
     async def _execute(self, command: str, limit: float, log: CommandLog | None, *, background: bool = False) -> ToolResult:

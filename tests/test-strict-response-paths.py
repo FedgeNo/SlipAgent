@@ -110,7 +110,7 @@ async def test_selected_contract_rejects_then_recovers_without_effects(mode, inv
         system = body["messages"][0]["content"]
         if native:
             assert "Replies and Tool Calls:" not in system
-            assert "Available Tool Definitions:" not in system
+            assert "============================= BEGIN AVAILABLE TOOL DEFINITIONS ==============================" not in system
             assert "tagged calls" not in system and "when using JSON" not in system
             assert body["tools"]
         else:

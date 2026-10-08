@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..prompts import load_prompt
+
 from ..workspace import Workspace, WorkspaceError
 from .base import Tool, ToolResult
 from .blocking import run_blocking
@@ -10,20 +12,18 @@ MAX_ENTRIES = 300
 
 
 class ListDirTool(Tool):
+    parameter_prompts = 'tools/list-dir-parameters.json'
     concurrent_safe = True
     instruction_path = "path"
     name = "list_dir"
-    description = (
-        "List a directory allowed by the current Workspace Access mode.\n\n"
-        "Directories are listed first and marked with a trailing '/'.\n\n"
-        "Use this to understand the layout before `glob`, `grep`, or `read_file`."
-    )
+    description_prompt = 'tools/list-dir.txt'
+    description = load_prompt(description_prompt)
     parameters = {
         "type": "object",
         "properties": {
             "path": {
                 "type": "string",
-                "description": "Directory to list. Defaults to the workspace root.",
+                "description": "",
             },
         },
     }

@@ -1,0 +1,4 @@
+{
+    "properties/url": "Absolute http:// or https:// URL.",
+    "properties/max_chars": "Truncate output to this many characters (default 40000)."
+}

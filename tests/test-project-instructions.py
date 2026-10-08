@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from slipagent.types import content_text
+
 from pathlib import Path
 
 import pytest
@@ -16,14 +18,14 @@ from slipagent.workspace import Workspace, WorkspaceError
 
 def test_harness_operating_guidance_does_not_depend_on_project_notes(workspace):
     prompt = build_system_prompt(str(workspace.root))
-    assert "Tool Call Batches:" in prompt
+    assert "============================= TOOL CALL BATCHES ==============================" in prompt
     assert "read_command_output" not in prompt and "next_offset" not in prompt
     assert "Project Python Environment" in prompt
     assert "src/slipagent/" not in prompt
     assert "test-runtime.py" not in prompt
     project_guidance = "Project-specific check: run ./verify-project."
     combined = build_system_prompt(str(workspace.root), project_instructions=project_guidance)
-    assert combined.index("Tool Call Batches:") < combined.index("Project Instructions:")
+    assert combined.index("============================= TOOL CALL BATCHES ==============================") < combined.index("============================= BEGIN PROJECT INSTRUCTIONS ==============================")
     assert project_guidance in combined
 
 
@@ -163,11 +165,11 @@ def test_nested_instruction_symlinks_can_target_guidance_inside_workspace(worksp
 
 
 def test_prompt_sections_have_stable_order_and_reject_duplicate_owners():
-    from slipagent.prompts import PromptSections
+    from slipagent.prompts import PromptSections, section_divider
     sections = PromptSections()
     sections.add("dynamic", "Dynamic", "changes", 20)
     sections.add("stable", "Stable", "rules", 0)
-    assert sections.render() == "Stable:\n\nrules\n\nDynamic:\n\nchanges"
+    assert sections.render() == (section_divider("BEGIN Stable") + "\n\nrules\n\n" + section_divider("END Stable") + "\n\n" + section_divider("BEGIN Dynamic") + "\n\nchanges\n\n" + section_divider("END Dynamic") + "\n")
     with pytest.raises(ValueError, match="Duplicate"):
         sections.add("stable", "Duplicate", "bad", 30)
 
@@ -180,8 +182,8 @@ async def test_stable_prompt_prefix_survives_new_user_input():
     agent.messages.append(Message.user("Additional constraint"))
     context = await agent._context_view(agent.registry.specs(), 1)
     second = context[0].content
-    boundary = "User Request for This Run:"
+    boundary = "============================= BEGIN USER REQUEST FOR THIS RUN =============================="
     assert first.split(boundary)[0] == second.split(boundary)[0]
     assert "First task" in second and "Additional constraint" in second
-    assert any("Additional constraint" in (message.content or "") for message in context[1:])
+    assert any("Additional constraint" in (content_text(message.content)) for message in context[1:])
     assert "Additional constraint" not in first

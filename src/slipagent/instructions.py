@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .prompts import load_prompt, section_divider
+
 import fnmatch
 import os
 import json
@@ -143,9 +145,7 @@ class ProjectInstructions:
             changed = [scope for scope in sorted(relevant)
                        if current.get(scope, "") != self.delivered.get(scope, "")]
             if changed:
-                return ("Project instructions are new or changed for: " + ", ".join(changed)
-                        + ". This edit was not executed. The next model request includes the current "
-                        "instructions; review them before requesting the edit again.")
+                return (load_prompt('project-instructions-changed.txt', scopes=', '.join(changed)))
         return None
 
     @staticmethod
@@ -153,10 +153,7 @@ class ProjectInstructions:
         sections = []
         for scope, content in snapshot.items():
             if content:
-                sections.append(f"Instruction Scope: {scope}/\n\n{content}")
+                sections.append(section_divider("BEGIN Instruction Scope") + f"\n\nPath: {scope}/\n\n{content}\n\n" + section_divider("END Instruction Scope"))
         if not sections:
             return ""
-        return ("Explicit user instructions take precedence. Apply each file's path and glob restrictions.\n\n"
-                "Nested guidance governs only its directory and descendants; more specific guidance takes precedence.\n\n"
-                "This is the current complete set for visited scopes; removed instructions are no longer included.\n\n"
-                + "\n\n".join(sections))
+        return (load_prompt('project-instructions-current.txt', scopes='\n\n'.join(sections)))

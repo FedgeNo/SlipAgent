@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from contextvars import ContextVar
 from typing import Any
 
-from ..types import ToolSpec
+from ..types import ToolSpec, content_text, decode_json_content
 from ..lifecycle import Lifetime
 
 # A call ID is unique only within one numbered history step. Context-local
@@ -40,15 +40,21 @@ _PYTHON_TYPES: dict[str, type | tuple[type, ...]] = {
 class ToolResult:
     """What a tool hands back to the model."""
 
-    content: str
+    content: Any
     is_error: bool = False
 
+    def __post_init__(self) -> None:
+        self.content = decode_json_content(self.content)
+
+    def text(self) -> str:
+        return content_text(self.content)
+
     @classmethod
-    def ok(cls, content: str) -> ToolResult:
+    def ok(cls, content: Any) -> ToolResult:
         return cls(content=content)
 
     @classmethod
-    def error(cls, content: str) -> ToolResult:
+    def error(cls, content: Any) -> ToolResult:
         return cls(content=content, is_error=True)
 
 
@@ -64,6 +70,8 @@ class Tool(ABC):
 
     name: str
     description: str
+    description_prompt: str | None = None
+    parameter_prompts: str | None = None
     parameters: dict[str, Any] = {"type": "object", "properties": {}}
     strict_arguments: bool = True
     concurrent_safe: bool = False
@@ -84,10 +92,21 @@ class Tool(ABC):
 
     @property
     def spec(self) -> ToolSpec:
+        from ..prompts import load_prompt
+        parameters = self.parameters
+        if self.parameter_prompts:
+            import copy
+            parameters = copy.deepcopy(parameters)
+            descriptions = json.loads(load_prompt(self.parameter_prompts))
+            for path, description in descriptions.items():
+                schema = parameters
+                for part in path.split("/") if path else []:
+                    schema = schema[part]
+                schema["description"] = "\n" + description.strip() + "\n"
         return ToolSpec(
             name=self.name,
-            description=self.description,
-            parameters=self.parameters,
+            description=load_prompt(self.description_prompt) if self.description_prompt else self.description,
+            parameters=parameters,
         )
 
     async def invoke(self, raw_arguments: str | dict[str, Any] | None) -> ToolResult:

@@ -7,6 +7,8 @@ for real. No network is involved.
 
 from __future__ import annotations
 
+from slipagent.types import content_text
+
 import json
 import sys
 from pathlib import Path
@@ -189,7 +191,7 @@ async def test_calling_an_unknown_tool_is_an_error_not_a_crash() -> None:
         result = await client.call_tool("nope", {})
 
         assert result.is_error
-        assert "nope" in result.content
+        assert "nope" in content_text(result.content)
     finally:
         await client.disconnect()
 
@@ -259,7 +261,7 @@ async def test_calling_a_disconnected_tool_reports_clearly() -> None:
 
     result = await tool.run(message="hi")
     assert result.is_error
-    assert "not connected" in result.content
+    assert "not connected" in content_text(result.content)
     await manager.aclose()
 
 

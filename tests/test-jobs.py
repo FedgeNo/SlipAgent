@@ -1,3 +1,7 @@
+
+from slipagent.types import content_text
+
+from slipagent.types import decode_json_content
 import asyncio
 import json
 import shlex
@@ -16,22 +20,22 @@ async def test_background_output_wait_timeout_and_stop(workspace):
     command = shlex.join([sys.executable, "-u", "-c", "import time; print('ready'); time.sleep(60)"])
     try:
         response = await tool.run(command, background=True)
-        metadata = json.loads(response.content.splitlines()[0])
+        metadata = response.content
         key = metadata["job_id"]
         for _ in range(200):
             output = await ReadCommandOutputTool(archive).run(log_id=key)
-            if "ready" in output.content:
+            if "ready" in content_text(output.content):
                 break
             await asyncio.sleep(.01)
-        assert "ready" in output.content
-        waited = json.loads((await control.run("wait", key, timeout=.01)).content)
+        assert "ready" in content_text(output.content)
+        waited = decode_json_content((await control.run("wait", key, timeout=.01)).content)
         assert waited["state"] == "running"
         with pytest.raises(ValueError, match="Stop background"):
             jobs.clear()
-        stopped = json.loads((await control.run("stop", key)).content)
+        stopped = decode_json_content((await control.run("stop", key)).content)
         assert stopped["state"] == "stopped" and stopped["finished"]
         assert not jobs.active
-        assert "ready" in (await ReadCommandOutputTool(archive).run(log_id=key)).content
+        assert "ready" in content_text((await ReadCommandOutputTool(archive).run(log_id=key)).content)
     finally:
         await jobs.aclose()
         await archive.aclose()
@@ -58,7 +62,7 @@ async def test_completion_is_announced_once_without_starting_a_model_turn(worksp
     agent = Agent(None, ToolRegistry(services={"command_jobs": jobs}), "test", on_event=events.append)
     try:
         result = await RunCommandTool(workspace, archive, jobs).run(shlex.join([sys.executable, "-c", "print('done')"]), background=True)
-        key = json.loads(result.content.splitlines()[0])["job_id"]
+        key = result.content["job_id"]
         await CommandJobsTool(jobs).run("wait", key)
         assert len(events) == 1 and events[0].kind == "notice"
         agent._notify_jobs()

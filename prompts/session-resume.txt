@@ -1,0 +1,1 @@
+Restored session ${session_id}. No tools were replayed. Inspect any interrupted tool's effects before retrying. The model and request settings are those currently selected; saved usage includes the parent session. Background jobs from the prior process are not reattached or relaunched; their outcomes may be unknown. Inspect retained logs before rerunning commands.${torn_notice}

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import random
 import copy
 from collections.abc import Callable
@@ -101,15 +102,16 @@ class OpenRouterClient:
         self.base_url = base_url.rstrip("/")
         self.retry = retry or RetryPolicy()
 
+        from . import __version__
+
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
+            "HTTP-Referer": http_referer or "https://github.com/FedgeNo/SlipAgent",
+            "X-OpenRouter-Title": app_title or "SlipAgent",
+            "X-OpenRouter-Categories": "cli-agent",
+            "User-Agent": os.environ.get("OPENROUTER_USER_AGENT") or f"SlipAgent/{__version__}",
         }
-        # Optional attribution headers; they only affect OpenRouter leaderboards.
-        if http_referer:
-            headers["HTTP-Referer"] = http_referer
-        if app_title:
-            headers["X-OpenRouter-Title"] = app_title
 
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
@@ -230,8 +232,15 @@ class OpenRouterClient:
                         raw = _decode_json(response)
                         completion = _parse_completion(raw)
                         wire = raw["choices"][0]["message"]
-                        for text in _reasoning_text(wire):
-                            on_delta("reasoning", text)
+                        try:
+                            for text in _reasoning_text(wire):
+                                on_delta("reasoning", text)
+                            if completion.text:
+                                on_delta("content", completion.text)
+                        except OpenRouterAPIError as exc:
+                            exc.usage = completion.usage
+                            exc.partial_response = json.dumps(wire, ensure_ascii=False)
+                            raise
                         return completion
                     state = _StreamCompletion(on_delta)
                     data: list[str] = []
@@ -251,7 +260,7 @@ class OpenRouterClient:
                             observed = True
                             state.add(event)
                     return state.completion()
-            except (httpx.TimeoutException, httpx.TransportError) as exc:
+            except (httpx.TimeoutException, httpx.TransportError, httpx.DecodingError) as exc:
                 # Visible partial output needs an agent-level retry notification.
                 if observed or attempt == retries:
                     error = OpenRouterTransportError(f"OpenRouter stream interrupted: {exc}")
@@ -292,17 +301,21 @@ class OpenRouterClient:
             await self.list_models()
         properties = self._model_properties.get(model)
         # Some compatible gateways expose only the older minimal catalog.
-        if properties is None or not isinstance(properties.get("supported_parameters"), list):
+        if properties is not None and not isinstance(properties.get("supported_parameters"), list):
             if store and model not in cache:
                 cache[model] = None
             return None
         raw = await self._request("GET", f"/models/{quote(model, safe='/')}/endpoints")
         data = raw.get("data")
+        if properties is None and isinstance(data, dict):
+            properties = data
         endpoints = data.get("endpoints") if isinstance(data, dict) else None
         if not isinstance(endpoints, list) or any(not isinstance(entry, dict) or not isinstance(entry.get("supported_parameters"), list)
                                                 or any(not isinstance(value, str) for value in entry["supported_parameters"]) for entry in endpoints):
             raise OpenRouterAPIError("OpenRouter returned malformed model endpoint properties.")
         try:
+            if properties is None:
+                raise ValueError("No model properties were supplied by the catalog or endpoint metadata.")
             capabilities = ModelCapabilities(properties, endpoints)
         except ValueError as exc:
             raise OpenRouterConfigError(f"Cannot use {model}: {exc}") from exc
@@ -347,7 +360,7 @@ class OpenRouterClient:
             is_final = attempt == retries
             try:
                 response = await self._client.request(method, url, **kwargs)
-            except (httpx.TimeoutException, httpx.TransportError) as exc:
+            except (httpx.TimeoutException, httpx.TransportError, httpx.DecodingError) as exc:
                 last_error = exc
                 if is_final:
                     raise OpenRouterTransportError(
@@ -358,7 +371,13 @@ class OpenRouterClient:
                 continue
 
             if response.status_code < 400:
-                return _decode_json(response)
+                raw = _decode_json(response)
+                error_body = raw.get("error")
+                code = error_body.get("code") if isinstance(error_body, dict) else None
+                if type(code) is not int or code not in RETRYABLE_STATUS:
+                    return raw
+                # Providers can report transient failures inside an HTTP 200 body.
+                response = httpx.Response(code, headers=response.headers, json=raw)
 
             error = _build_error(response)
             error.retry_after = response.headers.get("retry-after")

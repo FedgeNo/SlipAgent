@@ -20,8 +20,8 @@ from pathlib import Path
 from collections.abc import Mapping
 
 
-SOURCE_DIRECTORIES = ("src", "docs", "scripts", "tests")
-SOURCE_FILES = ("pyproject.toml", "README.md", "CONTRIBUTING.md", "AGENTS.md", "LICENSE", "install.py", ".gitignore", ".env.example")
+SOURCE_DIRECTORIES = ("src", "docs", "scripts", "tests", "prompts")
+SOURCE_FILES = ("pyproject.toml", "README.md", "CONTRIBUTING.md", "AGENTS.md", "LICENSE", "install.py", ".gitignore", ".env.example", "logo.png")
 HASH_MANIFEST = "file-hashes.json"
 IGNORED_NAMES = (".git", ".venv", "venv", "__pycache__", "*.pyc", "*.pyo", "*.egg-info", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".env", ".env.*", ".mcp.json")
 

@@ -1,5 +1,7 @@
 """MCP wire, deadline, and cleanup regressions; no remote services."""
 
+from slipagent.types import content_text
+
 import asyncio
 import json
 import sys
@@ -21,11 +23,11 @@ async def test_server_instructions_reach_context_and_disappear_on_disconnect(tmp
         assert state.status == "connected", state.detail
         agent = Agent(client=object(), registry=registry, model="test")
         view = await agent._context_view(registry.specs(), 1)
-        assert "Use echo before boom." in "\n".join(m.content or "" for m in view)
+        assert "Use echo before boom." in "\n".join(content_text(m.content) for m in view)
         assert state.client.server_info["name"] == "stub"
         await manager.disconnect("server")
         view = await agent._context_view(registry.specs(), 1)
-        assert "Use echo before boom." not in "\n".join(m.content or "" for m in view)
+        assert "Use echo before boom." not in "\n".join(content_text(m.content) for m in view)
     finally:
         await manager.aclose()
 
@@ -38,7 +40,7 @@ async def test_structured_content_is_retained_once(content):
     client._request = respond
     result = await client.call_tool("echo", {})
     assert result.is_error
-    assert result.content.count("unique-result") == 1
+    assert result.content == {"content": "", "structuredContent": {"value": "unique-result"}}
 
 
 @pytest.mark.parametrize("cwd", [None, "sub"])

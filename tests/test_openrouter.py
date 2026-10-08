@@ -398,3 +398,27 @@ async def test_malformed_catalog_and_key_raise_typed_errors(endpoint, data) -> N
             await getattr(client, endpoint)()
     finally:
         await client.aclose()
+@pytest.mark.parametrize("referer,title", [(None, None), ("https://example.com/app", "Custom App")])
+async def test_requests_identify_slipagent_as_cli_agent(referer, title, monkeypatch):
+    monkeypatch.delenv("OPENROUTER_USER_AGENT", raising=False)
+    from slipagent import __version__
+    async def handler(request):
+        assert request.headers["HTTP-Referer"] == (referer or "https://github.com/FedgeNo/SlipAgent")
+        assert request.headers["X-OpenRouter-Title"] == (title or "SlipAgent")
+        assert request.headers["X-OpenRouter-Categories"] == "cli-agent"
+        assert request.headers["User-Agent"] == f"SlipAgent/{__version__}"
+        return httpx.Response(200, json={"data": []})
+    async with OpenRouterClient("test", http_referer=referer, app_title=title,
+                                transport=httpx.MockTransport(handler)) as client:
+        assert await client.list_models() == []
+
+
+async def test_requests_use_local_user_agent_override(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_USER_AGENT", "Custom CLI/1.0")
+
+    async def handler(request):
+        assert request.headers["User-Agent"] == "Custom CLI/1.0"
+        return httpx.Response(200, json={"data": []})
+
+    async with OpenRouterClient("test", transport=httpx.MockTransport(handler)) as client:
+        assert await client.list_models() == []

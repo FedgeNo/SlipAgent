@@ -1,0 +1,3 @@
+Return exactly one JSON object: `response` contains your plain terminal reply.
+
+Prefer useful response text with tool call batches; empty text is allowed when requesting tools. Provide nonempty text when requesting no tools.

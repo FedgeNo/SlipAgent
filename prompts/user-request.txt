@@ -1,0 +1,11 @@
+============================= BEGIN USER REQUEST FOR THIS RUN ==============================
+
+The user request originated at step_id ${step_id} and may have been issued multiple steps ago. It establishes the overall goal for this run. Its exact user-authored text is supplied below.
+
+${input_guidance}
+
+Keep applicable user constraints and assess completion against this goal. When the request is fulfilled, return the result with no tool calls.
+
+User request for this run (JSON array of user-authored messages): ${user_messages}
+
+============================= END USER REQUEST FOR THIS RUN ==============================

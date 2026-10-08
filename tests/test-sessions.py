@@ -1,5 +1,9 @@
 """Durable sessions round-trip originals and recover interruptions without replay."""
 
+from slipagent.types import content_text
+
+from slipagent.types import decode_json_content
+
 import json
 import os
 import shlex
@@ -74,7 +78,6 @@ async def test_startup_and_resume_create_no_empty_session(tmp_path, metadata_ser
     agent.messages.append(Message.user("Saved prompt"))
     journal.begin(agent)
     parent = journal.session_id
-    original = journal.path.read_bytes()
     args = ["--no-mcp", "-w", str(tmp_path)]
     if startup_resume:
         args += ["--resume", parent]
@@ -84,10 +87,21 @@ async def test_startup_and_resume_create_no_empty_session(tmp_path, metadata_ser
         if not startup_resume:
             assert len(active.listing()) == 1
             await cli._handle_command(session, f"/resume {parent}")
-        assert len(active.listing()) == 2
-        assert journal.path.read_bytes() == original
+        assert len(active.listing()) == 1
+        assert active.session_id == parent
+        assert journal.load(parent)["messages"][-1].content == "Saved prompt"
         assert all(any(message.role == "user" for message in active.load(entry["id"])["messages"])
                    for entry in active.listing())
+        session.agent.client = StubClient([completion("Continued answer")])
+        await session.agent.run("Continue saved chat")
+        await session.agent.wait_for_compaction()
+        assert len(active.listing()) == 1
+        messages = active.load(parent)["messages"]
+        assert sum(message.content == "Saved prompt" for message in messages) == 1
+        assert messages[-1].content == "Continued answer"
+        session.agent.reset(new_session=False)
+        active.delete_current()
+        assert active.listing() == []
     finally:
         await cli._shutdown(session)
 
@@ -115,7 +129,7 @@ async def test_fork_preserves_parent_and_continues_in_new_session(tmp_path, meta
         assert len(journal.listing()) == 2
         assert journal.load(journal.session_id)["messages"][-1].content == "First answer"
         retained = await session.registry.invoke("read_command_output", {"log_id": log_id})
-        assert "forked output" in retained.content and not retained.is_error
+        assert "forked output" in retained.content["content"] and not retained.is_error
         await session.agent.run("New branch prompt")
         await session.agent.wait_for_compaction()
         assert parent_path.read_bytes() == original
@@ -214,7 +228,7 @@ def test_session_titles_survive_reopen_resume_and_reset(workspace, tmp_path):
     reopened = SessionJournal(str(workspace.root), tmp_path / "saved")
     restored = Agent(StubClient([]), ToolRegistry(), "test")
     restored.registry.services["session_journal"] = reopened
-    reopened.restore(restored, reopened.load(parent))
+    reopened.restore(restored, reopened.load(parent), fork=True)
     child = reopened.session_id
     assert child != parent and reopened.title == title
     assert reopened.load(child)["title"] == title
@@ -309,7 +323,7 @@ async def test_originals_summaries_reasoning_usage_and_pending_survive_resume(wo
     loaded = journal.load(parent)
     agent.system_prompt = "current instructions"
     agent.messages[0] = Message.system("current instructions")
-    journal.restore(agent, loaded)
+    journal.restore(agent, loaded, fork=True)
     assert journal.session_id != parent
     assert (journal.directory / (parent + ".jsonl")).read_bytes() == old_bytes
     assert agent.messages[0].content == "current instructions"
@@ -318,7 +332,7 @@ async def test_originals_summaries_reasoning_usage_and_pending_survive_resume(wo
     assert agent.history.steps[0].summary
     assert agent.usage.prompt_tokens > 0
     result = await agent.registry.invoke("recall_history", {"step_id": 1, "sections": ["prompt", "response"]})
-    assert "exact prompt" in result.content and "original reply" in result.content
+    assert result.content["content"] == {"prompt": "exact prompt", "response": "original reply"}
     view = await agent._context_view(agent.registry.specs(), 1)
     assert "private reasoning for archive only" in str(view)
     agent.overthinking = False
@@ -340,8 +354,8 @@ async def test_interrupted_tools_are_marked_and_never_replayed(workspace, tmp_pa
     assert tool.seen == []
     observations = [message for message in agent.messages if message.role == "tool"]
     assert len(observations) == 2
-    assert ("outcome unknown" if started else "not started") in observations[0].content
-    assert "not started" in observations[1].content
+    assert ("outcome unknown" if started else "not started") in observations[0].content["content"]
+    assert "not started" in content_text(observations[1].content)
     assert len(agent.history.steps) == 1
 
 
@@ -386,7 +400,7 @@ async def test_command_logs_survive_exit_reset_and_resume(workspace, tmp_path):
     assert not archive.logs
     journal.restore(agent, journal.load(saved))
     result = await registry.invoke("read_command_output", {"log_id": log_id})
-    assert "retained output" in result.content and not result.is_error
+    assert "retained output" in result.content["content"] and not result.is_error
     path = archive.logs[log_id].streams["stdout"].path
     current = journal.session_id
     original_size = path.stat().st_size
@@ -401,7 +415,7 @@ async def test_command_logs_survive_exit_reset_and_resume(workspace, tmp_path):
     registry.services["session_journal"] = replacement
     replacement.restore(restored, replacement.load(current))
     try:
-        page = json.loads((await registry.invoke("read_command_output", {"log_id": log_id})).content)
+        page = decode_json_content((await registry.invoke("read_command_output", {"log_id": log_id})).content)
         assert page["lost_bytes"] == original_size - 3
         assert "shorter than its journal" in page["retention_error"]
     finally:

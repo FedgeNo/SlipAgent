@@ -1,4 +1,4 @@
-"""Private append-only session journals; resume forks and never replays tools.
+"""Private append-only session journals; resume never replays tools.
 
 Message deltas and tool-start markers are flushed before execution. A missing
 result means uncertainty, not permission to retry. Only a torn final line can
@@ -6,6 +6,8 @@ be ignored during recovery; malformed complete records reject the journal.
 """
 
 from __future__ import annotations
+
+from .prompts import load_prompt
 
 import copy
 import hashlib
@@ -96,7 +98,7 @@ class SessionJournal:
             raise SessionError("Session journal is unavailable; no further actions can be recorded.")
         record = json.dumps({"type": kind, **data}, ensure_ascii=False, allow_nan=False) + "\n"
         try:
-            # Each event has one writer. Resumes always create a new journal.
+            # Each event has one writer.
             with self.path.open("a", encoding="utf-8") as target:
                 target.write(record)
                 target.flush()
@@ -159,6 +161,7 @@ class SessionJournal:
                      parent=parent, created=datetime.now(timezone.utc).isoformat(), title=title)
         self._title = title
         agent.session_id = self.session_id
+        self._checkpoint_directory(agent, parent=parent)
         diagnostics = agent.registry.services.get("request_diagnostics")
         if diagnostics is not None:
             diagnostics.use_directory(self.directory / (self.session_id + "-requests"))
@@ -169,11 +172,27 @@ class SessionJournal:
             archive.use_directory(directory, self.log)
         self.record(agent)
 
+    def _checkpoint_directory(self, agent: Agent, *, parent: str | None = None) -> None:
+        checkpoints = agent._checkpoints()
+        if checkpoints is not None:
+            try:
+                checkpoints.use_directory(
+                    self.directory / (self.session_id + "-checkpoints"),
+                    source=self.directory / (parent + "-checkpoints") if parent is not None else None,
+                )
+                if any(batch["rewound"] for batch in checkpoints.batches):
+                    agent.registry.context_notes["file_rewind"] = (
+                        "File-edit batches were restored with /rewind in this session. Conversation history is retained; "
+                        "earlier tool results may describe files before restoration. Read current contents before editing."
+                    )
+            except OSError as exc:
+                raise SessionError(f"Cannot restore file checkpoints: {exc}") from exc
+
     @staticmethod
     def _message(message: Message) -> dict[str, Any]:
         # Preserve reasoning independently of working-context retention and
         # compaction. Keep its originating model as well.
-        return {**message.to_api(), "reasoning": message.reasoning, "reasoning_model": message.reasoning_model}
+        return {**message.to_record(), "reasoning": message.reasoning, "reasoning_model": message.reasoning_model}
 
     def record(self, agent: Agent) -> None:
         if self.path is None:
@@ -236,7 +255,7 @@ class SessionJournal:
         if self.path is None:
             raise SessionError("No current saved session to delete.")
         try:
-            for suffix in ("-logs", "-requests"):
+            for suffix in ("-logs", "-requests", "-checkpoints"):
                 directory = self.directory / (self.session_id + suffix)
                 if directory.exists():
                     shutil.rmtree(directory)
@@ -301,6 +320,7 @@ class SessionJournal:
                         raise ValueError(f"unknown event {kind!r}")
             if not data["state"]:
                 raise ValueError("no complete saved session state")
+            data["message_count"] = len(data["messages"])
             data["messages"] = self._restore_messages(data)
             state = data["state"]
             if type(state.get("task_start")) is not int or not 0 <= state["task_start"] <= len(data["messages"]):
@@ -363,7 +383,8 @@ class SessionJournal:
         for raw in data["messages"]:
             if not isinstance(raw, dict) or raw.get("role") not in {"system", "user", "assistant", "tool"}:
                 raise ValueError("invalid message")
-            if raw.get("content") is not None and not isinstance(raw["content"], str):
+            allowed = (str, dict, list) if raw["role"] == "tool" else (str,)
+            if raw.get("content") is not None and not isinstance(raw["content"], allowed):
                 raise ValueError("invalid message content")
             message = Message.from_api(raw)
             message.reasoning_model = raw.get("reasoning_model")
@@ -382,13 +403,13 @@ class SessionJournal:
                             raise ValueError("broken tool-call/result sequence")
                     else:
                         detail = "Tool interrupted; outcome unknown and effects may be partial. Inspect before retrying." if (step, call.id) in data["started"] else "Tool was not started before interruption. No automatic replay was performed."
-                        messages.append(Message.tool_result(call.id, json.dumps({"tool": call.name, "call_id": call.id, "status": "error", "content": detail})))
+                        messages.append(Message.tool_result(call.id, {"tool": call.name, "call_id": call.id, "status": "error", "content": detail}))
                     index += 1
             elif message.role == "tool":
                 raise ValueError("orphan tool result")
         return messages
 
-    def restore(self, agent: Agent, data: dict[str, Any]) -> None:
+    def restore(self, agent: Agent, data: dict[str, Any], *, fork: bool = False) -> None:
         if agent.running:
             raise SessionError("Resume is available only while the agent is idle.")
         agent.reset(new_session=False)
@@ -408,7 +429,34 @@ class SessionJournal:
         agent.queued_messages.update({index: messages[index].content or ""
                                       for index in data["state"].get("queued_message_indices", [])})
         agent.usage = data["usage"]
-        self.begin(agent, parent=data["id"], title=data["title"])
+        if fork:
+            self.begin(agent, parent=data["id"], title=data["title"])
+        else:
+            self.session_id = data["id"]
+            self.path = self.directory / (self.session_id + ".jsonl")
+            if data["torn"]:
+                # Remove only the incomplete final event before appending.
+                with self.path.open("r+b") as journal_file:
+                    payload = journal_file.read()
+                    journal_file.truncate(payload.rfind(b"\n") + 1)
+            self.cursor = data["message_count"]
+            self.step_count = len(data["steps"])
+            self.last_message = None
+            self.system = None
+            self.state = None
+            self.failed = False
+            self._title = data["title"]
+            agent.session_id = self.session_id
+            self._checkpoint_directory(agent)
+            diagnostics = agent.registry.services.get("request_diagnostics")
+            if diagnostics is not None:
+                diagnostics.use_directory(self.directory / (self.session_id + "-requests"))
+            archive = agent.registry.services.get("command_archive")
+            if archive is not None:
+                directory = self.directory / (self.session_id + "-logs")
+                _private_directory(directory)
+                archive.use_directory(directory, self.log)
+            self.record(agent)
         archive = agent.registry.services.get("command_archive")
         if archive is not None:
             for log_id, metadata in data["logs"].items():
@@ -426,7 +474,8 @@ class SessionJournal:
                     try:
                         if source.exists():
                             destination = archive.directory / source.name
-                            shutil.copyfile(source, destination)
+                            if source != destination:
+                                shutil.copyfile(source, destination)
                             destination.chmod(0o600)
                             target.path, target.retained_bytes = destination, destination.stat().st_size
                             archive.used_bytes += target.retained_bytes
@@ -445,8 +494,5 @@ class SessionJournal:
                 archive.logs[log.id] = log
                 self.log(log)
         agent.registry.context_notes["resume"] = (
-            f"Restored session {data['id']}. No tools were replayed. Inspect any interrupted tool's effects before retrying. "
-            "The model and request settings are those currently selected; saved usage includes the parent session."
-            " Background jobs from the prior process are not reattached or relaunched; their outcomes may be unknown. Inspect retained logs before rerunning commands."
-            + (" A torn final journal entry was ignored; its operation may be uncertain." if data["torn"] else "")
+            load_prompt('session-resume.txt', session_id=data['id'], torn_notice=load_prompt('session-torn-entry.txt') if data['torn'] else '')
         )

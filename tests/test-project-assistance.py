@@ -46,6 +46,41 @@ async def test_map_respects_gitignore_and_keeps_text_within_budget(workspace):
         assert len(await RepositoryMap(workspace).snapshot("visible", limit)) <= limit
 
 
+@pytest.mark.parametrize("suffix,source,expected", [
+    (".js", "export class Box { run(x) { return convert(x); } } function convert(x) { return x; }", ["class Box", "run(x)", "function convert(x)"]),
+    (".ts", "interface Box { run(x: number): number; } export const convert = (x: number): number => x;", ["interface Box", "run(x: number)", "convert = (x: number)"]),
+    (".tsx", "export function View() { return <div>Hello</div>; }", ["function View()"]),
+    (".php", "<?php class Box { public function run($x) {return helper($x);} } function helper($x) {return $x;}", ["class Box", "function run($x)", "function helper($x)"]),
+    (".go", "package main\ntype Box struct {}\nfunc (b Box) Run(x int) int { return x }", ["Box struct", "Run(x int) int"]),
+    (".rs", "struct Box {} impl Box { fn run(&self, x: i32) -> i32 { x } }", ["struct Box", "fn run(&self, x: i32)"]),
+    (".java", "class Box { int run(int x) { return x; } }", ["class Box", "int run(int x)"]),
+    (".cpp", "struct Box {}; int convert(int x) { return x; }", ["struct Box", "int convert(int x)"]),
+    (".cs", "class Box { int Run(int x) { return x; } }", ["class Box", "int Run(int x)"]),
+    (".rb", "class Box\n def run(x)\n x\n end\nend", ["class Box", "def run(x)"]),
+])
+async def test_map_extracts_multilanguage_declarations_offline(workspace, suffix, source, expected):
+    (workspace.root / ("code" + suffix)).write_text(source)
+    mapping = RepositoryMap(workspace)
+    text = await mapping.snapshot("Box")
+    for declaration in expected:
+        assert declaration in text
+    assert await mapping.snapshot("Box") == text
+
+
+async def test_map_ranks_referenced_symbols_above_unrelated_files(workspace):
+    (workspace.root / "entry.ts").write_text("export function start() { return convert(); }")
+    (workspace.root / "z-helper.ts").write_text("export function convert() { return 1; }")
+    (workspace.root / "a-unrelated.ts").write_text("export function unrelated() { return 2; }")
+    text = await RepositoryMap(workspace).snapshot("start")
+    assert text.index("entry.ts") < text.index("z-helper.ts") < text.index("a-unrelated.ts")
+
+
+async def test_map_labels_partial_syntax_trees(workspace):
+    (workspace.root / "broken.ts").write_text("export function unfinished(x: number) {")
+    text = await RepositoryMap(workspace).snapshot("unfinished")
+    assert "partial outline: syntax errors" in text
+
+
 def configure(workspace, **settings):
     (workspace.root / ".slipagent").mkdir(exist_ok=True)
     (workspace.root / ".slipagent" / "project.json").write_text(json.dumps(settings))
@@ -81,6 +116,23 @@ async def test_syntax_failures_and_absent_environment_are_reported(workspace):
         result = await check_edit_batch(registry, batch, 1)
         assert "FAILED" in result and "never closed" in result
         assert "Command log" in result
+    finally:
+        await registry.aclose()
+
+
+async def test_missing_python_check_is_retained_for_agent_without_chat_warning(workspace):
+    registry = build_default_registry(workspace)
+    events = []
+    client = StubClient([
+        completion("Editing", [ToolCall("1", "write_file", {"path": "code.py", "content": "value = 1\n"})]),
+        completion("Done"),
+    ])
+    try:
+        agent = Agent(client, registry, "test", on_event=events.append)
+        assert await agent.run("edit") == "Done"
+        await agent.wait_for_compaction()
+        assert "SKIPPED — no selected project Python." in str(client.calls[1]["messages"])
+        assert not any(event.kind == "warning" and "no selected project Python" in event.text for event in events)
     finally:
         await registry.aclose()
 

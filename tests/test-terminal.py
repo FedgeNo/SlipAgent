@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+from types import SimpleNamespace
 
 import pyte
 import pytest
@@ -26,6 +27,28 @@ async def wait_until(predicate) -> None:
     async with asyncio.timeout(3):
         while not predicate():
             await asyncio.sleep(.02)
+
+
+@pytest.mark.parametrize("working", [False, True])
+def test_ctrl_c_exits_with_keyboard_interrupt_without_custom_stop_or_copy(display, monkeypatch, working):
+    sink, _, output, _, _ = display
+    exits = []
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        monkeypatch.setattr(ui.app, "exit", lambda **kwargs: exits.append(kwargs))
+        try:
+            ui.working = working
+            ui.input.text = "draft"
+            for key in (Keys.ControlC, Keys.SIGINT):
+                bindings = [binding for binding in ui._bindings().get_bindings_for_keys((key,))
+                            if binding.keys == (key,)]
+                assert len(bindings) == 1
+                bindings[0].handler(SimpleNamespace(app=ui.app))
+            assert exits == [{"exception": KeyboardInterrupt}] * 2
+            assert ui.input.text == "draft"
+            assert ui._lines.empty()
+        finally:
+            ui.close()
 
 
 @pytest.mark.parametrize("columns", [18, 100])
@@ -230,7 +253,7 @@ async def test_long_reasoning_stream_keeps_input_and_stop_responsive(display):
                 pipe.send_text(word)
                 await asyncio.sleep(.04)
             await wait_until(lambda: "Now check the result." in snapshot()[19])
-            pipe.send_text("\x03")
+            pipe.send_text("\x15/stop\r")
             assert await asyncio.wait_for(ui.read_line(), 1) == "/stop"
         finally:
             ui.close()
@@ -364,7 +387,7 @@ async def test_danger_status_suffix_is_red_last_and_survives_resize(display, tmp
             await task
 
 
-@pytest.mark.parametrize("cancel_key", ["\x1b", "\x03", "\x04"])
+@pytest.mark.parametrize("cancel_key", ["\x1b", "\x04"])
 async def test_menu_cancellation_preserves_input_history_scroll_and_running_turn(display, cancel_key):
     sink, _, output, _, snapshot = display
     with create_pipe_input() as pipe:
@@ -504,7 +527,8 @@ async def test_latest_user_prompt_pins_at_top_and_releases_on_next_prompt(displa
             ui.write("\n".join(f"result {i}" for i in range(50)))
             await wait_until(lambda: snapshot()[0].rstrip() == "> Keep the original task visible")
             assert "result 49" in "\n".join(snapshot()[1:17])
-            assert screen.buffer[0][0].fg == "66ff66"
+            assert screen.buffer[0][0].fg == "ffffff"
+            assert screen.buffer[0][0].bg == "004000"
             assert "unfinished draft" in snapshot()[19]
             assert "readout" in snapshot()[23]
 
@@ -569,7 +593,7 @@ async def test_pinned_prompt_follows_scrollback_in_both_directions(display):
             # A wheel event on the header crosses back into the previous task.
             pipe.send_text("\x1b[<64;1;1M")
             await wait_until(lambda: snapshot()[0].rstrip() == "> Second task")
-            assert screen.buffer[0][0].fg == "66ff66"
+            assert screen.buffer[0][0].fg == "ffffff"
             pipe.send_text("\x1b[<65;1;1M")
             await wait_until(lambda: snapshot()[0].rstrip() == "> Third task")
 
@@ -602,7 +626,7 @@ async def test_pinned_prompt_truncates_resizes_and_survives_context_view_and_ref
             ui.write("\n".join(f"output {i}" for i in range(50)))
             await wait_until(lambda: snapshot()[0].rstrip() == "> alpha beta gamma…")
             assert snapshot()[1].startswith("output ")
-            assert screen.buffer[0][0].fg == "66ff66"
+            assert screen.buffer[0][0].fg == "ffffff"
             size[0] = Size(rows=24, columns=40)
             screen.resize(lines=24, columns=40)
             ui.app.invalidate()
@@ -698,7 +722,7 @@ async def test_pinned_line_requires_green_prompt_prefix_and_survives_reload(disp
             ui.write(f"> Ordinary quote\n\x1b[{ansi_color}mGreen without marker\x1b[0m\n")
             ui.write("\n".join(f"output {i}" for i in range(40)))
             await wait_until(lambda: snapshot()[0].rstrip() == "> Saved task")
-            assert screen.buffer[0][0].fg == "66ff66"
+            assert screen.buffer[0][0].fg == "ffffff"
             # Rebuild from the file, as for a session without prompt metadata.
             for name in ("_pinned_prompt", "_prompt_pending"):
                 del ui.__dict__[name]
@@ -757,7 +781,7 @@ async def test_restored_transcript_replaces_output_and_scrolls_to_end(display):
             ui._scroll_output(-1000)
             await wait_until(lambda: "Saved first answer" in "\n".join(snapshot()[:17]))
             assert snapshot()[0].rstrip() == "> Saved first task"
-            assert screen.buffer[0][0].fg == "66ff66"
+            assert screen.buffer[0][0].fg == "ffffff"
             await renderer.restore_transcript(messages, ["Queued correction"])
             await wait_until(lambda: "> Queued correction" in "\n".join(snapshot()[:17]))
             assert "queued" in "\n".join(snapshot()[:17])
@@ -783,6 +807,45 @@ async def test_working_indicator_pulses_and_becomes_idle(display) -> None:
         finally:
             ui.close()
             await task
+
+
+def test_title_animation_matches_working_and_stops_when_ready(display, monkeypatch):
+    sink, _, output, _, _ = display
+    titles = []
+    clock = [0.0]
+    monkeypatch.setattr(output, "set_title", titles.append)
+    monkeypatch.setattr("slipagent.terminal.time.monotonic", lambda: clock[0])
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        try:
+            ui.set_title("Task | SlipAgent")
+            assert titles[-1] == "Task | SlipAgent"
+            assert ui._activity()[0][1] == "Ready"
+            ui.set_working(True)
+            assert titles[-1] == "▌ Task | SlipAgent"
+            clock[0] = .25
+            ui.app.before_render.fire()
+            assert titles[-1] == "▛ Task | SlipAgent"
+            assert ui._activity()[0][1].startswith(titles[-1][0])
+            ui.set_title("Renamed | SlipAgent")
+            assert titles[-1] == "▛ Renamed | SlipAgent"
+            ui.set_working(False)
+            assert titles[-1] == "Renamed | SlipAgent"
+            assert ui._activity()[0][1] == "Ready"
+            count = len(titles)
+            clock[0] = .5
+            ui.app.before_render.fire()
+            assert len(titles) == count
+            assert titles[-1] == "Renamed | SlipAgent"
+            assert ui._activity()[0][1] == "Ready"
+            from slipagent.terminal import PULSE_FRAMES
+            from wcwidth import width
+            assert all(width(frame) == 1 for frame in PULSE_FRAMES)
+            ready = ui.app.style.get_attrs_for_style_str("class:idle")
+            working = ui.app.style.get_attrs_for_style_str("class:pulse")
+            assert ready.color == working.color
+        finally:
+            ui.close()
 
 
 async def test_footer_resizes_and_wraps_input_above_blank_and_readout(display) -> None:
@@ -1217,7 +1280,7 @@ async def test_streaming_chunks_wrap_reflow_and_keep_the_footer_and_draft(displa
             renderer.handle(AgentEvent(kind="assistant_delta", text="ta gamma delta epsilon"))
             await wait_until(lambda: "delta epsilon" in snapshot()[2])
             assert snapshot()[1].rstrip() == "alpha beta gamma"
-            assert screen.buffer[1][0].bold
+            assert not screen.buffer[1][0].bold
             size[0] = Size(rows=24, columns=40)
             screen.resize(lines=24, columns=40)
             ui.app.invalidate()
@@ -1257,8 +1320,8 @@ async def test_requested_colors_apply_to_user_input_tool_calls_and_errors(displa
             pipe.send_text("draft")
             await wait_until(lambda: "draft" in snapshot()[19])
             for text, expected in [
-                ("> request", "66ff66"), ("list_dir", "ff00ff"),
-                ("tool failed", "ff6666"), ("request failed", "ff6666"), ("draft", "66ff66"),
+                ("> request", "ffffff"), ("list_dir", "ff00ff"),
+                ("tool failed", "ff6666"), ("request failed", "ff6666"), ("draft", "ffffff"),
                 ("muted detail", "aaaaaa"), ("readout", "aaaaaa"), ("white detail", "default"),
             ]:
                 rows = snapshot()

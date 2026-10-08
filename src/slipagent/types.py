@@ -14,6 +14,23 @@ from typing import Any, Literal, Self
 Role = Literal["system", "user", "assistant", "tool"]
 
 
+def decode_json_content(value: Any) -> Any:
+    """Decode structured text at an external boundary; preserve ordinary text."""
+    if isinstance(value, str) and value.lstrip().startswith(("{", "[")):
+        try:
+            return json.loads(value)
+        except ValueError:
+            pass
+    return value
+
+
+def content_text(value: Any) -> str:
+    """Render structured content only when a destination needs text."""
+    if value is None:
+        return ""
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+
+
 @dataclass(slots=True)
 class ToolCall:
     """A single function invocation requested by the model."""
@@ -40,6 +57,10 @@ class ToolCall:
                 "arguments": json.dumps(self.arguments, separators=(",", ":")),
             },
         }
+
+    def to_record(self) -> dict[str, Any]:
+        return {"id": self.id, "type": "function",
+                "function": {"name": self.name, "arguments": self.arguments}}
 
     def brief(self) -> str:
         """Short human-readable summary used by the CLI event renderer."""
@@ -75,7 +96,7 @@ class Message:
     """One entry in the conversation history."""
 
     role: Role
-    content: str | None = None
+    content: Any = None
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
     name: str | None = None
@@ -86,12 +107,16 @@ class Message:
     # Readable reasoning from this response only, concatenated before archival.
     reasoning: str | None = None
 
+    def __post_init__(self) -> None:
+        if self.role == "tool":
+            self.content = decode_json_content(self.content)
+
     @classmethod
     def system(cls, content: str) -> Self:
         return cls(role="system", content=content)
 
     @classmethod
-    def user(cls, content: str) -> Self:
+    def user(cls, content: Any) -> Self:
         return cls(role="user", content=content)
 
     @classmethod
@@ -99,11 +124,11 @@ class Message:
         return cls(role="assistant", content=content, tool_calls=tool_calls or None)
 
     @classmethod
-    def tool_result(cls, tool_call_id: str, content: str) -> Self:
+    def tool_result(cls, tool_call_id: str, content: Any) -> Self:
         return cls(role="tool", content=content, tool_call_id=tool_call_id)
 
     def to_api(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {"role": self.role, "content": self.content}
+        payload: dict[str, Any] = {"role": self.role, "content": content_text(self.content) if self.content is not None else None}
         if self.tool_calls:
             payload["tool_calls"] = [call.to_api() for call in self.tool_calls]
         if self.tool_call_id is not None:
@@ -114,6 +139,16 @@ class Message:
             payload["reasoning_details"] = self.reasoning_details
         elif self.reasoning:
             payload["reasoning"] = self.reasoning
+        return payload
+
+    def to_record(self) -> dict[str, Any]:
+        payload = {"role": self.role, "content": self.content}
+        if self.tool_calls:
+            payload["tool_calls"] = [call.to_record() for call in self.tool_calls]
+        for key in ("tool_call_id", "name", "reasoning_details", "reasoning"):
+            value = getattr(self, key)
+            if value is not None:
+                payload[key] = value
         return payload
 
     @classmethod

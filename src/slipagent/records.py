@@ -1,19 +1,19 @@
 """JSON input records, separate from the model's response/tool-call protocol.
 
-Each API user message carries one object. Descriptions belong in the system
-prompt; original user, reply, and tool text remains inside JSON string values.
+The outgoing system prompt embeds selected completed-step objects as JSON;
+the API user message carries the current-step object. Originals retain their
+roles in storage. Original user, reply, and tool text remains in string fields.
 """
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from .types import Message
 
 
 def record_message(record: dict[str, Any]) -> Message:
-    return Message.user(json.dumps(record, ensure_ascii=False))
+    return Message.user(record)
 
 
 def step_record(messages: list[Message], *, current: bool = False,
@@ -27,16 +27,13 @@ def step_record(messages: list[Message], *, current: bool = False,
             continue
         result = {"call_id": message.tool_call_id, "tool_name": names.get(message.tool_call_id or "", message.name),
                   "status": "unknown", "content": message.content}
-        try:
-            saved = json.loads(message.content or "")
-        except ValueError:
-            saved = None
+        saved = message.content
         # Unwrap only the harness's exact observation envelope. Arbitrary JSON
         # returned by a tool stays its content, even when it contains these keys.
         if (isinstance(saved, dict) and saved.keys() == {"tool", "call_id", "status", "content"}
                 and saved["call_id"] == message.tool_call_id
                 and saved["tool"] == result["tool_name"]
-                and saved["status"] in ("success", "error") and isinstance(saved["content"], str)):
+                and saved["status"] in ("success", "error")):
             result.update(status=saved["status"], content=saved["content"])
         results.append(result)
     record: dict[str, Any] = {

@@ -6,7 +6,7 @@ import json
 import httpx
 import pytest
 
-from test_agent import summary_response
+from test_agent import summary_response, context_records
 
 from slipagent.agent import Agent
 from slipagent.cli import Renderer, Session, Style, _model_command
@@ -22,6 +22,36 @@ from test_agent import RecordingTool, context_body, task_record
 def endpoint(parameters, context=262144, tag="provider", **extra):
     return {"tag": tag, "supported_parameters": parameters, "context_length": context,
             "max_completion_tokens": 32768, "status": 0, **extra}
+
+
+@pytest.mark.parametrize("status", [-2, -1, 1, None])
+def test_endpoint_status_does_not_reject_selected_model(status):
+    profile = ModelCapabilities({}, [endpoint(["tools"], status=status)])
+    assert profile.native_tools
+    assert profile.providers == ["provider"]
+    assert profile.context_length == 262144
+
+
+def test_status_does_not_exclude_rows_from_shared_routing_limits():
+    profile = ModelCapabilities({}, [endpoint(["tools"], 262144),
+                                     endpoint(["tools"], 32768, status=-2)])
+    assert profile.context_length == 32768
+
+
+async def test_capabilities_for_model_missing_from_catalog():
+    def handle(request):
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": []})
+        return httpx.Response(200, json={"data": {
+            "id": "test/unlisted", "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+            "endpoints": [endpoint(["tools", "temperature"])],
+        }})
+
+    async with OpenRouterClient("test", transport=httpx.MockTransport(handle)) as client:
+        capabilities = await client.model_capabilities("test/unlisted")
+        assert capabilities is not None
+        assert capabilities.native_tools
+        assert capabilities.context_length == 262144
 
 
 def test_context_uses_catalog_when_endpoint_omits_it():
@@ -88,11 +118,18 @@ async def test_infeasible_selection_preserves_active_model(tmp_path, context, ma
     assert requests == []
 
 
-async def test_startup_preflight_failure_closes_all_created_clients(tmp_path, monkeypatch):
+@pytest.mark.parametrize("failure", ["context", "catalog", "endpoints"])
+async def test_startup_model_failure_keeps_session_available(tmp_path, monkeypatch, capsys, failure):
     params = ["tools", "response_format"]
     requests, gets, clients, registries = [], [], [], []
     models = [{"id": "test/tiny", "supported_parameters": params}]
     transport = transport_for(models, {"test/tiny": [endpoint(params, 1)]}, requests, gets)
+    if failure != "context":
+        def handle(request):
+            if failure == "endpoints" and request.url.path.endswith("/models"):
+                return httpx.Response(200, json={"data": models})
+            return httpx.Response(403, json={"error": {"message": "Model unavailable"}})
+        transport = httpx.MockTransport(handle)
     original_registry = cli.build_default_registry
     def new_client(**kwargs):
         client = OpenRouterClient(**kwargs, transport=transport)
@@ -107,8 +144,13 @@ async def test_startup_preflight_failure_closes_all_created_clients(tmp_path, mo
     monkeypatch.setenv("SLIPAGENT_NO_DOTENV", "1")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test")
     args = cli.build_parser().parse_args(["--no-reload", "--no-mcp", "--model", "test/tiny", "-w", str(tmp_path)])
-    with pytest.raises(OpenRouterError, match="context budget"):
-        await cli.build_session(args)
+    session = await cli.build_session(args)
+    try:
+        assert session.agent.model == "test/tiny"
+        assert not clients[0]._client.is_closed
+        assert "model check failed" in capsys.readouterr().err
+    finally:
+        await cli._shutdown(session)
     assert clients[0]._client.is_closed
     assert registries[0].get("fetch_page")._client.is_closed
     assert requests == []
@@ -134,7 +176,7 @@ def transport_for(models, endpoints, requests, gets, replies=None):
         requests.append(body)
         content = replies[len(requests)-1] if replies else record()
         system = body["messages"][0]["content"]
-        native = "Replies and Native Tool Calls:" in system
+        native = "============================= BEGIN REPLIES AND NATIVE TOOL CALLS ==============================" in system
         text = json.dumps({"response": content["response"], "tool_calls": content["tool_calls"]})
         message = {"role": "assistant", "content": text}
         if native:
@@ -183,9 +225,9 @@ async def test_format_and_context_use_only_compatible_endpoints():
     async with OpenRouterClient("test", transport=transport_for([model], {"test/model": endpoints}, requests, gets)) as client:
         agent = Agent(client, ToolRegistry(), "test/model")
         assert await agent.run("Do the task.") == "Done."
-        assert await agent._context_length() == 128000
+        assert await agent._context_length() == 8000
     assert requests[0]["response_format"]["type"] == "json_schema"
-    assert requests[0]["provider"] == {"require_parameters": True, "only": ["strict"]}
+    assert requests[0]["provider"] == {"require_parameters": True, "only": ["strict", "offline"]}
 
 
 async def test_json_object_retries_before_reply_or_tool_execution():
@@ -204,7 +246,7 @@ async def test_json_object_retries_before_reply_or_tool_execution():
     assert not any(event.text == "REJECTED REPLY" for event in events)
     assert [event.kind for event in events].index("retry") < [event.kind for event in events].index("tool_start")
     assert "last response was rejected" in requests[1]["messages"][0]["content"]
-    assert json.loads(requests[2]["messages"][-2]["content"])["tool_results"][0]["content"] == "actual result"
+    assert context_records(requests[2]["messages"])[0]["tool_results"][0]["content"] == "actual result"
     assert all(request.get("response_format") == requests[0].get("response_format") for request in requests)
 
 
@@ -245,8 +287,7 @@ async def test_unsupported_model_fails_before_inference():
     assert requests == []
 
 
-@pytest.mark.parametrize("bad_endpoints", [[], [endpoint(["temperature"])], [endpoint(["max_tokens"])],
-                                           [endpoint(["tools", "response_format"], status=1)], "invalid"])
+@pytest.mark.parametrize("bad_endpoints", [[], [endpoint(["temperature"])], [endpoint(["max_tokens"])], "invalid"])
 async def test_rejected_selection_preserves_current_model_and_conversation(tmp_path, bad_endpoints):
     params = ["tools", "response_format", "reasoning"]
     models = [{"id": slug, "supported_parameters": params} for slug in ["test/current", "test/new"]]

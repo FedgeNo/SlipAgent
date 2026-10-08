@@ -9,6 +9,7 @@ so it survives behavior reloads and closes before the shared API client.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 from collections.abc import Callable
 from typing import Any
@@ -17,9 +18,10 @@ from .capabilities import ModelCapabilities
 from .context import SUMMARY_MAX_CHARS, CompletedStep, message_tokens
 from .openrouter import OpenRouterClient
 from .types import Message, Usage
-from .prompts import COMPACTION_PROMPT
+from .prompts import load_prompt
 
 COMPACTION_TIMEOUT = 20 * 60
+COMPACTION_RETRIES = 5
 
 class StepCompactor:
     def __init__(self, on_usage: Callable[[Usage], None], on_error: Callable[[str], None]) -> None:
@@ -31,18 +33,43 @@ class StepCompactor:
 
     def submit(self, step: CompletedStep, client: OpenRouterClient, model: str,
                capabilities: ModelCapabilities | None, max_tokens: int | None) -> None:
-        source = step.compaction_input()
+        source = copy.deepcopy(step.compaction_input())
         generation = self.generation
         job = asyncio.create_task(self._compact(step, source, client, model, capabilities, max_tokens, generation))
         self.jobs.add(job)
         job.add_done_callback(self.jobs.discard)
 
-    async def _compact(self, step: CompletedStep, source: str, client: OpenRouterClient, model: str,
+    async def _compact(self, step: CompletedStep, source: dict[str, Any], client: OpenRouterClient, model: str,
                        capabilities: ModelCapabilities | None, max_tokens: int | None, generation: int) -> None:
+        try:
+            for attempt in range(COMPACTION_RETRIES + 1):
+                try:
+                    await self._compact_once(step, source, client, model, capabilities, max_tokens, generation)
+                    return
+                except Exception as exc:
+                    if generation != self.generation:
+                        return
+                    if attempt < COMPACTION_RETRIES:
+                        delay = (client._backoff(attempt, getattr(exc, "retry_after", None))
+                                 if isinstance(client, OpenRouterClient) else min(2 ** attempt, 30))
+                        await asyncio.sleep(delay)
+                        continue
+                    step.compaction_status = "failed"
+                    step.compaction_error = f"{type(exc).__name__}: {exc}"
+                    self.on_error(f"Could not summarize step {step.id}: {exc}. Its full original remains available through recall_history.")
+                    callback = getattr(self, "on_step", None)
+                    if callback is not None:
+                        callback(step)
+        except asyncio.CancelledError:
+            step.compaction_status = "cancelled"
+            raise
+
+    async def _compact_once(self, step: CompletedStep, source: dict[str, Any], client: OpenRouterClient, model: str,
+                            capabilities: ModelCapabilities | None, max_tokens: int | None, generation: int) -> None:
         try:
             if generation != self.generation:
                 return
-            messages = [Message.system(COMPACTION_PROMPT.rstrip("\n")),
+            messages = [Message.system(load_prompt("background-summary-prompt.txt")),
                         Message.user(source)]
             reserve = max_tokens or 8192
             if capabilities is not None:
@@ -56,6 +83,7 @@ class StepCompactor:
             if isinstance(client, OpenRouterClient):
                 options["request_profile"] = capabilities
                 options["disable_timeout"] = True
+                options["single_attempt"] = True
             async with asyncio.timeout(COMPACTION_TIMEOUT):
                 completion = await client.chat(
                     model=model, messages=messages, tools=None, temperature=.2,
@@ -89,14 +117,6 @@ class StepCompactor:
         except asyncio.CancelledError:
             step.compaction_status = "cancelled"
             raise
-        except Exception as exc:
-            if generation == self.generation:
-                step.compaction_status = "failed"
-                step.compaction_error = f"{type(exc).__name__}: {exc}"
-                self.on_error(f"Could not summarize step {step.id}: {exc}. Its full original remains available through recall_history.")
-                callback = getattr(self, "on_step", None)
-                if callback is not None:
-                    callback(step)
 
     def reset(self) -> None:
         self.generation += 1

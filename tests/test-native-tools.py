@@ -233,7 +233,7 @@ async def test_json_only_fallback_omits_native_parameters_and_replays_observatio
     assert tool.seen == [{"value": "A"}]
     for request in router.requests:
         assert "tools" not in request and "tool_choice" not in request
-        assert "Available Tool Definitions" in request["messages"][0]["content"]
+        assert "BEGIN AVAILABLE TOOL DEFINITIONS" in request["messages"][0]["content"]
         assert all(message["role"] != "tool" and "tool_calls" not in message for message in request["messages"])
     transcript = "\n".join(message["content"] or "" for message in unpack_api_context(router.requests[1]["messages"]))
     assert "ACTUAL RESULT" in transcript

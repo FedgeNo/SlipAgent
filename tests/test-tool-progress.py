@@ -1,5 +1,7 @@
 """Progress reaches the user during execution without requesting another model step."""
 
+from slipagent.types import content_text
+
 import asyncio
 import io
 import os
@@ -12,7 +14,7 @@ import pytest
 from slipagent.activity import OutputProgress, command_output
 from slipagent.agent import Agent, AgentEvent
 from slipagent.cli import Renderer, Style
-from slipagent.progress import LoopGuard
+from slipagent.progress import LoopGuard, StreamLoopGuard, StreamLoopError
 from slipagent.tools.base import ToolRegistry, ToolResult
 from slipagent.tools.shell import RunCommandTool
 from slipagent.types import ToolCall
@@ -40,7 +42,7 @@ async def test_shell_streams_before_exit_and_preserves_final_output(workspace):
         command_output.reset(token)
     assert not result.is_error
     assert "FIRST" in "".join(chunks) and "LAST" in "".join(chunks)
-    assert "FIRST" in result.content and "LAST" in result.content
+    assert "FIRST" in content_text(result.content) and "LAST" in content_text(result.content)
 
 
 async def test_output_throttle_bounds_pending_text_and_flushes_on_close():
@@ -95,7 +97,7 @@ async def test_repeated_batches_get_recovery_context_before_stopping():
     answer = await agent.run("inspect")
     assert "unchanged results again" in answer
     assert len(client.calls) == 4 and len(agent.history.steps) == 4
-    assert "Change the approach" in client.calls[3]["messages"][0].content
+    assert "Change the approach" in content_text(client.calls[3]["messages"][0].content)
     current = context_records(client.calls[3]["messages"])[-1]
     assert any("Change the approach" in prompt for prompt in current["user_prompt"])
     assert current["is_tool_result_response"] is True
@@ -112,3 +114,84 @@ async def test_changed_action_after_recovery_continues_normally():
     assert await agent.run("inspect") == "Done"
     assert "progress" not in agent.registry.context_notes
     await agent.wait_for_compaction()
+
+
+@pytest.mark.parametrize("period", [2, 3, 6])
+def test_loop_guard_detects_cycles_with_unchanged_results(period):
+    guard, registry = LoopGuard(), ToolRegistry()
+    for index in range(period * 4):
+        batch = [(ToolCall(str(index), "inspect", {"file": index % period}), ToolResult.ok("same"))]
+        message, stop = guard.observe(batch, registry, index + 1)
+        assert bool(message) == (index + 1 >= period * 3)
+        assert stop == (index + 1 >= period * 4)
+
+
+def test_loop_guard_allows_cycles_whose_results_change():
+    guard, registry = LoopGuard(), ToolRegistry()
+    for index in range(30):
+        batch = [(ToolCall(str(index), "inspect", {"file": index % 2}), ToolResult.ok(str(index // 2)))]
+        assert guard.observe(batch, registry, index + 1) == ("", False)
+
+
+PROSE = "I need to inspect the same information once more to decide whether this request is complete. "
+
+
+@pytest.mark.parametrize("kind", ["reasoning", "content"])
+@pytest.mark.parametrize("chunk_size", [1, 37, 10000])
+def test_stream_guard_detects_repetition_independently_of_chunks(kind, chunk_size):
+    guard = StreamLoopGuard()
+    text = PROSE * 12
+    with pytest.raises(StreamLoopError, match="sustained repetition"):
+        for index in range(0, len(text), chunk_size):
+            guard.feed(kind, text[index:index + chunk_size])
+        guard.finish()
+
+
+def test_stream_guard_preserves_code_tables_lists_and_short_repetition():
+    samples = ["```python\n" + PROSE * 12 + "\n```", "~~~\n" + PROSE * 12,
+               ("| " + PROSE + " |\n") * 12, ("- " + PROSE + "\n") * 12, PROSE * 3]
+    for text in samples:
+        guard = StreamLoopGuard()
+        for chunk in text:
+            guard.feed("content", chunk)
+        guard.finish()
+
+
+async def test_repetitive_completed_response_does_not_execute_its_tools():
+    tool = RecordingTool()
+    response = completion(PROSE * 12, [ToolCall("one", "record", {"value": "unsafe"})])
+    agent = Agent(StubClient([response]), ToolRegistry([tool]), "test")
+    assert "sustained repetition" in await agent.run("inspect")
+    assert agent.stopped and tool.seen == []
+    assert len(agent.messages) == 1
+    await agent.registry.aclose()
+
+
+async def test_repetitive_decoded_response_does_not_execute_its_tools():
+    import json
+    import httpx
+    from slipagent.capabilities import ModelCapabilities
+    from slipagent.openrouter import OpenRouterClient
+    tool = RecordingTool()
+    content = json.dumps({"response": PROSE * 12, "tool_calls": [{"id": "one", "name": "record", "arguments": '{"value":"unsafe"}'}]})
+    def handle(request):
+        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": content}}],
+                                        "usage": {"prompt_tokens": 7, "completion_tokens": 11, "total_tokens": 18}})
+    async with OpenRouterClient("test", transport=httpx.MockTransport(handle)) as client:
+        client.cache_capabilities("test", ModelCapabilities({}, [{"tag": "stub", "context_length": 1000000, "supported_parameters": ["response_format"]}]))
+        agent = Agent(client, ToolRegistry([tool]), "test")
+        assert "sustained repetition" in await agent.run("inspect")
+        assert tool.seen == [] and agent.stopped
+        assert agent.usage.total_tokens == 18
+        await agent.registry.aclose()
+
+
+def test_stream_guard_bounds_buffers_and_excludes_long_code_fences():
+    guard = StreamLoopGuard()
+    guard.feed("content", "```\n")
+    for index in range(1000):
+        guard.feed("content", str(index) + PROSE + "\n")
+    guard.feed("content", "```\nDone.")
+    guard.finish()
+    assert all(len(value) <= 32768 for value in guard.buffers.values())
+    assert len(guard.pending) <= 32768

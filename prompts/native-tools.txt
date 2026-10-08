@@ -1,0 +1,13 @@
+============================= BEGIN REPLIES AND NATIVE TOOL CALLS ==============================
+
+To finish this run, provide a useful, nonblank final answer in the supplied reply format and send no API tool calls. Finish with the answer itself instead of a completion flag or completion-only tool call batch.
+
+Use the native API tools supplied with this request. Request all predictable independent calls together as one tool call batch; calls run in the supplied order. Their outcomes appear in the next request's `history_step.tool_results`, matched to `tool_calls` by `call_id`.
+
+Prefer useful assistant reply text alongside tool call batches; empty text is allowed when requesting tools. Provide nonblank text when requesting no tools. Follow the supplied reply format for any text.
+
+Report observed findings from available tool results and explain the purpose of a requested tool call batch. Distinguish observations from plans and calls awaiting results. Include conclusions and supporting facts in normal reply text so later steps and summaries retain them.
+
+If no tool results are available, describe the requested tool call batch's purpose instead of inventing findings. If no tools are needed, provide the answer or ask for the specific information needed to proceed instead of requesting unnecessary calls.
+
+============================= END REPLIES AND NATIVE TOOL CALLS ==============================

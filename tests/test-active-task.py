@@ -1,3 +1,7 @@
+
+from slipagent.types import content_text
+
+from slipagent.types import decode_json_content
 import io
 import json
 import re
@@ -32,7 +36,7 @@ class PlainClient(StubClient):
     """Keep working replies plain so task memory cannot depend on an echo."""
 
     async def chat(self, **kwargs):
-        if kwargs["messages"][0].content.startswith("Summarize one completed SlipAgent step"):
+        if kwargs["messages"][0].content.lstrip().startswith("Summarize one completed SlipAgent step"):
             return await super().chat(**kwargs)
         self.calls.append({**kwargs, "messages": list(kwargs["messages"])})
         return self.responses.pop(0)
@@ -53,7 +57,7 @@ async def test_new_prompt_replaces_active_prompt_without_forcing_old_source_reca
     assert not any(event.kind == "retry" for event in events)
     assert len(client.calls) == 2
     for request in client.calls:
-        wire = "\n".join(message.content or "" for message in unpack_context(request["messages"]))
+        wire = "\n".join(content_text(message.content) for message in unpack_context(request["messages"]))
         assert "Current request" in wire
         assert 'originated at step_id 3' in wire
         assert "Request only recall_history" not in wire
@@ -72,7 +76,7 @@ async def test_current_prompt_and_its_source_survive_compression_without_task_up
     assert len(tool.seen) == window + 2
     assert len(client.calls) == window + 3
     for request in client.calls:
-        wire = "\n".join(message.content or "" for message in unpack_context(request["messages"]))
+        wire = "\n".join(content_text(message.content) for message in unpack_context(request["messages"]))
         assert text in wire
         assert 'originated at step_id 1' in wire
     assert any(record["representation"] == "compressed" for record in context_records(client.calls[-1]["messages"]))
@@ -88,7 +92,7 @@ async def test_inline_task_records_are_rejected(include_revision):
     agent = Agent(client, ToolRegistry(), "test")
     assert await agent.run("Current request") == "Done"
     assert len(client.calls) == 2
-    assert "last response was rejected" in client.calls[1]["messages"][0].content
+    assert "last response was rejected" in content_text(client.calls[1]["messages"][0].content)
 
 
 async def test_context_supplies_retained_prompt_when_legacy_full_post_has_no_copy():
@@ -125,10 +129,10 @@ async def test_queued_prompt_replaces_retained_prompt_after_current_batch():
     agent.on_event = event
     assert await agent.run("FIRST PROMPT: inspect the project") == "Done"
     await agent.wait_for_compaction()
-    assert 'originated at step_id 1' in client.calls[0]["messages"][0].content
+    assert 'originated at step_id 1' in content_text(client.calls[0]["messages"][0].content)
     for request in client.calls[1:]:
-        assert 'originated at step_id 2' in request["messages"][0].content
+        assert 'originated at step_id 2' in content_text(request["messages"][0].content)
         assert any((m.content or "").endswith("NEW PROMPT: run the targeted tests") for m in unpack_context(request["messages"]) if m.role == "user")
     result = await agent.registry.invoke("recall_history", {"step_id": 2, "section": "user"})
     assert not result.is_error
-    assert json.loads(json.loads(result.content)["content"]) == ["NEW PROMPT: run the targeted tests"]
+    assert decode_json_content(decode_json_content(result.content)["content"]) == ["NEW PROMPT: run the targeted tests"]

@@ -1,0 +1,4 @@
+{
+    "properties/path": "Workspace-relative or absolute path, subject to the current Workspace Access mode.",
+    "properties/content": "Full file contents to write."
+}

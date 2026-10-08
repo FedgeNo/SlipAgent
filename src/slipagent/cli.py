@@ -7,6 +7,9 @@ Two modes:
 
 from __future__ import annotations
 
+from .prompts import PromptError
+from .markdown import THEMES, MarkdownRenderer, literal
+
 import argparse
 import asyncio
 import re
@@ -23,7 +26,7 @@ import shlex
 from dataclasses import dataclass, field
 from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, TextIO, cast
 
 from .agent import Agent, AgentEvent, STEP_LIMIT_NOTICE, STOP_NOTICE, build_system_prompt
 from .config import Config, ConfigError, dotenv_path, save_dotenv_value, save_model_choice
@@ -43,10 +46,11 @@ from .tools import build_default_registry
 from .types import KeyInfo, Message, ModelInfo
 from .workspace import Workspace, WorkspaceError
 from .terminal import TerminalUI
-from .palette import ERROR_COLOR, MUTED_COLOR, USER_COLOR, foreground_code
+from .palette import ERROR_COLOR, MUTED_COLOR, THOUGHT_COLOR, USER_BACKGROUND_COLOR, USER_COLOR, USER_TEXT_COLOR, foreground_code
 from .runtime import RuntimeFrame
 from .task import TaskMemory
 from .sessions import SessionJournal, SessionError, session_title
+from .checkpoints import CheckpointError
 from wcwidth import iter_graphemes, strip_sequences, wcswidth
 from tabulate import tabulate
 
@@ -59,7 +63,7 @@ BANNER = """SlipAgent — OpenRouter compatible coding agent
 Commands: /help  /tools  /model [slug]  /models [filter]  /key [show|status|key]
           /temperature [value]  /cost  /mcp [add|save|remove]
           /task [new]  /rename <name>  /reset  /reload  /generations
-          /sessions  /resume [id|latest]  /fork  /delete  /requests [attempt]
+          /sessions  /resume [id|latest]  /fork  /delete  /rewind  /requests [attempt]
           /menu  /danger [on|off|status]  /overthinking on|off  /init  /stop  /exit  /quit
 
 Type a task and press Enter. Follow-ups queue while the agent works.
@@ -73,15 +77,19 @@ HELP = """\
 Commands
 
   /help                show this help
+  /config-show         show active interpreter, model, and workspace settings
   /menu                open the arrow-key command menu; Enter selects, Esc closes
+  /theme <name>        dark, light, monochrome, or ironbow Markdown palette
+  /markdown [source|rendered] toggle Markdown source view (F2)
+  /copy [auto|text|markdown|code [number]] copy the latest reply (F3)
   /danger [on]         disable workspace path confinement (queues while working)
   /danger off          restore workspace path confinement (queues while working)
   /danger status       show whether danger mode is active
-  /overthinking on|off  enable or disable thoughts in the latest five steps (queues while working)
+  /overthinking on|off  enable or disable thoughts in the latest 25 steps (queues while working)
   /tools               list the available tools
-  /model               show the active model
+  /model               choose a model with Up/Down and Enter; Escape cancels
   /model <slug>        switch model and remember the choice
-  /models [filter]     browse the catalog (e.g. /models gpt, /models free)
+  /models [filter]     choose from the catalog (e.g. /models gpt, /models free)
   /temperature         show the current temperature and model support
   /temperature <value> set temperature from 0 to 2 when supported (default 1.0)
   /key                 enter a different OpenRouter API key (hidden input)
@@ -95,6 +103,8 @@ Commands
   /sessions            list saved sessions for this project
   /fork                copy the current saved session and continue in the copy (queues while working)
   /delete              confirm deletion of the current session and its logs; Esc cancels (queues while working)
+  /rewind              choose an edit checkpoint and confirm file restoration; Esc cancels
+  /rewind list         list available file checkpoints without restoring anything
   /resume              choose a saved session with Up/Down and Enter (queues while working)
   /resume <id|latest>   restore a saved conversation and scroll to its end (queues while working)
   /requests [attempt]  list recent request attempts or inspect an exact saved request
@@ -128,6 +138,8 @@ Inside a chooser, Esc only closes the chooser. Completed results are preserved."
 # input. Commands needing arguments remain available through the ordinary prompt.
 MENU_OPTIONS = [
     ("/help", "Help"),
+    ("/markdown", "Toggle Markdown Source"),
+    ("/copy", "Copy Latest Reply"),
     ("/tools", "Available Tools"),
     ("/model", "Current Model"),
     ("/models", "Browse Models"),
@@ -139,6 +151,7 @@ MENU_OPTIONS = [
     ("/resume", "Resume Session"),
     ("/fork", "Fork Current Session"),
     ("/delete", "Delete Current Session"),
+    ("/rewind", "Rewind File Edits"),
     ("/requests", "Request Diagnostics"),
     ("/mcp", "MCP Servers"),
     ("/reload", "Reload Components"),
@@ -169,6 +182,9 @@ class Style:
     def dim(self, text: str) -> str:
         return self._wrap(foreground_code(MUTED_COLOR), text)
 
+    def thought(self, text: str) -> str:
+        return self._wrap(foreground_code(THOUGHT_COLOR), text)
+
     def bold(self, text: str) -> str:
         return self._wrap("1", text)
 
@@ -177,6 +193,10 @@ class Style:
 
     def green(self, text: str) -> str:
         return self._wrap(foreground_code(USER_COLOR), text)
+
+    def user(self, text: str) -> str:
+        background = foreground_code(USER_BACKGROUND_COLOR).replace("38;2;", "48;2;", 1)
+        return self._wrap(foreground_code(USER_TEXT_COLOR) + ";" + background, text)
 
     def magenta(self, text: str) -> str:
         return self._wrap("38;2;255;0;255", text)
@@ -221,6 +241,9 @@ class Renderer:
         # written.
         self._prompt: tuple[str, str] | None = None
         self.terminal: TerminalUI | None = None
+        self.markdown_theme = "dark"
+        self.output_markdown = False
+        self.stdout_color = _use_color(sys.stdout, not style.enabled)
 
     def _write(
         self, text: str, *, continuation_indents: dict[int, int] | None = None,
@@ -270,6 +293,8 @@ class Renderer:
     def _finish_stream(self) -> None:
         if getattr(self, "_stream_kind", None) is None:
             return
+        if self.terminal is not None and self._stream_kind == "assistant_delta":
+            self.terminal.finish_markdown()
         if self.terminal is None:
             self.stream.write("\n")
             self.stream.flush()
@@ -285,9 +310,16 @@ class Renderer:
             self._begin_block(self._model_block)
             if kind == "reasoning_delta":
                 text = "Thinking: " + text
-        styled = self.style.dim(text) if kind in {"reasoning_delta", "tool_output"} else self.style.bold(text)
+        styled = literal(text)
+        if kind == "reasoning_delta":
+            styled = self.style.thought(text)
+        elif kind == "tool_output":
+            styled = self.style.dim(text)
         if self.terminal is not None:
-            self.terminal.write_chunk(styled, first=first)
+            if kind == "assistant_delta":
+                self.terminal.write_markdown(text, first=first, final=False)
+            else:
+                self.terminal.write_chunk(styled, first=first)
         else:
             self.stream.write(styled)
             self.stream.flush()
@@ -298,7 +330,7 @@ class Renderer:
         """Separate each submitted prompt from the surrounding transcript."""
         self._finish_stream()
         self._begin_block()
-        block = self.style.green(f"> {text}")
+        block = self.style.user(f"> {text}")
         if queued and self.terminal is not None:
             self._write(block + "\n", user_prompt=True)
             self.terminal.write_queued_notice(self.style.dim("  (queued — the agent is still working)"), text)
@@ -337,15 +369,12 @@ class Renderer:
                     self.handle(AgentEvent(kind="tool_start", tool_call=call))
             elif message.role == "tool":
                 result = ToolResult.ok(message.content or "")
-                try:
-                    saved = json.loads(result.content)
-                except ValueError:
-                    saved = None
+                saved = result.content
                 if (isinstance(saved, dict) and saved.get("status") in ("success", "error")
-                        and isinstance(saved.get("content"), str)):
+                        and "content" in saved):
                     result = ToolResult(saved["content"], saved["status"] == "error")
                 if result.content:
-                    body = _literal_tool_output(result.content)
+                    body = _literal_tool_output(result.text())
                     if result.is_error:
                         self.emit(self.style.red(f"  ✗ {body}"), block=self._model_block)
                     else:
@@ -413,8 +442,16 @@ class Renderer:
 
         elif event.kind == "assistant_text":
             if self.show_assistant_text:
+                self._finish_stream()
                 self._model_block = object()
-                self.emit(self.style.bold(event.text), block=self._model_block)
+                if self.terminal is not None:
+                    self._begin_block(self._model_block)
+                    self.terminal.write_markdown(event.text)
+                    self._last_output_blank = False
+                else:
+                    self.__dict__.setdefault("output_markdown", False)
+                    text = literal(event.text) if self.output_markdown else MarkdownRenderer(color=False).plain(event.text)
+                    self.emit(text, block=self._model_block)
 
         elif event.kind == "user_message":
             # Mid-step input the user typed while the agent was working. It is
@@ -448,16 +485,16 @@ class Renderer:
                 return
             if result.is_error:
                 # Errors are the most useful signal; always surface them.
-                self.emit(self.style.red(f"  ✗ {result.content}"), block=self._model_block)
+                self.emit(self.style.red(f"  ✗ {result.text()}"), block=self._model_block)
             elif getattr(self, "_tool_streamed", False):
                 self.emit(self.style.dim("  ✓ Command completed."), block=self._model_block)
-            elif self.verbose and result.content.strip():
-                body = result.content.strip()
+            elif self.verbose and result.text().strip():
+                body = result.text().strip()
                 for line in body.splitlines():
                     self.emit(self.style.dim(f"    {line}"), block=self._model_block)
 
         elif event.kind == "warning":
-            self.emit(self.style.red(f"  ! {event.text}"), block=self._model_block)
+            self.emit(self.style.red(f"  Warning: {event.text}"), block=self._model_block)
         elif event.kind == "notice":
             self.emit(self.style.dim(f"  {event.text}"))
 
@@ -550,15 +587,23 @@ async def build_session(args: argparse.Namespace) -> Session:
     )
     async with AsyncExitStack() as resources:
         resources.push_async_callback(client.aclose)
-        await client.list_models()
-        if await client.model_capabilities(config.model, refresh=True) is None:
-            raise OpenRouterConfigError("The API did not supply capabilities to verify the configured model's compatibility.")
+        model_error: OpenRouterError | None = None
+        try:
+            await client.list_models()
+            if await client.model_capabilities(config.model, refresh=True) is None:
+                raise OpenRouterConfigError("The API did not supply capabilities to verify the configured model's compatibility.")
+        except OpenRouterError as exc:
+            model_error = exc
         registry = build_default_registry(workspace)
+        registry.services["editable_prompts"] = True
         resources.push_async_callback(registry.aclose)
         registry.services["project_environment"].python_override = args.python
 
         style = Style(_use_color(sys.stderr, args.no_color))
         renderer = Renderer(style, sys.stderr, args.verbose)
+        renderer.markdown_theme = getattr(args, "theme", "dark")
+        renderer.output_markdown = getattr(args, "markdown", False)
+        renderer.stdout_color = _use_color(sys.stdout, args.no_color)
 
         agent = Agent(
             client=client,
@@ -585,11 +630,11 @@ async def build_session(args: argparse.Namespace) -> Session:
             try:
                 states = await manager.connect_all()
             except MCPError as exc:
-                print(style.red(f"  ! mcp: {exc}"), file=sys.stderr)
+                print(style.red(f"  Warning: mcp: {exc}"), file=sys.stderr)
                 states = []
             for state in states:
                 if state.status == "error":
-                    print(style.red(f"  ! mcp: {state.line()}"), file=sys.stderr)
+                    print(style.red(f"  Warning: mcp: {state.line()}"), file=sys.stderr)
 
         session = Session(
             agent=agent,
@@ -603,7 +648,13 @@ async def build_session(args: argparse.Namespace) -> Session:
             app_title=config.app_title,
             mcp=mcp,
         )
-        await agent._context_view(registry.specs(), 0, preview=True)
+        if model_error is None:
+            try:
+                await agent._context_view(registry.specs(), 0, preview=True)
+            except OpenRouterError as exc:
+                model_error = exc
+        if model_error is not None:
+            renderer.emit(f"  model check failed: {model_error} Select another model with /models or /model <slug>.")
         if not getattr(args, "no_session", False):
             journal = SessionJournal(str(config.workspace))
             registry.services["session_journal"] = journal
@@ -611,12 +662,12 @@ async def build_session(args: argparse.Namespace) -> Session:
                 data = await asyncio.to_thread(journal.load, args.resume)
                 journal.restore(agent, data)
                 session.extensions["restore_transcript"] = True
-                renderer.emit(f"  Resumed {data['id']} as {journal.session_id}; no tools were replayed.")
+                renderer.emit(f"  Resumed {journal.session_id}; no tools were replayed.")
         if not getattr(args, "no_reload", False):
             frame = RuntimeFrame(session, sys.modules[__name__])
             session.reloader = frame
             agent.on_boundary = lambda: frame.checkpoint(boundary=True)
-        if args.model:
+        if args.model and model_error is None:
             try:
                 await asyncio.to_thread(save_model_choice, config.model)
             except (OSError, ConfigError) as exc:
@@ -643,7 +694,16 @@ async def run_one_shot(session: Session, prompt: str) -> int:
         await _shutdown(session)
 
     # Rendered to stdout so `slipagent -p "..." | pbcopy` behaves.
-    print(answer)
+    if session.renderer.output_markdown:
+        print(literal(answer))
+    elif getattr(session.renderer, "stdout_color", _use_color(sys.stdout, not session.renderer.style.enabled)):
+        from prompt_toolkit.formatted_text import FormattedText
+        from prompt_toolkit.shortcuts import print_formatted_text
+        rows = MarkdownRenderer(session.renderer.markdown_theme).render(answer, shutil.get_terminal_size().columns)
+        fragments = [(style, text) for row in rows for style, text, *_ in [*row.fragments, ("", "\n")]]
+        print_formatted_text(FormattedText(fragments), file=sys.stdout, end="")
+    else:
+        print(MarkdownRenderer(color=False).plain(answer))
     return 1 if answer == STEP_LIMIT_NOTICE else 0
 
 
@@ -667,6 +727,7 @@ async def run_repl(session: Session) -> int:
             status_suffix=lambda: _danger_suffix(session, style),
         )
         renderer.terminal = terminal
+        terminal.configure_markdown(theme=renderer.markdown_theme, source=renderer.output_markdown)
         terminal.set_interrupt_handler(lambda: _request_interrupt(session))
         terminal_task = asyncio.create_task(terminal.run())
     renderer.show_banner(
@@ -746,9 +807,11 @@ async def _read_line(session: Session, style: Style) -> str | None:
 
     Returns None at end of input, which the caller treats as EOF.
     """
+    if "pending_input_line" in session.extensions:
+        return cast(str | None, session.extensions.pop("pending_input_line"))
     renderer = session.renderer
     _refresh_title(session)
-    renderer.draw_prompt(_status_bar(session, style), style.green("> "))
+    renderer.draw_prompt(_status_bar(session, style), style.user("> "))
     if renderer.terminal is not None:
         line = await renderer.terminal.read_line()
         renderer.end_prompt()
@@ -925,7 +988,7 @@ async def _run_request(session: Session, prompt: str, style: Style) -> bool:
                     if _background_command(text):
                         _start_background_command(session, text)
                     elif text.startswith("/") and await _handle_command(session, text):
-                        renderer.emit(style.dim("  exiting after this step."))
+                        renderer.emit(style.dim("  exiting."))
                         exiting = True
                         reader = None
                     elif text and not text.startswith("/"):
@@ -975,6 +1038,9 @@ async def _run_request(session: Session, prompt: str, style: Style) -> bool:
             reader.cancel()
         if reader is not None:
             await _gather_quietly(reader)
+            if not exiting and not reader.cancelled() and reader.exception() is None:
+                # Input may finish while deferred commands are being applied.
+                session.extensions["pending_input_line"] = reader.result()
         renderer.clear_prompt()
         if renderer.terminal is not None:
             renderer.terminal.set_working(False)
@@ -1062,9 +1128,9 @@ async def _run_interactive_command(session: Session, line: str) -> bool:
 
 def _changes_session(command: str, argument: str) -> bool:
     """Commands that cannot share a live model request or tool batch."""
-    return (command in {"reset", "init", "resume", "fork", "delete"}
+    return (command in {"reset", "init", "resume", "fork", "delete", "rewind", "model", "models"}
             or command == "key" and argument.lower() not in {"show", "status"}
-            or command in {"model", "mcp", "temperature"} and bool(argument)
+            or command in {"mcp", "temperature"} and bool(argument)
             or command == "task" and argument == "new"
             or command == "danger" and argument.lower() in {"", "on", "off"}
             or command == "overthinking" and argument.lower() in {"on", "off"})
@@ -1100,7 +1166,7 @@ async def _apply_deferred_commands(session: Session, *, exiting: bool = False) -
         parts = line[1:].split(None, 1)
         command = parts[0].lower()
         argument = parts[1].strip() if len(parts) > 1 else ""
-        if command in {"reset", "resume", "delete"} or command == "task" and argument == "new":
+        if command in {"reset", "resume", "delete", "rewind"} or command == "task" and argument == "new":
             resume = False
         try:
             if await _run_interactive_command(session, line):
@@ -1117,7 +1183,7 @@ def _background_command(text: str) -> bool:
     parts = text.split(None, 1)
     command = parts[0].lower() if parts else ""
     argument = parts[1].strip().lower() if len(parts) > 1 else ""
-    return (command == "/models" or command == "/key" and argument in {"show", "status"}
+    return (command == "/key" and argument in {"show", "status"}
             or command == "/temperature" and not argument)
 
 
@@ -1297,6 +1363,7 @@ async def _execute_command(session: Session, line: str) -> bool:
 
     if command in ("exit", "quit"):
         session.extensions["resume_after_commands"] = False
+        session.agent.request_stop()
         return True
     if command == "stop":
         session.extensions["resume_after_commands"] = False
@@ -1308,6 +1375,37 @@ async def _execute_command(session: Session, line: str) -> bool:
             print(style.dim("  already idle."), file=out)
     elif command == "help":
         print(HELP, file=out, end="")
+    elif command in {"theme", "markdown", "copy"}:
+        terminal = session.renderer.terminal
+        if terminal is None:
+            print(style.red(f"  /{command} requires an interactive terminal."), file=out)
+        elif command == "theme":
+            if argument not in THEMES:
+                print("  usage: /theme " + "|".join(THEMES), file=out)
+            else:
+                session.renderer.markdown_theme = argument
+                terminal.configure_markdown(theme=argument)
+                print(f"  Theme: {argument}", file=out)
+        elif command == "markdown":
+            if argument not in {"", "source", "rendered"}:
+                print("  usage: /markdown [source|rendered]", file=out)
+            else:
+                source = argument == "source" if argument else not terminal._markdown_source
+                terminal.configure_markdown(source=source)
+                print("  Markdown source" if source else "  Rendered Markdown", file=out)
+        else:
+            copy_options = argument.split()
+            mode = copy_options[0] if copy_options else "auto"
+            try:
+                if mode not in {"auto", "text", "markdown", "code"} or len(copy_options) > 2:
+                    raise ValueError("usage: /copy [auto|text|markdown|code [number]]")
+                if len(copy_options) == 2 and mode != "code":
+                    raise ValueError("A block number is only valid with /copy code.")
+                terminal.copy_response(mode, int(copy_options[1]) if len(copy_options) == 2 else 1)
+            except ValueError as exc:
+                print(style.red(f"  {exc}"), file=out)
+            else:
+                print("  Copied to clipboard; terminals without a local clipboard utility must support OSC 52.", file=out)
     elif command == "tools":
         print("  " + "\n  ".join(session.registry.names), file=out)
     elif command == "danger":
@@ -1403,9 +1501,46 @@ async def _execute_command(session: Session, line: str) -> bool:
                 journal.restore(session.agent, data)
                 await session.renderer.restore_transcript(session.agent.messages, session.agent.pending,
                                                           queued_messages=session.agent.queued_messages)
-                print(f"  restored {data['id']} as {journal.session_id}; no tools were replayed. Type a task or continue when ready.", file=out)
+                print(f"  restored {journal.session_id}; no tools were replayed. Type a task or continue when ready.", file=out)
             except SessionError as exc:
                 print(style.red(f"  {exc}"), file=out)
+    elif command == "rewind":
+        checkpoints = session.agent._checkpoints()
+        terminal = session.renderer.terminal
+        if argument not in {"", "list"}:
+            print(style.red("  usage: /rewind [list]"), file=out)
+        elif checkpoints is None or not checkpoints.listing():
+            print("  no file-edit checkpoints in this session.", file=out)
+        elif argument == "list":
+            for batch in checkpoints.listing():
+                print(f"  {batch['id']}  step {batch['step_id']}  {batch['created']}", file=out)
+        elif terminal is None:
+            print(style.red("  /rewind requires an interactive terminal for selection and confirmation."), file=out)
+        else:
+            batches = checkpoints.listing()
+            selected = await terminal.choose("Rewind File Edits", [
+                (batch["id"], f"Before Step {batch['step_id']} — {batch['created']}") for batch in batches
+            ])
+            if selected is not None:
+                from .tools.blocking import run_blocking
+                try:
+                    preview = await run_blocking(checkpoints.preview, selected)
+                except OSError as exc:
+                    print(style.red(f"  {exc}"), file=out)
+                    return False
+                print(_literal_tool_output(preview), file=out)
+                confirm = await terminal.choose("Restore These Files?", [("restore", "Restore Files"), ("cancel", "Cancel")])
+                if confirm == "restore":
+                    try:
+                        jobs = session.registry.services.get("command_jobs")
+                        if jobs is not None:
+                            await jobs.stop_all()
+                        restored = await run_blocking(checkpoints.rewind, selected)
+                        notice = "Files restored by /rewind: " + ", ".join(restored)
+                        session.registry.context_notes["file_rewind"] = notice + ". Conversation is retained; earlier tool results describe files before this restoration. Read current contents before editing."
+                        print("  " + notice, file=out)
+                    except (OSError, CheckpointError) as exc:
+                        print(style.red(f"  {exc}"), file=out)
     elif command in {"fork", "delete"}:
         journal = session.registry.services.get("session_journal")
         if argument:
@@ -1435,7 +1570,7 @@ async def _execute_command(session: Session, line: str) -> bool:
                 if command == "fork":
                     parent = journal.session_id
                     data = await asyncio.to_thread(journal.load, parent)
-                    journal.restore(session.agent, data)
+                    journal.restore(session.agent, data, fork=True)
                     print(f"  forked {parent} as {journal.session_id}; continuing in the new session.", file=out)
                 else:
                     session.agent.reset(new_session=False)
@@ -1488,6 +1623,13 @@ async def _execute_command(session: Session, line: str) -> bool:
             print(f"  current generation: {session.reloader.generation}", file=out)
     elif command == "init":
         await _init_command(session, style, out)
+    elif command == "config-show":
+        # Report live settings without exposing arbitrary dotenv credentials.
+        print(f"Active interpreter: {sys.executable}", file=out)
+        print(f"Model choice: {session.agent.model}", file=out)
+        print(f"Workspace: {session.workspace.root}", file=out)
+        print(f"Danger mode: {'on' if session.workspace.access.danger else 'off'}", file=out)
+        print(f"Overthinking mode: {'on' if session.agent.overthinking else 'off'}", file=out)
     else:
         print(style.red(f"  unknown command: /{command} (try /help)"), file=out)
     _refresh_title(session)
@@ -1499,6 +1641,9 @@ async def _model_command(
     session: Session, argument: str, style: Style, out: io.TextIOBase
 ) -> None:
     if not argument:
+        if session.renderer.terminal is not None:
+            await _models_command(session, "", style, out)
+            return
         print(f"  current model: {style.cyan(session.agent.model)}", file=out)
         print(style.dim("  switch with: /model <slug>   browse with: /models"), file=out)
         return
@@ -1588,6 +1733,19 @@ async def _models_command(
 
     if not matches:
         print(f"  no models matching {argument!r}", file=out)
+        return
+
+    terminal = session.renderer.terminal
+    if terminal is not None:
+        options = [
+            (model.id, f"{model.id}  {_price_cell(model.pricing)}/Mtok  "
+             "context: " + (f"{model.context_length:,}" if model.context_length else "unknown") +
+             ("  (current)" if model.id == session.agent.model else ""))
+            for model in sorted(matches, key=lambda model: model.id)
+        ]
+        selected = await terminal.choose("Select Model", options)
+        if selected is not None:
+            await _model_command(session, selected, style, out)
         return
 
     free_count = sum(1 for m in catalog if _price_cell(m.pricing) == "free")
@@ -1832,7 +1990,7 @@ async def _mcp_command(
             )
 
     if state.status == "error":
-        print(style.red(f"  ! {state.line()}"), file=out)
+        print(style.red(f"  Warning: {state.line()}"), file=out)
         return
 
     print(f"  {style.green('connected')} {state.spec.name} — {state.detail}", file=out)
@@ -1978,6 +2136,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="Show full tool output and per-step token usage.")
     parser.add_argument("--no-color", action="store_true", help="Disable ANSI colour.")
+    parser.add_argument("--theme", choices=list(THEMES), default="dark", help="Markdown theme (default: dark).")
+    parser.add_argument("--markdown", action="store_true", help="Preserve Markdown source instead of readable plain output.")
     parser.add_argument("--no-reload", action="store_true", help="Disable automatic component reloads.")
     parser.add_argument("--resume", nargs="?", const="latest", help="Restore a project session by full ID, or the latest saved session.")
     parser.add_argument("--no-session", action="store_true", help="Keep conversation and command logs only until reset or exit.")
@@ -2018,6 +2178,9 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         return asyncio.run(_dispatch(args, prompt))
+    except PromptError as exc:
+        print(f"slipagent: {exc}", file=sys.stderr)
+        return 2
     except KeyboardInterrupt:
         return 130
 

@@ -1,8 +1,12 @@
 """Shared colors for ANSI output, input styling, and transcript recognition."""
 
-USER_COLOR = "#66ff66"
+USER_COLOR = "#00ff00"
+USER_TEXT_COLOR = "#ffffff"
+USER_BACKGROUND_COLOR = "#004000"
+USER_PROMPT_STYLE = USER_TEXT_COLOR + " bg:" + USER_BACKGROUND_COLOR
 ERROR_COLOR = "#ff6666"
 MUTED_COLOR = "#aaaaaa"
+THOUGHT_COLOR = "#999999"
 
 
 def foreground_code(color: str) -> str:

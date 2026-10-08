@@ -1,5 +1,7 @@
 """Edits recover from model mistakes without guessing what to write."""
 
+from slipagent.types import content_text
+
 import pytest
 
 from slipagent.tools.files import EditFileTool
@@ -13,8 +15,8 @@ async def test_missing_match_reports_actual_numbered_source_without_writing(work
         "path": "app.py", "old_string": "    return value * 3", "new_string": "    return value * 4",
     })
     assert result.is_error
-    assert "2\t    return value * 2" in result.content
-    assert "No changes" in result.content
+    assert "2\t    return value * 2" in content_text(result.content)
+    assert "No changes" in content_text(result.content)
     assert target.read_text() == original
 
 
@@ -25,7 +27,7 @@ async def test_missing_match_identifies_existing_replacement(workspace):
         "path": "app.py", "old_string": "old_value = 1", "new_string": "new_value = 2",
     })
     assert result.is_error
-    assert "already exists at line 1" in result.content
+    assert "already exists at line 1" in content_text(result.content)
     assert target.read_text() == "new_value = 2\n"
 
 
@@ -38,7 +40,7 @@ async def test_multiple_edits_use_original_file_and_return_diff(workspace):
     ]})
     assert not result.is_error, result.content
     assert target.read_bytes() == b"second = 2\r\nextra = 0\r\nlast = 3\r\n"
-    assert "-first = 1" in result.content and "+last = 3" in result.content
+    assert "-first = 1" in content_text(result.content) and "+last = 3" in content_text(result.content)
 
 
 @pytest.mark.parametrize("edits", [

@@ -1,3 +1,5 @@
+
+from slipagent.types import content_text
 import asyncio
 
 import pytest
@@ -63,4 +65,4 @@ async def test_cancellation_drains_started_calls_and_pairs_every_result():
     assert sorted(finished) == started == ["0", "1"]
     assert [key for key, _ in committed] == [str(i) for i in range(6)]
     assert all(result.is_error for _, result in committed)
-    assert "not run" in committed[-1][1].content
+    assert "not run" in content_text(committed[-1][1].content)

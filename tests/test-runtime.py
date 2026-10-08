@@ -38,7 +38,7 @@ async def main():
     async def transport(request):
         if request.method == 'POST':
             body = json.loads(request.content)
-            if body['messages'][0]['content'].startswith('Summarize one completed SlipAgent step'):
+            if body['messages'][0]['content'].lstrip().startswith('Summarize one completed SlipAgent step'):
                 return httpx.Response(200, json={'choices': [{'message': {'role': 'assistant', 'content': 'Completed demo step.'}, 'finish_reason': 'stop'}]})
         requests.append(request)
         if request.url.path.endswith('/models'):
@@ -65,7 +65,7 @@ async def main():
     agent.on_boundary = lambda: frame.checkpoint(boundary=True)
     root = frame.root
     def edit(filename, before, after):
-        path = root / filename
+        path = root / ('prompts/' + filename if filename.endswith('.txt') else filename)
         source = path.read_text()
         assert before in source, (filename, before)
         path.write_text(source.replace(before, after))
@@ -86,6 +86,7 @@ def run_copy(tmp_path: Path):
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
     )
     project = tmp_path / "project"
+    shutil.copytree(Path(__file__).resolve().parents[1] / "prompts", package_root / "slipagent" / "prompts")
     project.mkdir()
 
     def run(body: str) -> None:
@@ -110,7 +111,12 @@ def test_prompt_resource_reloads_and_rejects_invalid_template(run_copy):
         edit('system-prompt.txt', '{workspace}', '{unknown_placeholder}')
         await frame.checkpoint()
         assert frame.generation == 1 and agent.system_prompt == accepted
-        assert cli.build_system_prompt(str(workspace.root)) in accepted
+        try:
+            cli.build_system_prompt(str(workspace.root))
+        except KeyError:
+            pass
+        else:
+            raise AssertionError('Invalid prompt placeholders must be reported')
         assert 'Reload rejected' in sink.getvalue()
         edit('system-prompt.txt', '{unknown_placeholder}', '{workspace}')
         edit('system-prompt.txt', 'You are the updated SlipAgent,', 'You are the recovered SlipAgent,')
@@ -137,6 +143,40 @@ def test_initialized_guidance_survives_component_reload(run_copy):
     ''')
 
 
+def test_file_checkpoints_and_cycle_guard_survive_behavior_reload(run_copy):
+    run_copy('''
+        from slipagent.checkpoints import current_checkpoint
+        from slipagent.tools.files import _atomic_write
+        path = workspace.root / 'file.txt'
+        path.write_text('original')
+        checkpoints = agent._checkpoints()
+        checkpoints.begin(1)
+        token = current_checkpoint.set(checkpoints)
+        try:
+            _atomic_write(workspace, path, 'first edit')
+        finally:
+            current_checkpoint.reset(token)
+            checkpoints.finish()
+        checkpoint_id = checkpoints.listing()[0]['id']
+        guard = agent._loop_guard()
+        guard.observe([(ToolCall('one', 'read_file', {'path': 'file.txt'}), ToolResult.ok('same'))], registry, 1)
+        edit('checkpoints.py', 'Unknown or already restored file checkpoint.', 'Unknown or restored file checkpoint.')
+        edit('progress.py', 'History is preserved.', 'History remains preserved.')
+        await frame.checkpoint()
+        assert frame.generation == 1, sink.getvalue()
+        assert agent._checkpoints() is checkpoints
+        assert agent._loop_guard() is guard
+        assert guard.recent
+        checkpoints.rewind(checkpoint_id)
+        assert path.read_text() == 'original'
+        responses.extend([{'role': 'assistant', 'content': '', 'tool_calls': [{'id': 'write', 'type': 'function', 'function': {'name': 'write_file', 'arguments': '{"path":"file.txt","content":"second edit"}'}}]}, {'role': 'assistant', 'content': 'Done'}])
+        assert await agent.run('edit file') == 'Done'
+        assert len(checkpoints.listing()) == 1
+        checkpoints.rewind(checkpoints.listing()[0]['id'])
+        assert path.read_text() == 'original'
+    ''')
+
+
 def test_background_jobs_and_request_diagnostics_survive_reload_and_rejection(run_copy):
     run_copy('''
         import shlex
@@ -148,7 +188,7 @@ def test_background_jobs_and_request_diagnostics_survive_reload_and_rejection(ru
         diagnostics.finish(attempt, 'request_error', response='partial failed response')
         command = shlex.join([sys.executable, '-c', 'import time; print("running", flush=True); time.sleep(60)'])
         result = await registry.invoke('run_command', {'command': command, 'background': True})
-        key = json.loads(result.content.splitlines()[0])['job_id']
+        key = result.content['job_id']
         edit('system-prompt.txt', 'You are SlipAgent,', 'You are the updated SlipAgent,')
         await frame.checkpoint()
         assert frame.generation == 1, sink.getvalue()
@@ -160,7 +200,7 @@ def test_background_jobs_and_request_diagnostics_survive_reload_and_rejection(ru
         await frame.checkpoint()
         assert frame.generation == 1 and jobs.active
         stopped = await registry.invoke('command_jobs', {'action': 'stop', 'job_id': key})
-        assert json.loads(stopped.content)['state'] == 'stopped'
+        assert stopped.content['state'] == 'stopped'
         assert not jobs.active
         assert 'partial failed response' in diagnostics.read(attempt)
     ''')
@@ -383,9 +423,9 @@ def test_edit_waits_for_complete_tool_batch_and_next_step_uses_new_behavior(run_
         assert registry.get('wait') is remote
         roles = [message.role for message in agent.messages]
         assert roles == ['system', 'user', 'assistant', 'tool', 'tool', 'assistant']
-        assert json.loads(agent.messages[3].content)['content'] == 'wait complete'
+        assert agent.messages[3].content['content'] == 'wait complete'
         assert agent.messages[4].tool_call_id == 'two'
-        assert 'is empty.' in agent.messages[4].content
+        assert 'is empty.' in agent.messages[4].content['content']
         assert 'EMPTY AFTER RELOAD.' in (await registry.invoke('list_dir', {})).content
         assert len([r for r in requests if r.method == 'POST']) == 2
     ''')
@@ -414,7 +454,7 @@ def test_stop_with_pending_reload_does_not_take_another_model_turn(run_copy):
         release.set()
         await task
         assert agent.stopped and not agent.running
-        assert json.loads(agent.messages[-1].content)['content'] == 'saved result'
+        assert agent.messages[-1].content['content'] == 'saved result'
         assert frame.generation == 1, sink.getvalue()
         assert len([r for r in requests if r.method == 'POST']) == 1
     ''')
@@ -596,8 +636,9 @@ def test_failed_terminal_build_rolls_back_entire_candidate(run_copy):
             assert terminal.app.key_bindings is original_bindings
             assert terminal.app.style is original_style
             assert terminal.input.window.height is original_height
+            renderer.terminal = None
             await cli._handle_command(session, '/model')
-            assert 'current model: test/model' in ''.join(terminal._raw_output)
+            assert 'current model: test/model' in sink.getvalue()
             assert terminal._activity()[0][1] == 'Ready'
             renderer.terminal = None
     ''')
@@ -874,12 +915,12 @@ def test_task_environment_and_command_logs_survive_reload_and_rejection(run_copy
         assert registry.services['command_archive'] is archive
         assert agent.history.task is task and task.sources == sources
         page = await registry.invoke('read_command_output', {'log_id': log.id})
-        assert json.loads(page.content)['content'] == 'retained output\\n'
+        assert page.content['content'] == 'retained output\\n'
         (root / 'agent.py').write_text('invalid Python !!!')
         await frame.checkpoint()
         assert frame.generation == 1
         page = await registry.invoke('read_command_output', {'log_id': log.id})
-        assert not page.is_error and 'retained output' in page.content
+        assert not page.is_error and 'retained output' in page.content['content']
         agent.reset()
         assert not archive.logs and not agent.history.task.sources
     ''')

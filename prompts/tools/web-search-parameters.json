@@ -1,0 +1,4 @@
+{
+    "properties/query": "Search query.",
+    "properties/num_results": "Number of results (1-10). Defaults to 5."
+}

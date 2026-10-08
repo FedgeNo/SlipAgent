@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .prompts import load_prompt
+
 import ast
 import asyncio
 import os
@@ -9,8 +11,10 @@ import re
 import subprocess
 import time
 from pathlib import Path
+from collections import defaultdict
 
 from .workspace import IGNORED_DIRS, Workspace, WorkspaceError
+from .symbols import outline
 
 SOURCE_SUFFIXES = frozenset({".py", ".pyi", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".c", ".h", ".cpp", ".hpp", ".java", ".php", ".rb", ".cs", ".swift", ".kt", ".sh", ".sql", ".html", ".css", ".md", ".toml"})
 MAX_FILES = 2000
@@ -50,13 +54,13 @@ class RepositoryMap:
         return paths, bool(pending)
 
     def _outline(self, path: Path) -> tuple[str, set[str]]:
-        if path.suffix not in {".py", ".pyi"}:
-            return "", set()
         try:
             with self.workspace.resolve(path).open("rb") as source:
                 raw = source.read(MAX_SOURCE_BYTES + 1)
             if len(raw) > MAX_SOURCE_BYTES:
                 return "[outline omitted: large file]", set()
+            if path.suffix.lower() not in {".py", ".pyi"}:
+                return outline(raw, path.suffix.lower())
             tree = ast.parse(raw)
         except (SyntaxError, ValueError, RecursionError, OSError, WorkspaceError):
             return "[outline unavailable; read source]", set()
@@ -64,9 +68,15 @@ class RepositoryMap:
         references: set[str] = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
-                references.update(alias.name.split(".")[-1] for alias in node.names)
+                references.update("module:" + alias.name.split(".")[-1] for alias in node.names)
             elif isinstance(node, ast.ImportFrom) and node.module:
-                references.add(node.module.split(".")[-1])
+                references.add("module:" + node.module.split(".")[-1])
+            elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                references.add("ref:" + node.id)
+            elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
+                references.add("ref:" + node.attr)
+            if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                references.add("def:" + node.name)
         def describe(nodes: list[ast.stmt], prefix: str = "") -> None:
             for node in nodes:
                 if len(definitions) >= 30:
@@ -88,6 +98,9 @@ class RepositoryMap:
         return "\n".join(definitions), references
 
     def _snapshot(self, query: str, limit: int) -> str:
+        if getattr(self, "symbol_version", 0) != 1:
+            self.cache.clear()
+            self.symbol_version = 1
         paths, incomplete = self._candidates()
         names = [self.workspace.relative(path) for path in paths]
         # Delegate ignore semantics to Git, including nested rules and negations.
@@ -124,17 +137,45 @@ class RepositoryMap:
                 continue
         self.cache = {name: entry for name, entry in retained.items() if entry[1] != "[outline deferred]"}
         words = set(re.findall(r"[a-z_][a-z_0-9]{2,}", query.casefold()))
-        all_references = [reference for _, _, refs in retained.values() for reference in refs]
-        def rank(name: str) -> tuple[int, str]:
+        definitions: dict[str, set[str]] = defaultdict(set)
+        modules: dict[str, set[str]] = defaultdict(set)
+        for name, (_, _, refs) in retained.items():
+            modules[Path(name).stem].add(name)
+            for tag in refs:
+                if tag.startswith("def:"):
+                    definitions[tag[4:]].add(name)
+        edges: dict[str, set[str]] = {}
+        relevance: dict[str, float] = {}
+        for name, (_, _, refs) in retained.items():
             terms = set(re.findall(r"[a-z_][a-z_0-9]{2,}", (name + " " + retained[name][1]).casefold()))
-            return -(len(words & terms) * 20 + min(10, all_references.count(Path(name).stem))), name
+            relevance[name] = 1 + len(words & terms) * 20
+            targets: set[str] = set()
+            for tag in sorted(refs)[:512]:
+                matches = (definitions.get(tag[4:], set()) if tag.startswith("ref:")
+                           else modules.get(tag[7:], set()) if tag.startswith("module:") else set())
+                if len(matches) <= 20:
+                    targets.update(matches)
+                if len(targets) >= 256:
+                    break
+            edges[name] = targets - {name}
+        total = sum(relevance.values()) or 1
+        personal = {name: score / total for name, score in relevance.items()}
+        scores = dict(personal)
+        for _ in range(20):
+            dangling = sum(scores[name] for name in edges if not edges[name])
+            next_scores = {name: (.15 + .85 * dangling) * score for name, score in personal.items()}
+            for name, targets in edges.items():
+                if targets:
+                    share = .85 * scores[name] / len(targets)
+                    for target in targets:
+                        next_scores[target] += share
+            scores = next_scores
+        def rank(name: str) -> tuple[float, str]:
+            return -(relevance[name] + scores[name] * 20), name
         header = (
-            "\n\nRepository Map (Orientation Only):\n\n"
-            "Paths and Python definitions with line numbers; signatures omit defaults and annotations. "
-            "Other languages list paths only.\n\nRead files before editing.\n\nDependencies, hidden directories, "
-            "symlinks and Git-ignored files are excluded from this map; file tools can still inspect them.\n\n"
+            load_prompt('repository-map.txt') + '\n\n'
         )
-        partial = "[Partial map: use glob/grep for files or definitions omitted here.]\n"
+        partial = load_prompt('repository-map-partial.txt') + '\n'
         if len(header) + len(partial) > limit:
             return ""
         result = header

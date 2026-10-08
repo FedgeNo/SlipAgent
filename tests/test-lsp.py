@@ -1,3 +1,7 @@
+
+from slipagent.types import content_text
+
+from slipagent.types import decode_json_content
 import asyncio
 import json
 import sys
@@ -66,7 +70,7 @@ async def test_navigation_confinement_unicode_and_fresh_disk_contents(workspace)
         for operation in ["definition", "references", "implementation"]:
             result = await tool.invoke({"operation": operation, "path": "source.py", "line": 1, "column": 3})
             assert not result.is_error, result.content
-            data = json.loads(result.content)
+            data = decode_json_content(result.content)
             assert data["locations"] == [{"path": "source.py", "line": 1, "column_utf16": 4}]
             assert data["excluded_outside_workspace"] == 1
         source.write_text("updated = 2\n")
@@ -86,11 +90,11 @@ async def test_unconfigured_navigation_reports_setup_without_spawning(workspace)
     (workspace.root / "source.py").write_text("x = 1")
     servers = LanguageServers(workspace)
     result = await NavigateCodeTool(servers).run("definition", "source.py", 1, 1)
-    assert result.is_error and "Configure language_servers" in result.content
+    assert result.is_error and "Configure language_servers" in content_text(result.content)
     assert not servers.clients
     await servers.aclose()
     closed = await NavigateCodeTool(servers).invoke({"operation": "definition", "path": "source.py", "line": 1, "column": 1})
-    assert closed.is_error and "closed" in closed.content
+    assert closed.is_error and "closed" in content_text(closed.content)
 
 
 async def test_cancelled_initialize_reaps_server(workspace):

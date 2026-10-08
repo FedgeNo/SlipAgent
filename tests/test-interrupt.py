@@ -1,5 +1,9 @@
 """Escape ends the step without discarding results or launching another step."""
 
+from slipagent.types import content_text
+
+from slipagent.types import decode_json_content
+
 import asyncio
 import io
 import json
@@ -78,9 +82,9 @@ async def test_interrupt_preserves_results_and_prevents_continuation(tmp_path, m
             assert ran == ["done", "blocked"]
             results = [message for message in session.agent.messages if message.role == "tool"]
             assert len(results) == 3
-            assert "Completed done" in results[0].content
-            assert "interrupted" in results[1].content
-            assert "not run" in results[2].content
+            assert "Completed done" in results[0].content["content"]
+            assert "interrupted" in results[1].content["content"]
+            assert "not run" in results[2].content["content"]
             assert session.agent.history.steps
         assert "Interrupted." in session.renderer.stream.getvalue()
     finally:
@@ -122,15 +126,15 @@ async def test_interrupt_stops_background_processes_summaries_and_commands(tmp_p
         command = shlex.join([sys.executable, "-u", "-c", "import time; print('ready'); time.sleep(60)"])
         result = await session.registry.invoke("run_command", {"command": command, "background": True})
         assert not result.is_error, result.content
-        job_id = json.loads(result.content.splitlines()[0])["job_id"]
+        job_id = result.content["job_id"]
         jobs = session.registry.services["command_jobs"]
         job = jobs.jobs[job_id]
         for _ in range(200):
             output = await session.registry.invoke("read_command_output", {"log_id": job_id})
-            if "ready" in output.content:
+            if "ready" in content_text(output.content):
                 break
             await asyncio.sleep(.01)
-        assert "ready" in output.content
+        assert "ready" in content_text(output.content)
         summary = asyncio.create_task(asyncio.Event().wait())
         compactor = session.registry.services["step_compactor"]
         compactor.jobs.add(summary)

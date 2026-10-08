@@ -1,0 +1,3 @@
+{
+    "properties/path": "Directory to list. Defaults to the workspace root."
+}

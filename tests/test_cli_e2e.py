@@ -418,7 +418,7 @@ def test_api_error_exits_nonzero(project_dir: Path) -> None:
         result = run_cli("-p", "hi", "--base-url", f"{stub.base_url}/nope",
                          cwd=project_dir)
 
-    assert result.returncode == 2
+    assert result.returncode == 1
     assert "slipagent:" in result.stderr
 
 
@@ -465,7 +465,7 @@ def test_repl_prints_the_answer_once_per_turn(project_dir: Path) -> None:
             [sys.executable, "-m", "slipagent.cli", "--base-url", stub.base_url,
              "--model", "stub/model"],
             cwd=project_dir,
-            input="hello\n/exit\n",
+            input="hello\n",
             capture_output=True,
             text=True,
             timeout=60,
@@ -495,7 +495,9 @@ def test_repl_reports_api_failure_without_crashing(project_dir: Path) -> None:
         env=cli_environment(),
     )
 
-    assert proc.returncode == 2, proc.stderr
+    assert proc.returncode == 0, proc.stderr
+    assert "model check failed" in proc.stderr
+    assert "Select another model" in proc.stderr
     assert "Network error" in proc.stderr
     assert "Traceback" not in proc.stderr
 
@@ -525,7 +527,7 @@ def run_repl_commands(project_dir: Path, commands: list[str], *extra: str) -> su
         result = subprocess.run(
             [sys.executable, "-m", "slipagent.cli", *extra],
             cwd=project_dir,
-            input="\n".join([*commands, "/exit"]) + "\n",
+            input="\n".join(commands) + "\n",
             capture_output=True,
             text=True,
             timeout=120,
@@ -656,7 +658,7 @@ def test_repl_never_prints_a_step_counter(project_dir: Path) -> None:
         proc = subprocess.run(
             [sys.executable, "-m", "slipagent.cli", "--base-url", stub.base_url,
              "--model", "stub/model"],
-            cwd=project_dir, input="go\n/exit\n", capture_output=True, text=True, timeout=60,
+            cwd=project_dir, input="go\n", capture_output=True, text=True, timeout=60,
             env=cli_environment(),
         )
 
@@ -672,7 +674,7 @@ def test_model_reply_starts_with_a_gap_after_tool_output(project_dir: Path) -> N
         proc = subprocess.run(
             [sys.executable, "-m", "slipagent.cli", "--base-url", stub.base_url,
              "--model", "stub/model", "-v"],
-            cwd=project_dir, input="go\n/exit\n", capture_output=True, text=True, timeout=60,
+            cwd=project_dir, input="go\n", capture_output=True, text=True, timeout=60,
             env=cli_environment(),
         )
 
@@ -813,13 +815,41 @@ def test_mid_turn_input_is_queued_and_labelled(project_dir: Path) -> None:
 @pytest.mark.parametrize("command", ["/exit", "/quit"])
 def test_exit_during_a_turn_still_prints_the_answer(project_dir: Path, command: str) -> None:
     """Exit commands must not discard work already in flight."""
-    with StubOpenRouter([text_step("finished anyway")]) as stub:
-        proc = run_repl_commands(
-            project_dir, ["go", command], "--base-url", stub.base_url
-        )
+    started, release = threading.Event(), threading.Event()
 
-    assert proc.returncode == 0, proc.stderr
-    assert "finished anyway" in proc.stderr
+    class PausedStub(StubOpenRouter):
+        def _make_handler(self):
+            base = super()._make_handler()
+            class Handler(base):
+                def do_POST(self):
+                    started.set()
+                    release.wait(10)
+                    super().do_POST()
+            return Handler
+
+    with PausedStub([text_step("finished anyway")]) as stub:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "slipagent.cli", "--base-url", stub.base_url],
+            cwd=project_dir, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, env=cli_environment(),
+        )
+        try:
+            proc.stdin.write("go\n")
+            proc.stdin.flush()
+            assert started.wait(5), "The model request never started"
+            proc.stdin.write(command + "\n")
+            proc.stdin.flush()
+            release.set()
+            _, stderr = proc.communicate(timeout=15)
+        finally:
+            release.set()
+            if proc.poll() is None:
+                proc.kill()
+                proc.communicate()
+
+    assert proc.returncode == 0, stderr
+    assert "finished anyway" in stderr
+    assert len(stub.requests) == 1
 
 
 def test_quit_is_advertised_and_exits_without_sending_later_input(project_dir: Path) -> None:
@@ -1073,10 +1103,8 @@ async def test_menu_dispatch_preserves_command_checks(tmp_path, monkeypatch, met
             assert "Queued /reset" in output.getvalue()
             assert session.agent.messages
         elif selection == "/models":
-            tasks = list(session.extensions["command_tasks"])
-            assert tasks
-            await asyncio.gather(*tasks)
-            models.assert_awaited_once()
+            assert "Queued /models" in output.getvalue()
+            models.assert_not_awaited()
         else:
             assert output.getvalue() == ""
     finally:
@@ -1107,6 +1135,7 @@ async def test_resume_picker_lists_all_sessions_and_restores_only_the_selected_o
     output = io.StringIO()
     terminal = Mock(spec=TerminalUI)
     terminal.write.side_effect = lambda text, **kwargs: output.write(text)
+    terminal.write_markdown.side_effect = lambda text, **kwargs: output.write(text)
     session.renderer.terminal = terminal
     try:
         ids = []
@@ -1132,7 +1161,8 @@ async def test_resume_picker_lists_all_sessions_and_restores_only_the_selected_o
         for entry, (value, label) in zip(entries, options):
             assert entry["title"] in label and entry["created"] in label
             assert ("(current)" in label) == (value == current_id)
-        assert all(path.read_bytes() == content for path, content in originals.items())
+        assert all(path.read_bytes() == content for path, content in originals.items()
+                   if cancel or path.stem != ids[2])
         if cancel:
             assert journal.session_id == current_id
             assert session.agent.messages == current_messages
@@ -1140,7 +1170,7 @@ async def test_resume_picker_lists_all_sessions_and_restores_only_the_selected_o
             assert output.getvalue() == ""
             terminal.clear_transcript.assert_not_called()
         else:
-            assert journal.session_id not in {*ids, current_id}
+            assert journal.session_id == ids[2]
             assert journal.title == "Saved Session 2 | SlipAgent"
             assert [message.content for message in session.agent.messages if message.role != "system"] == ["Question 2", "Answer 2"]
             assert "Question 2" in output.getvalue() and "Answer 2" in output.getvalue()
@@ -1208,7 +1238,7 @@ def test_rename_is_saved_listed_and_restored_in_another_process(project_dir):
     assert first.stderr.count("Review café changes | SlipAgent") >= 2
     second = run_repl_commands(project_dir, ["/sessions"], "--resume", "latest")
     assert second.returncode == 0, second.stderr
-    assert second.stderr.count("Review café changes | SlipAgent") >= 2
+    assert "Review café changes | SlipAgent" in second.stderr
     assert "\x1b]2;" not in first.stderr + second.stderr
 
 
@@ -1322,13 +1352,15 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             assert not stub.requests
             os.write(master, b"/menu\r")
             wait_for(lambda: "Enter = select | Esc = back" in screen.display[23])
-            os.write(master, b"\x1b[B\r")
+            from slipagent.cli import MENU_OPTIONS
+            tools_index = next(index for index, (command, _) in enumerate(MENU_OPTIONS) if command == "/tools")
+            os.write(master, b"\x1b[B" * tools_index + b"\r")
             wait_for(lambda: "Ready" in screen.display[18] and "read_file" in "\n".join(screen.display[:17]))
             assert not stub.requests
             os.write(master, b"go\r")
             wait_for(started.is_set)
             os.write(master, b"/rename Work in progress\r")
-            wait_for(lambda: screen.title == "Work in progress | SlipAgent")
+            wait_for(lambda: screen.title.endswith("Work in progress | SlipAgent"))
             os.write(master, b"/stop\r")
             wait_for(lambda: "Stopping After This Step" in screen.display[18])
             os.write(master, b"queued followup\r")
@@ -1345,7 +1377,7 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             assert "queued followup" in [context_body(m["content"]) for m in history if m["role"] == "user"]
             os.write(master, b"/model stub/two\r")
             wait_for(lambda: "model: stub/two" in screen.display[23])
-            assert screen.title == "Work in progress | SlipAgent"
+            assert screen.title.endswith("Work in progress | SlipAgent")
             os.write(master, b"/reset\r")
             wait_for(lambda: screen.title == f"{project_dir} | SlipAgent")
             wait_for(lambda: "conversation cleared" in "\n".join(screen.display[:17]))

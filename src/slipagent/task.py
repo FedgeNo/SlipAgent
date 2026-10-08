@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 
 from .types import Message
 from .records import record_message, step_record
@@ -42,7 +41,7 @@ class TaskMemory:
         for message in messages:
             if message.role != "user":
                 continue
-            record = json.loads(message.content or "{}")
+            record = message.content
             supplied.update(record.get("user_prompt", []))
             if record.get("record_type") == "current_step":
                 current = record

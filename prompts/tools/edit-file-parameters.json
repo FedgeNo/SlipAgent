@@ -1,0 +1,8 @@
+{
+    "properties/path": "Workspace-relative or absolute path, subject to the current Workspace Access mode.",
+    "properties/old_string": "Exact substring to replace within the file, including indentation; need not contain the entire file.",
+    "properties/new_string": "Replacement text. Use an empty string to delete.",
+    "properties/replace_all": "Replace every occurrence instead of requiring a unique match.",
+    "properties/edits": "Replacements matched against the original file. Merge overlapping targets.",
+    "properties/edits/items/properties/old_string": "Exact substring to replace within the original file, including indentation."
+}

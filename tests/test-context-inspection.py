@@ -6,7 +6,7 @@ import json
 import httpx
 import pytest
 
-from test_agent import summary_response
+from test_agent import summary_response, context_records
 
 from slipagent.agent import Agent
 from slipagent.cli import Renderer, Style
@@ -70,7 +70,7 @@ async def test_agent_snapshots_include_retry_prompt_and_matching_tool_results():
     assert snapshots == requests
     assert "last response was rejected" in snapshots[1]["messages"][0]["content"]
     assert "last response was rejected" not in snapshots[2]["messages"][0]["content"]
-    record = json.loads(snapshots[2]["messages"][-2]["content"])
+    record = context_records(snapshots[2]["messages"])[-2]
     assert record["tool_results"] == [{"call_id": "call-1", "tool_name": "record", "status": "success", "content": "EXACT TOOL RESULT"}]
     assert json.loads(snapshots[2]["messages"][-1]["content"])["record_type"] == "current_step"
     renderer = Renderer(Style(False), io.StringIO(), False)
@@ -82,7 +82,7 @@ async def test_agent_snapshots_include_retry_prompt_and_matching_tool_results():
 
 async def test_snapshot_uses_selected_compacted_context_and_stays_immutable():
     requests, events = [], []
-    original = "OLD ORIGINAL RESPONSE " * 100
+    original = " ".join(f"OLD ORIGINAL RESPONSE item {index}." for index in range(100))
     def transport(request):
         if request.method == "GET":
             return httpx.Response(200, json={"data": [{"id": "test", "context_length": 1000000}]})
@@ -99,6 +99,6 @@ async def test_snapshot_uses_selected_compacted_context_and_stays_immutable():
         snapshots = [json.loads(event.text) for event in events if event.kind == "context"]
         assert snapshots == requests
         assert original not in json.dumps(snapshots[-1])
-        assert agent.history.steps[0].summary in snapshots[-1]["messages"][1]["content"]
+        assert agent.history.steps[0].summary == context_records(snapshots[-1]["messages"])[0]["summary"]
         agent.reset()
         assert snapshots[-1] == requests[-1]

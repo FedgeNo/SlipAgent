@@ -1,0 +1,5 @@
+{
+    "properties/repo": "Repository directory, workspace-relative or absolute (default '.'); follows Workspace Access mode.",
+    "properties/paths": "Literal workspace-relative or absolute file/directory paths; use ['.'] for all workspace files. Paths must belong to the selected repository.",
+    "properties/timeout": "Timeout in seconds (default 120, max 600)."
+}

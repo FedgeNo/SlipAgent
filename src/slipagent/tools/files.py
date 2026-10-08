@@ -8,6 +8,8 @@ actually read, and a collision surfaces as an error it can fix.
 
 from __future__ import annotations
 
+from ..prompts import load_prompt
+
 import os
 import stat
 import tempfile
@@ -25,13 +27,32 @@ MAX_READ_LINES = 2_000
 
 
 def _atomic_write(workspace: Workspace, target: Path, content: str) -> None:
+    from ..checkpoints import current_checkpoint
+
+    encoded = content.encode("utf-8")
+    target = workspace.resolve(target)
+    checkpoints = current_checkpoint.get()
+    entry = checkpoints.prepare(target, encoded) if checkpoints is not None else None
+    try:
+        _atomic_write_bytes(workspace, target, encoded)
+    except BaseException:
+        if checkpoints is not None:
+            checkpoints.abort(entry)
+        raise
+    if checkpoints is not None:
+        try:
+            checkpoints.complete(entry)
+        except OSError as exc:
+            raise OSError(f"File was written, but checkpoint completion could not be saved: {exc}") from exc
+
+
+def _atomic_write_bytes(workspace: Workspace, target: Path, encoded: bytes) -> None:
     """Publish complete UTF-8 bytes without truncating files or following hard links.
 
     On POSIX, directory descriptors keep a swapped parent symlink from redirecting
     the write outside the workspace. Existing internal symlinks have already been
     resolved by Workspace. New files use the process umask; replacements keep mode.
     """
-    encoded = content.encode("utf-8")
     workspace.resolve(target)
     # Outside targets in danger mode use their filesystem root as the anchor;
     # retain descriptor-based traversal and atomic replacement in both modes.
@@ -95,35 +116,27 @@ def _atomic_write(workspace: Workspace, target: Path, content: str) -> None:
 
 
 class ReadFileTool(Tool):
+    parameter_prompts = 'tools/read-file-parameters.json'
     concurrent_safe = True
     instruction_path = "path"
     name = "read_file"
-    description = (
-        "Read a text file allowed by the current Workspace Access mode.\n\n"
-        "Returns numbered lines so they can be cited; omit the displayed line numbers when calling "
-        "`edit_file`.\n\n"
-        "Line endings are displayed as LF.\n\n"
-        "Read the code you intend to change before editing it. Include the needed sections of all "
-        "known files in the same read batch.\n\n"
-        "Omit `limit` for ordinary files; for larger files, use `offset`/`limit` and batch ranges "
-        "you already know you need instead of reading consecutive small chunks across steps.\n\n"
-        "Binary files are rejected."
-    )
+    description_prompt = 'tools/read-file.txt'
+    description = load_prompt(description_prompt)
     parameters = {
         "type": "object",
         "properties": {
             "path": {
                 "type": "string",
-                "description": "Workspace-relative or absolute path, subject to the current Workspace Access mode.",
+                "description": "",
             },
             "offset": {
                 "type": "integer",
-                "description": "1-based line number to start from. Defaults to 1.",
+                "description": "",
                 "minimum": 1,
             },
             "limit": {
                 "type": "integer",
-                "description": "Maximum number of lines to return. Defaults to 2000.",
+                "description": "",
                 "minimum": 1,
             },
         },
@@ -197,19 +210,17 @@ class ReadFileTool(Tool):
 
 
 class WriteFileTool(Tool):
+    parameter_prompts = 'tools/write-file-parameters.json'
     instruction_path = "path"
     mutates_workspace = True
     name = "write_file"
-    description = (
-        "Write a file, creating or overwriting it.\n\n"
-        "Parent directories are created automatically.\n\n"
-        "Overwrites the whole file, so prefer `edit_file` for changes to existing code."
-    )
+    description_prompt = 'tools/write-file.txt'
+    description = load_prompt(description_prompt)
     parameters = {
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "Workspace-relative or absolute path, subject to the current Workspace Access mode."},
-            "content": {"type": "string", "description": "Full file contents to write."},
+            "path": {"type": "string", "description": ""},
+            "content": {"type": "string", "description": ""},
         },
         "required": ["path", "content"],
     }
@@ -246,48 +257,35 @@ class WriteFileTool(Tool):
 
 
 class EditFileTool(Tool):
+    parameter_prompts = 'tools/edit-file-parameters.json'
     instruction_path = "path"
     mutates_workspace = True
     name = "edit_file"
-    description = (
-        "Replace an exact substring within a file. `old_string` contains the text to replace with "
-        "`new_string`; it does not need to contain the entire file. It must occur exactly once unless `replace_all=true`; "
-        "include surrounding lines to make it unique.\n\n"
-        "Prefer this tool over `write_file` for changes to existing code. Copy `old_string` from "
-        "a real file read, including indentation.\n\n"
-        "LF in copied text also matches CRLF; existing line endings are preserved outside the "
-        "replacement.\n\n"
-        "Omit `read_file`'s line numbers.\n\n"
-        "Alternatively supply `edits=[{old_string,new_string}, ...]` for several unique, "
-        "non-overlapping replacements in this file.\n\n"
-        "Every edit matches the ORIGINAL file; all are validated before one atomic write.\n\n"
-        "Choose either `edits` or the single `old_string`/`new_string` pair, never both.\n\n"
-        "On failure no edits are applied; nearby source is a suggestion only, not an applied fuzzy match.\n\n"
-        "Read the returned diffs to check the batch's changes."
-    )
+    description_prompt = 'tools/edit-file.txt'
+    description = load_prompt(description_prompt)
     parameters = {
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "Workspace-relative or absolute path, subject to the current Workspace Access mode."},
+            "path": {"type": "string", "description": ""},
             "old_string": {
                 "type": "string",
-                "description": "Exact substring to replace within the file, including indentation; need not contain the entire file.",
+                "description": "",
             },
             "new_string": {
                 "type": "string",
-                "description": "Replacement text. Use an empty string to delete.",
+                "description": "",
             },
             "replace_all": {
                 "type": "boolean",
-                "description": "Replace every occurrence instead of requiring a unique match.",
+                "description": "",
             },
             "edits": {
                 "type": "array", "minItems": 1, "maxItems": 100,
-                "description": "Replacements matched against the original file. Merge overlapping targets.",
+                "description": "",
                 "items": {"type": "object", "additionalProperties": False,
                           "required": ["old_string", "new_string"],
                           "properties": {"old_string": {"type": "string", "minLength": 1,
-                                                        "description": "Exact substring to replace within the original file, including indentation."},
+                                                        "description": ""},
                                          "new_string": {"type": "string"}}},
             },
         },

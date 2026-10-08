@@ -96,7 +96,7 @@ def _parse_json_response(text: str) -> AgentResponse:
 def _parse_native_response(text: str, native_calls: list[ToolCall], *, json_response: bool) -> AgentResponse:
     if any(not isinstance(call.id, str) or not call.id.strip() for call in native_calls):
         raise ResponseFormatError("Each API call requires a nonempty id.")
-    calls = normalize_calls([call.to_api() for call in native_calls])
+    calls = normalize_calls([call.to_record() for call in native_calls])
     if calls and not text.strip():
         return AgentResponse("", calls)
     if json_response:
@@ -389,7 +389,7 @@ def _parse_response(text: str, has_previous_results: bool, native_calls: list[To
     if sum(len(value[field]) for field in COMPRESSED_FIELDS) > RECORD_MAX_CHARS:
         raise ResponseFormatError(f"Keep the three compressed fields within {RECORD_MAX_CHARS} characters in total.")
     calls = merge_call_sources(
-        normalize_calls([call.to_api() for call in native_calls]),
+        normalize_calls([call.to_record() for call in native_calls]),
         normalize_calls(value.get("tool_calls")), normalize_calls(value.get("function_call")), tagged_calls,
     )
     if not calls and not value["response"].strip():

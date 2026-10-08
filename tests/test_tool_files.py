@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from slipagent.types import content_text
+
 import pytest
 
 from slipagent.tools.files import EditFileTool, ReadFileTool, WriteFileTool
@@ -27,30 +29,30 @@ async def test_read_offset_and_limit(project: Workspace) -> None:
         {"path": "src/app.py", "offset": 5, "limit": 2}
     )
 
-    assert "showing 5-6" in result.content
-    assert "def helper(value):" in result.content
-    assert "def main():" not in result.content
+    assert "showing 5-6" in content_text(result.content)
+    assert "def helper(value):" in content_text(result.content)
+    assert "def main():" not in content_text(result.content)
 
 
 async def test_read_truncation_is_announced(project: Workspace) -> None:
     result = await ReadFileTool(project).invoke({"path": "src/app.py", "limit": 2})
 
-    assert "Truncated: 4 more line(s)" in result.content
-    assert "offset=3" in result.content
+    assert "Truncated: 4 more line(s)" in content_text(result.content)
+    assert "offset=3" in content_text(result.content)
 
 
 async def test_read_missing_file(workspace: Workspace) -> None:
     result = await ReadFileTool(workspace).invoke({"path": "nope.txt"})
 
     assert result.is_error
-    assert "File not found" in result.content
+    assert "File not found" in content_text(result.content)
 
 
 async def test_read_directory_suggests_list_dir(project: Workspace) -> None:
     result = await ReadFileTool(project).invoke({"path": "src"})
 
     assert result.is_error
-    assert "list_dir" in result.content
+    assert "list_dir" in content_text(result.content)
 
 
 async def test_read_rejects_binary(workspace: Workspace) -> None:
@@ -59,14 +61,14 @@ async def test_read_rejects_binary(workspace: Workspace) -> None:
     result = await ReadFileTool(workspace).invoke({"path": "blob.bin"})
 
     assert result.is_error
-    assert "binary" in result.content
+    assert "binary" in content_text(result.content)
 
 
 async def test_read_cannot_escape(project: Workspace) -> None:
     result = await ReadFileTool(project).invoke({"path": "../../etc/passwd"})
 
     assert result.is_error
-    assert "outside the workspace" in result.content
+    assert "outside the workspace" in content_text(result.content)
 
 
 # --------------------------------------------------------------------------- #
@@ -80,7 +82,7 @@ async def test_write_creates_file_and_parents(workspace: Workspace) -> None:
     )
 
     assert not result.is_error
-    assert "Created" in result.content
+    assert "Created" in content_text(result.content)
     assert (workspace.root / "deep" / "nested" / "new.py").read_text() == "x = 1\n"
 
 
@@ -89,7 +91,7 @@ async def test_write_overwrite_reports_updated(project: Workspace) -> None:
         {"path": "README.md", "content": "# Replaced\n"}
     )
 
-    assert "Updated" in result.content
+    assert "Updated" in content_text(result.content)
     assert (project.root / "README.md").read_text() == "# Replaced\n"
 
 
@@ -99,7 +101,7 @@ async def test_write_cannot_escape(workspace: Workspace) -> None:
     )
 
     assert result.is_error
-    assert "outside the workspace" in result.content
+    assert "outside the workspace" in content_text(result.content)
 
 
 # --------------------------------------------------------------------------- #
@@ -117,7 +119,7 @@ async def test_edit_replaces_unique_match(project: Workspace) -> None:
     )
 
     assert not result.is_error
-    assert "line 6" in result.content
+    assert "line 6" in content_text(result.content)
     assert "return value**2" in (project.root / "src" / "app.py").read_text()
 
 
@@ -131,8 +133,8 @@ async def test_edit_reports_ambiguous_match(project: Workspace) -> None:
     )
 
     assert result.is_error
-    assert "matched 6 times" in result.content
-    assert "replace_all=true" in result.content
+    assert "matched 6 times" in content_text(result.content)
+    assert "replace_all=true" in content_text(result.content)
 
 
 async def test_edit_rejects_missing_match(project: Workspace) -> None:
@@ -145,7 +147,7 @@ async def test_edit_rejects_missing_match(project: Workspace) -> None:
     )
 
     assert result.is_error
-    assert "No match for old_string" in result.content
+    assert "No match for old_string" in content_text(result.content)
 
 
 async def test_edit_replace_all(project: Workspace) -> None:
@@ -159,7 +161,7 @@ async def test_edit_replace_all(project: Workspace) -> None:
     )
 
     assert not result.is_error
-    assert "6 occurrence(s)" in result.content
+    assert "6 occurrence(s)" in content_text(result.content)
     assert "\n\n\n" in (project.root / "src" / "app.py").read_text()
 
 
@@ -184,7 +186,7 @@ async def test_edit_rejects_empty_old_string(project: Workspace) -> None:
     )
 
     assert result.is_error
-    assert "must not be empty" in result.content
+    assert "must not be empty" in content_text(result.content)
 
 
 @pytest.mark.parametrize("bad", [{"path": "src/app.py"}, {"old_string": "x"}])
@@ -192,7 +194,7 @@ async def test_edit_requires_both_strings(project: Workspace, bad: dict) -> None
     result = await EditFileTool(project).invoke(bad)
 
     assert result.is_error
-    assert "missing required argument" in result.content
+    assert "missing required argument" in content_text(result.content)
 
 
 async def test_edit_preserves_crlf(workspace: Workspace) -> None:
@@ -207,4 +209,4 @@ async def test_edit_preserves_crlf(workspace: Workspace) -> None:
 
 async def test_write_reports_utf8_byte_count(workspace: Workspace) -> None:
     result = await WriteFileTool(workspace).invoke({"path": "text.txt", "content": "é"})
-    assert "2 bytes" in result.content
+    assert "2 bytes" in content_text(result.content)

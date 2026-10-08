@@ -1,3 +1,5 @@
+
+from slipagent.types import content_text
 import json
 
 import httpx
@@ -60,12 +62,12 @@ async def test_partial_tool_stream_retries_once_without_replaying_thoughts_or_to
     assert len(requests) == 3
     assert requests[0] == requests[1]
     assert tool.seen == [{"value": "once"}]
-    assert any(event.kind == "retry" and "connection" in event.text for event in events)
+    assert not any(event.kind == "retry" for event in events)
     assert all("abandoned thought" not in json.dumps(request) for request in requests)
-    assert all("abandoned thought" not in (message.content or "") for message in agent.messages)
+    assert all("abandoned thought" not in (content_text(message.content)) for message in agent.messages)
 
 
-async def test_stop_during_backoff_prevents_another_request():
+async def test_stop_during_backoff_prevents_another_request(monkeypatch):
     requests = []
 
     def handle(request):
@@ -74,10 +76,60 @@ async def test_stop_during_backoff_prevents_another_request():
 
     async with configured_client(handle, RetryPolicy(3, 30, 30)) as client:
         agent = Agent(client, ToolRegistry(), "test")
-        agent.on_event = lambda event: agent.request_stop() if event.kind == "retry" else None
+        def backoff(attempt, retry_after=None):
+            agent.request_stop()
+            return 30
+        monkeypatch.setattr(client, "_backoff", backoff)
         assert await agent.run("work") == STOP_NOTICE
         await agent.registry.aclose()
     assert len(requests) == 1
+
+
+async def test_transient_errors_remain_silent_until_three_retries_are_exhausted():
+    requests, events = [], []
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(503, json={"error": {"message": "busy"}})
+    async with configured_client(handle, RetryPolicy(3, 0, 0)) as client:
+        agent = Agent(client, ToolRegistry(), "test", on_event=events.append)
+        with pytest.raises(OpenRouterError, match="busy"):
+            await agent.run("work")
+        await agent.registry.aclose()
+    assert len(requests) == 4
+    assert not any(event.kind in {"retry", "warning"} for event in events)
+
+
+@pytest.mark.parametrize("kind", ["reasoning", "content"])
+async def test_repetitive_stream_closes_without_retrying_or_executing_partial_calls(kind):
+    requests, seen, closed = [], [], []
+    phrase = "I need to inspect the same information once more to decide whether this request is complete. "
+
+    class RepetitiveStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield packet({"tool_calls": [{"index": 0, "id": "one", "function": {
+                "name": "record", "arguments": '{"value":"must not execute"}',
+            }}]})
+            for _ in range(50):
+                seen.append(True)
+                yield packet({kind: phrase})
+            yield b"data: [DONE]\n\n"
+
+        async def aclose(self):
+            closed.append(True)
+
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=RepetitiveStream())
+
+    tool = RecordingTool()
+    async with configured_client(handle, RetryPolicy(3, 0, 0)) as client:
+        agent = Agent(client, ToolRegistry([tool]), "test")
+        assert "sustained repetition" in await agent.run("inspect")
+        assert agent.stopped
+        await agent.registry.aclose()
+    assert len(requests) == 1 and len(seen) < 50 and closed
+    assert not tool.seen
+    assert len(agent.messages) == 1
 
 
 @pytest.mark.parametrize("status, retries, steps, expected", [(503, 2, 20, 3), (503, 8, 2, 2), (402, 2, 20, 1)])

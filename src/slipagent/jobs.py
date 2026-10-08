@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .prompts import load_prompt
+
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
@@ -105,17 +107,8 @@ class CommandJobs:
 class CommandJobsTool(Tool):
     name = "command_jobs"
     progress_exempt = True
-    description = (
-        "Manage commands started with `run_command` and `background=true`.\n\n"
-        "Use `action=\"list\"` to list jobs, or `action=\"status\"` with `job_id` for one job. "
-        "List/status returns `job_id`, state, exit status and `log_id`; `read_command_output` retrieves "
-        "live pages or tails of either stream.\n\n"
-        "Use `action=\"wait\"` with `job_id` to wait at most 30 seconds without cancelling the job.\n\n"
-        "Use `action=\"stop\"` with `job_id` to kill its process group and drain cleanup.\n\n"
-        "Starting a job is not evidence that it succeeded. Completion does not wake the model; "
-        "request status/wait when you need the outcome. `/stop` leaves jobs running; reset, resume, "
-        "fork, deletion, and exit stop them."
-    )
+    description_prompt = 'tools/command-jobs.txt'
+    description = load_prompt(description_prompt)
     parameters = {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["list", "status", "wait", "stop"]},
         "job_id": {"type": "string"},
@@ -129,8 +122,8 @@ class CommandJobsTool(Tool):
     async def run(self, action: str, job_id: str | None = None, timeout: float = 10, offset: int = 0) -> ToolResult:
         if action == "list":
             jobs = list(self.jobs.jobs.values())
-            return ToolResult.ok(json.dumps({"jobs": [job.metadata() for job in jobs[offset:offset + 50]],
-                                            "next_offset": offset + 50 if offset + 50 < len(jobs) else None}))
+            return ToolResult.ok({"jobs": [job.metadata() for job in jobs[offset:offset + 50]],
+                                            "next_offset": offset + 50 if offset + 50 < len(jobs) else None})
         job = self.jobs.jobs.get(job_id or "")
         if job is None:
             return ToolResult.error("Unknown job_id; use command_jobs action=list. Jobs from an earlier process cannot be controlled; retained output remains accessible by log_id.")
@@ -148,4 +141,4 @@ class CommandJobsTool(Tool):
         if job.result is not None:
             result["result"] = job.result.content
             result["is_error"] = job.result.is_error
-        return ToolResult.ok(json.dumps(result, ensure_ascii=False))
+        return ToolResult.ok(result)

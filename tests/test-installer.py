@@ -66,8 +66,8 @@ def test_fresh_download_replaces_application_directories_and_preserves_git(monke
     monkeypatch.setattr(installer.shutil, "copytree", copytree)
     monkeypatch.setattr(installer.shutil, "copy2", copyfile)
     installer.copy_source(checkout, destination)
-    assert [call.args[0] for call in remove.call_args_list] == [destination / name for name in ("src", "docs", "scripts", "tests")]
-    assert [call.args[:2] for call in copytree.call_args_list] == [(checkout / name, destination / name) for name in ("src", "docs", "scripts", "tests")]
+    assert [call.args[0] for call in remove.call_args_list] == [destination / name for name in ("src", "docs", "scripts", "tests", "prompts")]
+    assert [call.args[:2] for call in copytree.call_args_list] == [(checkout / name, destination / name) for name in ("src", "docs", "scripts", "tests", "prompts")]
     assert any(call.args == (checkout / "install.py", destination / "install.py") for call in copyfile.call_args_list)
     assert any(call.args == (checkout / ".env.example", destination / ".env.example") for call in copyfile.call_args_list)
 
@@ -81,6 +81,28 @@ def test_configuration_template_is_included_in_application_hashes(monkeypatch):
     assert installer.source_hashes(source) == {
         ".env.example": installer.hashlib.sha256(b"OPENROUTER_API_KEY=\n").hexdigest(),
     }
+
+
+def test_installer_preserves_and_tracks_application_logo(tmp_path):
+    source = tmp_path / "download"
+    source.mkdir()
+    logo = source / "logo.png"
+    logo.write_bytes(b"application logo")
+    destination = tmp_path / "installed"
+    installer.copy_source(source, destination)
+    assert (destination / "logo.png").read_bytes() == logo.read_bytes()
+    assert "logo.png" in installer.source_hashes(destination)
+
+
+def test_updater_detects_edits_to_visible_prompt_files(tmp_path):
+    directory = tmp_path / "prompts"
+    directory.mkdir()
+    prompt = directory / "system-prompt.txt"
+    prompt.write_text("Original guidance.\n")
+    baseline = installer.source_hashes(tmp_path)
+    assert "prompts/system-prompt.txt" in baseline
+    prompt.write_text("Edited guidance.\n")
+    assert installer.changed_files(baseline, installer.source_hashes(tmp_path)) == ["prompts/system-prompt.txt"]
 
 
 def test_dry_run_performs_no_installation_or_path_update(monkeypatch, capsys):

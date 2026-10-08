@@ -1,5 +1,7 @@
 """Harness navigation labels must not become examples of assistant prose."""
 
+from slipagent.types import decode_json_content
+
 import json
 
 import pytest
@@ -80,5 +82,5 @@ async def test_accepted_replies_and_tool_batches_do_not_emit_or_archive_the_labe
     assert [event.text for event in events if event.kind == "assistant_text"] == ["Reading.", "Done."]
     assert [step.agent_response for step in agent.history.steps] == ["Reading.", "Done."]
     assert tool.seen == [{"value": HEADINGS[0]}]
-    assert [json.loads(request["messages"][1].content)["agent_response"]
+    assert [decode_json_content(request["messages"][1].content)["agent_response"]
             for request in client.summary_requests] == ["Reading.", "Done."]

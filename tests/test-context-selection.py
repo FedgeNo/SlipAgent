@@ -1,5 +1,7 @@
 """Prefer recent originals and never spend more context on an older summary."""
 
+from slipagent.types import content_text
+
 import pytest
 
 from test_agent import unpack_context, context_records
@@ -35,22 +37,22 @@ async def test_current_run_command_survives_tool_results_without_entering_histor
                               context_length=1_000_000, max_output=8192)
     current = context_records(view)[-1]
     assert current["record_type"] == "current_step"
-    assert 'User request for this run (JSON array of user-authored messages): ["Current request"]' in view[0].content
+    assert 'User request for this run (JSON array of user-authored messages): ["Current request"]' in content_text(view[0].content)
     assert current["is_tool_result_response"] is True
-    assert "step_id 2" in view[0].content
-    assert "overall goal for this run" in view[0].content
-    assert "multiple steps ago" in view[0].content
-    assert "no new user instruction was received" in view[0].content
-    assert "A new user request was received" not in view[0].content
+    assert "step_id 2" in content_text(view[0].content)
+    assert "overall goal for this run" in content_text(view[0].content)
+    assert "multiple steps ago" in content_text(view[0].content)
+    assert "no new user instruction was received" in content_text(view[0].content)
+    assert "A new user request was received" not in content_text(view[0].content)
     assert [step.full_text() for step in history.steps] == originals
     assert all("User Request for This Run" not in step.compaction_input() for step in history.steps)
     messages.extend([Message.assistant("Done"), Message.user("New request")])
     view = await history.view(messages, [], keep_steps=50,
                               context_length=1_000_000, max_output=8192)
     assert context_records(view)[-1]["user_prompt"] == ["New request"]
-    assert "step_id 4" in view[0].content
-    assert "A new user request was received" in view[0].content
-    assert "no new user instruction was received" not in view[0].content
+    assert "step_id 4" in content_text(view[0].content)
+    assert "A new user request was received" in content_text(view[0].content)
+    assert "no new user instruction was received" not in content_text(view[0].content)
 
 
 async def test_large_recent_originals_use_the_model_allowance_above_200000_tokens():
@@ -90,7 +92,7 @@ async def test_larger_summary_falls_back_to_original_roles_and_tool_pairing(nati
     assert [message.role for message in restored[1:4]] == ["user", "assistant", "tool"]
     assert restored[2].tool_calls == messages[1].tool_calls
     assert restored[3].tool_call_id == "read" and context_body(restored[3].content) == "EXACT TOOL RESULT"
-    assert "INFLATED SUMMARY" not in "\n".join(message.content or "" for message in unpack_context(view))
+    assert "INFLATED SUMMARY" not in "\n".join(content_text(message.content) for message in unpack_context(view))
     assert [step.full_text() for step in history.steps] == originals
 
 
@@ -114,7 +116,7 @@ async def test_ageing_out_large_original_recovers_context_on_the_next_request():
     messages.extend([Message.assistant("Another answer"), Message.user("New question")])
     second = await history.view(messages, [], keep_steps=50,
                                 context_length=1_000_000, max_output=8192)
-    wire = "\n".join(message.content or "" for message in unpack_context(second))
+    wire = "\n".join(content_text(message.content) for message in unpack_context(second))
     assert "LARGE FIRST ANSWER" not in wire and "SUMMARY 1" in wire
     assert message_tokens(second) < message_tokens(first) / 10
     assert answers[0] in history.steps[0].full_text()
@@ -128,13 +130,13 @@ async def test_omitted_older_history_returns_after_large_turn_ages_out():
     for step in history.steps[:10]:
         step.summary = f"EARLY SUMMARY {step.id}: " + "detail " * 500
     first = await history.view(messages, [], keep_steps=50, context_length=90_000, max_output=1000)
-    wire = "\n".join(message.content or "" for message in unpack_context(first))
+    wire = "\n".join(content_text(message.content) for message in unpack_context(first))
     assert "EARLY SUMMARY 1:" not in wire
     assert answers[-1] in wire
     for index in range(50):
         messages.extend([Message.assistant(f"Later answer {index}"), Message.user(f"Later question {index}")])
     second = await history.view(messages, [], keep_steps=50, context_length=90_000, max_output=1000)
-    restored = "\n".join(message.content or "" for message in unpack_context(second))
+    restored = "\n".join(content_text(message.content) for message in unpack_context(second))
     assert "EARLY SUMMARY 1:" in restored
     assert "LARGE RECENT ANSWER" not in restored
     assert "SUMMARY 60" in restored
@@ -157,7 +159,7 @@ async def test_equal_cost_summary_keeps_the_original(token_scale):
     view = await history.view(messages, [], keep_steps=5, context_length=1_000_000,
                               max_output=8192, token_scale=token_scale)
     assert context_records(view)[0]["agent_response"] == "ORIGINAL " * 100
-    assert step.summary not in "\n".join(message.content or "" for message in unpack_context(view))
+    assert step.summary not in "\n".join(content_text(message.content) for message in unpack_context(view))
 
 
 async def test_mixed_older_originals_and_summaries_keep_chronological_order():
@@ -165,7 +167,7 @@ async def test_mixed_older_originals_and_summaries_keep_chronological_order():
                                      + [f"Recent {index}" for index in range(5)])
     history.steps[1].summary = "EXPANDED SECOND SUMMARY " * 300
     view = await history.view(messages, [], keep_steps=5, context_length=1_000_000, max_output=8192)
-    wire = "\n".join(message.content or "" for message in unpack_context(view))
+    wire = "\n".join(content_text(message.content) for message in unpack_context(view))
     assert wire.index("SUMMARY 1") < wire.index("Second original") < wire.index("SUMMARY 3") < wire.index("Recent 0")
     assert "FIRST " not in wire and "THIRD " not in wire and "EXPANDED SECOND SUMMARY" not in wire
     assert [context_body(message.content) for message in unpack_context(view) if message.role == "user"] == [

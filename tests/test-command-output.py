@@ -1,3 +1,7 @@
+
+from slipagent.types import content_text
+
+from slipagent.types import decode_json_content
 import json
 import shlex
 import sys
@@ -22,15 +26,15 @@ async def test_complete_output_pages_and_tail_survive_preview_truncation(tmp_pat
         tool = ReadCommandOutputTool(archive)
         content, offset = "", 0
         while True:
-            page = json.loads((await tool.run(log_id=log.id, offset=offset, limit=1111)).content)
+            page = decode_json_content((await tool.run(log_id=log.id, offset=offset, limit=1111)).content)
             content += page["content"]
             offset = page["next_offset"]
             if offset is None:
                 break
         assert content == original
-        tail = json.loads((await tool.run(log_id=log.id, tail=True, limit=10)).content)
+        tail = decode_json_content((await tool.run(log_id=log.id, tail=True, limit=10)).content)
         assert tail["content"] == original[-10:]
-        records = json.loads((await tool.run(step_id=7, call_id="call/unsafe")).content)
+        records = decode_json_content((await tool.run(step_id=7, call_id="call/unsafe")).content)
         assert records["logs"][0]["log_id"] == log.id
         assert not (tmp_path / "unsafe").exists()
     finally:
@@ -50,9 +54,9 @@ async def test_shell_archives_middle_and_timeout_output_with_call_provenance(tmp
         assert (log.step_id, log.call_id, log.timed_out) == (1, "call_run_command", True)
         assert log.streams["stdout"].retained_bytes == 70007
         result = await registry.invoke("read_command_output", {"log_id": log.id, "offset": 34997, "limit": 12})
-        assert json.loads(result.content)["content"] == "AAAMIDDLEZZZ"
+        assert decode_json_content(result.content)["content"] == "AAAMIDDLEZZZ"
         observation = agent.history.steps[0].messages[-1].content
-        assert log.id in observation and "Effects may be partial" in observation
+        assert log.id in observation["content"] and "Effects may be partial" in observation["content"]
         directory = archive.directory
         agent.reset()
         assert not directory.exists() and not archive.logs
@@ -68,8 +72,8 @@ async def test_disk_failure_does_not_abort_or_block_the_command(tmp_path, monkey
     tool = RunCommandTool(Workspace(tmp_path), archive)
     result = await tool.run(shlex.join([sys.executable, "-c", "print('observed output')"]))
     assert not result.is_error
-    assert "observed output" in result.content
-    assert "simulated disk full" in result.content and "Lost 16 UTF-8 bytes" in result.content
+    assert "observed output" in content_text(result.content)
+    assert "simulated disk full" in content_text(result.content) and "Lost 16 UTF-8 bytes" in content_text(result.content)
     await archive.aclose()
     assert list(tmp_path.iterdir()) == []
 
@@ -85,7 +89,7 @@ async def test_quota_never_evicts_prior_logs_and_reports_lost_bytes(tmp_path):
         second.finish(-9, True)
         assert archive.used_bytes == 7
         assert second.streams["stderr"].lost_bytes == 8
-        page = json.loads((await ReadCommandOutputTool(archive).run(log_id=second.id, stream="stderr")).content)
+        page = decode_json_content((await ReadCommandOutputTool(archive).run(log_id=second.id, stream="stderr")).content)
         assert page["content"] == "🙂"
         assert page["lost_bytes"] == 8 and page["timed_out"] is True
         assert "quota" in page["retention_error"]

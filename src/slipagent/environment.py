@@ -7,6 +7,8 @@ Python to identify what that exact executable actually uses.
 
 from __future__ import annotations
 
+from .prompts import load_prompt
+
 import asyncio
 import json
 import os
@@ -116,13 +118,13 @@ class ProjectEnvironment:
                 candidates.append(str(directory / executable))
         info: dict[str, Any] = {
             "candidates": candidates,
-            "selection_help": f"Set python in {PROJECT_SETTINGS_PATH} or launch with --python PATH.",
-            "shell_policy": "PATH is inherited.\n\nUse the exact interpreter in the commands below.\n\nNo environment is created automatically.",
+            "selection_help": load_prompt("environment-selection-help.txt", settings_path=PROJECT_SETTINGS_PATH),
+            "shell_policy": load_prompt('environment-shell.txt'),
         }
         if selected is None:
             if len(candidates) != 1:
                 info["status"] = "ambiguous" if candidates else "unconfigured"
-                info["instruction"] = "Ask the user to select an environment before installing dependencies.\n\nDo not fall back to global Python."
+                info["instruction"] = load_prompt('environment-selection.txt')
                 return info
             selected = candidates[0]
             source = "discovery"
@@ -187,12 +189,5 @@ class ProjectEnvironment:
                 "installer": installer, "install_command": install_command,
                 "bootstrap_command": bootstrap_command,
                 "instruction": (
-                    "Read project instructions for test arguments and dependencies.\n\nUse the supplied install_command; "
-                    "uv can target the chosen virtual environment without pip installed there. Replace PACKAGE with "
-                    "the requested dependency specification and use the project's documented installation options. "
-                    "\n\nA null command is unavailable: do not attempt it or fall back to global Python.\n\nIf install_command "
-                    "is null and bootstrap_command is present, pip can be bootstrapped in this venv first; the next "
-                    "request will refresh availability.\n\nIf neither is present, ask how the selected environment is managed.\n\n"
-                    "If test_command is null, pytest is not installed in this interpreter.\n\nCommands describe available "
-                    "operations; they do not authorize installing packages or changing the environment."
+                    load_prompt('environment-commands.txt')
                 )}

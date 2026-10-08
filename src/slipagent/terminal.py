@@ -24,25 +24,32 @@ from prompt_toolkit.layout.controls import FormattedTextControl, UIContent, UICo
 from prompt_toolkit.layout.mouse_handlers import MouseHandlers
 from prompt_toolkit.layout.processors import Processor, Transformation, TransformationInput
 from prompt_toolkit.layout.utils import explode_text_fragments
-from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
+from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 from prompt_toolkit.output import ColorDepth, Output, create_output
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import TextArea
 from wcwidth import iter_graphemes, width as display_width, wrap
 
 from .transcript import TranscriptFile, WrappedTranscript
-from .palette import MUTED_COLOR, USER_COLOR
+from .palette import MUTED_COLOR, USER_PROMPT_STYLE
+from .markdown import THEMES, MarkdownRenderer, code_blocks
+from .clipboard import clipboard_sequence, copy_to_clipboard
 
 FOOTER_ROWS = 6
-PULSE_FRAMES = ("·", "•", "●", "•")
+PULSE_FRAMES = ("▌", "▛", "▀", "▜", "▐", "▟", "▄", "▙")
 MIN_REDRAW_INTERVAL = 1 / 30
 
 
 class TranscriptControl(UIControl):
     """Ask for indexed rows without FormattedTextControl's whole-text scan."""
 
-    def __init__(self, content: Callable[[int], UIContent]) -> None:
+    def __init__(self, content: Callable[[int], UIContent], mouse: Callable[[MouseEvent], object] | None = None) -> None:
         self._content = content
+        self._mouse = mouse
+
+    def mouse_handler(self, mouse_event: MouseEvent) -> object:
+        self.__dict__.setdefault("_mouse", None)
+        return self._mouse(mouse_event) if self._mouse is not None else NotImplemented
 
     def create_content(self, width: int, height: int | None) -> UIContent:
         return self._content(width)
@@ -150,6 +157,9 @@ class TerminalUI:
     indexed file with a bounded memory cache. Keep drafts/history/queues alive
     during refresh, and isolate secret prompts from those ordinary buffers.
     """
+    _selection_start: Point | None
+    _selection_end: Point | None
+
     def __init__(
         self, status: Callable[[int], str], stream: TextIO, *, color: bool = True,
         input: Input | None = None, output: Output | None = None,
@@ -182,12 +192,14 @@ class TerminalUI:
         self.app: Application[None] = Application(
             layout=self._layout(), key_bindings=self._bindings(),
             full_screen=True, input=input, output=self.output,
-            mouse_support=True, after_render=lambda app: self._route_mouse_wheel(app),
+            mouse_support=True, before_render=lambda app: self._update_title(),
+            after_render=lambda app: self._route_mouse_wheel(app),
             refresh_interval=.15,
             min_redraw_interval=MIN_REDRAW_INTERVAL,
             color_depth=ColorDepth.DEPTH_24_BIT if color else ColorDepth.DEPTH_1_BIT,
             style=self._style(),
         )
+        self._title_pulse_bound = True
 
     def _layout(self) -> Layout:
         self._ensure_context()
@@ -418,6 +430,15 @@ class TerminalUI:
         bindings = KeyBindings()
         in_menu = Condition(lambda: self._menu_future is not None)
 
+        @bindings.add("f2", filter=~in_menu)
+        def toggle_markdown(event: KeyPressEvent) -> None:
+            self.configure_markdown(source=not self.__dict__.get("_markdown_source", False))
+
+        @bindings.add("f3", filter=~in_menu)
+        def copy_response(event: KeyPressEvent) -> None:
+            if self.last_markdown():
+                self.copy_response()
+
         @bindings.add("up", filter=in_menu)
         @bindings.add("down", filter=in_menu)
         def move_menu(event: KeyPressEvent) -> None:
@@ -428,7 +449,6 @@ class TerminalUI:
             self._finish_menu(self._menu_options[self._menu_index][0])
 
         @bindings.add("escape", filter=in_menu, eager=True)
-        @bindings.add("c-c", filter=in_menu)
         @bindings.add("c-d", filter=in_menu)
         def cancel_menu(event: KeyPressEvent) -> None:
             self._finish_menu(None)
@@ -487,13 +507,10 @@ class TerminalUI:
             else:
                 event.current_buffer.delete()
 
-        @bindings.add("c-c", filter=~in_menu)
+        @bindings.add("c-c")
+        @bindings.add(Keys.SIGINT)
         def interrupt(event: KeyPressEvent) -> None:
-            event.current_buffer.reset()
-            if self.working:
-                self._lines.put_nowait("/stop")
-            else:
-                self._end_input()
+            event.app.exit(exception=KeyboardInterrupt)
 
         return bindings
 
@@ -503,7 +520,7 @@ class TerminalUI:
 
     def _style(self) -> Style:
         return Style.from_dict({
-            "status": MUTED_COLOR, "pulse": "bold ansicyan", "idle": MUTED_COLOR, "user": USER_COLOR,
+            "status": MUTED_COLOR, "pulse": "bold ansicyan", "idle": "ansicyan", "user": USER_PROMPT_STYLE,
             "context-system": "#ffff00",
             "menu-title": "bold", "menu-selected": "reverse bold",
         })
@@ -519,6 +536,9 @@ class TerminalUI:
         self.app.layout = layout
         self.app.key_bindings = bindings
         self.app.style = style
+        if not self.__dict__.get("_title_pulse_bound", False):
+            self.app.before_render += lambda app: self._update_title()
+            self._title_pulse_bound = True
         self._wrapped_columns = 0
         self.app.min_redraw_interval = MIN_REDRAW_INTERVAL
         self.app.invalidate()
@@ -527,13 +547,20 @@ class TerminalUI:
         original = app.renderer.mouse_handlers
 
         def mouse_handler(event: MouseEvent) -> object:
+            if event.event_type == MouseEventType.MOUSE_DOWN:
+                self._selection_dragging = False
             if event.event_type in (MouseEventType.SCROLL_UP, MouseEventType.SCROLL_DOWN):
                 self._scroll_output(-3 if event.event_type == MouseEventType.SCROLL_UP else 3)
                 app.invalidate()
                 return None
             if self._menu_future is not None:
                 return None  # Keep focus on the menu until selection/cancellation.
-            return original.mouse_handlers[event.position.y][event.position.x](event)
+            try:
+                return original.mouse_handlers[event.position.y][event.position.x](event)
+            finally:
+                # Releases outside the transcript must also end its drag.
+                if event.event_type == MouseEventType.MOUSE_UP:
+                    self._selection_dragging = False
 
         # Wheel events target the active menu or output view. Clicks retain
         # their normal behavior in the input field when no menu is open.
@@ -549,19 +576,33 @@ class TerminalUI:
     def _activity(self) -> StyleAndTextTuples:
         if not self.working:
             return [("class:idle", "Ready")]
-        frame = PULSE_FRAMES[int(time.monotonic() * 4) % len(PULSE_FRAMES)]
+        frame = self.__dict__.get("_activity_frame", PULSE_FRAMES[int(time.monotonic() * 4) % len(PULSE_FRAMES)])
         label = "Stopping After This Step" if self.stopping else "Working (esc to interrupt)"
         return [("class:pulse", f"{frame} {label}")]
 
     def set_working(self, working: bool, *, stopping: bool = False) -> None:
         self.working = working
         self.stopping = stopping
+        self._update_title()
         self.app.invalidate()
 
     def set_title(self, title: str) -> None:
         """Update the terminal/tab title through the platform's output adapter."""
-        self.output.set_title(title)
-        self.output.flush()
+        self._title = title
+        self._update_title()
+
+    def _update_title(self) -> None:
+        """Share the working animation with the title and restore its idle name."""
+        frame = PULSE_FRAMES[int(time.monotonic() * 4) % len(PULSE_FRAMES)]
+        self._activity_frame = frame
+        title = self.__dict__.get("_title")
+        if title is None:
+            return
+        displayed = f"{frame} {title}" if self.working else title
+        if displayed != self.__dict__.get("_displayed_title"):
+            self.output.set_title(displayed)
+            self.output.flush()
+            self._displayed_title = displayed
 
     def clear_transcript(self) -> None:
         """Replace display storage while retaining the input draft and application."""
@@ -571,6 +612,10 @@ class TerminalUI:
         self._raw_output = archive
         self._block_starts.clear()
         self._continuation_indents.clear()
+        self._markdown_chunks.clear()
+        self._markdown_finals.clear()
+        self._selection_start = self._selection_end = None
+        self._selection_dragging = False
         self.forget_queued_notices()
         self._flow = None
         self._wrapped_columns = self._wrapped_count = self._line_count = 0
@@ -609,6 +654,105 @@ class TerminalUI:
         self._raw_output.append(text)
         self.app.invalidate()
 
+    def configure_markdown(self, *, theme: str | None = None, source: bool | None = None) -> None:
+        self._ensure_transcript()
+        if theme is not None:
+            if theme not in THEMES:
+                raise ValueError(f"Unknown theme: {theme}")
+            self._markdown_theme = theme
+        if source is not None:
+            self._markdown_source = source
+        self._selection_start = self._selection_end = None
+        self._selection_dragging = False
+        self._wrapped_columns = 0
+        self.app.invalidate()
+
+    def write_markdown(self, text: str, *, first: bool = True, final: bool = True) -> None:
+        self._ensure_transcript()
+        index = len(self._raw_output)
+        self._markdown_chunks.add(index)
+        if final:
+            self._markdown_finals.add(index)
+        self.write_chunk(text, first=first)
+
+    def finish_markdown(self) -> None:
+        self._ensure_transcript()
+        if self._raw_output and len(self._raw_output) - 1 in self._markdown_chunks:
+            if len(self._raw_output) - 1 not in self._markdown_finals:
+                self.write_markdown("", first=False, final=True)
+
+    def last_markdown(self) -> str:
+        self._ensure_transcript()
+        if not self._markdown_chunks:
+            return ""
+        end = max(self._markdown_chunks)
+        start = end
+        while start not in self._block_starts and start > 0 and start - 1 in self._markdown_chunks:
+            start -= 1
+        return "".join(self._raw_output[i] for i in range(start, end + 1))
+
+    def copy_response(self, mode: str = "auto", number: int = 1) -> str:
+        source = self.last_markdown()
+        if not source:
+            raise ValueError("No assistant reply to copy.")
+        blocks = code_blocks(source)
+        if mode == "markdown" or (mode == "auto" and self._markdown_source):
+            text = source
+        elif mode == "code" or (mode == "auto" and len(blocks) == 1):
+            if not 1 <= number <= len(blocks):
+                raise ValueError(f"Code block {number} is unavailable; reply has {len(blocks)} code blocks.")
+            text = blocks[number - 1]
+        else:
+            text = MarkdownRenderer(color=False).plain(source)
+        self._copy_text(text)
+        return text
+
+    def _copy_text(self, text: str) -> None:
+        from prompt_toolkit.clipboard import ClipboardData
+        self.app.clipboard.set_data(ClipboardData(text))
+        if not copy_to_clipboard(text):
+            self.output.write_raw(clipboard_sequence(text))
+            self.output.flush()
+
+    def _select_transcript(self, event: MouseEvent) -> object:
+        self._ensure_transcript()
+        selecting_button = event.button in {MouseButton.LEFT, MouseButton.UNKNOWN}
+        if event.event_type == MouseEventType.MOUSE_DOWN:
+            self._selection_dragging = selecting_button
+            self._selection_start = self._selection_end = event.position if selecting_button else None
+        elif event.event_type == MouseEventType.MOUSE_MOVE:
+            if not selecting_button:
+                self._selection_dragging = False
+            if not self._selection_dragging:
+                return NotImplemented
+            self._selection_end = event.position
+        elif event.event_type == MouseEventType.MOUSE_UP:
+            dragging = self._selection_dragging
+            self._selection_dragging = False
+            if not dragging:
+                return NotImplemented
+            if event.button in {MouseButton.RIGHT, MouseButton.MIDDLE}:
+                self._selection_start = self._selection_end = None
+            else:
+                self._selection_end = event.position
+                text = self.selected_text()
+                if text:
+                    self._copy_text(text)
+        else:
+            return NotImplemented
+        self.app.invalidate()
+        return None
+
+    def selected_text(self) -> str:
+        if self._flow is None or self._selection_start is None or self._selection_end is None:
+            return ""
+        start, end = sorted([self._selection_start, self._selection_end], key=lambda p: (p.y, p.x))
+        pieces = []
+        for index in range(max(0, start.y), min(end.y + 1, len(self._flow.rows))):
+            row = self._flow.copy_row(index)
+            pieces.append(row.selected(start.x if index == start.y else 0, end.x if index == end.y else None))
+        return "".join(pieces)
+
     def write_queued_notice(self, text: str, prompt: str) -> None:
         """Append a removable full line immediately after a user's prompt."""
         self._ensure_transcript()
@@ -645,6 +789,22 @@ class TerminalUI:
         self.__dict__.setdefault("_continuation_indents", {})
         self.__dict__.setdefault("_queued_notices", {})
         self.__dict__.setdefault("_notice_rows", {})
+        # Existing highlighted selections are inactive after adopting this fix.
+        self.__dict__.setdefault("_selection_dragging", False)
+        # Explicit migration adds Markdown metadata without treating historical ANSI as Markdown.
+        if "_markdown_chunks" not in self.__dict__:
+            self._markdown_chunks: set[int] = set()
+            self._markdown_finals: set[int] = set()
+            self._markdown_theme = "dark"
+            self._markdown_source = False
+            self._selection_start = None
+            self._selection_end = None
+            self.transcript.content = TranscriptControl(lambda width: self._transcript_content(width), self._select_transcript)
+            # Retained pre-Markdown flows have no copy sidecar; reflow originals.
+            if self._flow is not None and not hasattr(self._flow, "_copy_rows"):
+                self._flow.rows.close()
+                self._flow = None
+                self._wrapped_columns = self._wrapped_count = 0
         original = self.__dict__["_raw_output"]
         if isinstance(original, TranscriptFile):
             return
@@ -672,17 +832,23 @@ class TerminalUI:
         if self._flow is None or columns != self._wrapped_columns or not hasattr(self._flow, "prompt_rows"):
             if self._flow is not None:
                 self._flow.close()
-            self._flow = WrappedTranscript(columns)
+            self._flow = WrappedTranscript(columns, theme=self._markdown_theme,
+                                           color=self.app.color_depth != ColorDepth.DEPTH_1_BIT,
+                                           source=self._markdown_source)
             self._notice_rows.clear()
+            self._selection_start = self._selection_end = None
+            self._selection_dragging = False
             self._wrapped_count = 0
             self._wrapped_columns = columns
         flow = self._flow
         for index in range(self._wrapped_count, len(self._raw_output)):
             start = len(flow.rows)
-            flow.append(
-                self._raw_output[index], first=index in self._block_starts,
-                continuation_indents=self._continuation_indents.get(index),
-            )
+            if index in self._markdown_chunks:
+                flow.append_markdown(self._raw_output[index], first=index in self._block_starts,
+                                     final=index in self._markdown_finals)
+            else:
+                flow.append(self._raw_output[index], first=index in self._block_starts,
+                            continuation_indents=self._continuation_indents.get(index))
             if index in self._queued_notices:
                 self._notice_rows[index] = (start, len(flow.rows))
         self._wrapped_count = len(self._raw_output)
@@ -692,7 +858,21 @@ class TerminalUI:
 
         def get_line(index: int) -> StyleAndTextTuples:
             if index < complete:
-                return flow.get_row(index)
+                fragments = flow.get_row(index)
+                if self._selection_start is not None and self._selection_end is not None:
+                    start, end = sorted([self._selection_start, self._selection_end], key=lambda p: (p.y, p.x))
+                    if start.y <= index <= end.y:
+                        highlighted: StyleAndTextTuples = []
+                        column = 0
+                        left = start.x if index == start.y else 0
+                        right = end.x if index == end.y else columns
+                        for style, text, *_ in fragments:
+                            for cluster in iter_graphemes(text):
+                                selected = left <= column < right
+                                highlighted.append((style + " reverse" if selected else style, cluster))
+                                column += max(0, display_width(cluster))
+                        return highlighted
+                return fragments
             offset = index - complete
             return preview[offset] if offset < len(preview) else []
 

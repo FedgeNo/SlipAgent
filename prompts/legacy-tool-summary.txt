@@ -1,0 +1,1 @@
+Compressed whole-round record: user request, previous tool results, current response and all planned calls.

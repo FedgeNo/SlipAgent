@@ -1,7 +1,7 @@
 """Malformed responses are rejected before effects, regardless of request mode."""
 
 import json
-from data_text_reader import read_data
+from data_text_reader import read_data, current_input
 import re
 
 import httpx
@@ -97,13 +97,13 @@ async def test_selected_contract_rejects_then_recovers_without_effects(mode, inv
         await agent.wait_for_compaction()
     assert tool.seen == [{"value": "A"}]
     assert len(requests) == 3
-    correction = read_data(requests[1]["messages"][-1]["content"])["user_prompt"]
+    correction = current_input(requests[1]["messages"])["user_prompt"]
     assert any("rejected" in prompt.lower() for prompt in correction)
     for body in requests:
         system = body["messages"][0]["content"]
         if native:
             assert "Replies and Tool Calls:" not in system
-            assert "# Available Tool Definitions" not in system
+            assert "# Available Tool Definitions" in system
             assert "tagged calls" not in system and "when using JSON" not in system
             assert body["tools"]
         else:

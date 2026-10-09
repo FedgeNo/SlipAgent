@@ -269,7 +269,8 @@ async def test_fast_summary_cannot_hide_unseen_tool_results_at_tiny_budget():
     result = "ACTUAL RESULT " * 5000
     client = Client([reply("Read", [ToolCall("read", "record", {"value": "A"})]), reply("Done")])
     agent = Agent(client, ToolRegistry([RecordingTool(result)]), "test")
-    agent._context_lengths[agent.model] = 12000
+    # Leave room for system tool definitions while forcing result excerpts.
+    agent._context_lengths[agent.model] = 22000
     await agent.run("Inspect")
     sent = "\n".join(content_text(message.content) for message in client.main_requests[1]["messages"])
     assert any(record["representation"] == "excerpt" for record in context_records(client.main_requests[1]["messages"]))

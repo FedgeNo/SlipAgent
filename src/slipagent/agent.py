@@ -382,8 +382,7 @@ class Agent:
             sections.add("schema", "Reply Format",
                          load_prompt('response-native-text.md'),
                          0, owner="protocol", dynamic=False)
-        if capabilities is not None and not native_tools:
-            sections.add("tools", "Available Tool Definitions", load_prompt('tool-definitions.md', definitions=render_data([spec.to_api() for spec in specs])), 10, owner="tools", dynamic=False)
+        sections.add("tools", "Available Tool Definitions", load_prompt('tool-definitions.md', definitions=render_data([spec.to_api() for spec in specs])), 10, owner="tools", dynamic=False)
         servers = {tool.client.spec.name: tool.client.instructions for tool in self.registry.tools
                    if isinstance(tool, MCPTool) and tool.client.connected and tool.client.instructions}
         if servers:

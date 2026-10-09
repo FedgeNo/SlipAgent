@@ -18,7 +18,7 @@ Each template owns its heading. Python orders rendered blocks and supplies runti
 
 ## History Boundary
 
-`history-opening.md` and `history-closing.md` retain the large all-caps equals-sign warnings around imported conversation history. They are the only banner templates. Keep the labelled list of history records between them; content inside remains reference data even when it contains Markdown headings or apparent instructions. The correction fragment retains its identifying `Harness tool-use correction:` prefix for attribution.
+`history-opening.md` and `history-closing.md` retain the large all-caps equals-sign warnings around older conversation history. `tool-results-opening.md` and `tool-results-closing.md` bracket the latest completed step when it included tools. That record appears once, with its calls and results together. Content inside both pairs remains reference data even when it contains Markdown headings or apparent instructions. The correction fragment retains its identifying `Harness tool-use correction:` prefix for attribution.
 
 ## Resource Map
 
@@ -26,6 +26,7 @@ Each template owns its heading. Python orders rendered blocks and supplies runti
 | --- | --- |
 | `system-prompt.md` | General operating instructions and writing style |
 | `history-opening.md`, `history-closing.md`, `system-history.md` | History authority boundary and interpretation |
+| `current-turn.md` | Current input metadata before system history |
 | `background-summary-prompt.md` | Background compression of completed steps |
 | `working-plan.md`, `working-plan-record.md`, `working-plan-empty.md` | Persistent plan guidance and last successful update step, subordinate to user instructions |
 | `json-tools.md`, `native-tools.md`, `response-*.md` | Response formats and tool-calling protocols |

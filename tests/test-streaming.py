@@ -3,7 +3,7 @@
 import asyncio
 import io
 import json
-from data_text_reader import read_data
+from data_text_reader import read_data, current_input
 
 import httpx
 import pytest
@@ -293,8 +293,8 @@ async def test_invalid_stream_reports_red_error_and_restarts_before_running_tool
     assert sink.getvalue().index("Response rejected") < sink.getvalue().index("Accepted response.")
     assert len(agent.history.steps) == 1
     assert "Rejected plan" not in agent.history.steps[0].full_text()
-    first = read_data(requests[0]["messages"][-1]["content"])
-    retry = read_data(requests[1]["messages"][-1]["content"])
+    first = current_input(requests[0]["messages"])
+    retry = current_input(requests[1]["messages"])
     corrections = retry.pop("user_prompt")
     assert corrections[0] == first.pop("user_prompt")[0] == "work"
     assert len(corrections) == 2 and corrections[1].startswith("Harness tool-use correction:")

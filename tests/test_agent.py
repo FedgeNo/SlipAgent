@@ -17,14 +17,24 @@ from data_text_reader import input_data, read_data
 
 def context_messages(messages):
     """Expose system-embedded history records to behavioral fixture readers."""
+    embedded_current = False
     for source in messages:
         message = source if isinstance(source, Message) else Message.from_api(source)
+        if embedded_current and message.role == "user":
+            continue
         yield message
         if message.role == "system":
             _, marker, body = content_text(message.content).partition("\n" + load_prompt("history-opening.md").strip() + "\n")
             if marker:
                 records = read_data(body.lstrip())
                 yield from (Message.user(record) for record in records)
+            _, marker, body = content_text(message.content).partition("\n" + load_prompt("tool-results-opening.md").strip() + "\n")
+            if marker:
+                yield from (Message.user(record) for record in read_data(body.lstrip()))
+            _, current_marker, current_body = content_text(message.content).partition(load_prompt("current-turn.md"))
+            if current_marker:
+                yield Message.user(read_data(current_body))
+                embedded_current = True
 
 
 def context_records(messages):

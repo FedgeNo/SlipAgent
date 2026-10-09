@@ -1,7 +1,7 @@
 """Structured input records, separate from the model's response/tool-call protocol.
 
-The outgoing system prompt retains selected completed-step objects until rendering;
-the user message carries the current-step object. Originals retain their
+The outgoing system prompt carries current input before selected completed-step
+objects; user messages carry plain input or an empty string. Originals retain their
 roles in storage. Text fields render literally at the API boundary.
 """
 

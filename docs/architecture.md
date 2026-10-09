@@ -18,9 +18,9 @@ the workspace having a copy of SlipAgent's own `AGENTS.md`.
 The built-in model instructions and tool descriptions live in the checkout's top-level `prompts/` folder. Wheel builds include that folder as `slipagent/prompts`. `prompts.py` locates the application resources independently of the working project and reads UTF-8 text at use time. `agent.py` renders the main template's workspace and interpreter and refreshes it before each CLI model request, including with live reload disabled. Other dynamic templates use explicit `${name}` substitutions without interpreting inserted data as templates. The reload frame monitors these resources along with Python sources; compatible source reloads preserve their service owners. Missing resources and invalid templates report errors.
 File reads and edits, command-output recovery, background jobs, Git previews,
 and language-server navigation are described in their respective tool definitions.
-Native-tool requests deliver those contracts through API tool definitions;
-JSON-tool requests include the same definitions in the system's Available Tool
-Definitions section.
+All working requests include those contracts in the system's Available Tool
+Definitions section. Native-tool requests also carry the same definitions in
+the API tool field required for native calls.
 
 The background-summary prompt is in `prompts/background-summary-prompt.md`. `compaction.py` reads it when building each isolated summary request. Protocol, history, environment, recovery, and tool guidance use the same loader. Tool specs read descriptions and argument-description mappings on each access; argument schemas and behavior remain in Python. See `prompts/README.md` for the editable file map.
 
@@ -121,7 +121,9 @@ Context construction proceeds in this order:
    remain intact; user and tool content, arguments, and archived originals are
    not rewritten. This avoids teaching the reply format through artificial
    assistant-message prefixes, including when resuming an older session.
-4. A final `current_step` JSON object contains current input verbatim. An empty
+4. A `current_step` object before history in the system prompt contains current
+   input verbatim. The final user messages contain original user text or a
+   blank user message when no new input exists, without the record envelope. An empty
    prompt array with `is_tool_result_response=true` marks a response to earlier tool results. If the supplied results satisfy the user's request, return the result with no tool calls to finish; request more tools only when necessary work remains.
    Continuation steps carry the active user
    prompt with their full records. Newly returned results cannot leave the full
@@ -130,6 +132,10 @@ Context construction proceeds in this order:
    original-part retrieval instructions as a last resort. Text fragments and
    omitted-character counts occupy separate fields; clipping never splices
    descriptive markers into message text.
+   The latest completed step with tools is placed once in its own system block,
+   between `BEGIN PREVIOUS TURN TOOL RESULTS` and `END PREVIOUS TURN TOOL RESULTS`,
+   after the older history block. Request assembly does not append these blocks,
+   tool definitions, or the empty continuation message to archived turns.
 5. `TaskMemory.prompt_supplement` ensures the current user prompt is supplied,
    even after its original step is compressed. It reuses a full copy already
    selected or fills the current-step object's prompt array with the retained

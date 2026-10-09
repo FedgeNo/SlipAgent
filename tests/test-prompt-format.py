@@ -30,7 +30,7 @@ def assert_markdown_structure(text):
             assert index == 0 or not lines[index - 1].strip(), line
             assert index + 1 == len(lines) or not lines[index + 1].strip(), line
         elif not fenced and line.startswith('====='):
-            assert 'CONVERSATION HISTORY DATA' in line, line
+            assert 'CONVERSATION HISTORY DATA' in line or 'PREVIOUS TURN TOOL RESULTS' in line, line
     assert not fenced
 
 
@@ -60,7 +60,7 @@ async def test_working_and_summary_requests_have_markdown_structure(native):
     assert len(requests) == len(summaries) == 1
     assert_markdown_structure(requests[0]["messages"][0]["content"])
     assert_markdown_structure(summaries[0]["messages"][0]["content"])
-    assert read_data(requests[0]["messages"][1]["content"])["user_prompt"] == [user]
+    assert requests[0]["messages"][1]["content"] == user
     assert read_data(summaries[0]["messages"][1]["content"])["user_prompt"] == user
     definitions = requests[0].get("tools")
     if not native:

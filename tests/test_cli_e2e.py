@@ -86,13 +86,13 @@ class StubOpenRouter:
                 params = ["tools", "response_format", "structured_outputs"]
                 if self.path.endswith("/endpoints"):
                     self._send({"data": {"endpoints": [{"tag": "stub-provider", "supported_parameters": params,
-                                "context_length": 32000 if "stub/two" in self.path else 128000}]}})
+                                "context_length": 64000 if "stub/two" in self.path else 128000}]}})
                     return
                 if self.path != "/api/v1/models":
                     self._send({"error": {"message": "unknown endpoint"}}, status=404)
                     return
                 self._send({"data": [{"id": "stub/one", "context_length": 128000, "supported_parameters": params},
-                                     {"id": "stub/two", "context_length": 32000, "supported_parameters": params},
+                                     {"id": "stub/two", "context_length": 64000, "supported_parameters": params},
                                      {"id": "stub/model", "context_length": 128000, "supported_parameters": params},
                                      {"id": DEFAULT_MODEL, "context_length": 128000, "supported_parameters": params}]})
 

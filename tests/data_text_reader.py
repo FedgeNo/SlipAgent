@@ -60,3 +60,16 @@ def read_data(text):
 
 def input_data(value):
     return read_data(value) if isinstance(value, str) else value
+
+
+def current_input(messages):
+    from slipagent.prompts import load_prompt
+    from slipagent.types import Message, content_text
+    for message in messages:
+        role = message.role if isinstance(message, Message) else message['role']
+        content = message.content if isinstance(message, Message) else message['content']
+        if role == 'system':
+            _, marker, body = content_text(content).partition(load_prompt('current-turn.md'))
+            if marker:
+                return read_data(body)
+    raise AssertionError('Current Turn Input missing from system prompt')

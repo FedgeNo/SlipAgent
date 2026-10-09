@@ -37,12 +37,15 @@ async def test_tool_guidance_reaches_actual_request_body(workspace, native):
             await client.chat(model="test", messages=view, tools=registry.specs() if native else None,
                               request_profile=profile)
         body = captured[0]
+        system = body["messages"][0]["content"]
+        system_definitions = read_data(system.split("# Available Tool Definitions\n\n```text\n", 1)[1].split("\n```", 1)[0])
+        assert all("# Available Tool Definitions" not in message["content"] for message in body["messages"] if message["role"] == "user")
         if native:
             definitions = body["tools"]
+            assert system_definitions == definitions
         else:
             assert "tools" not in body
-            system = body["messages"][0]["content"]
-            definitions = read_data(system.split("# Available Tool Definitions\n\n```text\n", 1)[1].split("\n```", 1)[0])
+            definitions = system_definitions
         descriptions = {item["function"]["name"]: item["function"]["description"] for item in definitions}
         assert "substring" in descriptions["edit_file"] and "`old_string`" in descriptions["edit_file"]
         assert "same read batch" in descriptions["read_file"]

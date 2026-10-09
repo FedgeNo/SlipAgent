@@ -554,15 +554,33 @@ class ConversationHistory:
             pinned = [Message.system("\n" + instructions)]
         history_begin = load_prompt('history-opening.md').strip()
         history_end = load_prompt('history-closing.md').strip()
-        history_prefix = (pinned[-1].content or "").rstrip() + "\n\n" + history_begin + "\n\n"
+        system_prefix = (pinned[-1].content or "").rstrip() + "\n\n"
+        history_prefix = system_prefix + history_begin + "\n\n"
         history_suffix = "\n\n" + history_end + "\n"
         pinned[-1] = Message.system(MessageSections([history_prefix, [], history_suffix]))
 
         def assemble(selected: list[Message], current: list[Message]) -> list[Message]:
             # Only the request projection changes; archives retain their roles.
+            user_input = [message for message in tail_messages if message.role == "user"]
+            if not user_input:
+                user_input = [Message.user("")]
+            recent_results: list[Any] = []
+            if selected and self.steps and self.steps[-1].has_results:
+                if selected[-1].content.get("step_id") == self.steps[-1].id:
+                    recent_results = [selected[-1].content]
+                    selected = selected[:-1]
+            result_sections: list[Any] = []
+            if recent_results:
+                result_sections = [
+                    "\n" + load_prompt("tool-results-opening.md"), recent_results,
+                    load_prompt("tool-results-closing.md"),
+                ]
             return [*pinned[:-1], Message.system(MessageSections([
-                history_prefix, [message.content for message in selected], history_suffix,
-            ])), *current]
+                system_prefix, load_prompt("current-turn.md"),
+                *[message.content for message in current],
+                "\n\n" + history_begin + "\n\n",
+                [message.content for message in selected], history_suffix, *result_sections,
+            ])), *user_input]
 
         tail_messages = [message for message in messages[self.cursor:] if message.role != "system"]
         tail = [record_message(step_record(tail_messages, current=True, step_id=len(self.steps) + 1))]

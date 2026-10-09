@@ -192,7 +192,8 @@ async def test_over_budget_preserves_recent_tool_batch_without_extra_calls():
             ToolCall("a", "record", {"value": "one"}), ToolCall("b", "record", {"value": "two"})]),
         completion(reply(2, "Received excerpts.", "Model received bounded results.", "Two tools returned large payloads; only excerpts were visible.")),
     ])
-    agent._context_lengths[agent.model] = 12000
+    # Include system tool definitions but leave too little room for full results.
+    agent._context_lengths[agent.model] = 22000
     agent.registry.get("record").result = payload
     assert await agent.run("read") == "Received excerpts."
     assert len(client.calls) == 2
@@ -288,7 +289,7 @@ async def test_shrunk_window_has_whole_turn_summary_and_full_latest_turn():
     ])
     agent.registry.get("record").result = "FULL LARGE TOOL OUTPUT " * 1000
     await agent.run("Original exact request")
-    agent._context_lengths[agent.model] = 12000
+    agent._context_lengths[agent.model] = 22000
     await agent.run("Follow-up exact request")
     view = client.calls[-1]["messages"]
     wire = "\n".join(content_text(message.content) for message in unpack_context(view))
@@ -390,7 +391,7 @@ async def test_large_old_user_requests_reduce_the_recent_window_without_compress
     async def unused(source):
         pytest.fail("compressing responses cannot make the user requests fit")
     view = await history.view(messages, [], keep_steps=50,
-                              context_length=9000, max_output=1000, summarize=unused)
+                              context_length=10000, max_output=1000, summarize=unused)
     assert [context_body(message.content) for message in unpack_context(view) if message.role == "user"] == [second]
     assert any(context_body(message.content) == "second answer" for message in unpack_context(view))
     assert history.steps[0].messages[0].content == first
@@ -940,7 +941,7 @@ async def test_catalog_context_length_limits_full_history_and_is_cached():
     def respond(request):
         if request.method == "GET":
             catalog_calls.append(request)
-            return httpx.Response(200, json={"data": [{"id": "small/model", "context_length": 12000}]})
+            return httpx.Response(200, json={"data": [{"id": "small/model", "context_length": 22000}]})
         summary = summary_response(json.loads(request.content))
         if summary is not None:
             return httpx.Response(200, json=summary)

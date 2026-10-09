@@ -698,7 +698,13 @@ been sent.
 
 Selected historical steps are supplied as labelled records inside the system prompt,
 between large `BEGIN CONVERSATION HISTORY DATA` and `END CONVERSATION HISTORY DATA`
-dividers. The separate user message contains the current-step record.
+dividers. The current-step record appears under Current Turn Input before those
+dividers. Separate user messages contain plain user text, or an empty string
+when there is no new user input. Tool definitions
+appear in the system prompt for all models; native tools also use the API tool field.
+When the latest completed step included tools, its record appears once after
+older history, between large `BEGIN PREVIOUS TURN TOOL RESULTS` and
+`END PREVIOUS TURN TOOL RESULTS` markers. Calls and results remain together.
 Internally, records remain objects and lists until the API message is rendered.
 Text values appear literally in indented blocks: quotes, backslashes, tabs, and
 newlines are not JSON-escaped. Block indentation is presentation, not source text.

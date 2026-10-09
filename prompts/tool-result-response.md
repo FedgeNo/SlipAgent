@@ -1,3 +1,3 @@
 ### Continuation After Tools
 
-This turn continues automatically after the previous step, without new user input. Review the available tool results against the user request for this run and report the outcome. Request more tools only if fulfilling that request requires them. Otherwise, return your answer with no tool calls.
+No new user message was supplied. Use the previous turn's results in the conversation history below and the existing user request to choose your action for this turn. If those results fulfill the request, report the outcome with no tool calls. Otherwise, request tools needed to advance it.

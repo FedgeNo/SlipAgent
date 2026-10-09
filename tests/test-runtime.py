@@ -17,7 +17,7 @@ SETUP = '''
 import asyncio
 import io
 import json
-from data_text_reader import read_data
+from data_text_reader import read_data, current_input
 import os
 from pathlib import Path
 import re
@@ -49,7 +49,7 @@ async def main():
         body = json.loads(request.content)
         completion = responses.pop(0)
         system = ' '.join(m.get('content') or '' for m in body['messages'] if m['role'] == 'system')
-        current_record = read_data(body['messages'][-1]['content'])
+        current_record = current_input(body['messages'])
         step_id = current_record['step_id']
         content = completion.get('content') or ''
         completion['content'] = content or 'Requesting tools.'

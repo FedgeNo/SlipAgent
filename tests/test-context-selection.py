@@ -46,7 +46,8 @@ async def test_current_run_command_survives_tool_results_without_entering_histor
     assert "step_id 2" in content_text(view[0].content)
     assert "overall goal for this run" in content_text(view[0].content)
     assert "multiple steps ago" in content_text(view[0].content)
-    assert "without new user input" in content_text(view[0].content)
+    assert "No new user message was supplied" in content_text(view[0].content)
+    assert view[-1].content == ""
     assert "This turn includes new user input" not in content_text(view[0].content)
     assert [step.full_text() for step in history.steps] == originals
     assert all("User Request for This Run" not in step.compaction_input() for step in history.steps)

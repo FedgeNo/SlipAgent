@@ -2,7 +2,7 @@
 
 import io
 import json
-from data_text_reader import read_data
+from data_text_reader import read_data, current_input
 
 import httpx
 import pytest
@@ -74,7 +74,7 @@ async def test_agent_snapshots_include_retry_prompt_and_matching_tool_results():
     assert "last response was rejected" not in snapshots[2]["messages"][0]["content"]
     record = context_records(snapshots[2]["messages"])[-2]
     assert record["tool_results"] == [{"call_id": "call-1", "tool_name": "record", "status": "success", "content": "EXACT TOOL RESULT"}]
-    assert read_data(snapshots[2]["messages"][-1]["content"])["record_type"] == "current_step"
+    assert current_input(snapshots[2]["messages"])["record_type"] == "current_step"
     renderer = Renderer(Style(False), io.StringIO(), False)
     for event in events:
         if event.kind == "context":

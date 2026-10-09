@@ -567,6 +567,7 @@ In the REPL:
 | `/model <slug>` | Switch model and remember the choice for future launches |
 | `/models [filter]` | Select from the catalog with context and pricing; optionally filter by name |
 | `/models free` | Select from zero-cost models |
+| `/provider <provider>` | Select and remember a free default: OpenRouter/NVIDIA Nemotron 3 Ultra, or Kilo Auto Free; refuse missing models or nonzero/unknown pricing |
 | `/temperature` | Show the effective temperature and whether the selected model supports changing it |
 | `/temperature <value>` | Set the session temperature from 0 to 2; unsupported changes report an error |
 | `/key show`, `/key status` | Show the masked current key, spend limit, and reported free quota |

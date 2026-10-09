@@ -242,6 +242,62 @@ def test_only_nvidia_key_selects_nvidia_automatically():
     assert active_providers({"OPENROUTER_API_KEY": "  ", "NVIDIA_API_KEY": "dummy"}) == ["nvidia"]
 
 
+@pytest.mark.parametrize("provider,model", [
+    ("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free"),
+    ("nvidia", ULTRA_MODEL), ("kilo", "kilo-auto/free"),
+])
+async def test_provider_command_selects_and_remembers_free_default(tmp_path, monkeypatch, provider, model):
+    async with OpenRouterClient("dummy") as client:
+        session = session_for(client, tmp_path)
+        entry = ModelInfo(model, provider=provider, pricing={"prompt": "0", "completion": "0"})
+        catalog = AsyncMock(return_value=[entry])
+        select = AsyncMock()
+        monkeypatch.setattr(cli.Session, "catalog", catalog)
+        monkeypatch.setattr(cli.Session, "select_model", select)
+        await cli._execute_command(session, f"/provider {provider}")
+        select.assert_awaited_once_with(entry)
+        catalog.assert_awaited_once_with(refresh=True)
+        config = Config.from_env(environ={"OPENROUTER_API_KEY": "dummy", "NVIDIA_API_KEY": "dummy", "KILO_API_KEY": "dummy"})
+        assert (config.provider, config.model) == (provider, model)
+
+
+@pytest.mark.parametrize("pricing", [{}, {"prompt": "unknown", "completion": "0"},
+    {"prompt": "0.000001", "completion": "0"},
+    {"prompt": "0", "completion": "0", "request": "0.01"}])
+async def test_provider_command_rejects_paid_or_unknown_pricing(tmp_path, monkeypatch, pricing):
+    async with OpenRouterClient("dummy") as client:
+        session = session_for(client, tmp_path)
+        entry = ModelInfo("kilo-auto/free", provider="kilo", pricing=pricing)
+        monkeypatch.setattr(cli.Session, "catalog", AsyncMock(return_value=[entry]))
+        select = AsyncMock()
+        monkeypatch.setattr(cli.Session, "select_model", select)
+        await cli._execute_command(session, "/provider kilo")
+        select.assert_not_awaited()
+        assert "not advertised as free" in session.renderer.stream.getvalue()
+
+
+async def test_provider_command_does_not_substitute_missing_default(tmp_path, monkeypatch):
+    async with OpenRouterClient("dummy") as client:
+        session = session_for(client, tmp_path)
+        monkeypatch.setattr(cli.Session, "catalog", AsyncMock(return_value=[
+            ModelInfo("other/free", provider="kilo", pricing={"prompt": "0", "completion": "0"})]))
+        select = AsyncMock()
+        monkeypatch.setattr(cli.Session, "select_model", select)
+        await cli._execute_command(session, "/provider kilo")
+        select.assert_not_awaited()
+        assert "unknown model: kilo::kilo-auto/free" in session.renderer.stream.getvalue()
+
+
+async def test_provider_command_queues_during_work_and_help_accepts_slash(tmp_path):
+    async with OpenRouterClient("dummy") as client:
+        session = session_for(client, tmp_path)
+        session.agent.running = True
+        await cli._execute_command(session, "/provider kilo")
+        assert session.extensions["deferred_commands"] == ["/provider kilo"]
+        assert cli._command_help("provider") == cli._command_help("/provider")
+        assert "free default" in cli._command_help("provider")
+
+
 async def test_list_models_activates_provider_from_explicit_key(monkeypatch, capsys):
     monkeypatch.delenv("OPENROUTER_API_KEY")
     fetch = AsyncMock(return_value=[ModelInfo(ULTRA_MODEL, provider="nvidia")])

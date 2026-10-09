@@ -96,6 +96,7 @@ Commands
   /model               choose a model with Up/Down and Enter; Escape cancels
   /model <selector>    switch model/provider; use provider::model when ambiguous
   /models [filter]     search active provider catalogs (e.g. /models nemotron)
+  /provider <provider> switch to a free default: openrouter/nvidia Ultra, kilo Auto Free
   /temperature         show the current temperature and model support
   /temperature <value> set temperature from 0 to 2 when supported (model-specific default)
   /key                 enter a different key for the current provider (hidden input)
@@ -1256,7 +1257,7 @@ def _command_help(argument: str) -> str:
 
 def _changes_session(command: str, argument: str) -> bool:
     """Commands that cannot share a live model request or tool batch."""
-    return (command in {"reset", "init", "resume", "fork", "delete", "rewind", "model", "models"}
+    return (command in {"reset", "init", "resume", "fork", "delete", "rewind", "model", "models", "provider"}
             or command == "key" and argument.lower() not in {"show", "status"}
             or command in {"mcp", "temperature"} and bool(argument)
             or command == "task" and argument == "new"
@@ -1577,6 +1578,13 @@ async def _execute_command(session: Session, line: str) -> bool:
         await _model_command(session, argument, style, out)
     elif command == "models":
         await _models_command(session, argument, style, out)
+    elif command == "provider":
+        provider = argument.lower()
+        if provider not in PROVIDERS:
+            print(style.red("  usage: /provider " + "|".join(PROVIDERS)), file=out)
+        else:
+            await _model_command(session, f"{provider}::{provider_class(provider).default_model}",
+                                 style, out, require_free=True)
     elif command == "temperature":
         await _temperature_command(session, argument, style, out)
     elif command == "key":
@@ -1785,7 +1793,7 @@ async def _execute_command(session: Session, line: str) -> bool:
 
 
 async def _model_command(
-    session: Session, argument: str, style: Style, out: io.TextIOBase
+    session: Session, argument: str, style: Style, out: io.TextIOBase, *, require_free: bool = False,
 ) -> None:
     if not argument:
         if session.renderer.terminal is not None:
@@ -1814,6 +1822,16 @@ async def _model_command(
         print(_model_table(session, matches), file=out)
         return
     entry = matches[0]
+    if require_free:
+        try:
+            free = all(float(entry.pricing[name]) == 0 for name in ("prompt", "completion"))
+            free = free and all(float(entry.pricing.get(name, 0)) == 0
+                                for name in ("request", "internal_reasoning"))
+        except (KeyError, TypeError, ValueError):
+            free = False
+        if not free:
+            print(style.red(f"  {entry.selector} is not advertised as free; provider unchanged."), file=out)
+            return
     try:
         await session.select_model(entry)
     except (APIError, ConfigError) as exc:

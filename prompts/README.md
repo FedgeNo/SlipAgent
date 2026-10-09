@@ -6,6 +6,8 @@ SlipAgent strips leading and trailing whitespace and surrounds each rendered pro
 
 ## Markdown Structure
 
+Address actions available in the current response: interpreting supplied evidence, planning, replying, and requesting tools. Express workflow guidance as a choice from current evidence, not an obligation to act on future turns. Tool results requested now are unavailable to this response. Historical evidence, conditional plans, and factual descriptions of harness behavior can refer to other turns.
+
 - Use `#` for a major instruction block, `##` for related topics, and `###` for procedures or subtopics. Fragment templates use the level appropriate to their parent.
 - Separate headings, paragraphs, lists, tables, and fenced examples with blank lines. Keep prose paragraphs unwrapped; lists and code can span lines.
 - Use numbered lists for sequences, bullets for independent rules, and tables for field meanings or comparisons.

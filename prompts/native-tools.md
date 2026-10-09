@@ -10,7 +10,7 @@ Use the native API tools supplied with this request. Request all predictable ind
 
 ## Reply Text
 
-Aim to include brief reply text with each tool call batch so later turns can follow your progress and next action. Empty text is still allowed when requesting tools. Provide nonblank text when requesting no tools. Follow the supplied reply format for any text.
+Aim to include brief reply text with this tool call batch, recording progress and the batch's purpose. Empty text is still allowed when requesting tools. Provide nonblank text when requesting no tools. Follow the supplied reply format for any text.
 
 ## Evidence and Continuation
 

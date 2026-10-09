@@ -10,9 +10,9 @@ Omit step_id to search/list steps; total_matches counts all matching steps acros
 
 Use offset and limit to page either a listing or a selected step; both count characters.
 
-A complete structured selection is returned as an object or array in content. Partial pages contain text fragments of its JSON representation; follow next_offset to reconstruct the complete text. Plain-text selections remain strings.
+A complete structured selection is returned as an object or array in content. Partial pages contain text fragments of its JSON representation. Plain-text selections remain strings.
 
-Follow next_offset until null.
+If a supplied page has a non-null next_offset and needed text is missing, request that offset. A null next_offset marks the end.
 
 ## Selecting Results and Fields
 

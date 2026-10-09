@@ -8,7 +8,7 @@ Read retained shell/Git stdout or stderr without rerunning the command.
 
 Use `log_id` from the result; `offset` counts UTF-8 bytes and `limit` counts characters.
 
-Start with `stream="stdout"`, `offset=0`, `limit=8000`; use `stream="stderr"` for errors or `tail=true` for the end. Follow `next_offset` until it is `null`.
+For a first page, use `stream="stdout"`, `offset=0`, `limit=8000`; use `stream="stderr"` for errors or `tail=true` for the end. If a supplied page has a non-null `next_offset` and needed output is missing, request that offset. A null `next_offset` marks the end.
 
 Batch independent output reads together. Polling retained logs is exempt from unchanged-batch detection.
 

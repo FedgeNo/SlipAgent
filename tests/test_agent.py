@@ -615,7 +615,7 @@ def test_system_prompt_allows_silent_tool_batches_and_requires_final_output() ->
     prompt = build_system_prompt("/tmp/ws")
 
     assert "Empty text is still allowed when requesting tools" in load_prompt("native-tools.md")
-    assert "End the run with a useful, nonempty answer and no tool calls" in prompt
+    assert "If the request is fulfilled, return a useful, nonempty answer and no tool calls" in prompt
 
 
 def test_system_prompt_states_parallel_calls_are_available() -> None:

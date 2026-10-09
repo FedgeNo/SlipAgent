@@ -30,6 +30,6 @@ For intentional polling of external state, set `poll=true`. Do not mark ordinary
 
 ## Background Jobs
 
-Set `background=true` to return immediately with a managed `job_id` and `log_id`; use `command_jobs` to check/wait/stop it and `read_command_output` for live output.
+Set `background=true` to request a managed job. Its result supplies a `job_id` and `log_id`. For a job already identified in supplied results, use `command_jobs` to check/wait/stop it and `read_command_output` for live output.
 
 At most four jobs run concurrently. The same execution timeout still applies (default 120 seconds, maximum 600). Starting a job is not evidence that it succeeded.

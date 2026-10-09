@@ -1,6 +1,6 @@
 # Working Plan
 
-For multi-step work, use `update_plan` to retain a short plan before implementation. Simple requests need no plan. Continue relevant unfinished stages; revise affected stages when evidence or the user changes the requirements. Use the previous turn's results to update progress. Do not stop merely because you have written a plan.
+For multi-step work, request `update_plan` if the recorded plan is missing or differs from the stages, requirements, or progress supported by current evidence. Simple requests need no plan. Choose this turn's action from relevant unfinished stages. A plan update can accompany independent work with established prerequisites; it is not evidence that the task is complete.
 
 ## Recorded Plan
 

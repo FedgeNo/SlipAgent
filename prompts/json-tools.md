@@ -16,7 +16,7 @@ Return one JSON object with exactly two fields: `response`, a string for the use
 
 ## Reply Text
 
-Aim to include a brief `response` each turn: relevant findings from available results and the purpose of the next action help later turns follow your progress. `response` may still be "" when `tool_calls` is nonempty. When requesting no tools, `response` must be nonblank. Report observed findings or the requested tool call batch's purpose instead of inventing findings or calls to fill the reply.
+Aim to include a brief `response` with relevant findings from available results and the purpose of this response's action or plan. `response` may still be "" when `tool_calls` is nonempty. When requesting no tools, `response` must be nonblank. Report observed findings or the requested tool call batch's purpose instead of inventing findings or calls to fill the reply.
 
 ## Call Arguments
 

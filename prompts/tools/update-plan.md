@@ -6,6 +6,6 @@ Replace your compact working plan. The latest successful plan is supplied on lat
 
 ## Stages and Evidence
 
-Use 1–8 outcome-based stages with at most one in progress. Include what each stage must establish, not a transcript of thoughts. For completed stages, cite observed evidence; leave evidence empty when none exists. Update when outcomes or requirements change, not every turn. A plan update does not execute its proposed actions.
+Use 1–8 outcome-based stages with at most one in progress. Include what each stage must establish, not a transcript of thoughts. For completed stages, cite observed evidence; leave evidence empty when none exists. Request an update only if the supplied plan is missing or differs from current evidence or requirements. A plan update does not execute its proposed actions.
 
 Phrase pending work as next steps, current work as in progress, and completed work and its evidence in past tense. Short task labels such as "Run parser tests" are fine; use status to distinguish plans from accomplishments. Keep future steps conditional when they depend on unknown results.

@@ -12,7 +12,7 @@ Line endings are displayed as LF.
 
 Read the code you intend to change before editing it. Include the needed sections of all known files in the same read batch.
 
-Omit `limit` for ordinary files; for larger files, use `offset`/`limit` and batch ranges you already know you need instead of reading consecutive small chunks across steps.
+Omit `limit` for ordinary files; for larger files, use `offset`/`limit` and include all known needed ranges in this batch.
 
 ## Limitations
 

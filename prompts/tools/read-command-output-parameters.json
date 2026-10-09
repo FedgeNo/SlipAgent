@@ -1,5 +1,5 @@
 {
-    "properties/offset": "UTF-8 byte offset for stream pages; record index when listing logs. Follow next_offset.",
+    "properties/offset": "UTF-8 byte offset for stream pages; record index when listing logs. Use a supplied next_offset for a needed additional page.",
     "properties/limit": "Characters per stream page (default 8000); number of records when listing, capped at 50.",
     "properties/tail": "With log_id, return the last limit characters, ignoring offset."
 }

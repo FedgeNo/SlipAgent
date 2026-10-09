@@ -14,7 +14,7 @@ Before choosing an action, trace the last ten supplied completed steps, or all s
 
 ## Evidence and Retrieval
 
-Distinguish intentions from outcomes. An agent statement or recorded tool call does not prove success; use the matching tool result. Errors may have partial effects. Compressed records and excerpts omit details, and omitted details are unknown rather than empty or successful. Retrieve consequential missing evidence with recall_history using the exact step_id and follow next_offset. Retrieve an existing result instead of repeating an executed action solely to obtain omitted output.
+Distinguish intentions from outcomes. An agent statement or recorded tool call does not prove success; use the matching tool result. Errors may have partial effects. Compressed records and excerpts omit details, and omitted details are unknown rather than empty or successful. Retrieve consequential missing evidence with recall_history using the exact step_id and a supplied next_offset if another page is needed. Retrieve an existing result instead of repeating an executed action solely to obtain omitted output.
 
 ## Representation and Output
 

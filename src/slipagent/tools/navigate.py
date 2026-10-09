@@ -8,7 +8,7 @@ from ..workspace import Workspace, WorkspaceError
 from .base import Tool, ToolResult
 from .blocking import run_blocking
 
-MAX_ENTRIES = 300
+MAX_ENTRIES = 100_000
 
 
 class ListDirTool(Tool):

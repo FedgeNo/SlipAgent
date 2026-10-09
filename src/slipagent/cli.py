@@ -134,7 +134,7 @@ Page Up/Down, or Home/End. System prompts appear in yellow.
 Ordinary text continues the active task. Use /task new before a separate task.
 Project Python selection is shown in context; --python PATH overrides discovery.
 Sessions, command logs, and request diagnostics are saved unless --no-session is used.
-Command logs have a shared 100 MiB quota; request diagnostics have a 32 MiB quota.
+Command logs default to a shared 1 GiB quota; request diagnostics have a 32 MiB quota.
 Background commands use command_jobs and read_command_output for control/output.
 /stop leaves those jobs running; /reset and exit stop them.
 Esc immediately interrupts agent work, active tools, and background jobs.

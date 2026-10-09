@@ -34,11 +34,41 @@ async def test_read_offset_and_limit(project: Workspace) -> None:
     assert "def main():" not in content_text(result.content)
 
 
+@pytest.mark.parametrize("arguments,start,end", [
+    ({}, 1, 13_527),
+    ({"offset": 2_001}, 2_001, 13_527),
+    ({"offset": 3_001, "limit": 5_000}, 3_001, 8_000),
+])
+async def test_read_large_file_without_hidden_line_cap(workspace, arguments, start, end):
+    lines = [f"line {number}: " + "λ" * 100 for number in range(1, 13_528)]
+    source = "\n".join(lines) + "\n"
+    assert len(source.encode()) > 2_000_000
+    (workspace.root / "large.txt").write_text(source)
+
+    result = await ReadFileTool(workspace).invoke({"path": "large.txt", **arguments})
+
+    assert not result.is_error
+    header, body = result.content.split("\n---\n", 1)
+    assert f"13527 lines, showing {start}-{end}" in header
+    assert body == "\n".join(f"{number:>6}\t{lines[number - 1]}" for number in range(start, end + 1))
+    assert ("Truncated:" in header) == (end < len(lines))
+
+
 async def test_read_truncation_is_announced(project: Workspace) -> None:
     result = await ReadFileTool(project).invoke({"path": "src/app.py", "limit": 2})
 
     assert "Truncated: 4 more line(s)" in content_text(result.content)
     assert "offset=3" in content_text(result.content)
+
+
+async def test_read_reports_file_above_memory_ceiling(workspace: Workspace) -> None:
+    with (workspace.root / "oversized.txt").open("wb") as file:
+        file.truncate(32_000_001)
+
+    result = await ReadFileTool(workspace).invoke({"path": "oversized.txt"})
+
+    assert result.is_error
+    assert "memory limit (32000001 bytes > 32000000)" in result.content
 
 
 async def test_read_missing_file(workspace: Workspace) -> None:

@@ -1,4 +1,4 @@
 {
     "properties/query": "Search query.",
-    "properties/num_results": "Number of results (1-10). Defaults to 5."
+    "properties/num_results": "Number of results (1-100, subject to provider limits). Defaults to 5."
 }

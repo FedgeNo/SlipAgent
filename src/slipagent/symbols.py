@@ -47,7 +47,7 @@ def outline(raw: bytes, suffix: str) -> tuple[str, set[str]]:
     definitions: set[str] = set()
     stack = [tree.root_node]
     visited = 0
-    while stack and visited < 50000:
+    while stack and visited < 1_000_000:
         node = stack.pop()
         visited += 1
         named = _name(node)
@@ -57,7 +57,7 @@ def outline(raw: bytes, suffix: str) -> tuple[str, set[str]]:
         if (node.type in DEFINITIONS or callable_variable) and named is not None:
             name = raw[named.start_byte:named.end_byte].decode("utf-8", errors="replace")
             definitions.add(name)
-            if len(declarations) < 30:
+            if len(declarations) < 1000:
                 signature_node = value if callable_variable and value is not None else node
                 body = signature_node.child_by_field_name("body")
                 if body is None:
@@ -67,11 +67,11 @@ def outline(raw: bytes, suffix: str) -> tuple[str, set[str]]:
                                      "block", "statement_block", "compound_statement",
                                  }), None)
                 end = body.start_byte if body is not None else signature_node.end_byte
-                header = raw[node.start_byte:min(end, node.start_byte + 600)].decode("utf-8", errors="replace")
-                header = re.sub(r"\s+", " ", header).strip().rstrip(";{ ")[:240]
+                header = raw[node.start_byte:min(end, node.start_byte + 16000)].decode("utf-8", errors="replace")
+                header = re.sub(r"\s+", " ", header).strip().rstrip(";{ ")[:4000]
                 declarations.append(f"{node.start_point.row + 1}: {header}")
         if (node.type in {"identifier", "type_identifier", "field_identifier", "property_identifier", "name", "constant"}
-                and len(references) < 2000):
+                and len(references) < 100_000):
             # Exclude declaration names, but retain their separate usages.
             parent = node.parent
             declaration_name = _name(parent) if parent is not None and parent.type in DEFINITIONS else None

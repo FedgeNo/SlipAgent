@@ -19,9 +19,8 @@ from .base import Tool, ToolResult
 from .blocking import run_blocking
 from .editing import apply_edits, edit_diff
 
-# Guard rails so a stray path or runaway file cannot blow up the context window.
-MAX_READ_BYTES = 2_000_000
-MAX_READ_LINES = 2_000
+# Bound local read memory; request assembly enforces the model's context budget.
+MAX_READ_BYTES = 32_000_000
 
 
 def _atomic_write(workspace: Workspace, target: Path, content: str) -> None:
@@ -148,11 +147,11 @@ class ReadFileTool(Tool):
         self,
         path: str,
         offset: int = 1,
-        limit: int = MAX_READ_LINES,
+        limit: int | None = None,
     ) -> ToolResult:
         return await run_blocking(self._read, path, offset, limit)
 
-    def _read(self, path: str, offset: int, limit: int) -> ToolResult:
+    def _read(self, path: str, offset: int, limit: int | None) -> ToolResult:
         try:
             target = self.workspace.resolve(path)
         except WorkspaceError as exc:
@@ -165,15 +164,18 @@ class ReadFileTool(Tool):
                 f"{self.workspace.relative(target)} is a directory; use list_dir instead."
             )
 
-        size = target.stat().st_size
-        if size > MAX_READ_BYTES:
-            return ToolResult.error(
-                f"File is too large to read ({size} bytes > {MAX_READ_BYTES}). "
-                f"Read it with a shell command instead, e.g. `head -n 200 <path>`."
-            )
-
         try:
-            text = target.read_text(encoding="utf-8")
+            size = target.stat().st_size
+            if size <= MAX_READ_BYTES:
+                with target.open("rb") as file:
+                    data = file.read(MAX_READ_BYTES + 1)
+                size = len(data)
+            if size > MAX_READ_BYTES:
+                return ToolResult.error(
+                    f"File exceeds the read_file memory limit ({size} bytes > {MAX_READ_BYTES}). "
+                    "Select the needed content with run_command."
+                )
+            text = data.decode("utf-8")
         except UnicodeDecodeError:
             return ToolResult.error(
                 f"{self.workspace.relative(target)} appears to be binary; "
@@ -185,7 +187,8 @@ class ReadFileTool(Tool):
         lines = text.splitlines()
         total = len(lines)
         start = max(1, offset)
-        window = lines[start - 1 : start - 1 + min(limit, MAX_READ_LINES)]
+        end = None if limit is None else start - 1 + limit
+        window = lines[start - 1 : end]
 
         if not window:
             return ToolResult.ok(

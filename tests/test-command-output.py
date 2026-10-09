@@ -42,6 +42,32 @@ async def test_complete_output_pages_and_tail_survive_preview_truncation(tmp_pat
     assert list(tmp_path.iterdir()) == []
 
 
+async def test_large_command_streams_are_returned_and_recalled_whole(tmp_path):
+    archive = CommandArchive(20_000_000, directory=tmp_path)
+    tool = RunCommandTool(Workspace(tmp_path), archive)
+    command = shlex.join([sys.executable, "-c",
+                         "import sys; sys.stdout.write('A'*2000000+'STDOUT END'); sys.stderr.write('B'*2000000+'STDERR END')"])
+    try:
+        result = await tool.run(command)
+        assert not result.is_error
+        assert "A" * 2_000_000 + "STDOUT END" in result.content
+        assert "B" * 2_000_000 + "STDERR END" in result.content
+        assert "truncated" not in result.content
+        log = next(iter(archive.logs.values()))
+        reader = ReadCommandOutputTool(archive)
+        for stream, expected in [("stdout", "A" * 2_000_000 + "STDOUT END"),
+                                 ("stderr", "B" * 2_000_000 + "STDERR END")]:
+            recalled = await reader.invoke({"log_id": log.id, "stream": stream})
+            assert not recalled.is_error
+            assert recalled.content["content"] == expected
+            assert recalled.content["next_offset"] is None
+            selected = await reader.invoke({"log_id": log.id, "stream": stream, "limit": 100_000})
+            assert not selected.is_error
+            assert selected.content["content"] == expected[:100_000]
+    finally:
+        await archive.aclose()
+
+
 async def test_shell_archives_middle_and_timeout_output_with_call_provenance(tmp_path):
     registry = build_default_registry(Workspace(tmp_path))
     archive = registry.services["command_archive"]

@@ -103,35 +103,45 @@ async def test_grep_respects_max_results(project: Workspace) -> None:
 
 
 async def test_grep_clamps_an_oversized_max_results(workspace: Workspace) -> None:
-    """A tool call can carry any integer, so the cap is enforced here too.
-
-    Regression: the schema only declared a minimum, so `max_results: 100000`
-    returned every match and could flood the context window these limits exist
-    to protect.
-    """
+    """Calls above the declared result ceiling are rejected."""
     from slipagent.tools.search import MAX_GREP_RESULTS
 
-    for index in range(MAX_GREP_RESULTS + 50):
-        (workspace.root / f"mod{index}.py").write_text("x = 1\n", encoding="utf-8")
-
-    result = await GrepTool(workspace).invoke({"pattern": "x = 1", "max_results": 100_000})
+    result = await GrepTool(workspace).invoke({"pattern": "x = 1", "max_results": MAX_GREP_RESULTS + 1})
 
     assert result.is_error
-    assert "must be <= 200" in content_text(result.content)
+    assert f"must be <= {MAX_GREP_RESULTS}" in content_text(result.content)
 
 
 async def test_grep_run_clamps_directly(workspace: Workspace) -> None:
     """The clamp holds even when validation is bypassed by calling run()."""
     from slipagent.tools.search import MAX_GREP_RESULTS
 
-    for index in range(MAX_GREP_RESULTS + 50):
-        (workspace.root / f"mod{index}.py").write_text("x = 1\n", encoding="utf-8")
+    (workspace.root / "many.py").write_text("x = 1\n" * (MAX_GREP_RESULTS + 50), encoding="utf-8")
 
-    result = await GrepTool(workspace).run(pattern="x = 1", max_results=100_000)
+    result = await GrepTool(workspace).run(pattern="x = 1", max_results=MAX_GREP_RESULTS + 100)
 
     body = result.content.splitlines()[1:]
     assert len(body) == MAX_GREP_RESULTS
     assert f"stopped at the {MAX_GREP_RESULTS}-result limit" in content_text(result.content)
+
+
+async def test_grep_preserves_long_lines_and_searches_large_files(workspace: Workspace) -> None:
+    long_line = "needle " + "x" * 2_100_000 + " END"
+    (workspace.root / "large.txt").write_text(long_line + "\n" + "needle short\n" * 600)
+    result = await GrepTool(workspace).invoke({"pattern": "needle"})
+    assert not result.is_error
+    assert long_line in result.content
+    assert len(result.content.splitlines()[1:]) == 601
+
+
+async def test_glob_and_directory_listing_include_more_than_old_caps(workspace: Workspace) -> None:
+    for number in range(650):
+        (workspace.root / f"file{number:04}.txt").touch()
+    for tool, arguments in [(GlobTool(workspace), {"pattern": "*.txt"}), (ListDirTool(workspace), {})]:
+        result = await tool.invoke(arguments)
+        assert not result.is_error
+        assert len(result.content.splitlines()[1:]) == 650
+        assert "file0649.txt" in result.content
 
 
 async def test_grep_cannot_escape(project: Workspace) -> None:
@@ -246,17 +256,16 @@ async def test_glob_ignores_vendor_directories(project: Workspace) -> None:
 async def test_glob_clamps_an_oversized_max_results(workspace: Workspace) -> None:
     from slipagent.tools.search import MAX_GLOB_RESULTS
 
-    for index in range(MAX_GLOB_RESULTS + 50):
-        (workspace.root / f"mod{index}.py").write_text("x", encoding="utf-8")
-
-    result = await GlobTool(workspace).invoke({"pattern": "*.py", "max_results": 100_000})
+    result = await GlobTool(workspace).invoke({"pattern": "*.py", "max_results": MAX_GLOB_RESULTS + 1})
 
     assert result.is_error
-    assert "must be <= 500" in content_text(result.content)
+    assert f"must be <= {MAX_GLOB_RESULTS}" in content_text(result.content)
 
 
-async def test_glob_run_clamps_directly(workspace: Workspace) -> None:
-    from slipagent.tools.search import MAX_GLOB_RESULTS
+async def test_glob_run_clamps_directly(workspace: Workspace, monkeypatch) -> None:
+    from slipagent.tools import search
+    monkeypatch.setattr(search, "MAX_GLOB_RESULTS", 600)
+    MAX_GLOB_RESULTS = search.MAX_GLOB_RESULTS
 
     for index in range(MAX_GLOB_RESULTS + 50):
         (workspace.root / f"mod{index}.py").write_text("x", encoding="utf-8")

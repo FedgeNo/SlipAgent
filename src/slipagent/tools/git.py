@@ -258,7 +258,7 @@ class GitLogTool(GitTool):
         "type": "object",
         "properties": {
             "repo": REPO_PARAMETER, "timeout": TIMEOUT_PARAMETER,
-            "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100_000},
         },
     }
 

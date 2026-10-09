@@ -1,5 +1,5 @@
 {
     "properties/pattern": "Filename glob, e.g. '**/*.py'.",
     "properties/path": "Directory to search. Defaults to the workspace root.",
-    "properties/max_results": "Maximum entries to return. Defaults to and is capped at 500."
+    "properties/max_results": "Maximum entries to return. Defaults to and is capped at 100,000."
 }

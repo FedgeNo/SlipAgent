@@ -381,7 +381,7 @@ needed; neither is required for other projects. The supported settings are:
 ```json
 {
   "python": ".venv/bin/python",
-  "log_quota_bytes": 104857600,
+  "log_quota_bytes": 1073741824,
   "python_syntax": true,
   "checks": []
 }
@@ -422,7 +422,7 @@ reported module availability on the next request.
 `.env` search starts from the current working directory and package directory;
 it is separate from workspace-specific `.slipagent/project.json` resolution.
 
-`log_quota_bytes` sets a **session-wide disk quota**, default **100 MiB**, read at
+`log_quota_bytes` sets a **session-wide disk quota**, default **1 GiB**, read at
 session startup. It must be a positive integer. Logs use owner-only files saved
 with the session; they survive model switches, `/task new`, component reloads,
 and exit. `/reset` starts a new session without deleting saved originals.
@@ -964,8 +964,7 @@ as contextual history. Its instructions restrict compression to the current step
 Oldest contextual records are omitted if needed to fit; the current step remains complete.
 Tool arguments and structured results remain dictionaries or lists internally;
 the complete summary input is serialized once for the model. Complete history
-retrievals return objects or arrays, while partial character pages return text
-fragments for reconstruction with `next_offset`.
+retrievals return complete objects or arrays without character paging.
 The summarizer uses the model and endpoint profile selected for that step and
 returns a JSON object with separate factual `summary` and filtered
 `reasoning_summary` strings, each limited to 6,000 characters. Short steps
@@ -986,16 +985,16 @@ its summaries before shutting down. These additional requests use the same API
 key and contribute to quota use, session tokens, and reported cost.
 
 The model's `recall_history` tool searches captured originals or reads a step
-by ID, with character pagination for large records. List/search pages include
-`total_matches`, the number of matching steps across all pages (zero when none
-match). Follow `next_offset` until null; offsets and limits remain character
-counts for both listings and individual records. Select `section="prompt"`,
+by ID, returning the complete selected object without character limits or paging.
+List/search results include `total_matches`, the number of matching steps (zero
+when none match). Select `section="prompt"`,
 `"response"`, `"reasoning"`, `"tool_calls"`, or `"tool_results"` to retrieve one original part;
 `sections=["prompt", "tool_results"]` selects several together. Omit the selector
 for the full step. `call_id` selects one observation, or a call when paired with
 `section="tool_calls"`. `section="user"` returns the original new user messages
 associated with that step, for task-source recovery. Shell and Git observations show the
-beginning and end of long output, up to 30,000 characters per stream. The full
+full output up to 32,000,000 characters per stream, then the beginning and end
+for larger output. The full
 decoded streams are retained separately within the session log quota and are
 retrieved with `read_command_output`. Timeout results preserve partial output and
 state that effects may be partial. Both history versions are journaled for
@@ -1134,7 +1133,7 @@ The model gets these built-in tools:
 | Tool | Purpose |
 | --- | --- |
 | `answer` | Display `text`; end the run when called without other tools, or continue after a mixed tool batch. Also accepts `<tool_call><answer>text</answer></tool_call>`. |
-| `read_file` | Read a file with numbered lines, with offset/limit paging. |
+| `read_file` | Read a whole UTF-8 file up to 32 MB with numbered lines; optional offset/limit ranges, without a line cap. Model context limits still apply. |
 | `write_file` | Create or overwrite a file, making parent directories. |
 | `edit_file` | Replace one exact string or an `edits` array against one original file. All matches must validate before an atomic write; returns a bounded diff and helpful match diagnostics. |
 | `grep` | Regex search across file contents, with an optional glob filter. |
@@ -1145,14 +1144,39 @@ The model gets these built-in tools:
 | `read_command_output` | Page retained stdout/stderr or read its tail by log ID; list logs by step/call ID. |
 | `git_status` | Show the branch and short repository status. |
 | `git_diff` | Show unstaged changes, or staged changes with `staged=true`; optionally select literal `paths`. |
-| `git_log` | Show recent commit hashes and subjects (`limit=10`, maximum 100). |
+| `git_log` | Show recent commit hashes and subjects (`limit=10`, maximum 100,000). |
 | `git_add` | Stage explicit workspace-relative `paths`, including deletions; `["."]` stages all files. |
 | `git_commit` | Commit already staged changes with a nonempty `message`. |
-| `web_search` | Search the web via Exa. Returns titles, URLs, and snippets. |
+| `web_search` | Search the web via Exa. Returns titles, URLs, and provider-supplied page text. |
 | `fetch_page` | Fetch a URL and return readable text (scripts stripped). |
-| `recall_history` | Search history or retrieve any original parts of a numbered step, with pagination. |
+| `recall_history` | Search history or retrieve a complete original step or selected fields, without character limits or paging. |
 | `update_plan` (planning enabled) | Save an objective and 1–8 stages, with at most one in progress; the latest successful plan is supplied with its last-updated step. |
 | `navigate_code` (configured projects only) | Definitions, references, implementations, and hover via a local language server. |
+
+### Data Size Limits
+
+Tools return large results directly; request assembly applies the selected
+model's context budget. Explicitly requested ranges still select only those ranges.
+
+| Data | Limit |
+| --- | --- |
+| Text files read or searched; navigation source files | 32 MB per file |
+| Command stdout/stderr, saved-output reads, edit diffs | 32 million characters per stream or result |
+| History recall | Complete selected object, without character paging |
+| Grep | 100,000 matches with complete lines |
+| Glob and directory listings | 100,000 entries |
+| Git log | Up to 100,000 commits; default 10 |
+| Web fetch | 32 MB downloaded; 32 million returned characters |
+| Web search | Up to 100 results, subject to provider limits; returned text is not clipped locally |
+| Navigation results and hover text | Complete results within the transport limit |
+| MCP and language-server messages | 256 MB per incoming protocol message |
+| Saved command logs | 1 GiB per session by default; explicit project settings take precedence |
+
+Repository orientation accepts source files up to 32 MB and up to 1,000
+declarations per file. Its automatic overview remains bounded by approximately
+3% of the context allowance and 128,000 characters; it does not replace source
+reads. Compressed summaries and diagnostic/UI previews retain their separate
+limits; they do not cap file-tool results or complete history retrieval.
 
 ### Background Commands
 
@@ -1160,7 +1184,7 @@ Pass `{"command":"your test command","background":true,"timeout":120}` to
 `run_command`. It returns a `job_id` and `log_id`. Use `command_jobs` with
 `{"action":"wait","job_id":"ID_FROM_RESULT","timeout":10}` to wait briefly,
 `action="status"` to inspect, or `action="stop"` to kill the process group.
-`action="list"` lists jobs in pages of 50; follow `next_offset`.
+`action="list"` lists all jobs from the optional `offset` onward.
 Use `read_command_output` with the log ID for live pages or tails.
 
 Waits are capped at 30 seconds and never cancel the command. Execution retains
@@ -1207,9 +1231,9 @@ or `hover`), `path`, `line`, and `column`; supply `server` if several match the
 file extension. Input lines/columns are **1-based**, with input columns counting
 Unicode characters. Locations explicitly return `column_utf16`, a 1-based UTF-16
 column, as used by the protocol. ASCII positions are identical; a non-BMP
-character occupies two UTF-16 units. Locations page at 100 items using `offset`;
-hover text is capped at 16,000 characters. Source files must be UTF-8 and at
-most 2 MB. Queries time out after 30 seconds, with bounded startup/shutdown and
+character occupies two UTF-16 units. Returns all locations from `offset` onward
+and complete hover text. Source files must be UTF-8 and at most 32 MB.
+Queries time out after 30 seconds, with bounded startup/shutdown and
 pipe writes. Unsupported operations and missing executables return tool errors.
 
 Each query supplies current file contents and reports workspace file changes
@@ -1228,17 +1252,17 @@ several Git subprocesses can produce several logs; list with `step_id` and
 `call_id` to find them all. Call IDs are unique within a step, not the whole session.
 
 ```json
-{"log_id": "ID_FROM_RESULT", "stream": "stdout", "offset": 0, "limit": 8000}
+{"log_id": "ID_FROM_RESULT", "stream": "stdout"}
 ```
 
 Pass that object to `read_command_output`, then use the returned `next_offset`
 for the next page. Stream offsets count **UTF-8 bytes**; limits count **characters**
-and are capped at 16,000. Use `stream="stderr"` for errors or `tail=true` for the
+and default to a maximum of 32,000,000. Use `stream="stderr"` for errors or `tail=true` for the
 last `limit` characters. Invalid process bytes are decoded with replacement before
 storage; this is a text log, not a binary artifact archive.
 
 Omit `log_id` to list logs. For listings, `offset` is a record index and `limit`
-is a record count, capped at 50; commands are shown as bounded previews. Each log
+is a record count; commands are shown in full. Each log
 includes its step/call IDs, exit status, timeout status, retained byte counts,
 lost byte counts, and any retention error. Log IDs never become user-supplied paths.
 

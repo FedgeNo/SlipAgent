@@ -679,31 +679,28 @@ async def test_cancelled_tool_batch_preserves_valid_summary_and_original():
     assert "Tool interrupted" in agent.history.steps[0].full_text()
 
 
-async def test_recall_searches_full_original_and_pages_without_truncation_loss():
+async def test_recall_returns_whole_large_original_without_paging():
     history = ConversationHistory()
-    history.sync([Message.user("user needle λ"), Message.assistant("answer " * 500)])
+    history.sync([Message.user("user needle λ"), Message.assistant("answer " * 50_000)])
     tool = RecallHistoryTool(history)
     assert "Step 1" in content_text((await tool.invoke({"query": "NEEDLE"})).content)
     assert "Step 1" in content_text((await tool.invoke({"query": "answer"})).content)
-    offset, chunks = 0, []
-    while True:
-        page = decode_json_content((await tool.invoke({"step_id": 1, "offset": offset, "limit": 97})).content)
-        chunks.append(page["content"])
-        if page["next_offset"] is None:
-            break
-        offset = page["next_offset"]
-    full = read_data("".join(chunks))
+    result = await tool.invoke({"step_id": 1})
+    assert not result.is_error
+    full = result.content["content"]
+    assert full == history.steps[0].record()
     assert full["prompt"] == "user needle λ"
-    assert full["response"] == "answer " * 500
+    assert full["response"] == "answer " * 50_000
     assert (await tool.invoke({"step_id": 999})).is_error
-    assert (await tool.invoke({"limit": 16001})).is_error
-    assert (await tool.invoke({"offset": -1})).is_error
+    assert "limit" not in tool.spec.parameters["properties"]
+    assert "offset" not in tool.spec.parameters["properties"]
+    assert "next_offset" not in result.content
 
 
 @pytest.mark.parametrize("query, expected_ids", [
     ("", [1, 2, 3]), ("needle", [1, 3]), ("SUMMARY", [2]), ("missing", []),
 ])
-async def test_recall_listing_reports_total_matches_on_every_character_page(query, expected_ids):
+async def test_recall_listing_returns_all_matches(query, expected_ids):
     history = ConversationHistory()
     history.sync([
         Message.user("needle λ"), Message.assistant("first answer"),
@@ -712,30 +709,18 @@ async def test_recall_listing_reports_total_matches_on_every_character_page(quer
     ])
     history.steps[1].summary = "summary marker"
     tool = RecallHistoryTool(history)
-    offset, chunks = 0, []
-    while True:
-        result = await tool.invoke({"query": query, "offset": offset, "limit": 7})
-        assert not result.is_error
-        page = decode_json_content(result.content)
-        assert page["total_matches"] == len(expected_ids)
-        chunks.append(page["content"])
-        if page["next_offset"] is None:
-            break
-        assert page["next_offset"] == offset + len(page["content"])
-        offset = page["next_offset"]
-    listing = "".join(chunks)
-    assert len(listing) == page["total_characters"]
+    result = await tool.invoke({"query": query})
+    assert not result.is_error
+    assert result.content["total_matches"] == len(expected_ids)
+    listing = result.content["content"]
     assert [int(value) for value in re.findall(r"^Step (\d+):", listing, re.MULTILINE)] == expected_ids
-    beyond = decode_json_content((await tool.invoke({"query": query, "offset": len(listing) + 1})).content)
-    assert beyond["total_matches"] == len(expected_ids)
-    assert beyond["content"] == "" and beyond["next_offset"] is None
 
 
 async def test_recall_empty_history_reports_zero_matches():
     result = await RecallHistoryTool(ConversationHistory()).invoke({})
     page = decode_json_content(result.content)
     assert page["total_matches"] == 0
-    assert page["next_offset"] is None
+    assert "next_offset" not in page
     assert page["content"] == "No matching history steps."
 
 
@@ -926,7 +911,7 @@ async def test_memory_prompt_explains_background_summaries_and_retrieval(has_pre
     system = content_text(view[0].content)
     assert "Return one JSON object with exactly two fields" in system
     assert "The harness creates summaries separately" in system
-    assert "recall_history" in system and "next_offset" in system
+    assert "recall_history" in system and "complete original object" in system
     assert "ONE JSON object in EVERY response" not in system
     assert "previous_tool_responses_compressed" not in system
 

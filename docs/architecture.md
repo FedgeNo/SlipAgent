@@ -49,7 +49,7 @@ fields. Working-model user input serializes one complete JSON object; system dat
 sections, compression inputs, and terminal output use labelled literal text.
 Journals and HTTP transport encode JSON only at their destination boundaries. The request callback carries a
 dictionary to diagnostics and token accounting. Complete history selections return
-structured content; partial character pages return fragments of its literal-text presentation. Resume
+structured content without character paging. Resume
 accepts both legacy text observations and structured journal observations.
 
 The transport sends one explicit list of messages plus tool definitions and
@@ -389,10 +389,9 @@ its summaries first. Replacing the API key drains jobs before retiring their
 client. The shared service survives behavior reloads. Its lazy initialization
 is an explicit migration for sessions created before the service existed.
 
-`recall_history` pages listings and original parts at character offsets. Every
-list/search page includes `total_matches` for the entire filtered result, including
-empty results and offsets beyond the listing. `next_offset` remains the character
-cursor, and `total_characters` describes the complete listing text. A single `section`
+`recall_history` returns complete selections without character limits or paging.
+List/search results include `total_matches` for the entire filtered result,
+including empty results. A single `section`
 selects `prompt`, `response`, `reasoning`, `tool_calls`, or `tool_results`; `sections` selects
 several as one JSON object. Without a selector, it returns the full step with its
 original user prompt. `section="user"` returns only the original new user messages for
@@ -461,7 +460,8 @@ reloading code does not reset its consumed bytes or change its configured quota.
 ## Command Output Is Separate From the Context Preview
 
 Shell and Git capture drain stdout/stderr concurrently. Their bounded observations
-retain a beginning and end preview; the archive receives all decoded text while
+include up to 32,000,000 characters per stream, keeping the beginning and end
+when that limit is exceeded; the archive receives all decoded text while
 quota permits. Process timeout cleanup kills the process group and drains its
 pipes before reporting partial output. Cancellation also closes the log and reaps
 the process. POSIX process groups cover ordinary descendants; shell execution is
@@ -471,10 +471,11 @@ Each subprocess has a random log ID, with `(step_id, call_id)` copied from a
 context-local invocation marker set by the agent. One tool can spawn multiple
 subprocesses. The archive uses private generated filenames, never call IDs or
 model-supplied paths. `read_command_output` resolves IDs through its own index.
-It pages stdout/stderr with byte offsets and character limits, or lists bounded
+It reads stdout/stderr with byte offsets and a default and maximum limit of
+32,000,000 characters, or lists bounded
 metadata with record offsets. The response always states which units apply.
 
-The quota defaults to 100 MiB across both streams of all commands in the session.
+The quota defaults to 1 GiB across both streams of all commands in the session.
 Retention is append-only until reset/close. Once a stream loses bytes, it retains
 one contiguous prefix and counts subsequent bytes as lost. Earlier logs are not
 evicted. Disk failure or quota exhaustion does not stop pipe draining or discard
@@ -532,7 +533,7 @@ request cancellation and shutdown/exit followed by forced cleanup if needed.
 Stopped or failed protocol readers are replaced by bounded discard readers
 before process reaping, so a full stdout pipe cannot deadlock shutdown.
 Startup/query deadlines are 30 seconds, writes 5 seconds, shutdown stages 1 second,
-and incoming messages at most 8 MiB. Only UTF-16 wire positions are negotiated;
+and incoming messages at most 256 MB. Only UTF-16 wire positions are negotiated;
 tool input uses 1-based Unicode character columns and converts to wire units.
 Returned locations label their 1-based UTF-16 columns explicitly.
 

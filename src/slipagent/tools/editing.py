@@ -11,7 +11,7 @@ import heapq
 import re
 from collections.abc import Sequence
 
-MAX_DIFF_CHARS = 6000
+MAX_DIFF_CHARS = 32_000_000
 
 
 def edit_pattern(old: str) -> re.Pattern[str]:
@@ -34,7 +34,7 @@ def missing_match_details(text: str, old: str, replacement: str) -> str:
     candidates = []
     # Cheap token overlap bounds the expensive character comparisons, even for
     # long generated files and repeated source lines.
-    for index, line in enumerate(lines[:20000]):
+    for index, line in enumerate(lines):
         sample = line[:300].strip()
         tokens = set(re.findall(r"\w+|[^\w\s]", sample))
         shared = len(words & tokens)
@@ -47,8 +47,7 @@ def missing_match_details(text: str, old: str, replacement: str) -> str:
         notes.append("Nearby actual source (line numbers are not part of the file):")
         for number in range(start, end):
             line = lines[number]
-            preview = line[:400] + ("…" if len(line) > 400 else "")
-            notes.append(f"{number + 1:>6}\t{preview}")
+            notes.append(f"{number + 1:>6}\t{line}")
     notes.append("Read the file and copy the exact target text including whitespace.")
     return "\n".join(notes)
 

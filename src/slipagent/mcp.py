@@ -56,7 +56,7 @@ PROBE_TIMEOUT = 10.0
 # The spec forbids newlines inside a message, but a large tool result can still
 # be big, so the line reader gets a generous ceiling rather than the 64 KiB
 # asyncio default.
-MAX_LINE_BYTES = 8 * 1024 * 1024
+MAX_LINE_BYTES = 256_000_000
 STDERR_TAIL_LINES = 20
 
 # JSON-RPC error codes we care about.

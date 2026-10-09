@@ -15,12 +15,13 @@ import codecs
 import os
 import signal
 import json
+from collections import deque
 from typing import TYPE_CHECKING
 
 from ..workspace import Workspace, WorkspaceError
 from ..activity import OutputProgress, command_output
 from .base import Tool, ToolResult
-from .output import CommandArchive, CommandLog
+from .output import CommandArchive, CommandLog, MAX_OUTPUT_CHARS as MAX_OUTPUT_CHARS
 from ..lifecycle import finish_cleanup
 
 if TYPE_CHECKING:
@@ -28,7 +29,6 @@ if TYPE_CHECKING:
 
 DEFAULT_TIMEOUT = 120.0
 MAX_TIMEOUT = 600.0
-MAX_OUTPUT_CHARS = 30_000
 
 
 class RunCommandTool(Tool):
@@ -158,8 +158,9 @@ async def _capture(stream: asyncio.StreamReader | None, *, log: CommandLog | Non
     if stream is None:
         return ""
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-    prefix = ""
-    suffix = ""
+    prefix: list[str] = []
+    suffix: deque[str] = deque()
+    prefix_size = suffix_size = 0
     total = 0
     head_limit = MAX_OUTPUT_CHARS // 2
     tail_limit = MAX_OUTPUT_CHARS + 1 - head_limit
@@ -171,11 +172,25 @@ async def _capture(stream: asyncio.StreamReader | None, *, log: CommandLog | Non
         if progress is not None:
             progress.feed(text)
         total += len(text)
-        prefix += text[:max(0, head_limit - len(prefix))]
-        suffix = (suffix + text)[-tail_limit:]
+        head = text[:max(0, head_limit - prefix_size)]
+        if head:
+            prefix.append(head)
+            prefix_size += len(head)
+        if text:
+            suffix.append(text)
+            suffix_size += len(text)
+        # Keep chunks so large outputs do not repeatedly copy the entire tail.
+        while suffix_size > tail_limit:
+            excess = suffix_size - tail_limit
+            first = suffix.popleft()
+            if len(first) > excess:
+                suffix.appendleft(first[excess:])
+                suffix_size -= excess
+            else:
+                suffix_size -= len(first)
         if not raw:
-            remaining = min(max(0, total - len(prefix)), tail_limit)
-            return prefix + (suffix[-remaining:] if remaining else "")
+            remaining = min(max(0, total - prefix_size), tail_limit)
+            return "".join(prefix) + ("".join(suffix)[-remaining:] if remaining else "")
 
 
 async def _kill(process: asyncio.subprocess.Process) -> None:

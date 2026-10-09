@@ -297,7 +297,36 @@ async def test_web_search_caps_result_count() -> None:
     await tool.invoke({"query": "x", "num_results": 999})
     await tool.aclose()
 
-    assert captured["body"]["numResults"] <= 10
+    assert captured["body"]["numResults"] == 100
+
+
+async def test_fetch_returns_large_plain_text_without_clipping() -> None:
+    body = "x" * 6_000_000 + "EXACT END"
+    tool = FetchPageTool()
+    rebind(tool, lambda request: httpx.Response(200, text=body, headers={"content-type": "text/plain"}))
+    try:
+        result = await tool.invoke({"url": "https://example.com/large.txt"})
+        assert not result.is_error
+        assert body in result.content
+        assert "[truncated]" not in result.content
+    finally:
+        await tool.aclose()
+
+
+async def test_search_preserves_supplied_page_text() -> None:
+    body = "source " * 10_000 + "EXACT END"
+    tool = WebSearchTool(api_key="dummy")
+    def handler(request):
+        import json
+        assert json.loads(request.content)["contents"] == {"text": True}
+        return httpx.Response(200, json={"results": [{"title": "Source", "url": "https://example.com/", "text": body}]})
+    rebind(tool, handler)
+    try:
+        result = await tool.invoke({"query": "source"})
+        assert not result.is_error
+        assert body in result.content
+    finally:
+        await tool.aclose()
 
 
 # --------------------------------------------------------------------------- #

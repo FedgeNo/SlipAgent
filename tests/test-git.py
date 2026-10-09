@@ -173,7 +173,7 @@ async def test_errors_are_returned(repository: Workspace, tmp_path: Path) -> Non
     assert (await commit.invoke({"message": "Missing identity"})).is_error
     assert (await GitAddTool(repository).invoke({"paths": []})).is_error
     assert (await GitAddTool(repository).invoke({"paths": ["missing.txt"]})).is_error
-    assert (await GitLogTool(repository).invoke({"limit": 101})).is_error
+    assert (await GitLogTool(repository).invoke({"limit": 100_001})).is_error
     empty = tmp_path / "empty"
     empty.mkdir()
     result = await GitStatusTool(Workspace(empty)).invoke({})

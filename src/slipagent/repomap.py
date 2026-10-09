@@ -17,8 +17,8 @@ from .workspace import IGNORED_DIRS, Workspace, WorkspaceError
 from .symbols import outline
 
 SOURCE_SUFFIXES = frozenset({".py", ".pyi", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".c", ".h", ".cpp", ".hpp", ".java", ".php", ".rb", ".cs", ".swift", ".kt", ".sh", ".sql", ".html", ".css", ".md", ".toml"})
-MAX_FILES = 2000
-MAX_SOURCE_BYTES = 200_000
+MAX_FILES = 100_000
+MAX_SOURCE_BYTES = 32_000_000
 
 
 class RepositoryMap:
@@ -26,7 +26,7 @@ class RepositoryMap:
         self.workspace = workspace
         self.cache: dict[str, tuple[tuple[int, int, int], str, set[str]]] = {}
 
-    async def snapshot(self, query: str, limit: int = 8000) -> str:
+    async def snapshot(self, query: str, limit: int = 128_000) -> str:
         return await asyncio.to_thread(self._snapshot, query, limit)
 
     def _candidates(self) -> tuple[list[Path], bool]:
@@ -34,13 +34,13 @@ class RepositoryMap:
         pending = [self.workspace.root]
         visited = 0
         deadline = time.monotonic() + 1
-        while pending and visited < 10000 and len(paths) < MAX_FILES and time.monotonic() < deadline:
+        while pending and visited < 1_000_000 and len(paths) < MAX_FILES and time.monotonic() < deadline:
             directory = pending.pop()
             try:
                 with os.scandir(directory) as entries:
                     for entry in entries:
                         visited += 1
-                        if visited >= 10000 or len(paths) >= MAX_FILES or time.monotonic() >= deadline:
+                        if visited >= 1_000_000 or len(paths) >= MAX_FILES or time.monotonic() >= deadline:
                             return paths, True
                         if entry.is_symlink():
                             continue
@@ -79,7 +79,7 @@ class RepositoryMap:
                 references.add("def:" + node.name)
         def describe(nodes: list[ast.stmt], prefix: str = "") -> None:
             for node in nodes:
-                if len(definitions) >= 30:
+                if len(definitions) >= 1000:
                     return
                 if isinstance(node, ast.ClassDef):
                     definitions.append(f"{node.lineno}: class {prefix}{node.name}")
@@ -93,14 +93,14 @@ class RepositoryMap:
                     args.extend(arg.arg for arg in node.args.kwonlyargs)
                     if node.args.kwarg:
                         args.append("**" + node.args.kwarg.arg)
-                    definitions.append(f"{node.lineno}: {'async ' if isinstance(node, ast.AsyncFunctionDef) else ''}def {prefix}{node.name}({', '.join(args)})"[:240])
+                    definitions.append(f"{node.lineno}: {'async ' if isinstance(node, ast.AsyncFunctionDef) else ''}def {prefix}{node.name}({', '.join(args)})"[:4000])
         describe(tree.body)
         return "\n".join(definitions), references
 
     def _snapshot(self, query: str, limit: int) -> str:
-        if getattr(self, "symbol_version", 0) != 1:
+        if getattr(self, "symbol_version", 0) != 2:
             self.cache.clear()
-            self.symbol_version = 1
+            self.symbol_version = 2
         paths, incomplete = self._candidates()
         names = [self.workspace.relative(path) for path in paths]
         # Delegate ignore semantics to Git, including nested rules and negations.
@@ -125,7 +125,7 @@ class RepositoryMap:
                 stamp = (stat.st_ino, stat.st_mtime_ns, stat.st_size)
                 cached = self.cache.get(name)
                 if cached is None or cached[0] != stamp:
-                    if time.monotonic() >= deadline or parsed_bytes + stat.st_size > 5_000_000:
+                    if time.monotonic() >= deadline or parsed_bytes + stat.st_size > 32_000_000:
                         incomplete = True
                         retained[name] = (stamp, "[outline deferred]", set())
                         continue

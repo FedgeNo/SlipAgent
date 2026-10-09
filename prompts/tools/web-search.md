@@ -2,7 +2,7 @@
 
 ## Search
 
-Search the web and return ranked results with titles, URLs, and text snippets.
+Search the web and return ranked results with titles, URLs, and the page text supplied by the provider.
 
 Use it for library documentation, error messages, API references, and anything about code you have not seen before.
 

@@ -22,13 +22,10 @@ async def test_oversized_new_results_allow_next_request_and_exact_recall():
     assert request_input(client.calls[1]["messages"])["history"][-1]["representation"] == "excerpt"
     assert "recall_history" in sent
     assert message_tokens(client.calls[1]["messages"]) <= 1_000_000 * .85 - 8192
-    result = await agent.registry.invoke("recall_history", {"step_id": 1, "call_id": "call_record", "offset": 0, "limit": 100})
-    page = decode_json_content(result.content)
-    assert page["next_offset"] == 100
+    result = await agent.registry.invoke("recall_history", {"step_id": 1, "call_id": "call_record"})
+    assert not result.is_error
     original = next(m.content for m in agent.history.steps[0].messages if m.role == "tool")
-    assert page["content"] == content_text(original)[:100]
-    tail = await agent.registry.invoke("recall_history", {"step_id": 1, "call_id": "call_record", "offset": len(content_text(original)) - 100})
-    assert "THE EXACT TAIL" in decode_json_content(tail.content)["content"]
+    assert result.content["content"] == original
 
 
 async def test_aggregate_batch_is_bounded_and_keeps_current_user_request():

@@ -68,9 +68,19 @@ async def test_edit_forms_cannot_be_mixed(workspace):
     assert target.read_text() == "original"
 
 
-async def test_diagnostic_output_is_bounded_for_long_source_lines(workspace):
+async def test_edit_returns_diff_beyond_old_preview_limit(workspace):
+    before = "\n".join(f"old_{index}" for index in range(2000))
+    after = "\n".join(f"new_{index}" for index in range(2000))
+    (workspace.root / "large.txt").write_text(before)
+    result = await EditFileTool(workspace).invoke({"path": "large.txt", "old_string": before, "new_string": after})
+    assert not result.is_error
+    assert "+new_1999" in result.content and "-old_1999" in result.content
+    assert "Diff truncated" not in result.content
+
+
+async def test_diagnostic_preserves_long_source_lines(workspace):
     target = workspace.root / "app.py"
     target.write_text("value = " + "x" * 50000)
     result = await EditFileTool(workspace).invoke({"path": "app.py", "old_string": "value = y", "new_string": "value = z"})
     assert result.is_error
-    assert len(result.content) < 6000
+    assert "value = " + "x" * 50000 in result.content

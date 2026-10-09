@@ -30,10 +30,7 @@ def main() -> None:
         matches = []
         for number, text in enumerate(request["text"].splitlines(), 1):
             if pattern.search(text):
-                shown = text.rstrip()
-                if len(shown) > config["line_limit"]:
-                    shown = shown[:config["line_limit"] - 1] + "…"
-                matches.append([number, shown])
+                matches.append([number, text])
                 if len(matches) >= request["budget"]:
                     break
         print(json.dumps({"matches": matches}), flush=True)

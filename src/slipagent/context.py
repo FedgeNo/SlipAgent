@@ -676,8 +676,6 @@ class RecallHistoryTool(Tool):
             "sections": {"type": "array", "minItems": 1, "uniqueItems": True,
                          "items": {"type": "string", "enum": list(HISTORY_PART_NAMES)}},
             "query": {"type": "string"},
-            "offset": {"type": "integer", "minimum": 0},
-            "limit": {"type": "integer", "minimum": 1, "maximum": 16000},
         },
     }
 
@@ -685,7 +683,7 @@ class RecallHistoryTool(Tool):
         self.history = history
 
     async def run(self, *, step_id: int | None = None, call_id: str | None = None,
-                  query: str = "", offset: int = 0, limit: int = 8000, section: str | None = None,
+                  query: str = "", section: str | None = None,
                   sections: list[str] | None = None) -> ToolResult:
         if sections is not None and (section is not None or call_id is not None):
             return ToolResult.error("sections cannot be combined with section or call_id.")
@@ -718,11 +716,9 @@ class RecallHistoryTool(Tool):
                 return ToolResult.error(f"No history step {step_id}. Available steps: 1–{len(self.history.steps)}.")
             step = self.history.steps[step_id - 1]
             structured = step.record()
-            text = step.full_text()
             if section == "user":
                 structured = [message.content or "" for message in self.history.steps[step_id - 1].messages
                               if message.role == "user"]
-                text = render_data(structured)
             if section in HISTORY_PART_NAMES or sections is not None:
                 original = step if isinstance(step, CompletedStep) else CompletedStep(step.id, step.request, step.messages)
                 parts = original.parts()
@@ -733,14 +729,12 @@ class RecallHistoryTool(Tool):
                         return ToolResult.error(f"No {section} with call_id {call_id!r} in step {step_id}.")
                 value = {name: parts[name] for name in sections} if sections is not None else parts[section]
                 structured = value
-                text = content_text(value)
             elif call_id is not None:
                 observation = next((message for message in self.history.steps[step_id - 1].messages
                                     if message.role == "tool" and message.tool_call_id == call_id), None)
                 if observation is None:
                     return ToolResult.error(f"No tool result with call_id {call_id!r} in step {step_id}.")
                 structured = observation.content
-                text = content_text(structured)
         else:
             needle = query.casefold()
             matches = []
@@ -752,14 +746,12 @@ class RecallHistoryTool(Tool):
                     preview = preview[:199] + "…"
                 matches.append(f"Step {step.id}: {preview}")
             text = "\n".join(matches) or "No matching history steps."
-        end = min(len(text), offset + limit)
-        page: dict[str, Any] = {
-            "step_id": step_id, "offset": offset, "next_offset": end if end < len(text) else None,
+        result: dict[str, Any] = {
+            "step_id": step_id,
             "section": section,
             "sections": sections,
-            "total_characters": len(text),
-            "content": structured if offset == 0 and end == len(text) and structured is not None else text[offset:end],
+            "content": structured if step_id is not None else text,
         }
         if step_id is None:
-            page["total_matches"] = len(matches)
-        return ToolResult.ok(page)
+            result["total_matches"] = len(matches)
+        return ToolResult.ok(result)

@@ -86,6 +86,24 @@ async def test_navigation_confinement_unicode_and_fresh_disk_contents(workspace)
     assert "workspace/didChangeWatchedFiles" in events
 
 
+async def test_large_document_and_hover_survive_transport(workspace):
+    setup(workspace)
+    text = "# " + "x" * 9_000_000 + " END\n"
+    (workspace.root / "large.py").write_text(text)
+    servers = LanguageServers(workspace)
+    try:
+        result = await NavigateCodeTool(servers).invoke({"operation": "hover", "path": "large.py", "line": 1, "column": 1})
+        assert not result.is_error
+        assert result.content == text
+        locations = [{"uri": (workspace.root / "large.py").as_uri(),
+                      "range": {"start": {"line": index, "character": 0}}} for index in range(250)]
+        result = servers._render("references", locations, 0)
+        assert len(result.content["locations"]) == 250
+        assert result.content["next_offset"] is None
+    finally:
+        await servers.aclose()
+
+
 async def test_unconfigured_navigation_reports_setup_without_spawning(workspace):
     (workspace.root / "source.py").write_text("x = 1")
     servers = LanguageServers(workspace)

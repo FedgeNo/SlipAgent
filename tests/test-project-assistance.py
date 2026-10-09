@@ -106,6 +106,24 @@ async def test_python_check_uses_final_batch_state_and_does_not_import_code(work
         await registry.aclose()
 
 
+async def test_large_source_outline_syntax_and_check_output(workspace):
+    configure(workspace, python=sys.executable, checks=[{
+        "name": "Full output", "argv": ["{python}", "-I", "-c", "print('x' * 100000 + ' END')"],
+    }])
+    source = "# " + "x" * 2_100_000 + "\n" + "\n".join(f"def item_{index}(): pass" for index in range(100))
+    (workspace.root / "large.py").write_text(source)
+    mapping = await RepositoryMap(workspace).snapshot("item_99")
+    assert "def item_99()" in mapping
+    registry = build_default_registry(workspace)
+    try:
+        result = await check_edit_batch(registry, [(ToolCall("1", "write_file", {"path": "large.py"}), ToolResult.ok("written"))], 1)
+        assert "Python syntax: PASSED" in result
+        assert "Full output: PASSED" in result
+        assert "x" * 100000 + " END" in result
+    finally:
+        await registry.aclose()
+
+
 async def test_syntax_failures_and_absent_environment_are_reported(workspace):
     registry = build_default_registry(workspace)
     (workspace.root / "code.py").write_text("def broken(")

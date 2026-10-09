@@ -24,9 +24,9 @@ from .base import Tool, ToolResult
 
 EXA_SEARCH_URL = "https://api.exa.ai/search"
 DEFAULT_TIMEOUT = 30.0
-MAX_FETCH_BYTES = 5_000_000
-MAX_PAGE_CHARS = 40_000
-MAX_SEARCH_RESULTS = 10
+MAX_FETCH_BYTES = 32_000_000
+MAX_PAGE_CHARS = 32_000_000
+MAX_SEARCH_RESULTS = 100
 
 _SKIP_TAGS = {"script", "style", "noscript", "svg", "head", "template"}
 _VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
@@ -171,7 +171,7 @@ class WebSearchTool(Tool):
                     "query": query,
                     "numResults": limit,
                     "type": "auto",
-                    "contents": {"text": {"maxCharacters": 1200}},
+                    "contents": {"text": True},
                 },
             )
         except httpx.HTTPError as exc:
@@ -204,7 +204,7 @@ class WebSearchTool(Tool):
             snippet = (item.get("text") or "").strip()
             blocks.append(f"[{index}] {title}\n    {url}")
             if snippet:
-                blocks.append(f"    {snippet[:600]}")
+                blocks.append(f"    {snippet}")
 
         blocks.append(
             "Use fetch_page on the most relevant URL to read it in full."

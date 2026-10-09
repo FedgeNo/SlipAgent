@@ -404,7 +404,7 @@ class Agent:
             if "repository_map" not in self.registry.services:
                 self.registry.services["repository_map"] = RepositoryMap(environment.workspace)
             query = next((m.content or "" for m in reversed(self.messages) if m.role == "user"), "")
-            repository_map = await self.registry.services["repository_map"].snapshot(query, min(8000, int(length * budget_fraction * .03)))
+            repository_map = await self.registry.services["repository_map"].snapshot(query, min(128_000, int(length * budget_fraction * .03 * 3)))
         view_options: dict[str, Any] = dict(
             user_corrections="\n\n".join(part.strip() for part in (
                 self.registry.context_notes.get("progress", ""), repair,

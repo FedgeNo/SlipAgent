@@ -26,7 +26,7 @@ Do not infer success from the absence of `error`; an absent result is unknown. A
 
 ## History Representations
 
-`representation="full"` supplies original parts and any available `compressed_summary` of the same step. These are two views of one event; prefer original evidence if they conflict. `representation="compressed"` supplies the summary instead of originals. `representation="excerpt"` marks bounded text and omissions. Missing text is unknown, not empty or successful. Use the exact `step_id` with `recall_history` to retrieve originals, and a supplied non-null `next_offset` for a needed additional page.
+`representation="full"` supplies original parts and any available `compressed_summary` of the same step. These are two views of one event; prefer original evidence if they conflict. `representation="compressed"` supplies the summary instead of originals. `representation="excerpt"` marks bounded text and omissions. Missing text is unknown, not empty or successful. Use the exact `step_id` with `recall_history` to retrieve the complete original object.
 
 Excerpted calls use `result_excerpt`, `error_excerpt`, or `unclassified_result_excerpt` for bounded observations. `response_excerpts` contains bounded message text and call descriptions. Call arguments may be omitted; retrieve originals when exact arguments matter.
 

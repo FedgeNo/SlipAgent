@@ -1,5 +1,5 @@
 {
     "properties/path": "Workspace-relative or absolute path, subject to the current Workspace Access mode.",
     "properties/offset": "1-based line number to start from. Defaults to 1.",
-    "properties/limit": "Maximum number of lines to return. Defaults to 2000."
+    "properties/limit": "Maximum number of lines to return. Omit to read through the end of the file; no fixed line cap."
 }

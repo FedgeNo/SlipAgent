@@ -16,8 +16,8 @@ from .tools.base import Tool, ToolResult
 from .tools.shell import kill_and_drain
 from .workspace import Workspace, WorkspaceError
 
-MAX_MESSAGE_BYTES = 8 * 1024 * 1024
-MAX_DOCUMENT_BYTES = 2_000_000
+MAX_MESSAGE_BYTES = 256_000_000
+MAX_DOCUMENT_BYTES = 32_000_000
 OPERATIONS = {"definition": "definitionProvider", "references": "referencesProvider",
               "implementation": "implementationProvider", "hover": "hoverProvider"}
 
@@ -215,7 +215,7 @@ def _document(path: Path) -> str:
     with path.open("rb") as source:
         raw = source.read(MAX_DOCUMENT_BYTES + 1)
     if len(raw) > MAX_DOCUMENT_BYTES or b"\0" in raw:
-        raise LSPError("Navigation requires a UTF-8 text file no larger than 2 MB")
+        raise LSPError("Navigation requires a UTF-8 text file no larger than 32 MB")
     return raw.decode("utf-8")
 
 
@@ -333,7 +333,7 @@ class LanguageServers:
             if any(not isinstance(part, str) and (not isinstance(part, dict) or not isinstance(part.get("value"), str)) for part in parts):
                 raise LSPError("Malformed hover contents")
             text = "\n\n".join(part if isinstance(part, str) else part["value"] for part in parts)
-            return ToolResult.ok(text[:16000] + ("\n… [hover truncated at 16000 characters]" if len(text) > 16000 else ""))
+            return ToolResult.ok(text)
         locations = response if isinstance(response, list) else [response] if response is not None else []
         result, excluded = [], 0
         for location in locations:
@@ -360,9 +360,9 @@ class LanguageServers:
                 raise LSPError("Navigation location has an invalid position")
             result.append({"path": self.workspace.relative(target), "line": start["line"] + 1,
                            "column_utf16": start["character"] + 1})
-        return ToolResult.ok({"locations": result[offset:offset + 100], "total": len(result),
+        return ToolResult.ok({"locations": result[offset:], "total": len(result),
                                         "excluded_outside_workspace": excluded,
-                                        "next_offset": offset + 100 if offset + 100 < len(result) else None,
+                                        "next_offset": None,
                                         "position_units": "1-based lines and UTF-16 columns"})
 
     async def aclose(self) -> None:

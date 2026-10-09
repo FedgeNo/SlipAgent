@@ -12,7 +12,7 @@ Results label UTF-16 columns explicitly.
 
 ## Paths and Paging
 
-Locations follow the current Workspace Access mode; use `offset` to page past 100 results.
+Locations follow the current Workspace Access mode. Returns all locations from `offset` onward and complete hover text. Source files may be up to 32 MB.
 
 ## Prerequisites
 

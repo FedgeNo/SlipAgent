@@ -4,15 +4,11 @@
 
 Search full session history or retrieve an original step with both user input and assistant/tool messages.
 
-Omit step_id to search/list steps; total_matches counts all matching steps across pages.
+Omit step_id to search/list steps; total_matches counts all matching steps.
 
-## Paging
+## Complete Objects
 
-Use offset and limit to page either a listing or a selected step; both count characters.
-
-A complete structured selection is returned as an object or array in content. Partial pages contain text fragments of its JSON representation. Plain-text selections remain strings.
-
-If a supplied page has a non-null next_offset and needed text is missing, request that offset. A null next_offset marks the end.
+Returns the complete selected object or array in content. Plain-text selections remain strings. There is no character limit or paging.
 
 ## Selecting Results and Fields
 

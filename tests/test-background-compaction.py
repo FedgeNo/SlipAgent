@@ -290,20 +290,14 @@ async def test_recall_rejects_ambiguous_or_invalid_part_selection(arguments):
     assert (await RecallHistoryTool(history).invoke({"step_id": 1, **arguments})).is_error
 
 
-async def test_selected_parts_page_exactly_and_call_id_selects_original_call():
+async def test_selected_parts_return_whole_and_call_id_selects_original_call():
     history = ConversationHistory()
     history.sync([Message.user("PROMPT λ"), Message.assistant("RESPONSE", [ToolCall("a", "read_file", {"path": "a.py"})]),
-                  Message.tool_result("a", "RESULT λ " * 500)])
+                  Message.tool_result("a", "RESULT λ " * 50_000)])
     recall = RecallHistoryTool(history)
-    offset, chunks = 0, []
-    while True:
-        result = await recall.invoke({"step_id": 1, "sections": ["prompt", "tool_results"], "offset": offset, "limit": 200})
-        page = decode_json_content(result.content)
-        chunks.append(page["content"])
-        offset = page["next_offset"]
-        if offset is None:
-            break
-    parts = read_data("".join(chunks))
+    result = await recall.invoke({"step_id": 1, "sections": ["prompt", "tool_results"]})
+    assert not result.is_error
+    parts = result.content["content"]
     assert parts == {key: history.steps[0].parts()[key] for key in ["prompt", "tool_results"]}
     call = await recall.invoke({"step_id": 1, "section": "tool_calls", "call_id": "a"})
     assert decode_json_content(decode_json_content(call.content)["content"])[0] == history.steps[0].tool_calls[0].to_record()

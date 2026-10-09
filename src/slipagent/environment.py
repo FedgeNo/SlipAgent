@@ -22,7 +22,7 @@ from typing import Any
 from .config import ConfigError
 from .workspace import Workspace
 
-DEFAULT_LOG_QUOTA_BYTES = 100 * 1024 * 1024
+DEFAULT_LOG_QUOTA_BYTES = 1024 * 1024 * 1024
 PROJECT_SETTINGS_PATH = ".slipagent/project.json"
 PROBE = (
     "import json,sys,importlib.util; print(json.dumps({"

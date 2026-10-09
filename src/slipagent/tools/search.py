@@ -21,10 +21,9 @@ from .blocking import run_blocking
 from .shell import _kill
 from .grep import worker_source
 
-MAX_GREP_RESULTS = 200
-MAX_GREP_FILE_BYTES = 2_000_000
-MAX_GLOB_RESULTS = 500
-MAX_LINE_LENGTH = 400
+MAX_GREP_RESULTS = 100_000
+MAX_GREP_FILE_BYTES = 32_000_000
+MAX_GLOB_RESULTS = 100_000
 GREP_TIMEOUT = 10.0
 
 
@@ -79,13 +78,12 @@ class GrepTool(Tool):
         process = await asyncio.create_subprocess_exec(
             sys.executable, "-I", "-c", self._worker_source.decode("utf-8"),
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL, cwd=self.workspace.root, limit=2_000_000,
+            stderr=asyncio.subprocess.DEVNULL, cwd=self.workspace.root, limit=256_000_000,
             start_new_session=os.name == "posix",
         )
         try:
             async with asyncio.timeout(GREP_TIMEOUT):
-                ready = await self._worker_request(process, {"pattern": pattern, "ignore_case": ignore_case,
-                                                              "line_limit": MAX_LINE_LENGTH})
+                ready = await self._worker_request(process, {"pattern": pattern, "ignore_case": ignore_case})
                 if "error" in ready:
                     return ToolResult.error(str(ready["error"]))
                 return await self._scan(process, pattern, path, include, max_results)
@@ -124,9 +122,7 @@ class GrepTool(Tool):
         files_scanned = 0
         truncated = False
 
-        # validate_arguments rejects an oversized max_results, so this clamp
-        # only matters for a direct run() call; the cap exists to keep a result
-        # from flooding the context window either way.
+        # Direct run() calls use the same result ceiling as validated calls.
         max_results = min(max_results, MAX_GREP_RESULTS)
         candidates = self.workspace.iter_files(base)
         while (candidate := await asyncio.to_thread(next, candidates, None)) is not None:

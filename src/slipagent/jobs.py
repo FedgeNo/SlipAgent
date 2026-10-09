@@ -122,8 +122,8 @@ class CommandJobsTool(Tool):
     async def run(self, action: str, job_id: str | None = None, timeout: float = 10, offset: int = 0) -> ToolResult:
         if action == "list":
             jobs = list(self.jobs.jobs.values())
-            return ToolResult.ok({"jobs": [job.metadata() for job in jobs[offset:offset + 50]],
-                                            "next_offset": offset + 50 if offset + 50 < len(jobs) else None})
+            return ToolResult.ok({"jobs": [job.metadata() for job in jobs[offset:]],
+                                            "next_offset": None})
         job = self.jobs.jobs.get(job_id or "")
         if job is None:
             return ToolResult.error("Unknown job_id; use command_jobs action=list. Jobs from an earlier process cannot be controlled; retained output remains accessible by log_id.")

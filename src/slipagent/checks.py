@@ -11,7 +11,7 @@ from typing import Any
 
 from .tools.base import ToolRegistry, ToolResult
 from .tools.files import EditFileTool, WriteFileTool
-from .tools.shell import capture_process, _subprocess_env
+from .tools.shell import capture_process, _subprocess_env, _truncate
 from .types import ToolCall
 
 SYNTAX_CHECK = """import ast, sys, tokenize
@@ -19,8 +19,8 @@ failed = False
 for name in sys.argv[1:]:
     try:
         with tokenize.open(name) as source:
-            text = source.read(2000001)
-        if len(text) > 2000000:
+            text = source.read(32000001)
+        if len(text) > 32000000:
             raise ValueError('file exceeds the automatic syntax-check size limit')
         ast.parse(text, filename=name)
     except (SyntaxError, ValueError, OSError, RecursionError) as error:
@@ -98,9 +98,9 @@ async def check_edit_batch(registry: ToolRegistry, batch: list[tuple[ToolCall, T
                 continue
             stdout, stderr, timed_out = await capture_process(process, check.get("timeout", 10), log=log)
             status = "TIMED OUT" if timed_out else ("PASSED" if process.returncode == 0 else f"FAILED (exit {process.returncode})")
+            stdout, _ = _truncate(stdout, archived=log is not None)
+            stderr, _ = _truncate(stderr, archived=log is not None)
             output = (stdout + "\n" + stderr).strip()
-            if len(output) > 4000:
-                output = output[:3999] + "…"
             reports.append(f"{check['name']}: {status}\n\n{output}" + ("\n\n" + log.notice() if log is not None else ""))
         return "\n\n".join(reports)
     except Exception as exc:

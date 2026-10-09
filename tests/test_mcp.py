@@ -174,6 +174,18 @@ async def test_lists_and_calls_tools() -> None:
         await client.disconnect()
 
 
+async def test_large_tool_result_survives_mcp_framing() -> None:
+    client = MCPClient(stub_spec())
+    await client.connect()
+    try:
+        text = "x" * 9_000_000 + " END"
+        result = await client.call_tool("echo", {"message": text})
+        assert not result.is_error
+        assert result.content == "echo: " + text
+    finally:
+        await client.disconnect()
+
+
 async def test_server_reported_error_is_an_error_result() -> None:
     client = MCPClient(stub_spec())
     await client.connect()

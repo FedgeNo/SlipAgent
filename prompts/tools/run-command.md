@@ -18,7 +18,7 @@ Long-running commands are killed at the timeout.
 
 ## Output and Recovery
 
-The observation shows at most 30000 characters per stream, retaining the beginning and end. Omitted output is not evidence of an empty result or a successful command.
+The observation includes up to 32,000,000 characters per stream. Larger output retains the beginning and end. Omitted output is not evidence of an empty result or a successful command. The model's context budget still applies to the combined results.
 
 Session command logs retain full decoded output within the configured disk quota; `read_command_output` retrieves pages or tails using the returned log ID without rerunning the command. The observation includes a concrete recovery call.
 

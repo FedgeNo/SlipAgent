@@ -325,10 +325,13 @@ async def test_command_rejects_blank(project: Workspace) -> None:
 
 async def test_command_output_is_truncated(project: Workspace) -> None:
     result = await RunCommandTool(project).invoke(
-        {"command": "python3 -c \"print('x' * 100000)\""}
+        {"command": "python3 -c \"print('BEGINNING'); print('x' * 32000100); print('FINAL DIAGNOSTIC')\""}
     )
 
-    assert "[output truncated at 30000 chars]" in content_text(result.content)
+    assert "[output truncated at 32000000 chars]" in content_text(result.content)
+    stdout = result.content.split("--- stdout ---\n", 1)[1]
+    assert stdout.startswith("BEGINNING\n")
+    assert "FINAL DIAGNOSTIC" in stdout
 
 
 async def test_large_command_preserves_beginning_and_final_diagnostic(workspace):
@@ -338,7 +341,8 @@ async def test_large_command_preserves_beginning_and_final_diagnostic(workspace)
     result = await RunCommandTool(workspace).invoke({"command": shlex.join([sys.executable, "-c", code])})
     stdout = result.content.split("--- stdout ---\n", 1)[1]
     assert "BEGINNING" in stdout and "FINAL DIAGNOSTIC" in stdout
-    assert "middle not archived" in stdout
+    assert "x" * 100000 in stdout
+    assert "truncated" not in stdout
 
 
 async def test_timeout_kills_descendants(workspace: Workspace) -> None:

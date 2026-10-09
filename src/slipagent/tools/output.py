@@ -21,6 +21,9 @@ from typing import Any, BinaryIO
 from .base import Tool, ToolResult, current_invocation
 
 
+MAX_OUTPUT_CHARS = 32_000_000
+
+
 class OutputStream:
     def __init__(self) -> None:
         self.path: Path | None = None
@@ -96,7 +99,7 @@ class CommandLog:
 
     def metadata(self) -> dict[str, Any]:
         return {"log_id": self.id, "step_id": self.step_id, "call_id": self.call_id,
-                "command": self.command[:512] + ("…" if len(self.command) > 512 else ""),
+                "command": self.command,
                 "command_characters": len(self.command), "returncode": self.returncode,
                 "timed_out": self.timed_out, "finished": self.finished,
                 "streams": {name: {"retained_bytes": stream.retained_bytes,
@@ -106,7 +109,7 @@ class CommandLog:
     def notice(self) -> str:
         errors = " ".join(f"{name}: {stream.error} Lost {stream.lost_bytes} UTF-8 bytes."
                           for name, stream in self.streams.items() if stream.error)
-        arguments = json.dumps({"log_id": self.id, "stream": "stdout", "offset": 0, "limit": 8000})
+        arguments = json.dumps({"log_id": self.id, "stream": "stdout"})
         return load_prompt("command-output-recovery.md", log_id=self.id, arguments=arguments,
             retention=load_prompt("command-output-saved.md" if getattr(self.archive, "_persistent", None) else "command-output-temporary.md"),
             errors=errors).rstrip()
@@ -175,7 +178,7 @@ class ReadCommandOutputTool(Tool):
         "call_id": {"type": "string"}, "stream": {"type": "string", "enum": ["stdout", "stderr"]},
         "offset": {"type": "integer", "minimum": 0,
                    "description": ""},
-        "limit": {"type": "integer", "minimum": 1, "maximum": 16000,
+        "limit": {"type": "integer", "minimum": 1, "maximum": MAX_OUTPUT_CHARS,
                   "description": ""},
         "tail": {"type": "boolean", "description": ""},
     }}
@@ -185,13 +188,12 @@ class ReadCommandOutputTool(Tool):
 
     async def run(self, *, log_id: str | None = None, step_id: int | None = None,
                   call_id: str | None = None, stream: str = "stdout", offset: int = 0,
-                  limit: int = 8000, tail: bool = False) -> ToolResult:
+                  limit: int = MAX_OUTPUT_CHARS, tail: bool = False) -> ToolResult:
         if log_id is None:
             records = [log.metadata() for log in self.archive.logs.values()
                        if (step_id is None or log.step_id == step_id) and (call_id is None or log.call_id == call_id)]
-            # Listing is paged too: long sessions must not create an oversized
-            # observation just by asking which logs are available.
-            page = records[offset:offset + min(limit, 50)]
+            # Listing offsets and limits count records, not characters.
+            page = records[offset:offset + limit]
             end = offset + len(page)
             return ToolResult.ok({"logs": page, "total_logs": len(records),
                                             "offset_unit": "records", "limit_unit": "records",

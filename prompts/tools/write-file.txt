@@ -1,5 +1,0 @@
-Write a file, creating or overwriting it.
-
-Parent directories are created automatically.
-
-Overwrites the whole file, so prefer `edit_file` for changes to existing code.

@@ -34,7 +34,7 @@ MAX_OUTPUT_CHARS = 30_000
 class RunCommandTool(Tool):
     parameter_prompts = 'tools/run-command-parameters.json'
     name = "run_command"
-    description_prompt = 'tools/run-command.txt'
+    description_prompt = 'tools/run-command.md'
     description = load_prompt(description_prompt)
     parameters = {
         "type": "object",
@@ -206,7 +206,7 @@ async def kill_and_drain(process: asyncio.subprocess.Process, *, log: CommandLog
 
 def _subprocess_env() -> dict[str, str]:
     env = dict(os.environ)
-    # Keep tool output and agent output from interleaving confusingly.
+    # Flush Python child output promptly for capture and progress updates.
     env["PYTHONUNBUFFERED"] = "1"
     env.setdefault("PYTHONIOENCODING", "utf-8")
     return env

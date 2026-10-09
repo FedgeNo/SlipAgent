@@ -59,7 +59,7 @@ async def test_models_displays_every_matching_catalog_entry(argument):
     assert output.index(models[0].id) < output.index(models[-1].id)
 
 
-@pytest.mark.parametrize("selection", [None, "test/free"])
+@pytest.mark.parametrize("selection", [None, "openrouter::test/free"])
 async def test_free_model_selector_filters_and_switches_only_on_selection(monkeypatch, selection):
     from slipagent import cli
     models = [ModelInfo("test/paid", pricing={"prompt": "0.01", "completion": "0.01"}),
@@ -74,7 +74,7 @@ async def test_free_model_selector_filters_and_switches_only_on_selection(monkey
     await _models_command(session, "free", Style(False), io.StringIO())
     title, options = choose.call_args.args
     assert title == "Select Model"
-    assert [value for value, label in options] == ["test/free"]
+    assert [value for value, label in options] == ["openrouter::test/free"]
     assert "(current)" in options[0][1]
     if selection is None:
         switch.assert_not_awaited()
@@ -90,3 +90,28 @@ async def test_model_without_slug_opens_selector(monkeypatch):
     out = io.StringIO()
     await _model_command(session, "", Style(False), out)
     assert browse.call_args.args[1] == ""
+
+
+@pytest.mark.parametrize("interactive", [False, True])
+@pytest.mark.parametrize("query", ["ultra nemotron", "NVIDIA   flagship", " nemotron\tultra  flagship "])
+async def test_model_search_requires_every_word_across_fields(query, interactive):
+    models = [
+        ModelInfo("test/nemotron-3-ultra", name="Flagship", provider="nvidia"),
+        ModelInfo("test/nemotron-super", name="Small", provider="nvidia"),
+        ModelInfo("test/ultra", name="Flagship", provider="openrouter"),
+    ]
+    renderer = Renderer(Style(False), io.StringIO(), False)
+    choose = AsyncMock(return_value=None)
+    if interactive:
+        renderer.terminal = SimpleNamespace(choose=choose)
+    session = SimpleNamespace(renderer=renderer, catalog=AsyncMock(return_value=models),
+                              agent=SimpleNamespace(model="test/nemotron-3-ultra"))
+    out = io.StringIO()
+    await _models_command(session, query, Style(False), out)
+    if interactive:
+        assert [value for value, label in choose.call_args.args[1]] == [models[0].selector]
+    else:
+        assert "1 shown of 3" in out.getvalue()
+        assert models[0].id in out.getvalue()
+        assert models[1].id not in out.getvalue()
+        assert models[2].id not in out.getvalue()

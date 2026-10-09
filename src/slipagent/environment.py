@@ -118,13 +118,13 @@ class ProjectEnvironment:
                 candidates.append(str(directory / executable))
         info: dict[str, Any] = {
             "candidates": candidates,
-            "selection_help": load_prompt("environment-selection-help.txt", settings_path=PROJECT_SETTINGS_PATH),
-            "shell_policy": load_prompt('environment-shell.txt'),
+            "selection_help": load_prompt("environment-selection-help.md", settings_path=PROJECT_SETTINGS_PATH),
+            "shell_policy": load_prompt('environment-shell.md'),
         }
         if selected is None:
             if len(candidates) != 1:
                 info["status"] = "ambiguous" if candidates else "unconfigured"
-                info["instruction"] = load_prompt('environment-selection.txt')
+                info["instruction"] = load_prompt('environment-selection.md')
                 return info
             selected = candidates[0]
             source = "discovery"
@@ -189,5 +189,5 @@ class ProjectEnvironment:
                 "installer": installer, "install_command": install_command,
                 "bootstrap_command": bootstrap_command,
                 "instruction": (
-                    load_prompt('environment-commands.txt')
+                    load_prompt('environment-commands.md')
                 )}

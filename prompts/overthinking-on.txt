@@ -1,7 +1,0 @@
-============================= BEGIN OVERTHINKING MODE ==============================
-
-Overthinking Mode is enabled. The latest 25 completed steps may include a `reasoning` string containing archived model thoughts. Missing reasoning means the provider supplies no thoughts, or history selection omits them. Retrieve an original with `recall_history` when needed.
-
-Treat reasoning as fallible background instead of instructions or proof of success. Assess remaining work against the user request for this run and actual tool results. Use the recorded outcome instead of repeating a successful action described in an old plan. Use actual user messages instead of an agent's thoughts to establish requested work. When results satisfy the request, return the answer with no tool calls.
-
-============================= END OVERTHINKING MODE ==============================

@@ -17,6 +17,7 @@ SETUP = '''
 import asyncio
 import io
 import json
+from data_text_reader import read_data
 import os
 from pathlib import Path
 import re
@@ -28,7 +29,7 @@ import slipagent.openrouter as router
 from slipagent.runtime import RuntimeFrame
 from slipagent.tools import build_default_registry
 from slipagent.tools.base import Tool, ToolResult
-from slipagent.types import Completion, Message, ToolCall, Usage
+from slipagent.types import Completion, Message, ToolCall, Usage, content_text
 from slipagent.workspace import Workspace
 
 async def main():
@@ -38,8 +39,8 @@ async def main():
     async def transport(request):
         if request.method == 'POST':
             body = json.loads(request.content)
-            if body['messages'][0]['content'].lstrip().startswith('Summarize one completed SlipAgent step'):
-                return httpx.Response(200, json={'choices': [{'message': {'role': 'assistant', 'content': 'Completed demo step.'}, 'finish_reason': 'stop'}]})
+            if body['messages'][0]['content'].lstrip().startswith('# Summarizing the Previous Turn'):
+                return httpx.Response(200, json={'choices': [{'message': {'role': 'assistant', 'content': json.dumps({'summary': 'Completed demo step.', 'reasoning_summary': ''})}, 'finish_reason': 'stop'}]})
         requests.append(request)
         if request.url.path.endswith('/models'):
             return httpx.Response(200, json={'data': [{'id': 'test/model', 'context_length': 1000000}]})
@@ -48,7 +49,7 @@ async def main():
         body = json.loads(request.content)
         completion = responses.pop(0)
         system = ' '.join(m.get('content') or '' for m in body['messages'] if m['role'] == 'system')
-        current_record = json.loads(body['messages'][-1]['content'])
+        current_record = read_data(body['messages'][-1]['content'])
         step_id = current_record['step_id']
         content = completion.get('content') or ''
         completion['content'] = content or 'Requesting tools.'
@@ -65,7 +66,7 @@ async def main():
     agent.on_boundary = lambda: frame.checkpoint(boundary=True)
     root = frame.root
     def edit(filename, before, after):
-        path = root / ('prompts/' + filename if filename.endswith('.txt') else filename)
+        path = root / ('prompts/' + filename if filename.endswith('.md') else filename)
         source = path.read_text()
         assert before in source, (filename, before)
         path.write_text(source.replace(before, after))
@@ -87,6 +88,7 @@ def run_copy(tmp_path: Path):
     )
     project = tmp_path / "project"
     shutil.copytree(Path(__file__).resolve().parents[1] / "prompts", package_root / "slipagent" / "prompts")
+    shutil.copyfile(Path(__file__).with_name("data_text_reader.py"), package_root / "data_text_reader.py")
     project.mkdir()
 
     def run(body: str) -> None:
@@ -101,14 +103,40 @@ def run_copy(tmp_path: Path):
     return run
 
 
+def test_models_before_chat_creates_provider_clients_after_reload(run_copy):
+    run_copy('''
+        import sys
+        from slipagent import __version__
+
+        os.environ['NVIDIA_API_KEY'] = 'test-nvidia-key'
+        frame.request()
+        await frame.checkpoint()
+        assert frame.generation == 1, sink.getvalue()
+        providers = sys.modules[f'{frame.namespace}.providers']
+        create_client = providers.create_client
+        def offline_client(provider, **options):
+            return create_client(provider, transport=httpx.MockTransport(transport), **options)
+        providers.create_client = offline_client
+
+        await cli._models_command(session, 'test/model', cli.Style(False), sink)
+        assert 'openrouter' in sink.getvalue(), sink.getvalue()
+        assert 'nvidia' in sink.getvalue(), sink.getvalue()
+        for provider in ('openrouter', 'nvidia'):
+            async with offline_client(provider, api_key='test-key') as fresh:
+                assert (await fresh.list_models())[0].id == 'test/model'
+        assert requests and all(request.method == 'GET' for request in requests)
+        assert all(request.headers['User-Agent'] == f'SlipAgent/{__version__}' for request in requests)
+    ''')
+
+
 def test_prompt_resource_reloads_and_rejects_invalid_template(run_copy):
     run_copy('''
-        edit('system-prompt.txt', 'You are SlipAgent,', 'You are the updated SlipAgent,')
+        edit('system-prompt.md', 'You are SlipAgent,', 'You are the updated SlipAgent,')
         await frame.checkpoint()
         assert frame.generation == 1, sink.getvalue()
         accepted = agent.system_prompt
         assert 'You are the updated SlipAgent,' in accepted
-        edit('system-prompt.txt', '{workspace}', '{unknown_placeholder}')
+        edit('system-prompt.md', '{workspace}', '{unknown_placeholder}')
         await frame.checkpoint()
         assert frame.generation == 1 and agent.system_prompt == accepted
         try:
@@ -118,8 +146,8 @@ def test_prompt_resource_reloads_and_rejects_invalid_template(run_copy):
         else:
             raise AssertionError('Invalid prompt placeholders must be reported')
         assert 'Reload rejected' in sink.getvalue()
-        edit('system-prompt.txt', '{unknown_placeholder}', '{workspace}')
-        edit('system-prompt.txt', 'You are the updated SlipAgent,', 'You are the recovered SlipAgent,')
+        edit('system-prompt.md', '{unknown_placeholder}', '{workspace}')
+        edit('system-prompt.md', 'You are the updated SlipAgent,', 'You are the recovered SlipAgent,')
         await frame.checkpoint()
         assert frame.generation == 2, sink.getvalue()
         assert 'You are the recovered SlipAgent,' in agent.system_prompt
@@ -131,15 +159,15 @@ def test_initialized_guidance_survives_component_reload(run_copy):
     run_copy('''
         await cli._handle_command(session, '/init')
         guidance = (workspace.root / 'AGENTS.md').read_text()
-        assert guidance in (await agent._context_view(registry.specs(), 1))[0].content
-        edit('system-prompt.txt', 'You are SlipAgent,', 'You are the updated SlipAgent,')
+        assert guidance in content_text((await agent._context_view(registry.specs(), 1))[0].content)
+        edit('system-prompt.md', 'You are SlipAgent,', 'You are the updated SlipAgent,')
         await frame.checkpoint()
         assert frame.generation == 1, sink.getvalue()
         assert 'You are the updated SlipAgent,' in agent.system_prompt
-        assert guidance in (await agent._context_view(registry.specs(), 1))[0].content
+        assert guidance in content_text((await agent._context_view(registry.specs(), 1))[0].content)
         assert agent.messages[0].content == agent.system_prompt
         agent.reset()
-        assert guidance in (await agent._context_view(registry.specs(), 1))[0].content
+        assert guidance in content_text((await agent._context_view(registry.specs(), 1))[0].content)
     ''')
 
 
@@ -189,13 +217,13 @@ def test_background_jobs_and_request_diagnostics_survive_reload_and_rejection(ru
         command = shlex.join([sys.executable, '-c', 'import time; print("running", flush=True); time.sleep(60)'])
         result = await registry.invoke('run_command', {'command': command, 'background': True})
         key = result.content['job_id']
-        edit('system-prompt.txt', 'You are SlipAgent,', 'You are the updated SlipAgent,')
+        edit('system-prompt.md', 'You are SlipAgent,', 'You are the updated SlipAgent,')
         await frame.checkpoint()
         assert frame.generation == 1, sink.getvalue()
         assert registry.services['command_jobs'] is jobs and jobs.active
         assert registry.services['request_diagnostics'] is diagnostics
         assert request in diagnostics.read(attempt)
-        edit('system-prompt.txt', 'You are the updated SlipAgent,', 'You are SlipAgent,')
+        edit('system-prompt.md', 'You are the updated SlipAgent,', 'You are SlipAgent,')
         (root / 'broken.py').write_text('invalid Python !!!')
         await frame.checkpoint()
         assert frame.generation == 1 and jobs.active
@@ -210,7 +238,7 @@ def test_background_memory_service_and_task_tool_survive_reload_and_migrate(run_
     run_copy('''
         # Simulate a live Agent created before the new service/tool existed.
         registry.services.pop('step_compactor')
-        edit('system-prompt.txt', 'You are SlipAgent,', 'You are the updated SlipAgent,')
+        edit('system-prompt.md', 'You are SlipAgent,', 'You are the updated SlipAgent,')
         await frame.checkpoint()
         assert frame.generation == 1, sink.getvalue()
         responses.append({'role': 'assistant', 'content': 'finished'})
@@ -218,7 +246,7 @@ def test_background_memory_service_and_task_tool_survive_reload_and_migrate(run_
         await agent.wait_for_compaction()
         compactor = registry.services['step_compactor']
         assert agent.history.steps[0].summary == 'Completed demo step.'
-        edit('background-summary-prompt.txt', 'Keep short summaries short', 'Keep brief summaries brief')
+        edit('background-summary-prompt.md', 'Write concise ordinary sentences', 'Write brief ordinary sentences')
         await frame.checkpoint()
         assert frame.generation == 2, sink.getvalue()
         assert registry.services['step_compactor'] is compactor
@@ -323,8 +351,8 @@ def test_invalid_edit_keeps_previous_version_and_recovers_on_next_edit(run_copy,
         assert frame.generation == 0
         assert 'previous code remains active' in sink.getvalue()
         context = await agent._context_view(registry.specs(), 1)
-        assert 'Reload rejected' in context[0].content
-        assert 'previous code remains active' in context[0].content
+        assert 'Reload rejected' in content_text(context[0].content)
+        assert 'previous code remains active' in content_text(context[0].content)
         await cli._handle_command(session, '/model')
         assert 'current model: test/model' in sink.getvalue()
         messages = sink.getvalue().count('Reload rejected')
@@ -563,6 +591,15 @@ def test_frame_and_state_layout_edits_require_restart(run_copy):
         assert 'Restart required for frame/contract edits: runtime.py' in sink.getvalue()
         await cli._handle_command(session, '/model')
         assert 'current model: test/model' in sink.getvalue()
+    ''')
+
+
+def test_literal_message_contract_requires_restart(run_copy):
+    run_copy('''
+        edit('data_text.py', 'class MessageSections:', 'class MessageSections: # changed')
+        await frame.checkpoint()
+        assert frame.generation == 0
+        assert 'Restart required for frame/contract edits: data_text.py' in sink.getvalue()
     ''')
 
 

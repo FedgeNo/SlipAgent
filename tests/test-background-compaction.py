@@ -6,6 +6,7 @@ from slipagent.types import decode_json_content
 
 import asyncio
 import json
+from data_text_reader import read_data
 
 import pytest
 
@@ -34,12 +35,12 @@ class Client:
 
     async def chat(self, **kwargs):
         messages = kwargs["messages"]
-        if messages[0].content.lstrip().startswith("Summarize one completed SlipAgent step"):
+        if content_text(messages[0].content).lstrip().startswith("# Summarizing the Previous Turn"):
             self.summary_requests.append(kwargs)
             self.started.set()
             await self.release.wait()
             source = decode_json_content(messages[1].content)
-            return Completion(Message.assistant("Inspected the project; tools returned their recorded results."),
+            return Completion(Message.assistant(json.dumps({'summary': "Inspected the project; tools returned their recorded results.", 'reasoning_summary': source.get('reasoning', '')})),
                               "test", usage=Usage(prompt_tokens=10, completion_tokens=5))
         self.main_requests.append(kwargs)
         return self.replies.pop(0)
@@ -51,7 +52,7 @@ def reply(text=None, calls=None):
 
 @pytest.mark.parametrize("recover", [True, False])
 @pytest.mark.parametrize("failure", ["overload", "bad-gzip"])
-async def test_summary_retries_transient_failures_five_times_silently(monkeypatch, recover, failure):
+async def test_summary_retries_transient_failures_with_bounded_provider_policy(monkeypatch, recover, failure):
     from slipagent.compaction import StepCompactor
     attempts, delays, errors = [], [], []
     def handle(request):
@@ -60,22 +61,22 @@ async def test_summary_retries_transient_failures_five_times_silently(monkeypatc
             if failure == "bad-gzip":
                 return httpx.Response(200, headers={"content-encoding": "gzip"}, content=b"not a gzip stream")
             return httpx.Response(200, json={"error": {"message": "Service temporarily overloaded", "code": 503}})
-        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "Completed the work."}, "finish_reason": "stop"}]})
+        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": json.dumps({'summary': 'Completed the work.', 'reasoning_summary': ''})}, "finish_reason": "stop"}]})
     history = ConversationHistory()
     history.sync([Message.user("Request"), Message.assistant("Response")])
     step = history.steps[0]
     original = step.full_text()
     compactor = StepCompactor(lambda usage: None, errors.append)
-    async with OpenRouterClient("test", transport=httpx.MockTransport(handle), retry=RetryPolicy()) as client:
+    async with OpenRouterClient("test", transport=httpx.MockTransport(handle), retry=RetryPolicy(extended=True)) as client:
         async def sleep(delay):
             delays.append(delay)
             assert errors == []
-        monkeypatch.setattr("slipagent.openrouter.asyncio.sleep", sleep)
-        monkeypatch.setattr("slipagent.openrouter.random.uniform", lambda lower, upper: upper)
+        monkeypatch.setattr("slipagent.api.asyncio.sleep", sleep)
+        monkeypatch.setattr("slipagent.api.random.uniform", lambda lower, upper: upper)
         compactor.submit(step, client, "test", None, None)
         await compactor.wait()
-    assert len(attempts) == 6
-    assert delays == [1, 2, 4, 8, 16]
+    assert len(attempts) == (6 if recover else 7)
+    assert delays == ([1, 2, 4, 8, 16] if recover else [1, 2, 4, 8, 16, 32])
     assert all(request == attempts[0] for request in attempts)
     assert step.full_text() == original
     assert len(errors) == (0 if recover else 1)
@@ -95,7 +96,7 @@ async def test_plain_response_and_native_calls_do_not_require_memory_json():
     assert agent.usage.prompt_tokens == 60 and agent.usage.completion_tokens == 30
 
 
-async def test_summary_gets_only_its_completed_turn_and_runs_in_background():
+async def test_summary_gets_current_turn_and_separate_history_and_runs_in_background():
     tool = RecordingTool("CURRENT TOOL RESULT")
     client = Client([reply("Reading.", [ToolCall("one", "record", {"value": "A"})]), reply("Done.")], pause_summary=True)
     agent = Agent(client, ToolRegistry([tool]), "test", system_prompt="PROJECT INSTRUCTIONS MUST NOT BE SUMMARIZED")
@@ -110,7 +111,8 @@ async def test_summary_gets_only_its_completed_turn_and_runs_in_background():
     assert "CURRENT TOOL RESULT" in json.dumps(source["tool_results"])
     assert len(first["messages"]) == 2 and not first.get("tools")
     assert "response_format" not in first.get("extra_body", {})
-    assert "OLD UNRELATED" not in json.dumps(source)
+    assert 'OLD UNRELATED' in json.dumps(source['history'])
+    assert 'OLD UNRELATED' not in json.dumps({k:v for k,v in source.items() if k != 'history'})
     assert "PROJECT INSTRUCTIONS" not in json.dumps(source)
     assert agent.history.steps[-2].summary is None
     client.release.set()
@@ -118,7 +120,7 @@ async def test_summary_gets_only_its_completed_turn_and_runs_in_background():
     assert agent.history.steps[-2].summary.startswith("Inspected the project;")
 
 
-async def test_reasoning_is_saved_per_turn_and_recallable_but_never_compacted():
+async def test_reasoning_is_saved_recallable_and_compacted_separately():
     first = reply("Reading.", [ToolCall("one", "record", {"value": "A"})])
     first.message.reasoning = "FIRST REASONING\nInspect λ."
     second = reply("Done.")
@@ -129,7 +131,7 @@ async def test_reasoning_is_saved_per_turn_and_recallable_but_never_compacted():
     await agent.wait_for_compaction()
     for step, expected in zip(agent.history.steps, [first.message.reasoning, second.message.reasoning]):
         assert step.reasoning == expected
-        assert json.loads(step.full_text())["reasoning"] == expected
+        assert read_data(step.full_text())["reasoning"] == expected
         result = await agent.registry.invoke("recall_history", {"step_id": step.id, "section": "reasoning"})
         assert not result.is_error and decode_json_content(result.content)["content"] == expected
         assert expected not in str([m.to_api() for m in step.context_messages(compressed=True)])
@@ -140,8 +142,8 @@ async def test_reasoning_is_saved_per_turn_and_recallable_but_never_compacted():
         assert thoughts == ([first.message.reasoning] if index else [])
     for request in client.summary_requests:
         source = decode_json_content(request["messages"][1].content)
-        assert set(source) == {"user_prompt", "agent_response", "tool_calls", "tool_results"}
-        assert "REASONING" not in str([m.to_api() for m in unpack_context(request["messages"])])
+        assert set(source) == {"user_prompt", "agent_response", "tool_calls", "tool_results", "reasoning", "history", "history_omitted"}
+        assert 'REASONING' in source['reasoning']
 
 
 async def test_rejected_response_reasoning_does_not_enter_accepted_record():
@@ -202,7 +204,7 @@ async def test_bad_summary_preserves_originals_without_retrying_the_work(bad, mo
     monkeypatch.setattr("slipagent.compaction.asyncio.sleep", immediate_backoff)
     class BadSummary(Client):
         async def chat(self, **kwargs):
-            if kwargs["messages"][0].content.lstrip().startswith("Summarize one completed SlipAgent step"):
+            if content_text(kwargs["messages"][0].content).lstrip().startswith("# Summarizing the Previous Turn"):
                 self.summary_requests.append(kwargs)
                 if bad == "exception":
                     raise RuntimeError("compaction unavailable")
@@ -228,14 +230,14 @@ async def test_bad_summary_preserves_originals_without_retrying_the_work(bad, mo
 async def test_reset_discards_late_summary_and_its_usage_even_if_transport_ignores_cancel():
     class LateSummary(Client):
         async def chat(self, **kwargs):
-            if kwargs["messages"][0].content.lstrip().startswith("Summarize one completed SlipAgent step"):
+            if content_text(kwargs["messages"][0].content).lstrip().startswith("# Summarizing the Previous Turn"):
                 if decode_json_content(kwargs["messages"][1].content)["user_prompt"] == "OLD":
                     self.started.set()
                     try:
                         await self.release.wait()
                     except asyncio.CancelledError:
                         await self.release.wait()
-                    return reply("OLD SUMMARY")
+                    return reply(json.dumps({'summary': 'OLD SUMMARY', 'reasoning_summary': ''}))
             return await super().chat(**kwargs)
     client = LateSummary([reply("OLD ANSWER"), reply("NEW ANSWER")], pause_summary=True)
     agent = Agent(client, ToolRegistry(), "test")
@@ -267,7 +269,7 @@ async def test_fast_summary_cannot_hide_unseen_tool_results_at_tiny_budget():
     result = "ACTUAL RESULT " * 5000
     client = Client([reply("Read", [ToolCall("read", "record", {"value": "A"})]), reply("Done")])
     agent = Agent(client, ToolRegistry([RecordingTool(result)]), "test")
-    agent._context_lengths[agent.model] = 9000
+    agent._context_lengths[agent.model] = 12000
     await agent.run("Inspect")
     sent = "\n".join(content_text(message.content) for message in client.main_requests[1]["messages"])
     assert any(record["representation"] == "excerpt" for record in context_records(client.main_requests[1]["messages"]))
@@ -300,7 +302,7 @@ async def test_selected_parts_page_exactly_and_call_id_selects_original_call():
         offset = page["next_offset"]
         if offset is None:
             break
-    parts = json.loads("".join(chunks))
+    parts = read_data("".join(chunks))
     assert parts == {key: history.steps[0].parts()[key] for key in ["prompt", "tool_results"]}
     call = await recall.invoke({"step_id": 1, "section": "tool_calls", "call_id": "a"})
     assert decode_json_content(decode_json_content(call.content)["content"])[0] == history.steps[0].tool_calls[0].to_record()
@@ -328,7 +330,7 @@ async def test_summary_uses_frozen_capabilities_and_does_not_overwrite_context_s
     def transport(request):
         body = json.loads(request.content)
         requests.append(body)
-        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "Summary"}, "finish_reason": "stop"}]})
+        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": json.dumps({'summary': 'Summary', 'reasoning_summary': ''})}, "finish_reason": "stop"}]})
     async with OpenRouterClient("test", transport=httpx.MockTransport(transport)) as client:
         client.cache_capabilities("test", new)
         history = ConversationHistory()
@@ -354,7 +356,7 @@ async def test_compaction_disables_transport_timeout_without_changing_normal_req
 
     def transport(request):
         timeouts.append(request.extensions["timeout"])
-        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "Summary"}, "finish_reason": "stop"}]})
+        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": json.dumps({'summary': 'Summary', 'reasoning_summary': ''})}, "finish_reason": "stop"}]})
 
     async with OpenRouterClient("test", timeout=42, transport=httpx.MockTransport(transport)) as client:
         history = ConversationHistory()

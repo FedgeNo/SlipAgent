@@ -1,8 +1,8 @@
-"""JSON input records, separate from the model's response/tool-call protocol.
+"""Structured input records, separate from the model's response/tool-call protocol.
 
-The outgoing system prompt embeds selected completed-step objects as JSON;
-the API user message carries the current-step object. Originals retain their
-roles in storage. Original user, reply, and tool text remains in string fields.
+The outgoing system prompt retains selected completed-step objects until rendering;
+the user message carries the current-step object. Originals retain their
+roles in storage. Text fields render literally at the API boundary.
 """
 
 from __future__ import annotations

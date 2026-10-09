@@ -1,1 +1,0 @@
-Set python in ${settings_path} or launch with --python PATH.

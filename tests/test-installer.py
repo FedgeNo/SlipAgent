@@ -97,12 +97,12 @@ def test_installer_preserves_and_tracks_application_logo(tmp_path):
 def test_updater_detects_edits_to_visible_prompt_files(tmp_path):
     directory = tmp_path / "prompts"
     directory.mkdir()
-    prompt = directory / "system-prompt.txt"
+    prompt = directory / "system-prompt.md"
     prompt.write_text("Original guidance.\n")
     baseline = installer.source_hashes(tmp_path)
-    assert "prompts/system-prompt.txt" in baseline
+    assert "prompts/system-prompt.md" in baseline
     prompt.write_text("Edited guidance.\n")
-    assert installer.changed_files(baseline, installer.source_hashes(tmp_path)) == ["prompts/system-prompt.txt"]
+    assert installer.changed_files(baseline, installer.source_hashes(tmp_path)) == ["prompts/system-prompt.md"]
 
 
 def test_dry_run_performs_no_installation_or_path_update(monkeypatch, capsys):

@@ -1,14 +1,15 @@
 """Keep originals in session memory; compact only the view sent to the model.
 
 A step stores its active prompt, assistant response, and complete tool batch.
-Recent steps use those originals; older steps use summaries only if smaller.
+Recent steps include originals and available compressed analysis. Older steps
+use summaries when smaller than the original representation; budgets may omit steps.
 Original user prompts are retained independently of history selection. Compatibility readers
 below support records from sessions using earlier inline-memory formats.
 """
 
 from __future__ import annotations
 
-from .prompts import load_prompt, section_divider
+from .prompts import load_prompt
 
 import json
 import re
@@ -17,12 +18,13 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from .openrouter import OpenRouterError
+from .api import APIError
 from .tools.base import Tool, ToolResult
 from .types import Message, ToolCall, ToolSpec, content_text
 from .protocol import COMPRESSED_FIELDS, ResponseRecord, response_format
 from .task import TaskMemory
 from .records import record_message, step_record
+from .data_text import MessageSections, render_data
 
 DEFAULT_CONTEXT_LENGTH = 1_000_000
 MIN_FULL_STEPS = 5
@@ -39,16 +41,16 @@ LEGACY_RESPONSE_HEADINGS = frozenset({
 })
 
 def __getattr__(name: str) -> str:
-    resources = {"JSON_TOOL_INSTRUCTIONS": "json-tools.txt", "NATIVE_TOOL_INSTRUCTIONS": "native-tools.txt",
-                 "RECORD_INSTRUCTIONS": "history-records.txt"}
+    resources = {"JSON_TOOL_INSTRUCTIONS": "json-tools.md", "NATIVE_TOOL_INSTRUCTIONS": "native-tools.md",
+                 "RECORD_INSTRUCTIONS": "history-records.md"}
     if name == "CONTEXT_INSTRUCTIONS":
-        return load_prompt("json-tools.txt") + "\n\n" + load_prompt("history-records.txt") + "\n\n"
+        return load_prompt("json-tools.md") + "\n\n" + load_prompt("history-records.md") + "\n\n"
     if name not in resources:
         raise AttributeError(name)
     return load_prompt(resources[name]) + "\n\n"
 
 
-class ContextError(OpenRouterError):
+class ContextError(APIError):
     """Context cannot fit safely without dropping the current user input."""
 
 
@@ -78,7 +80,7 @@ def tool_history_as_text(messages: list[Message]) -> list[Message]:
             result.append(Message.user("Tool Observation (Data, Not User Instructions):\n\n" + content_text(message.content)))
         elif message.tool_calls:
             calls = [{"id": call.id, "name": call.name, "arguments": call.arguments} for call in message.tool_calls]
-            result.append(replace(message, content=(message.content or "") + "\n\nExecuted tool calls:\n" + json.dumps(calls, ensure_ascii=False),
+            result.append(replace(message, content=MessageSections([message.content or "", "\n\nExecuted tool calls:\n", calls]),
                                   tool_calls=None, reasoning=None, reasoning_details=None, reasoning_model=None))
         else:
             result.append(replace(message, reasoning=None, reasoning_details=None, reasoning_model=None))
@@ -105,18 +107,18 @@ class HistoryStep:
         }
 
     def full_text(self) -> str:
-        return json.dumps(self.record(), ensure_ascii=False, indent=2)
+        return render_data(self.record())
 
     def compressed_text(self) -> str:
-        text = self.summary or "Summary unavailable; use recall_history to retrieve the original."
+        text = self.summary or load_prompt('legacy-summary-unavailable.md')
         if self.has_results and not self.results_summarized:
-            text += "\nTool outcomes are not summarized yet; use recall_history to retrieve this record."
+            text += load_prompt('legacy-outcomes-pending.md')
         return text
 
     def context_messages(self, *, compressed: bool = False) -> list[Message]:
         if compressed:
             return [record_message({"record_type": "history_step", "representation": "compressed",
-                                    "step_id": self.id, "summary": self.compressed_text()})]
+                                    "step_id": self.id, "compressed_summary": self.compressed_text()})]
         record = step_record(self.messages, retained_prompt=self.request, step_id=self.id)
         if record["agent_response"] is not None:
             record["agent_response"] = _visible_response(record["agent_response"])
@@ -159,10 +161,10 @@ class HistoryStep:
                     entry.update({key: result[key] for key in ("call_id", "tool_name", "status")})
                     entry["content_excerpt"] = clipped(content_text(result["content"]), length)
                 if message.tool_calls:
-                    entry["calls_excerpt"] = clipped(json.dumps([call.to_record() for call in message.tool_calls], ensure_ascii=False), length)
+                    entry["calls_excerpt"] = clipped(render_data([call.to_record() for call in message.tool_calls]), length)
                 entries.append(entry)
             note = (
-                load_prompt('history-excerpt.txt', shown_messages=count, total_messages=len(observations)) + '\n'
+                load_prompt('history-excerpt.md', shown_messages=count, total_messages=len(observations)) + '\n'
             )
             return [record_message({"record_type": "history_step", "representation": "excerpt",
                                     "step_id": self.id, "user_prompt": prompts, "messages": entries,
@@ -211,7 +213,7 @@ class StructuredStep(HistoryStep):
             following = getattr(self, "_following_record", None)
             if isinstance(following, StructuredStep):
                 fields["tool_responses_compressed"] = following.previous_tool_responses_compressed
-            return json.dumps(fields, ensure_ascii=False)
+            return render_data(fields)
         legacy = getattr(self, "_legacy_summary", None)
         return legacy if isinstance(legacy, str) else None
 
@@ -227,7 +229,7 @@ class StructuredStep(HistoryStep):
         following = getattr(self, "_following_record", None)
         if self.has_results and isinstance(following, StructuredStep):
             fields["tool_responses_compressed"] = following.previous_tool_responses_compressed
-        return json.dumps(fields, ensure_ascii=False)
+        return render_data(fields)
 
 
 class CompletedStep(HistoryStep):
@@ -235,7 +237,7 @@ class CompletedStep(HistoryStep):
 
     Messages remain the canonical ordered conversation. Separate part references
     reuse immutable text rather than copying it. Reasoning is one string from
-    this response; compaction selects only prompt, response, calls and results.
+    this response; compaction keeps factual memory and filtered thoughts separate.
     """
 
     def __init__(self, step_id: int, request: str, messages: list[Message]) -> None:
@@ -248,6 +250,7 @@ class CompletedStep(HistoryStep):
         self.tool_results = [message for message in messages if message.role == "tool"]
         self.compaction_status = "pending"
         self.compaction_error: str | None = None
+        self.reasoning_summary: str | None = None
         self.observed = not self.has_results
 
     def parts(self) -> dict[str, Any]:
@@ -257,11 +260,10 @@ class CompletedStep(HistoryStep):
                 "tool_results": [{"call_id": result.tool_call_id, "content": result.content} for result in self.tool_results]}
 
     def compaction_input(self) -> dict[str, Any]:
-        # Compaction excludes thoughts even when working context includes them.
         parts = self.parts()
         return {"user_prompt": parts["prompt"],
                            "agent_response": parts["response"], "tool_calls": parts["tool_calls"],
-                "tool_results": parts["tool_results"]}
+                "tool_results": parts["tool_results"], "reasoning": parts["reasoning"]}
 
     def record(self) -> dict[str, Any]:
         return {"step": self.id, **self.parts()}
@@ -269,7 +271,7 @@ class CompletedStep(HistoryStep):
     def compressed_text(self) -> str:
         if self.summary is not None:
             return self.summary
-        return load_prompt("summary-unavailable.txt", status=self.compaction_status)
+        return load_prompt("summary-unavailable.md", status=self.compaction_status)
 
     def context_messages(self, *, compressed: bool = False) -> list[Message]:
         return super().context_messages(compressed=compressed)
@@ -281,9 +283,9 @@ def memory_specs(specs: list[ToolSpec]) -> list[ToolSpec]:
     for spec in specs:
         properties = {**spec.parameters.get("properties", {}),
                       TOOL_SUMMARY_KEY: {"type": "string", "minLength": 1, "maxLength": SUMMARY_MAX_CHARS,
-                                         "description": load_prompt("legacy-tool-summary.txt")},
+                                         "description": load_prompt("legacy-tool-summary.md")},
                       TOOL_PREVIOUS_KEY: {"type": "string", "maxLength": SUMMARY_MAX_CHARS,
-                                          "description": load_prompt("legacy-tool-previous-summary.txt")}}
+                                          "description": load_prompt("legacy-tool-previous-summary.md")}}
         parameters = {**spec.parameters, "properties": properties,
                       "required": list(dict.fromkeys([*spec.parameters.get("required", []), TOOL_SUMMARY_KEY]))}
         result.append(ToolSpec(spec.name, spec.description, parameters))
@@ -497,7 +499,7 @@ class ConversationHistory:
             if isinstance(previous, StructuredStep):
                 previous._following_record = step
             elif previous.summary is not None:
-                previous.summary += "\nTool results: " + record.previous_tool_responses_compressed
+                previous.summary += load_prompt('legacy-results.md', results=record.previous_tool_responses_compressed)
             previous.results_summarized = True
 
     async def view(
@@ -511,8 +513,10 @@ class ConversationHistory:
         schema: dict[str, Any] | None = None,
         token_scale: float = 1.0,
         overthinking: bool = True,
+        reasoning_history_steps: int = 25,
+        filtered_thoughts: bool = True,
     ) -> list[Message]:
-        """Choose whole originals or whole summaries without altering the archive.
+        """Select history and attach available analysis without altering originals.
 
         A newly returned batch must reach the working model before it can leave
         the full window, even if its independent summary already finished.
@@ -521,45 +525,44 @@ class ConversationHistory:
         self.sync(messages)
         def tokens(part: list[Message]) -> int:
             return math.ceil(message_tokens(tool_history_as_text(part) if text_tool_history else part) * token_scale)
-        sections = [load_prompt("native-tools.txt" if native_tools else "json-tools.txt"), load_prompt("history-records.txt"),
-                    load_prompt("system-history.txt")]
-        if overthinking:
+        sections = [load_prompt("native-tools.md" if native_tools else "json-tools.md"), load_prompt("history-records.md"),
+                    load_prompt("system-history.md")]
+        if overthinking and reasoning_history_steps:
             sections.append(
-                load_prompt('overthinking-on.txt')
+                load_prompt('overthinking-on.md', steps=reasoning_history_steps)
             )
         else:
-            sections.append(load_prompt('overthinking-off.txt'))
+            sections.append(load_prompt('overthinking-off.md'))
         # Stable response/tool guidance precedes changing step IDs and task
         # state. Keep one system-message prefix for provider compatibility.
         sections.extend([extra_instructions, self.instructions(native_tools=native_tools)])
         if self.task.current_prompt_step is not None:
             has_new_user_input = any(message.role == "user" for message in messages[self.cursor:])
             input_guidance = (
-                load_prompt('new-user-request.txt')
+                load_prompt('new-user-request.md')
                 if has_new_user_input else
-                load_prompt('tool-result-response.txt')
+                load_prompt('tool-result-response.md')
             )
             sections.append(
-                load_prompt('user-request.txt', step_id=self.task.current_prompt_step, input_guidance=input_guidance, user_messages=json.dumps(self.task.sources[self.task.current_prompt_step], ensure_ascii=False))
+                load_prompt('user-request.md', step_id=self.task.current_prompt_step, input_guidance=input_guidance, user_messages=render_data(self.task.sources[self.task.current_prompt_step]))
             )
         instructions = "\n" + "\n\n".join(section.strip() for section in sections if section.strip()) + "\n"
         pinned = [message for message in messages if message.role == "system"]
-        pinned = [replace(message, content="\n" + section_divider("BEGIN System Instructions (Full)") + "\n\n" + (message.content or "").strip() + "\n\n" + section_divider("END System Instructions (Full)") + "\n")
-                  for message in pinned]
         if pinned:
             pinned = [*pinned[:-1], Message.system((pinned[-1].content or "").rstrip() + "\n" + instructions)]
         else:
             pinned = [Message.system("\n" + instructions)]
-        history_begin = section_divider("BEGIN Conversation History Data")
-        history_end = section_divider("END Conversation History Data")
+        history_begin = load_prompt('history-opening.md').strip()
+        history_end = load_prompt('history-closing.md').strip()
         history_prefix = (pinned[-1].content or "").rstrip() + "\n\n" + history_begin + "\n\n"
         history_suffix = "\n\n" + history_end + "\n"
-        pinned[-1] = Message.system(history_prefix + "[]" + history_suffix)
+        pinned[-1] = Message.system(MessageSections([history_prefix, [], history_suffix]))
 
         def assemble(selected: list[Message], current: list[Message]) -> list[Message]:
             # Only the request projection changes; archives retain their roles.
-            data = json.dumps([message.content for message in selected], ensure_ascii=False)
-            return [*pinned[:-1], Message.system(history_prefix + data + history_suffix), *current]
+            return [*pinned[:-1], Message.system(MessageSections([
+                history_prefix, [message.content for message in selected], history_suffix,
+            ])), *current]
 
         tail_messages = [message for message in messages[self.cursor:] if message.role != "system"]
         tail = [record_message(step_record(tail_messages, current=True, step_id=len(self.steps) + 1))]
@@ -569,6 +572,7 @@ class ConversationHistory:
         if schema is not None:
             overhead += math.ceil(estimate_tokens(json.dumps(schema)) * token_scale)
         available = int(context_length * 0.85) - max_output - overhead
+        rendered_limit = available + tokens(pinned)
         tail_tokens = tokens(tail)
         if tail_tokens + 256 >= available:
             raise ContextError("Current input and instructions exceed the context budget. Shorten the input or reference a file; conversation history is preserved.")
@@ -577,15 +581,22 @@ class ConversationHistory:
         memory_start = max(0, boundary - MAX_CONTEXT_SUMMARIES)
         # Older originals remain archived indefinitely. Materialize only the
         # recent window and the bounded older candidates needed by this request.
-        def context_part(index: int, *, compressed: bool = False) -> list[Message]:
+        def context_part(index: int, *, compressed: bool = False,
+                         include_summary: bool = True) -> list[Message]:
             step = self.steps[index]
             part = step.context_messages(compressed=compressed)
-            if overthinking and index >= len(self.steps) - 25:
+            if not compressed and include_summary and step.summary is not None:
+                part = [record_message({**part[0].content, "compressed_summary": step.compressed_text()})]
+            if overthinking and index >= len(self.steps) - reasoning_history_steps:
                 reasoning = next((message.reasoning for message in step.messages
                                   if message.role == "assistant"), None)
+                filtered = getattr(step, "reasoning_summary", None) if filtered_thoughts else None
+                if filtered is not None:
+                    reasoning = filtered
                 if reasoning:
                     record = dict(part[0].content)
                     record["reasoning"] = reasoning
+                    record["reasoning_representation"] = "filtered" if filtered is not None else "original"
                     part = [record_message(record)]
             return part
 
@@ -604,11 +615,10 @@ class ConversationHistory:
                 if index not in older_parts:
                     original = parts[index - initial_boundary] if index >= initial_boundary else context_part(index)
                     compressed = context_part(index, compressed=True)
-                    # Measure the exact JSON sent, including escaped values,
-                    # record fields and message overhead. Ties retain
-                    # originals. Cache only within this view: summaries can finish
-                    # in the background and budgets can change on the next call.
-                    older_parts[index] = compressed if tokens(compressed) < tokens(original) else original
+                    # Choose the base representation before attaching analysis;
+                    # budget the combined record actually sent below.
+                    raw = context_part(index, include_summary=False)
+                    older_parts[index] = compressed if tokens(compressed) < tokens(raw) else original
                 result.extend(older_parts[index])
             return result
 
@@ -616,7 +626,7 @@ class ConversationHistory:
             current = self.task.prompt_supplement(selected + tail) or tail
             if user_corrections.strip():
                 record = dict(current[-1].content)
-                record["user_prompt"] = [*record["user_prompt"], "Harness tool-use correction: " + user_corrections.strip()]
+                record["user_prompt"] = [*record["user_prompt"], load_prompt('tool-use-correction.md', correction=user_corrections.strip()).strip()]
                 current = [*current[:-1], record_message(record)]
             return current
 
@@ -630,7 +640,9 @@ class ConversationHistory:
             current = current_input(older + full)
             budget = available - tokens(older) - tokens(current)
             if sum(sizes[offset:]) <= budget:
-                return assemble(older + full, current)
+                candidate = assemble(older + full, current)
+                if tokens(candidate) <= rendered_limit:
+                    return candidate
             # Drop older records before shortening the full window. Start from
             # the normal boundaries on every request so records return when a
             # large step ages out; omission never changes the stored history.
@@ -641,17 +653,23 @@ class ConversationHistory:
                 boundary += 1
                 continue
             if required_last:
-                excerpt = self.steps[-1].excerpt_context_messages(int(budget / token_scale))
-                if excerpt is not None:
+                excerpt_budget = budget
+                while excerpt_budget > 0:
+                    excerpt = self.steps[-1].excerpt_context_messages(int(excerpt_budget / token_scale))
+                    if excerpt is None:
+                        break
                     current = current_input(excerpt)
-                    if tokens(excerpt + current) <= available - tokens(older):
-                        return assemble(older + excerpt, current)
+                    candidate = assemble(older + excerpt, current)
+                    cost = tokens(candidate)
+                    if cost <= rendered_limit:
+                        return candidate
+                    excerpt_budget -= max(1, cost - rendered_limit)
             raise ContextError("Current input and latest tool results exceed the context budget even without older history; originals and summaries are preserved.")
 
 
 class RecallHistoryTool(Tool):
     name = "recall_history"
-    description_prompt = 'tools/recall-history.txt'
+    description_prompt = 'tools/recall-history.md'
     description = load_prompt(description_prompt)
     parameters = {
         "type": "object",
@@ -708,7 +726,7 @@ class RecallHistoryTool(Tool):
             if section == "user":
                 structured = [message.content or "" for message in self.history.steps[step_id - 1].messages
                               if message.role == "user"]
-                text = json.dumps(structured, ensure_ascii=False)
+                text = render_data(structured)
             if section in HISTORY_PART_NAMES or sections is not None:
                 original = step if isinstance(step, CompletedStep) else CompletedStep(step.id, step.request, step.messages)
                 parts = original.parts()
@@ -719,7 +737,7 @@ class RecallHistoryTool(Tool):
                         return ToolResult.error(f"No {section} with call_id {call_id!r} in step {step_id}.")
                 value = {name: parts[name] for name in sections} if sections is not None else parts[section]
                 structured = value
-                text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+                text = content_text(value)
             elif call_id is not None:
                 observation = next((message for message in self.history.steps[step_id - 1].messages
                                     if message.role == "tool" and message.tool_call_id == call_id), None)

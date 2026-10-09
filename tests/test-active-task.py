@@ -36,7 +36,7 @@ class PlainClient(StubClient):
     """Keep working replies plain so task memory cannot depend on an echo."""
 
     async def chat(self, **kwargs):
-        if kwargs["messages"][0].content.lstrip().startswith("Summarize one completed SlipAgent step"):
+        if content_text(kwargs["messages"][0].content).lstrip().startswith("# Summarizing the Previous Turn"):
             return await super().chat(**kwargs)
         self.calls.append({**kwargs, "messages": list(kwargs["messages"])})
         return self.responses.pop(0)
@@ -84,15 +84,17 @@ async def test_current_prompt_and_its_source_survive_compression_without_task_up
 
 
 @pytest.mark.parametrize("include_revision", [False, True])
-async def test_inline_task_records_are_rejected(include_revision):
+async def test_legacy_task_envelopes_do_not_replace_the_users_request(include_revision):
     value = json.loads(record(revision=0))
     if not include_revision:
         del value["task"]["source_revision"]
     client = StubClient([completion(json.dumps(value)), completion("Done")])
     agent = Agent(client, ToolRegistry(), "test")
     assert await agent.run("Current request") == "Done"
-    assert len(client.calls) == 2
-    assert "last response was rejected" in content_text(client.calls[1]["messages"][0].content)
+    assert len(client.calls) == 1
+    assert agent.history.steps[0].user_prompt == "Current request"
+    assert agent.history.steps[0].agent_response == "Done"
+    assert all("Implement inventory support" not in content_text(message.content) for message in agent.messages)
 
 
 async def test_context_supplies_retained_prompt_when_legacy_full_post_has_no_copy():

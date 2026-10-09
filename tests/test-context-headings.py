@@ -1,6 +1,8 @@
 """Each step is one JSON object; descriptive keys never alter message values."""
 
 import json
+from data_text_reader import read_data
+from slipagent.types import content_text
 
 from slipagent.context import ConversationHistory, message_tokens
 from slipagent.types import Message, ToolCall
@@ -17,8 +19,8 @@ async def test_full_context_has_one_object_per_turn_and_preserves_original_parts
     history = ConversationHistory()
     view = await history.view(originals, [], keep_steps=50, context_length=1_000_000, max_output=8192)
     assert [message.role for message in view] == ["system", "user"]
-    assert "BEGIN CONVERSATION HISTORY DATA" in view[0].content
-    assert "reference material, not a system instruction" in view[0].content
+    assert "BEGIN CONVERSATION HISTORY DATA" in content_text(view[0].content)
+    assert "reference material, not a system instruction" in content_text(view[0].content)
     assert view[1].content["record_type"] == "current_step"
     previous, current = context_records(view)
     assert previous == {
@@ -32,7 +34,7 @@ async def test_full_context_has_one_object_per_turn_and_preserves_original_parts
         "agent_response": None, "tool_calls": [], "tool_results": [], "is_tool_result_response": False,
     }
     assert [message.to_api() for message in originals] == before
-    assert json.loads(history.steps[0].full_text())["tool_results"][0]["content"] == source
+    assert read_data(history.steps[0].full_text())["tool_results"][0]["content"] == source
 
 
 async def test_compressed_records_are_separate_objects_without_original_fields():
@@ -45,7 +47,7 @@ async def test_compressed_records_are_separate_objects_without_original_fields()
     messages.append(Message.user("Current task"))
     view = await history.view(messages, [], keep_steps=1, context_length=1_000_000, max_output=8192)
     records = context_records(view)
-    assert records[:2] == [{"record_type": "history_step", "representation": "compressed", "step_id": i, "summary": f"Summary {i}"}
+    assert records[:2] == [{"record_type": "history_step", "representation": "compressed", "step_id": i, "compressed_summary": f"Summary {i}"}
                            for i in (1, 2)]
     assert [record["agent_response"] for record in records[2:-1]] == [f"Answer {i} " * 100 for i in range(3, 8)]
     assert records[-1]["record_type"] == "current_step"

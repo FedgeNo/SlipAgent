@@ -22,7 +22,7 @@ Native-tool requests deliver those contracts through API tool definitions;
 JSON-tool requests include the same definitions in the system's Available Tool
 Definitions section.
 
-The background-summary prompt is in `prompts/background-summary-prompt.txt`. `compaction.py` reads it when building each isolated summary request. Protocol, history, environment, recovery, and tool guidance use the same loader. Tool specs read descriptions and argument-description mappings on each access; argument schemas and behavior remain in Python. See `prompts/README.md` for the editable file map.
+The background-summary prompt is in `prompts/background-summary-prompt.md`. `compaction.py` reads it when building each isolated summary request. Protocol, history, environment, recovery, and tool guidance use the same loader. Tool specs read descriptions and argument-description mappings on each access; argument schemas and behavior remain in Python. See `prompts/README.md` for the editable file map.
 
 Project instruction discovery supplies the selected workspace's documents under
 a separate heading. `/init` creates a project-notes scaffold only when `AGENTS.md`
@@ -45,22 +45,25 @@ project guidance comes from this refreshed service rather than a stale suffix.
 Tool-call arguments, structured tool results, observation envelopes, input records,
 and frozen compaction inputs remain dictionaries or lists internally. External JSON
 text is decoded at entry. File contents and command output remain literal string
-fields. API messages, terminal rendering, and journals serialize data at their
-destination boundaries. Complete history selections return structured content;
-partial character pages return fragments of its serialized representation. Resume
+fields. Model-facing messages and terminal output render structured values as
+labelled literal text, without JSON escaping. Journals and HTTP transport encode
+JSON only at their destination boundaries. The request callback carries a
+dictionary to diagnostics and token accounting. Complete history selections return
+structured content; partial character pages return fragments of its literal-text presentation. Resume
 accepts both legacy text observations and structured journal observations.
 
 The transport sends one explicit list of messages plus tool definitions and
 request parameters. No earlier API call, terminal line, file, or archive entry
 is visible unless it is included in that request. Separate reasoning deltas are
 displayed and joined into one string for that response's uncompressed record;
-Overthinking Mode (enabled by default) includes that string as `reasoning` in
-the latest 25 completed steps' JSON records, including selected summaries.
+Overthinking Mode (enabled by default) includes filtered thoughts when ready,
+otherwise the original string, as `reasoning` in selected records from the latest
+25 completed steps by default. `--reasoning-history-steps` controls that depth.
 Missing thoughts add no field. The exact JSON participates in context selection
 and token budgeting; omitted steps and budget-limited excerpts omit reasoning.
 Opaque provider metadata is excluded. Disabling the mode excludes all reasoning
-from working context. Compaction inputs exclude reasoning in
-either mode. Explicit history retrieval can still access the originals. The context inspector
+from working context. Compaction processes reasoning separately in either mode.
+Explicit history retrieval can still access the originals. The context inspector
 captures the final outgoing body after capability settings are applied, without
 the authentication headers.
 
@@ -69,30 +72,39 @@ Context construction proceeds in this order:
 1. `ConversationHistory.sync` recognizes complete assistant/tool batches and
    assigns sequential step IDs. New user messages are associated with the next
    response step and also registered as active-task source instructions.
-2. System messages are pinned and labelled. The last receives the response
+2. System messages are pinned without rewriting their contents. The last receives the response
    contract and named sections assembled by `PromptSections`: schema/tool/MCP
    guidance first, then current project instructions, environment, runtime
    state, and repair details. Current step IDs and task state follow those
    sections. Names are unique, owners and static/dynamic roles are explicit,
    and order is deterministic. Section registries belong to one request, so
    a rejected generation cannot leave global prompt registrations behind.
+   Static headings belong to editable templates; `PromptSections` renders their
+   content without adding wrappers. Markdown uses `#`, `##`, and `###` for the
+   instruction hierarchy, fenced examples, and field tables. Only imported
+   history retains opening and closing equals-sign warnings, loaded from
+   `history-opening.md` and `history-closing.md`.
    Prompt paragraphs occupy one physical line, without fixed-width wrapping. Two newlines separate paragraphs, headings, topic groups, task fields, tool guidance, examples, and assembled sections. Single newlines remain for meaningful item boundaries, metadata fields, code, and other structured content.
    Loaded instruction-file contents and original conversation text stay intact.
-   The input uses a system prefix followed by JSON records. The inspector
+   The input uses a system prefix followed by labelled records with literal text blocks. The inspector
    displays the final body rather than reconstructing it separately.
-3. Up to 100 older records precede the recent full window. Each
-   retained step has one representation: either its complete prompt, response,
-   calls and results, or its summary. A summary is selected only if its estimated
-   token cost, including JSON fields, escaped values and message overhead, is lower.
+3. Up to 100 older records precede the recent full window. Each retained step
+   occupies one object. Full records contain originals plus available compressed
+   analysis. Older records use a summary if its estimated cost is lower than
+   the original representation before adding analysis. The budget includes all
+   fields actually sent, presentation indentation, and message overhead. Selection
+   checks the fully assembled request, including excerpts, against the allowance.
    Both native-tool and embedded-tool profiles receive the same record format;
    ties keep originals, with complete tool batches intact. Every step has its
-   own JSON object and API user message, including consecutive summaries.
+   own object in the system prompt's history list. Objects remain structured until
+   `Message.to_api()` renders literal text through `data_text.py`; the HTTP client
+   JSON-encodes the complete payload. Text fields are not embedded JSON strings.
    The full window targets 50 calls by default, with a floor of 5 on the requested
    window size. Under model context pressure, selection drops the oldest older
    records first, then reduces the full window oldest-first, below 5 if necessary.
    Boundaries and representation caches belong to one view: later requests can
    restore omitted records as large calls age into smaller summaries. There is
-   no persistent omission marker and no separate history token cap.
+   no persistent omission marker. `--context-tokens` can cap total working context.
    `records.py` encodes full steps with `record_type`, `representation`, `user_prompt`,
    `agent_response`, `tool_calls`, and `tool_results`. Prompts remain an array so
    queued inputs retain their boundaries. Calls use `call_id`, `tool_name`, and
@@ -100,8 +112,8 @@ Context construction proceeds in this order:
    The harness's exact observation envelope is unpacked, while arbitrary JSON
    inside tool output remains content. Unknown legacy status stays `unknown`.
    The selected records form a contiguous suffix of stored history. The current
-   step number remains in the system prompt. Every full, compressed, excerpt,
-   and current bundle also includes its exact `step_id` as JSON metadata for
+   step number is supplied as metadata. Every full, compressed, excerpt,
+   and current bundle also includes its exact `step_id` as metadata for
    `recall_history`, separate from the original message strings.
    Description keys never enter actual message strings. Reserved legacy response
    labels are removed from standalone prose
@@ -179,21 +191,31 @@ support, independently of their JSON-format support. Startup and explicit model
 selection refresh the profile; ordinary requests reuse it. Native-capable routes
 take priority. Schema-capable endpoints receive a small strict response schema.
 Other endpoints receive no `response_format`; ordinary replies are accepted.
-Native routes without schemas use plain reply text. JSON-only routes require
-exactly `response` and `tool_calls` on every step, including final answers.
+Native routes without schemas request plain reply text. JSON-only routes request
+`response` and `tool_calls` on every step, including final answers.
 Selection preflight publishes neither the model nor its profile on failure.
 
-`protocol.py` validates the response against the profile selected before the
-request. Each path advertises only its own contract. Native calls must use API
-`message.tool_calls`: each call has `id`, `type="function"`, and `function`
-containing `name` and JSON-encoded `arguments`. Reply content is plain text or,
-for schema-capable endpoints, exactly an object containing `response`. JSON-only
-responses contain exactly `response` and `tool_calls`; each call contains exactly
-`id`, `name`, and JSON-encoded `arguments`. IDs must be nonempty and unique.
-Every response requires nonempty reply text. No alternate carriers, fences,
-argument aliases, extra fields, inline task records, or compressed fields are
-accepted. Native and embedded batches are never merged. Format violations reject
-the complete response before reply display or tool execution.
+`protocol.py` detects response formats independently of request capabilities.
+Plain replies, JSON envelopes, whole JSON fences, legacy summary records, tagged
+JSON calls, and Qwen3-Coder calls share one normalization boundary. The API adapter
+accepts native `tool_calls`, legacy `function_call`, and `tool_use` content blocks.
+Separate calls and calls embedded in reply text can coexist. API carriers precede
+text calls; identical alternate representations are deduplicated by multiplicity,
+while distinct calls are combined. Conflicting shared IDs reject the batch.
+Qwen argument conversion uses tool parameter schemas, preserving string whitespace
+and entities. No model-specific response-format memory is used. Requests retain
+their preferred output instructions and API capability profiles.
+Complete streamed responses are validated before effects. Malformed or truncated
+batches, conflicting fields, and duplicate IDs within a carrier reject the entire
+response. Explanatory code examples and reasoning are never scanned for actions.
+An empty reply is valid only when accompanied by tool calls.
+
+The built-in `answer` tool returns its text as a user-visible answer. A successful
+batch containing only answer calls ends the run without another working request;
+mixed batches continue normally. Results are journaled and replayed through the
+same renderer path. XML `<tool_call><answer>text</answer></tool_call>` maps to this
+tool. Missing trailing XML closing tags are tolerated, but provider-reported
+truncation and incomplete JSON arguments still reject the entire batch.
 
 The archive retains assistant calls followed by matching `role: tool` results.
 Working requests package each complete step as one JSON object, regardless of
@@ -212,8 +234,8 @@ being received, preserving whitespace and avoiding duplicate copies when a
 delta supplies both a plain reasoning field and reasoning details. JSON
 completions use the same extraction. Each retry starts a fresh accumulator;
 existing history is never reassembled. Accepted messages and `CompletedStep.reasoning`
-retain the resulting string. Working JSON records include readable thoughts
-for the latest 25 completed steps when Overthinking Mode is enabled, with
+retain the resulting string. Working input records include readable thoughts
+for up to 25 completed steps (configurable) when Overthinking Mode is enabled, with
 their exact token cost included in selection. Provider details stay excluded.
 The client removes native reasoning fields from outgoing message
 dictionaries, covering direct calls and older stored records without mutating
@@ -225,9 +247,8 @@ The normalization boundary follows the general approach documented by
 recognize specific call formats, then expose one internal call representation.
 SlipAgent does not use a model-name allowlist or attempt arbitrary JSON repair.
 
-Acceptance validates response structure and executable calls, including the
-contents of optional task updates. Source acknowledgment and revision echoes
-are not required; the harness assigns revision metadata when saving a record.
+Acceptance validates response structure and executable calls. Working plans
+use the ordinary `update_plan` tool; no task envelope or revision echo is required.
 Until validation passes, only separately delivered reasoning can appear.
 Reply text and all tool effects wait. A rejected response is not appended as
 executed history. A bounded excerpt and precise diagnosis enter the next request
@@ -236,9 +257,7 @@ Three invalid attempts end the run; retries count against usage and the step cap
 
 Working calls set `single_attempt=True` on the client. The agent owns bounded
 transport recovery, preventing nested HTTP retries from multiplying requests
-beyond the step budget. The default allows three transient retries; each starts
-with fresh stream accumulators and uses silent, interruptible backoff. Exhausted
-retries report the failure. A registry-owned stop event wakes the wait. EOF without a finish marker,
+beyond the step budget. The default performs three silent transient retries, then reports the error with a cancellable countdown. Exponential retry intervals stop before exceeding 60 seconds; `Retry-After` values, including HTTP dates, cannot exceed that ceiling. Explicit finite `RetryPolicy` instances can disable extended recovery. Each attempt starts with fresh stream accumulators. Exhausted retries report the failure. A registry-owned stop event wakes the wait. EOF without a finish marker,
 transport failures, and retryable status codes are distinct from permanent API
 errors. Reported partial usage is retained; unreported usage is not invented.
 Direct metadata and isolated compaction calls retain their own client policy.
@@ -286,7 +305,7 @@ text remains outside model history and session journals.
 `/stop` finishes the active response and entire tool batch and prevents another
 working model request. The completed step can still be summarized in the
 background. It does not kill that batch's processes. `/quit` finishes the active
-run before closing resources and prevents automatic launch of another queued run.
+response/tool batch before closing resources and prevents another working request.
 Queued corrections from an earlier failed/stopped run are drained before the new
 prompt on resumption. Timeout cleanup of an individual process is a separate
 mechanism from these session controls.
@@ -307,29 +326,42 @@ interrupt binding, so closing a chooser never interrupts agent work.
 The working prompt asks for explicit findings, evidence, decisions, uncertainties,
 and next steps in each response, including tool-call steps. These responses remain
 in working history and their important conclusions are preserved in summaries.
-Overthinking Mode supplies recent readable reasoning to the working model;
-the compactor always excludes it.
+Overthinking Mode supplies recent original or filtered reasoning to the working
+model. The compactor processes thoughts separately from its factual summary.
+
+Working history uses one JSON object per step. Full records include available
+`compressed_summary` analysis alongside their original fields; compressed-only
+records use the same key in place of those fields. Selection compares older base
+representations before adding analysis, then budgets every field actually sent.
+Current-turn input and original archives are unchanged.
 
 `CompletedStep` extends `HistoryStep` with independent `user_prompt`, `agent_response`,
-`reasoning`, `tool_calls`, and `tool_results` references, plus one whole-step `summary` and a
-task-record snapshot. Canonical messages retain their original order and native
-call/result structure. Continuation prompts repeat the active request under an
-explicit heading; that heading cannot acknowledge a new task-source step.
+`reasoning`, `tool_calls`, and `tool_results` references, plus whole-step `summary`
+and separate `reasoning_summary` fields. Canonical messages retain their original
+order and native call/result structure. Continuation records retain the active
+request without registering it as new user input.
 
 After archiving a complete batch, `Agent._archive_step` submits it to
-`StepCompactor`, a registry-owned service. It freezes only the original prompt,
-response, tool calls and results, the selected model, and its capabilities. Every job starts asynchronously;
+`StepCompactor`, a registry-owned service. It freezes the original prompt,
+response, tool calls, results and thoughts, up to 25 preceding completed steps,
+the selected model, and its capabilities. Every job starts asynchronously;
 the working loop does not wait. A reply without tools also gets one job. The
 compaction request contains exactly two messages: summarization instructions
-with the step ID as private system metadata, and the JSON serialization of those
-four parts without a step-number field. It contains no thread, prior
-summaries, task state, project guidance, or reasoning. No tools or output schema
-are requested; the reply is a plain summary capped at 6,000 characters. The
-complete input is checked against the frozen endpoint budget without silently
-truncating it. A context overflow or bad summary leaves the originals intact and
+and a structured record separating the completed step's fields from contextual
+`history`, rendered as labelled literal text at the API boundary.
+History uses available summaries or full records, without project guidance.
+Only the current step is compressed into two JSON string fields: `summary`
+and `reasoning_summary`, each capped at 6,000 characters. Both are validated
+before publication. An empty reasoning summary means nothing useful survived;
+`None` means no filtered result is available. Overthinking prefers the filtered
+field and otherwise uses raw thoughts. Originals remain immutable and recallable.
+Both fields persist in the journal; old journals fall back to original thoughts.
+The frozen endpoint budget is checked before sending. Oldest contextual records
+are omitted first with an explicit count; the current step is never truncated.
+A context overflow or bad summary leaves the originals intact and
 marks the summary failed with a visible warning and a recall reference. Each
-summary request has a 20-minute overall timeout, including retries; timeout
-failure preserves the originals and follows the same warning path.
+summary attempt has a 20-minute timeout. Retry waits and later attempts can
+extend the job beyond that duration; final failure preserves the originals.
 
 Summary completion and observation delivery are independent. `CompletedStep.observed`
 protects the newest tool batch until an accepted working response has received
@@ -441,8 +473,8 @@ they must not be told that discarded data is retrievable.
 The archive stores UTF-8 text after replacement decoding of invalid process bytes.
 Page boundaries preserve code points. Binary artifacts belong in workspace files.
 Persistent sessions bind the archive to private durable files and journal log
-metadata when commands start/finish. Resume copies retained streams to the new
-session and preserves their IDs. Reset detaches old files without deleting them.
+metadata when commands start/finish. Fork copies retained streams and preserves
+their IDs; resume reuses saved log storage. Reset detaches files without deleting them.
 Without persistence, reset/shutdown removes temporary files; a forced kill can
 leave the temporary directory behind. Resuming an older archive larger than a
 newly configured quota preserves existing bytes and permits no additional bytes
@@ -525,9 +557,9 @@ do not cover shell/MCP edits or replace an explicit project test suite.
 `LoopGuard` compares consecutive complete batches by tool name, canonical
 arguments and actual result/status, excluding changing call/log IDs. The third
 unchanged batch adds recovery instructions to the next request; the fourth
-stops. A changed batch or user input clears the sequence. Individual calls are
-never deduplicated. Explicit `run_command(poll=true)`, log reads and task updates
-are exempt, allowing intentional external polling and normal bookkeeping.
+stops. It also detects repeating cycles of up to six batches. New user input
+resets detection. This guard does not deduplicate calls. Explicit
+`run_command(poll=true)`, command-log reads and job-control calls are exempt.
 
 ## Durable Sessions and Recovery
 
@@ -559,10 +591,10 @@ OpenRouter attribution setting. Without persistence, the name lives in
 
 Messages append as deltas, with explicit replacement records for refreshed system
 instructions or step-batch check annotations. State records hold task boundaries,
-the working task record, usage, queued input, and selected settings. Step records
+usage, queued input, and selected settings. Working plans persist as tool results. Step records
 hold summary state, including asynchronous summary completion.
 Reasoning is stored in the original message, included in recent context when
-Overthinking Mode is enabled, and excluded from compaction. Writes flush/fsync;
+Overthinking Mode is enabled, and supplied separately to compaction. Writes flush/fsync;
 an unsavable tool-start marker stops dispatch.
 Complete originals are never rewritten by compression.
 
@@ -571,8 +603,8 @@ Only an unterminated final entry is ignored, with a recovery note; malformed
 complete records fail. Missing tool observations are filled explicitly as
 unknown outcomes for started calls and not-run outcomes for unstarted calls.
 No saved tool call executes during restore. Original numbered steps, task
-sources, summaries, queued input, usage and command logs are restored to a new
-journal. The original remains available. Operating/project instructions and
+sources, summaries, queued input, usage and command logs are restored from the
+selected journal, which resume reopens. Fork creates a child. Operating/project instructions and
 model settings come from the current process. Interrupted summaries stay
 labelled; restoration itself performs no model calls.
 
@@ -584,7 +616,7 @@ available. The transcript stays in place and subsequent work targets the child.
 `/delete` requires an interactive Enter/Escape chooser before any deletion.
 After confirmation it drains summaries and jobs, clears the conversation with
 `reset(new_session=False)` to detach log/diagnostic owners, and removes only the
-current journal, title sidecar, log directory, and request-diagnostic directory.
+current journal, title sidecar, logs, request diagnostics, and file checkpoints.
 The journal service returns to its pre-prompt state and the transcript is replaced
 by the startup banner. Other sessions and project files remain untouched.
 Filesystem deletion errors report potentially partial removal and disable further
@@ -635,20 +667,23 @@ subprocesses. Session persistence is enabled at construction on the next launch;
 compatible edits to its behavior can subsequently reload.
 
 `RequestDiagnostics` uses a sidecar directory attached by `SessionJournal.begin`.
-Each working attempt records its step/step, UTC time, request snapshot reference,
+Each working attempt records its run-step and history-step IDs, UTC time, request snapshot reference,
 outcome, reported usage, and bounded response/error excerpts. Exact final request
 JSON is gzip-compressed and deduplicated by SHA-256; no authentication headers are
 captured. Pending records survive a crash and remain visibly unsettled. Atomic
 owner-only writes and fsync preserve earlier records when storage fails. A
-32 MiB quota stops further diagnostic writes with a warning rather than deleting
-old requests or blocking ordinary work. These files are not history steps.
-`/requests [attempt]` inspects current-session records; previous directories remain
-beside their journals after reset/resume. `--no-session` uses temporary storage.
+32 MiB quota stops further diagnostic writes with a warning rather than blocking
+ordinary work. These files are not history steps. `/requests [attempt]` inspects
+saved attempts. Reset starts a new directory; resume reuses the saved session's
+directory, continues after its highest attempt number, and counts existing file
+sizes toward the quota. Even incomplete attempt files reserve their numbers.
+`--no-session` uses temporary storage.
 
 ## Reload Transactions
 
 `runtime.py` is the stable frame. Its `CORE_MODULES` set also pins package root,
-configuration, wire types, workspace, tool base, MCP connections, and `lifecycle`.
+configuration, wire types, their `data_text` renderer, workspace, tool base, MCP
+connections, and `lifecycle`.
 These classes/state contracts must agree for the session's lifetime. Editing a
 pinned module requires a restart; most agent, tool, UI, API, task, and context
 behavior is reloadable when layouts remain compatible.
@@ -745,7 +780,8 @@ to the model along with the active generation number.
   and source line, and replayed on resize. The startup tool list uses this to
   align wrapped rows beneath its first item without changing ordinary output.
   During append/reflow, `WrappedTranscript` indexes source lines whose first
-  character is `>` with decoded foreground color `#00ff00`. Binary search selects
+  character is `>` with a recognized historical green foreground or the current
+  white-on-green prompt style. Binary search selects
   the nearest preceding matching line at the viewport top, including its wrapped
   rows. The unfinished tail participates without rescanning previous output.
   A one-row green overlay reuses the first wrapped row, adding an ellipsis at a
@@ -766,7 +802,7 @@ to the model along with the active generation number.
   `TerminalUI.choose(title, options)` temporarily replaces the six-row footer
   with a heading, four option rows, and a bottom key legend. A focused menu
   control owns navigation; the input buffer, history, queue, and transcript stay
-  intact. It returns the selected value or `None` on Escape, Ctrl-C/Ctrl-D, or
+  intact. It returns the selected value or `None` on Escape, Ctrl-D, or
   terminal closure. Cancellation restores input focus, and refresh preserves an
   open menu's selection. `/menu` dispatches complete command strings through the
   normal handlers, retaining busy-state checks and background execution for
@@ -794,3 +830,15 @@ For every stateful change, test the relevant combination of success, rejection,
 cancellation, reset, and reload. Assert actual request bodies and external effects,
 not just helper return values. Preserve user-owned instruction files; maintain
 these explanatory guides separately from local operational conventions.
+
+## API Provider Modules
+
+`api.py` owns `APIClient`, common errors, HTTP/SSE transport, retries, and completion normalization. `providers.py` maps provider names to implementation classes in separate files and exposes `create_client`. Providers subclass `APIClient`; they supply identity/defaults, capability discovery, optional account metadata, headers, request preparation, and options retained during key replacement. Importing modules does not create connections. `openrouter.py` keeps the previous error aliases for callers using those imports.
+
+The agent and compactor use the common `RequestProfile` contract, not a provider class or routing format. `ModelCapabilities` selects OpenRouter routes from live metadata. NVIDIA's explicit profiles describe verified hosted models; unsupported catalog entries stay visible without invented capabilities. A supplied frozen compaction profile remains independent of later selections. Provider request preparation runs before diagnostics so the inspector sees the final body.
+
+`ModelInfo.selector` is `provider::model-id`. Search combines catalogs only for providers with a nonblank environment or session key, preserves duplicate IDs, and reports partial failures. Missing-key providers are not queried or listed. Changes to the active provider set refresh the catalog cache. `Session.select_model` preflights capabilities and context. Same-provider changes preserve pending summaries; provider changes cancel and drain them before closing their client. Originals survive cancellation. Preflight failures close candidate resources and preserve active state. Credentials, URLs, and remembered models are provider-specific. `/key` uses authoritative metadata where available and explicitly reports when verification must wait for inference.
+
+Provider behavior files participate in the existing reload transaction. Shared state contracts in `types.py`, configuration, package exports, and changes to class inheritance require restart. Adding a provider requires a module, registry entry, documented configuration, and offline wire/selection tests.
+
+Common transport and agent recovery share one retry schedule. Working requests remain `single_attempt=True`, so each attempt consumes exactly one working request. Three retries are silent; subsequent waits update the terminal activity row once per second, clearing it after success, stop, or cancellation. Noninteractive output retains the error and periodic countdown notices. No interval exceeds one minute. Background compaction uses the same transient-error schedule; malformed summaries retain a separate finite repair limit. HTTP 200 overload envelopes and SSE errors are retryable; partial tool calls never execute before a complete accepted response.

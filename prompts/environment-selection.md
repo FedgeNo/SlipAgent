@@ -1,0 +1,5 @@
+# Python Selection Required
+
+Ask the user to select an environment before installing dependencies.
+
+Do not fall back to global Python.

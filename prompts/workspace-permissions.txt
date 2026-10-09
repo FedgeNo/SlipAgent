@@ -1,3 +1,0 @@
-.
-
-OS permissions still apply. Shell and MCP processes use the harness process's permissions.

@@ -4,6 +4,8 @@ from slipagent.types import content_text
 
 import asyncio
 import io
+import json
+from data_text_reader import read_data
 import os
 import shlex
 import subprocess
@@ -94,10 +96,16 @@ async def test_repeated_batches_get_recovery_context_before_stopping():
     tool = RecordingTool("unchanged")
     client = StubClient([completion("", [ToolCall(str(i), "record", {"value": "same"})]) for i in range(8)])
     agent = Agent(client, ToolRegistry([tool]), "test")
+    events: list[AgentEvent] = []
+    agent.on_event = events.append
     answer = await agent.run("inspect")
     assert "unchanged results again" in answer
     assert len(client.calls) == 4 and len(agent.history.steps) == 4
     assert "Change the approach" in content_text(client.calls[3]["messages"][0].content)
+    delivered = content_text(client.calls[3]["messages"][0].content)
+    assert 'value: text (4 characters):' in delivered and 'same' in delivered
+    assert not any(event.kind == "warning" and "Change the approach" in event.text for event in events)
+    assert any(event.kind == "warning" and "unchanged results again" in event.text for event in events)
     current = context_records(client.calls[3]["messages"])[-1]
     assert any("Change the approach" in prompt for prompt in current["user_prompt"])
     assert current["is_tool_result_response"] is True
@@ -124,6 +132,11 @@ def test_loop_guard_detects_cycles_with_unchanged_results(period):
         message, stop = guard.observe(batch, registry, index + 1)
         assert bool(message) == (index + 1 >= period * 3)
         assert stop == (index + 1 >= period * 4)
+        if index + 1 == period * 3:
+            calls = read_data(message.split('```text\n', 1)[1].split('```', 1)[0])
+            assert [item['step'] for item in calls] == list(range(period * 2 + 1, period * 3 + 1))
+            assert [item['tool_calls'][0]['function']['arguments'] for item in calls] == [
+                {'file': value} for value in range(period)]
 
 
 def test_loop_guard_allows_cycles_whose_results_change():

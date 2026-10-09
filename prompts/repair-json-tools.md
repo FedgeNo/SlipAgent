@@ -1,0 +1,3 @@
+### Embedded Tool Calls
+
+Put planned calls in the content object's tool_calls array.

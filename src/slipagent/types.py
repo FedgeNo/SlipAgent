@@ -1,6 +1,6 @@
-"""Wire-level types shared by the OpenRouter client and the agent loop.
+"""Wire-level types shared by provider clients and the agent loop.
 
-These mirror the OpenRouter Chat Completions schema closely enough that
+These mirror the Chat Completions schema closely enough that
 `to_api()` is a straight projection, but they stay independent of httpx so the
 agent loop can be tested without a network client.
 """
@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from typing import Any, Literal, Self
+
+from .data_text import render_content
 
 Role = Literal["system", "user", "assistant", "tool"]
 
@@ -26,9 +28,7 @@ def decode_json_content(value: Any) -> Any:
 
 def content_text(value: Any) -> str:
     """Render structured content only when a destination needs text."""
-    if value is None:
-        return ""
-    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    return render_content(value)
 
 
 @dataclass(slots=True)
@@ -85,8 +85,7 @@ def _decode_arguments(raw: Any) -> dict[str, Any]:
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
-        # Preserve the bad payload so the error surfaces in the tool result
-        # rather than being silently swallowed.
+        # Preserve invalid data for the acceptance boundary to reject.
         return {"__invalid_arguments__": raw}
     return parsed if isinstance(parsed, dict) else {"__invalid_arguments__": raw}
 
@@ -101,7 +100,7 @@ class Message:
     tool_call_id: str | None = None
     name: str | None = None
     # Provider reasoning blocks/signatures belong to the originating model.
-    # Keep them opaque when replaying full tool steps; never render signatures.
+    # Preserve them locally; outgoing requests omit these native fields.
     reasoning_details: list[dict[str, Any]] | None = None
     reasoning_model: str | None = None
     # Readable reasoning from this response only, concatenated before archival.
@@ -112,7 +111,7 @@ class Message:
             self.content = decode_json_content(self.content)
 
     @classmethod
-    def system(cls, content: str) -> Self:
+    def system(cls, content: Any) -> Self:
         return cls(role="system", content=content)
 
     @classmethod
@@ -230,7 +229,7 @@ def _optional_float(value: Any) -> float | None:
 
 @dataclass(slots=True)
 class Completion:
-    """A parsed, non-streaming chat completion."""
+    """A parsed completion, including an assembled streaming response."""
 
     message: Message
     model: str
@@ -256,12 +255,17 @@ class Completion:
 
 @dataclass(slots=True)
 class ModelInfo:
-    """A single entry from the OpenRouter model catalog."""
+    """A catalog entry identified by its provider and model ID."""
 
     id: str
     name: str | None = None
     context_length: int | None = None
     pricing: dict[str, Any] = field(default_factory=dict)
+    provider: str = "openrouter"
+
+    @property
+    def selector(self) -> str:
+        return f"{self.provider}::{self.id}"
 
     @classmethod
     def from_api(cls, raw: dict[str, Any]) -> Self:

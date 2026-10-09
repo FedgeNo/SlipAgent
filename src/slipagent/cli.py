@@ -7,7 +7,7 @@ Two modes:
 
 from __future__ import annotations
 
-from .prompts import PromptError
+from .prompts import PromptError, load_prompt
 from .markdown import THEMES, MarkdownRenderer, literal
 
 import argparse
@@ -29,18 +29,20 @@ from pathlib import Path
 from typing import Any, TextIO, cast
 
 from .agent import Agent, AgentEvent, STEP_LIMIT_NOTICE, STOP_NOTICE, build_system_prompt
-from .config import Config, ConfigError, dotenv_path, save_dotenv_value, save_model_choice
+from .config import Config, ConfigError, configured_provider, dotenv_path, save_dotenv_value, save_model_choice
 from .instructions import load_project_instructions, ProjectInstructions
 from .lifecycle import finish_cleanup
 from .mcp import MCPManager, MCPError, ServerSpec, config_path, load_servers
-from .openrouter import (
+from .api import (
     DEFAULT_TEMPERATURE,
-    OpenRouterAPIError,
-    OpenRouterClient,
-    OpenRouterConfigError,
-    OpenRouterError,
-    OpenRouterLimitError,
+    APIResponseError,
+    APIClient,
+    APIConfigError,
+    APIError,
+    APILimitError,
 )
+from .providers import PROVIDERS, active_providers, create_client, provider_class, fetch_catalog
+from .model_catalog import coding_models
 from .tools.base import ToolRegistry, ToolResult
 from .tools import build_default_registry
 from .types import KeyInfo, Message, ModelInfo
@@ -54,17 +56,20 @@ from .checkpoints import CheckpointError
 from wcwidth import iter_graphemes, strip_sequences, wcswidth
 from tabulate import tabulate
 
-BANNER = """SlipAgent — OpenRouter compatible coding agent
+BANNER = """SlipAgent — coding agent with selectable API providers
 
-  model:     {model}
-  workspace: {workspace}
-  tools:     {tools}
-{mcp}
-Commands: /help  /tools  /model [slug]  /models [filter]  /key [show|status|key]
-          /temperature [value]  /cost  /mcp [add|save|remove]
-          /task [new]  /rename <name>  /reset  /reload  /generations
-          /sessions  /resume [id|latest]  /fork  /delete  /rewind  /requests [attempt]
-          /menu  /danger [on|off|status]  /overthinking on|off  /init  /stop  /exit  /quit
+  Model:     {model}
+
+  Workspace: {workspace}
+
+  Tools:     {tools}
+
+{mcp}  Commands:  /help  /tools  /model [slug]  /models [filter]  /key [show|status|key]
+             /temperature [value]  /cost  /mcp [add|save|remove]
+             /task [new]  /rename <name>  /reset  /reload  /generations
+             /sessions  /resume [id|latest]  /fork  /delete  /rewind  /requests [attempt]
+             /menu  /danger [on|off|status]  /overthinking on|off  /planning [on|off]
+             /init  /stop  /exit  /quit
 
 Type a task and press Enter. Follow-ups queue while the agent works.
 Settings changes also queue until the current response and tool batch finish.
@@ -76,7 +81,7 @@ QUOTA_REFRESH_INTERVAL = 15 * 60
 HELP = """\
 Commands
 
-  /help                show this help
+  /help [command]      show all help, or help for one command (with or without /)
   /config-show         show active interpreter, model, and workspace settings
   /menu                open the arrow-key command menu; Enter selects, Esc closes
   /theme <name>        dark, light, monochrome, or ironbow Markdown palette
@@ -85,24 +90,25 @@ Commands
   /danger [on]         disable workspace path confinement (queues while working)
   /danger off          restore workspace path confinement (queues while working)
   /danger status       show whether danger mode is active
-  /overthinking on|off  enable or disable thoughts in the latest 25 steps (queues while working)
+  /overthinking on|off  enable or disable recent archived thoughts, up to 25 steps (queues while working)
+  /planning [on|off]    enable planning (default); off disables it (queues while working)
   /tools               list the available tools
   /model               choose a model with Up/Down and Enter; Escape cancels
-  /model <slug>        switch model and remember the choice
-  /models [filter]     choose from the catalog (e.g. /models gpt, /models free)
+  /model <selector>    switch model/provider; use provider::model when ambiguous
+  /models [filter]     search active provider catalogs (e.g. /models nemotron)
   /temperature         show the current temperature and model support
-  /temperature <value> set temperature from 0 to 2 when supported (default 1.0)
-  /key                 enter a different OpenRouter API key (hidden input)
+  /temperature <value> set temperature from 0 to 2 when supported (model-specific default)
+  /key                 enter a different key for the current provider (hidden input)
   /key show            show the current key, masked
   /key status          same as /key show
-  /key <key>           use a specific OpenRouter API key
+  /key <key>           use a specific key for the current provider
   /cost                show token usage and cost for this session
-  /task                show the active goal, constraints, progress, and source steps
+  /task                show retained user input and its source step IDs
   /task new            start a new task with your next prompt; retain history and logs
   /rename <name>       name this saved conversation and its terminal title
   /sessions            list saved sessions for this project
   /fork                copy the current saved session and continue in the copy (queues while working)
-  /delete              confirm deletion of the current session and its logs; Esc cancels (queues while working)
+  /delete              confirm deletion of the session, logs, diagnostics, and checkpoints; Esc cancels (queues while working)
   /rewind              choose an edit checkpoint and confirm file restoration; Esc cancels
   /rewind list         list available file checkpoints without restoring anything
   /resume              choose a saved session with Up/Down and Enter (queues while working)
@@ -222,7 +228,7 @@ def _literal_tool_output(text: str) -> str:
 
 
 class Renderer:
-    """Steps AgentEvents into terminal output."""
+    """Render agent events as terminal output."""
 
     def __init__(self, style: Style, stream: TextIO, verbose: bool) -> None:
         self.style = style
@@ -231,6 +237,7 @@ class Renderer:
         # One-shot mode writes the final answer to stdout and streams previews
         # here on stderr. Buffered replies need no second rendering on stderr.
         self.show_assistant_text = True
+        self._queued_settings_pause = False
         self._active_block: object | None = None
         self._model_block = object()
         self._stream_kind: str | None = None
@@ -373,6 +380,9 @@ class Renderer:
                 if (isinstance(saved, dict) and saved.get("status") in ("success", "error")
                         and "content" in saved):
                     result = ToolResult(saved["content"], saved["status"] == "error")
+                if isinstance(saved, dict) and saved.get("tool") == "answer" and not result.is_error:
+                    self.handle(AgentEvent(kind="assistant_text", text=result.content["text"]))
+                    continue
                 if result.content:
                     body = _literal_tool_output(result.text())
                     if result.is_error:
@@ -421,6 +431,18 @@ class Renderer:
         screen, meaning output must be written around it rather than over it."""
         return self._prompt is not None
 
+    def retry_countdown(self, error: str, seconds: int) -> None:
+        """Keep countdown ticks out of scrollback while retaining the error."""
+        previous = self.__dict__.get("_retry_error", "")
+        self.__dict__["_retry_error"] = error
+        if error and error != previous:
+            self.emit(self.style.red(f"  ✗ {error}"))
+        text = f"Retrying in {seconds}s (Esc to interrupt)" if error else ""
+        if self.terminal is not None:
+            self.terminal.set_retry_status(text)
+        elif error and (not previous or seconds % 10 == 0):
+            self.emit(self.style.dim(f"  Retrying in {seconds}s."), separate=False)
+
     def handle(self, event: AgentEvent) -> None:
         if event.kind == "context":
             if self.terminal is not None:
@@ -439,6 +461,9 @@ class Renderer:
 
         elif event.kind == "retry":
             self.emit(self.style.red(f"  ✗ {event.text}"))
+
+        elif event.kind == "retry_wait":
+            self.retry_countdown(event.text, event.step)
 
         elif event.kind == "assistant_text":
             if self.show_assistant_text:
@@ -469,6 +494,8 @@ class Renderer:
 
         elif event.kind == "tool_start" and event.tool_call is not None:
             self._tool_streamed = False
+            if event.tool_call.name == "answer":
+                return
             self.emit(self.style.magenta(f"  ⚙ {event.tool_call.brief()}"), block=self._model_block)
 
         elif event.kind == "tool_output":
@@ -486,6 +513,8 @@ class Renderer:
             if result.is_error:
                 # Errors are the most useful signal; always surface them.
                 self.emit(self.style.red(f"  ✗ {result.text()}"), block=self._model_block)
+            elif event.tool_call is not None and event.tool_call.name == "answer":
+                self.handle(AgentEvent(kind="assistant_text", step=event.step, text=result.content["text"]))
             elif getattr(self, "_tool_streamed", False):
                 self.emit(self.style.dim("  ✓ Command completed."), block=self._model_block)
             elif self.verbose and result.text().strip():
@@ -494,7 +523,10 @@ class Renderer:
                     self.emit(self.style.dim(f"    {line}"), block=self._model_block)
 
         elif event.kind == "warning":
-            self.emit(self.style.red(f"  Warning: {event.text}"), block=self._model_block)
+            if event.text == STOP_NOTICE and getattr(self, '_queued_settings_pause', False):
+                self.emit(self.style.dim("  Current step finished; applying queued commands."))
+            else:
+                self.emit(self.style.red(f"  Warning: {event.text}"), block=self._model_block)
         elif event.kind == "notice":
             self.emit(self.style.dim(f"  {event.text}"))
 
@@ -512,7 +544,7 @@ class Renderer:
 class Session:
     agent: Agent
     registry: ToolRegistry
-    client: OpenRouterClient
+    client: APIClient
     renderer: Renderer
     workspace: Workspace
     api_key: str
@@ -532,10 +564,33 @@ class Session:
     extensions: dict[str, Any] = field(default_factory=dict)
 
     async def catalog(self, refresh: bool = False) -> list[ModelInfo]:
-        """Model catalog for the current key, fetched once per session."""
-        if self._catalog is None or refresh:
-            self._catalog = await self.client.list_models()
-        return self._catalog
+        """Combined provider catalogs, refreshed on explicit model selection."""
+        keys = {name: options["api_key"] for name, options in self.extensions.get("provider_options", {}).items()}
+        keys[self.client.provider] = self.client.api_key
+        names = active_providers(keys=keys)
+        if self._catalog is None or refresh or self.extensions.get("catalog_providers", names) != names:
+            async def catalog_for(provider: str) -> list[ModelInfo]:
+                if provider == self.client.provider:
+                    return await self.client.list_models()
+                implementation = provider_class(provider)
+                return await fetch_catalog(provider, base_url=os.environ.get(implementation.base_url_env),
+                                           on_retry=self.renderer.retry_countdown)
+            results = await asyncio.gather(*(catalog_for(name) for name in names), return_exceptions=True)
+            catalog: list[ModelInfo] = []
+            errors: list[str] = []
+            for name, result in zip(names, results):
+                if isinstance(result, BaseException):
+                    if not isinstance(result, (APIError, ConfigError)):
+                        raise result
+                    errors.append(f"{name}: {result}")
+                else:
+                    catalog.extend(result)
+            self.extensions["catalog_errors"] = errors
+            if not catalog and errors:
+                raise APIError("; ".join(errors))
+            self._catalog = catalog
+            self.extensions["catalog_providers"] = names
+        return coding_models(self._catalog)
 
     def use_model(self, slug: str) -> None:
         """Switch the model for subsequent steps."""
@@ -544,12 +599,14 @@ class Session:
     async def use_api_key(self, key: str) -> None:
         """Swap in a new API key, rebuilding the transport that holds it."""
         await self.agent.wait_for_compaction()
-        replacement = OpenRouterClient(
+        replacement = create_client(
+            self.client.provider,
             api_key=key,
             base_url=self.base_url,
             http_referer=self.http_referer,
             app_title=self.app_title,
             transport=self.transport,
+            **self.client.replacement_options(),
         )
         await self.client.aclose()
         self.client = replacement
@@ -559,12 +616,56 @@ class Session:
         self.free_calls = None
         self.quota_checked_at = None
 
+    async def select_model(self, model: ModelInfo) -> None:
+        """Preflight the candidate before replacing any active provider state."""
+        replacement = self.client
+        if model.provider != self.client.provider:
+            options = self.extensions.get("provider_options", {}).get(model.provider)
+            if options is None:
+                config = Config.from_env(provider=model.provider, model=model.id)
+                options = {"api_key": config.api_key, "base_url": config.base_url,
+                           "http_referer": config.http_referer, "app_title": config.app_title,
+                           "on_retry": self.renderer.retry_countdown}
+            replacement = create_client(model.provider, **options)
+        try:
+            capabilities = await replacement.model_capabilities(model.id, refresh=True, store=False)
+            if capabilities is None:
+                raise APIConfigError("The API did not supply capabilities to verify this model's compatibility.")
+            await self.agent._context_view(self.registry.specs(), 0, capabilities=capabilities, preview=True)
+            if replacement is not self.client:
+                # Pending jobs use the old client; originals survive cancellation.
+                self.agent._compactor().reset()
+                await self.agent.wait_for_compaction()
+        except BaseException:
+            if replacement is not self.client:
+                await finish_cleanup(asyncio.create_task(replacement.aclose()))
+            raise
+        replacement.cache_capabilities(model.id, capabilities)
+        previous = self.client
+        if previous is not replacement:
+            self.extensions.setdefault("provider_options", {})[previous.provider] = {
+                "api_key": self.api_key, "base_url": self.base_url,
+                "http_referer": self.http_referer, "app_title": self.app_title,
+                **previous.replacement_options(),
+            }
+        self.client = replacement
+        self.agent.client = replacement
+        self.api_key = replacement.api_key
+        self.base_url = replacement.base_url
+        self.use_model(model.id)
+        if previous is not replacement:
+            self.transport = None
+            self.free_calls = None
+            self.quota_checked_at = None
+            await finish_cleanup(asyncio.create_task(previous.aclose()))
+
 
 async def build_session(args: argparse.Namespace) -> Session:
     if getattr(args, "no_session", False) and getattr(args, "resume", None):
         raise ConfigError("--resume cannot be combined with --no-session.")
     config = Config.from_env(
         api_key=args.api_key,
+        provider=getattr(args, "provider", None),
         model=args.model,
         base_url=args.base_url,
         workspace=args.workspace,
@@ -579,31 +680,32 @@ async def build_session(args: argparse.Namespace) -> Session:
     except WorkspaceError as exc:
         raise ConfigError(str(exc)) from exc
 
-    client = OpenRouterClient(
-        api_key=config.api_key,
+    style = Style(_use_color(sys.stderr, args.no_color))
+    renderer = Renderer(style, sys.stderr, args.verbose)
+    renderer.markdown_theme = getattr(args, "theme", "dark")
+    renderer.output_markdown = getattr(args, "markdown", False)
+    renderer.stdout_color = _use_color(sys.stdout, args.no_color)
+
+    client = create_client(
+        config.provider, api_key=config.api_key,
         base_url=config.base_url,
         http_referer=config.http_referer,
         app_title=config.app_title,
+        on_retry=renderer.retry_countdown,
     )
     async with AsyncExitStack() as resources:
         resources.push_async_callback(client.aclose)
-        model_error: OpenRouterError | None = None
+        model_error: APIError | None = None
         try:
             await client.list_models()
             if await client.model_capabilities(config.model, refresh=True) is None:
-                raise OpenRouterConfigError("The API did not supply capabilities to verify the configured model's compatibility.")
-        except OpenRouterError as exc:
+                raise APIConfigError("The API did not supply capabilities to verify the configured model's compatibility.")
+        except APIError as exc:
             model_error = exc
         registry = build_default_registry(workspace)
         registry.services["editable_prompts"] = True
         resources.push_async_callback(registry.aclose)
         registry.services["project_environment"].python_override = args.python
-
-        style = Style(_use_color(sys.stderr, args.no_color))
-        renderer = Renderer(style, sys.stderr, args.verbose)
-        renderer.markdown_theme = getattr(args, "theme", "dark")
-        renderer.output_markdown = getattr(args, "markdown", False)
-        renderer.stdout_color = _use_color(sys.stdout, args.no_color)
 
         agent = Agent(
             client=client,
@@ -614,12 +716,16 @@ async def build_session(args: argparse.Namespace) -> Session:
             max_tokens=config.max_tokens,
             context_steps=config.context_steps,
             overthinking=config.overthinking,
+            planning=getattr(args, "planning", True),
+            context_tokens=getattr(args, "context_tokens", None),
+            reasoning_history_steps=getattr(args, "reasoning_history_steps", 25),
+            filtered_thoughts=not getattr(args, "raw_reasoning_history", False),
+            exposed_tools=tuple(args.tools.split(',')) if getattr(args, "tools", None) else None,
             system_prompt=build_system_prompt(str(workspace.root)),
             on_event=lambda event: renderer.handle(event),
         )
 
-        # One-shot runs are pipeable, so a slow server would delay the answer; the
-        # REPL connects automatically and `--mcp` opts one-shot back in.
+        # Skip automatic MCP startup for one-shot runs unless --mcp is set.
         mcp: MCPManager | None = None
         if not args.no_mcp and (args.mcp or not args.prompt_flag and not args.prompt):
             manager = MCPManager(workspace.root, registry=registry)
@@ -651,7 +757,7 @@ async def build_session(args: argparse.Namespace) -> Session:
         if model_error is None:
             try:
                 await agent._context_view(registry.specs(), 0, preview=True)
-            except OpenRouterError as exc:
+            except APIError as exc:
                 model_error = exc
         if model_error is not None:
             renderer.emit(f"  model check failed: {model_error} Select another model with /models or /model <slug>.")
@@ -669,7 +775,7 @@ async def build_session(args: argparse.Namespace) -> Session:
             agent.on_boundary = lambda: frame.checkpoint(boundary=True)
         if args.model and model_error is None:
             try:
-                await asyncio.to_thread(save_model_choice, config.model)
+                await asyncio.to_thread(save_model_choice, config.model, config.provider)
             except (OSError, ConfigError) as exc:
                 renderer.emit(f"  could not remember model choice: {exc}")
         resources.pop_all()
@@ -687,7 +793,7 @@ async def run_one_shot(session: Session, prompt: str) -> int:
     try:
         answer = await session.agent.run(prompt)
         await session.agent.wait_for_compaction()
-    except (OpenRouterError, WorkspaceError) as exc:
+    except (APIError, WorkspaceError) as exc:
         print(f"slipagent: {exc}", file=sys.stderr)
         return 1
     finally:
@@ -714,7 +820,7 @@ async def run_repl(session: Session) -> int:
         connected = sum(
             1 for state in session.mcp.servers.values() if state.status == "connected"
         )
-        mcp_line = f"  mcp:       {connected}/{len(session.mcp.servers)} server(s) connected"
+        mcp_line = f"  MCP:       {connected}/{len(session.mcp.servers)} server(s) connected\n\n"
     # Prime the free-call count so the status bar is populated on the first
     # prompt rather than showing a dash until the first step finishes.
     await _refresh_quota(session)
@@ -775,8 +881,7 @@ async def run_repl(session: Session) -> int:
                 if await _run_request(session, line, style):
                     break
             except KeyboardInterrupt:
-                # The conversation is still consistent; the model simply has
-                # not replied yet. Let the user try again.
+                # Preserve completed results; interrupted actions may be partial.
                 renderer.emit(style.dim("  interrupted."))
                 continue
             except Exception as exc:
@@ -878,6 +983,8 @@ def _status_bar(session: Session, style: Style, *, columns: int | None = None) -
     quota = session.free_calls
     free = f"free: {'—' if quota is None else quota}"
     model = f"model: {session.agent.model}"
+    if isinstance(getattr(session, "client", None), APIClient):
+        model += f" ({session.client.provider})"
     if columns is None:
         columns = shutil.get_terminal_size(fallback=(0, 0)).columns
     danger = _danger_suffix(session, Style(False))
@@ -899,8 +1006,7 @@ def _danger_suffix(session: Session, style: Style) -> str:
 def _cwd_readout(workspace: Workspace) -> str:
     """Show the tools' working directory, abbreviating the home directory."""
     cwd = workspace.root
-    # "~" stands in for the home directory: it is the one absolute path short
-    # enough to be worth drawing, and the tail beyond it is still worth reading.
+    # Abbreviate the home prefix while retaining the workspace suffix.
     home = Path.home()
     if cwd == home:
         return "~"
@@ -930,10 +1036,10 @@ async def _fetch_quota(session: Session) -> None:
     client = session.client
     try:
         info = await client.key_info()
-    except (OpenRouterError, ConfigError):
+    except (APIError, ConfigError):
         return
     # A response for the previous key must not overwrite the new key's quota.
-    if session.client is client:
+    if session.client is client and info is not None:
         _cache_quota(session, info)
 
 
@@ -951,7 +1057,7 @@ async def _poll_quota(session: Session) -> None:
 
 
 async def _run_request(session: Session, prompt: str, style: Style) -> bool:
-    """Run one step while keeping the prompt usable in the background.
+    """Run a task while keeping the prompt usable in the background.
 
     A reader task stays alive for the duration: lines that arrive mid-step are
     queued onto the agent, and `/exit` or `/quit` finishes the step before exiting.
@@ -974,11 +1080,12 @@ async def _run_request(session: Session, prompt: str, style: Style) -> bool:
             done, _ = await asyncio.wait(
                 watched, return_when=asyncio.FIRST_COMPLETED
             )
-            if reader is not None and reader in done:
+            # A line arriving with completion belongs to the idle REPL. Keep it
+            # for the handoff below instead of queuing it on a stopped run.
+            if reader is not None and reader in done and not agent_task.done():
                 line = reader.result()
                 if line is None:
-                    # Input ended while the agent was still working. Let the
-                    # step finish so its answer is not thrown away.
+                    # EOF lets the active run finish before shutdown.
                     reader = None
                     exiting = True
                 else:
@@ -1005,18 +1112,20 @@ async def _run_request(session: Session, prompt: str, style: Style) -> bool:
                 exiting = exiting or commands_exit
                 if resume and not exiting and answer == STOP_NOTICE:
                     renderer.emit(style.dim("  Queued commands applied; continuing the current task."))
+                    if renderer.terminal is not None:
+                        renderer.terminal.set_working(True)
                     agent_task = asyncio.create_task(session.agent.run("", continue_run=True))
                     session.extensions["active_agent_task"] = agent_task
                     continue
                 if not exiting and session.agent.pending and answer != STEP_LIMIT_NOTICE and not session.agent.stopped:
+                    if renderer.terminal is not None:
+                        renderer.terminal.set_working(True)
                     agent_task = asyncio.create_task(session.agent.run(""))
                     session.extensions["active_agent_task"] = agent_task
                     continue
                 break
             if reader is None:
-                # No more input to service. Wait for the step to finish rather
-                # than cancelling it: a completed answer the user cannot see
-                # because they closed the pipe is a worse outcome than waiting.
+                # With no reader, wait for the active run to settle.
                 if session.extensions.get("interrupt_requested"):
                     await _wait_for_interrupt(session)
                     break
@@ -1044,8 +1153,6 @@ async def _run_request(session: Session, prompt: str, style: Style) -> bool:
         renderer.clear_prompt()
         if renderer.terminal is not None:
             renderer.terminal.set_working(False)
-    # The abandoned reader may have been mid-draw; drop the rows it left so the
-    # next prompt does not try to erase them again.
 
     if agent_task.done() and not agent_task.cancelled():
         failure = agent_task.exception()
@@ -1073,6 +1180,7 @@ def _request_interrupt(session: Session) -> None:
     session.registry.services["interrupt_requested"] = True
     session.extensions.pop("deferred_commands", None)
     session.extensions["resume_after_commands"] = False
+    session.renderer._queued_settings_pause = False
     session.agent.request_stop()
     session.agent.stopped = True
     task = session.extensions.get("active_agent_task")
@@ -1126,6 +1234,26 @@ async def _run_interactive_command(session: Session, line: str) -> bool:
         session.extensions.pop("active_command_task", None)
 
 
+def _command_help(argument: str) -> str:
+    """Select command entries and their continuation lines from shared help."""
+    topic = argument.strip().removeprefix("/").lower()
+    if not argument.strip():
+        return HELP
+    lines: list[str] = []
+    selected = False
+    for line in HELP.splitlines():
+        match = re.match(r"^  /(\S+)", line)
+        if match:
+            selected = match[1] == topic
+        elif line and not line.startswith(" "):
+            selected = False
+        if selected:
+            lines.append(line)
+    if not lines:
+        return f"  No help found for {argument.strip()!r}. Use /help to list commands.\n"
+    return f"Help: /{topic}\n\n" + "\n".join(lines).rstrip() + "\n"
+
+
 def _changes_session(command: str, argument: str) -> bool:
     """Commands that cannot share a live model request or tool batch."""
     return (command in {"reset", "init", "resume", "fork", "delete", "rewind", "model", "models"}
@@ -1133,7 +1261,8 @@ def _changes_session(command: str, argument: str) -> bool:
             or command in {"mcp", "temperature"} and bool(argument)
             or command == "task" and argument == "new"
             or command == "danger" and argument.lower() in {"", "on", "off"}
-            or command == "overthinking" and argument.lower() in {"on", "off"})
+            or command == "overthinking" and argument.lower() in {"on", "off"}
+            or command == "planning" and argument.lower() in {"", "on", "off"})
 
 
 def _queue_command(session: Session, line: str, command: str) -> None:
@@ -1141,7 +1270,10 @@ def _queue_command(session: Session, line: str, command: str) -> None:
     if not commands:
         session.extensions["resume_after_commands"] = not session.agent.stop_requested
     commands.append(line)
+    session.renderer._queued_settings_pause = bool(session.extensions.get("resume_after_commands"))
     session.agent.request_stop()
+    if session.renderer.terminal is not None:
+        session.renderer.terminal.set_working(True, stopping=True)
     session.renderer.emit(session.renderer.style.dim(
         f"  Queued /{command}; it will run after the current response and tool batch."
     ))
@@ -1156,6 +1288,7 @@ async def _apply_deferred_commands(session: Session, *, exiting: bool = False) -
     commands = session.extensions.pop("deferred_commands", [])
     interrupt_sequence = session.extensions.get("interrupt_sequence", 0)
     resume = session.extensions.pop("resume_after_commands", False)
+    session.renderer._queued_settings_pause = False
     if exiting:
         if commands:
             session.renderer.emit(session.renderer.style.dim(
@@ -1169,12 +1302,18 @@ async def _apply_deferred_commands(session: Session, *, exiting: bool = False) -
         if command in {"reset", "resume", "delete", "rewind"} or command == "task" and argument == "new":
             resume = False
         try:
+            if session.renderer.terminal is not None:
+                session.renderer.terminal.set_working(False)
+                session.renderer.terminal.set_command_status(f"Applying /{command} (Esc to interrupt)")
             if await _run_interactive_command(session, line):
                 return False, True
             if session.extensions.get("interrupt_sequence", 0) != interrupt_sequence:
                 return False, False
         except Exception as exc:
             session.renderer.emit(session.renderer.style.red(f"  ✗ /{command} failed: {exc}"))
+        finally:
+            if session.renderer.terminal is not None:
+                session.renderer.terminal.set_command_status("")
     return resume, False
 
 
@@ -1259,7 +1398,7 @@ def _describe_model(model: ModelInfo) -> str:
 def _model_table(session: Session, models: list[ModelInfo]) -> str:
     terminal = session.renderer.terminal
     columns = terminal.output.get_size().columns if terminal is not None else shutil.get_terminal_size((80, 24)).columns
-    rows = [[model.id, f"{model.context_length:,}" if model.context_length else "-", _price_cell(model.pricing)] for model in models]
+    rows = [[f"{model.provider}::\n{model.id}", f"{model.context_length:,}" if model.context_length else "-", _price_cell(model.pricing)] for model in models]
     headers = ["Model", "Context", "In/Out $/Mtok"]
     context_width = max(len(headers[1]), *(len(row[1]) for row in rows))
     price_width = max(len(headers[2]), *(len(row[2]) for row in rows))
@@ -1363,10 +1502,12 @@ async def _execute_command(session: Session, line: str) -> bool:
 
     if command in ("exit", "quit"):
         session.extensions["resume_after_commands"] = False
+        session.renderer._queued_settings_pause = False
         session.agent.request_stop()
         return True
     if command == "stop":
         session.extensions["resume_after_commands"] = False
+        session.renderer._queued_settings_pause = False
         if session.agent.request_stop():
             if session.renderer.terminal is not None:
                 session.renderer.terminal.set_working(True, stopping=True)
@@ -1374,7 +1515,7 @@ async def _execute_command(session: Session, line: str) -> bool:
         else:
             print(style.dim("  already idle."), file=out)
     elif command == "help":
-        print(HELP, file=out, end="")
+        print(_command_help(argument), file=out, end="")
     elif command in {"theme", "markdown", "copy"}:
         terminal = session.renderer.terminal
         if terminal is None:
@@ -1420,6 +1561,12 @@ async def _execute_command(session: Session, line: str) -> bool:
                 print("  Danger mode OFF: workspace path confinement is enabled.", file=out)
             if session.renderer.terminal is not None:
                 session.renderer.terminal.app.invalidate()
+    elif command == "planning":
+        if argument.lower() not in {"", "on", "off"}:
+            print(style.red("  usage: /planning [on|off]"), file=out)
+        else:
+            session.agent.set_planning(argument.lower() != "off")
+            print(f"  Planning {'ON' if session.agent.planning else 'OFF'}.", file=out)
     elif command == "overthinking":
         if argument.lower() not in {"on", "off"}:
             print(style.red("  usage: /overthinking on|off"), file=out)
@@ -1537,7 +1684,7 @@ async def _execute_command(session: Session, line: str) -> bool:
                             await jobs.stop_all()
                         restored = await run_blocking(checkpoints.rewind, selected)
                         notice = "Files restored by /rewind: " + ", ".join(restored)
-                        session.registry.context_notes["file_rewind"] = notice + ". Conversation is retained; earlier tool results describe files before this restoration. Read current contents before editing."
+                        session.registry.context_notes["file_rewind"] = load_prompt('file-rewind.md', notice=notice)
                         print("  " + notice, file=out)
                     except (OSError, CheckpointError) as exc:
                         print(style.red(f"  {exc}"), file=out)
@@ -1650,37 +1797,35 @@ async def _model_command(
 
     try:
         catalog = await session.catalog(refresh=True)
-    except (OpenRouterError, ConfigError) as exc:
+    except (APIError, ConfigError) as exc:
         print(style.red(f"  could not verify against the catalog: {exc}"), file=out)
         return
 
-    known = {model.id for model in catalog}
-    if argument not in known:
+    matches = [model for model in catalog if argument in (model.id, model.selector)]
+    if not matches:
         suggestions = [m for m in catalog if argument.lower() in m.id.lower()][:5]
         print(style.red(f"  unknown model: {argument}"), file=out)
         if suggestions:
             print(style.dim("  did you mean:"), file=out)
             print(_model_table(session, suggestions), file=out)
         return
-
+    if len(matches) > 1:
+        print(style.dim("  Select a provider explicitly with /model <provider>::<model>:"), file=out)
+        print(_model_table(session, matches), file=out)
+        return
+    entry = matches[0]
     try:
-        capabilities = await session.client.model_capabilities(argument, refresh=True, store=False)
-        if capabilities is None:
-            raise OpenRouterConfigError("The API did not supply capabilities to verify this model's compatibility.")
-        await session.agent._context_view(session.registry.specs(), 0, capabilities=capabilities, preview=True)
-    except OpenRouterError as exc:
+        await session.select_model(entry)
+    except (APIError, ConfigError) as exc:
         print(style.red(f"  could not load model properties: {exc}"), file=out)
         return
-    session.client.cache_capabilities(argument, capabilities)
-    session.use_model(argument)
     try:
-        await asyncio.to_thread(save_model_choice, argument)
+        await asyncio.to_thread(save_model_choice, entry.id, entry.provider)
     except (OSError, ConfigError) as exc:
         print(style.red(f"  could not remember model choice: {exc}"), file=out)
-    entry = next(m for m in catalog if m.id == argument)
-    print(f"  switched to {style.cyan(argument)}  {_price_cell(entry.pricing)}/Mtok",
+    print(f"  switched to {style.cyan(entry.selector)}  {_price_cell(entry.pricing)}/Mtok",
           file=out)
-    if _price_cell(entry.pricing) == "free":
+    if entry.provider == "openrouter" and _price_cell(entry.pricing) == "free":
         print(style.dim("  note: free models still work with a $0-limit key"), file=out)
 
 
@@ -1698,7 +1843,7 @@ async def _temperature_command(
             return
     try:
         capabilities = await session.client.model_capabilities(session.agent.model)
-    except OpenRouterError as exc:
+    except APIError as exc:
         print(style.red(f"  could not verify temperature support: {exc}"), file=out)
         return
     if capabilities is None or "temperature" not in capabilities.parameters:
@@ -1709,7 +1854,8 @@ async def _temperature_command(
         return
     if argument:
         session.agent.temperature = value
-    effective = DEFAULT_TEMPERATURE if value is None else value
+    from .inference import sampling_defaults
+    effective = sampling_defaults(session.agent.model, capabilities).get("temperature", DEFAULT_TEMPERATURE) if value is None else value
     suffix = " (default)" if value is None else ""
     print(f"  temperature: {effective:g}{suffix}", file=out)
 
@@ -1719,15 +1865,20 @@ async def _models_command(
 ) -> None:
     try:
         catalog = await session.catalog()
-    except (OpenRouterError, ConfigError) as exc:
+    except (APIError, ConfigError) as exc:
         print(style.red(f"  could not load the catalog: {exc}"), file=out)
         return
 
-    needle = argument.lower()
+    for error in getattr(session, "extensions", {}).get("catalog_errors", []):
+        print(style.red(f"  catalog unavailable: {error}"), file=out)
+
+    needle = argument.strip().lower()
     if needle in ("free", "0"):
         matches = [m for m in catalog if _price_cell(m.pricing) == "free"]
     elif needle:
-        matches = [m for m in catalog if needle in m.id.lower()]
+        words = needle.split()
+        matches = [m for m in catalog
+                   if all(word in f"{m.selector} {m.name or ''}".lower() for word in words)]
     else:
         matches = list(catalog)
 
@@ -1738,10 +1889,10 @@ async def _models_command(
     terminal = session.renderer.terminal
     if terminal is not None:
         options = [
-            (model.id, f"{model.id}  {_price_cell(model.pricing)}/Mtok  "
+            (model.selector, f"{model.selector}  {_price_cell(model.pricing)}/Mtok  "
              "context: " + (f"{model.context_length:,}" if model.context_length else "unknown") +
-             ("  (current)" if model.id == session.agent.model else ""))
-            for model in sorted(matches, key=lambda model: model.id)
+             ("  (current)" if model.id == session.agent.model and model.provider == getattr(getattr(session, "client", None), "provider", "openrouter") else ""))
+            for model in sorted(matches, key=lambda model: (model.id, model.provider))
         ]
         selected = await terminal.choose("Select Model", options)
         if selected is not None:
@@ -1758,7 +1909,7 @@ async def _models_command(
         # Only reachable models matter to someone on a limited key.
         try:
             info = await session.client.key_info()
-        except OpenRouterError:
+        except APIError:
             info = None
         if info is not None and info.cannot_reach_paid_models:
             print(style.dim(
@@ -1814,11 +1965,14 @@ async def _key_command(
         print(f"  key: {style.cyan(_mask_key(session.api_key))}", file=out)
         try:
             info = await session.client.key_info()
-        except OpenRouterError as exc:
+        except APIError as exc:
             print(style.red(f"  could not verify key: {exc}"), file=out)
             return
-        _cache_quota(session, info)
-        _describe_key_info(info, style, out)
+        if info is None:
+            print(style.dim("  This provider has no key-status API; authentication is checked on inference."), file=out)
+        else:
+            _cache_quota(session, info)
+            _describe_key_info(info, style, out)
         return
 
     # Anything else is treated as a key supplied directly.
@@ -1836,12 +1990,12 @@ async def _replace_key(
             print(
                 style.dim(
                     "  /key needs an interactive terminal to read a key. "
-                    "Set OPENROUTER_API_KEY, or run `/key sk-or-v1-...`."
+                    f"Set {session.client.key_env}, or run `/key <key>`."
                 ),
                 file=out,
             )
             return
-        print(style.dim("  Enter a new OpenRouter API key (input hidden)."), file=out)
+        print(style.dim(f"  Enter a new {session.client.provider} API key (input hidden)."), file=out)
         try:
             candidate = (await _ask_input(session, "  key: ", password=True)).strip()
         except (EOFError, KeyboardInterrupt):
@@ -1854,21 +2008,24 @@ async def _replace_key(
     previous = session.api_key
     try:
         await session.use_api_key(candidate)
-    except OpenRouterConfigError as exc:
+    except APIConfigError as exc:
         print(style.red(f"  {exc}"), file=out)
         return
 
-    # Verify against /key, which authenticates. GET /models does not.
+    # Verify through account metadata when the selected provider supports it.
     try:
         info = await session.client.key_info()
-    except (OpenRouterError, ConfigError) as exc:
+    except (APIError, ConfigError) as exc:
         await session.use_api_key(previous)
         print(style.red(f"  rejected: {exc}"), file=out)
         return
 
-    print(f"  key accepted: {style.cyan(_mask_key(candidate))}", file=out)
-    _cache_quota(session, info)
-    _describe_key_info(info, style, out)
+    if info is None:
+        print(style.dim("  key updated for this session; authentication will be checked on inference."), file=out)
+    else:
+        print(f"  key accepted: {style.cyan(_mask_key(candidate))}", file=out)
+        _cache_quota(session, info)
+        _describe_key_info(info, style, out)
 
     # Persisting replaces a credential on disk, so require explicit consent.
     if not sys.stdin.isatty():
@@ -1881,7 +2038,7 @@ async def _replace_key(
 
     path = dotenv_path()
     try:
-        save_dotenv_value(path, "OPENROUTER_API_KEY", candidate)
+        save_dotenv_value(path, session.client.key_env, candidate)
         print(style.dim(f"  saved to {path}"), file=out)
     except (OSError, ConfigError) as exc:
         print(style.red(f"  could not save to {path}: {exc}"), file=out)
@@ -2102,16 +2259,23 @@ def _describe_mcp(session: Session, style: Style, out: io.TextIOBase) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="slipagent",
-        description="An agentic coding harness powered by OpenRouter models.",
+        description="An agentic coding harness with selectable API providers.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "examples:\n"
             "  slipagent                       start the interactive REPL\n"
             "  slipagent 'add tests for foo'   run a single task and exit\n"
             "  slipagent -p 'explain this repo' --model openai/gpt-5\n"
-            "  slipagent --list-models         show the catalog for your key\n"
+            "  slipagent --list-models         browse configured providers' catalogs\n"
         ),
     )
+    parser.add_argument("--planning", action=argparse.BooleanOptionalAction, default=True,
+                        help="Expose a persistent working-plan tool for multi-step tasks (default: enabled).")
+    parser.add_argument("--raw-reasoning-history", action="store_true", help="Compare original thoughts instead of filtered thoughts in Overthinking history.")
+    parser.add_argument("--context-tokens", type=int, help="Working context cap including output reserve (at least 4096; never expands the endpoint limit).")
+    parser.add_argument("--reasoning-history-steps", type=int, choices=range(26), default=25,
+                        metavar="0..25", help="Recent steps whose archived thoughts may be supplied; 0 keeps outcomes only (default 25).")
+    parser.add_argument("--tools", help="Comma-separated tool allowlist; recall_history and enabled planning remain available.")
     parser.add_argument("prompt", nargs="*", help="Task to run, then exit.")
     parser.add_argument("-p", "--prompt", dest="prompt_flag",
                         help="Task to run, then exit.")
@@ -2120,19 +2284,20 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Project root and default path boundary (lifted by --danger). Default: cwd.")
     parser.add_argument("--max-steps", type=int, default=None,
                         help="Cap on model requests per run, including response retries. "
-                             "Default: 200, far above what real work needs.")
+                             "Default: 200.")
     parser.add_argument("--temperature", type=float, default=None,
-                        help="Sampling temperature (default 1.0 when supported by the selected model).")
+                        help="Sampling temperature (default follows the known model profile, otherwise 1.0, when supported).")
     parser.add_argument("--max-tokens", type=int, default=None,
                         help="Cap on completion tokens per response.")
     parser.add_argument("--context-steps", type=int, default=None,
                         help="Recent model calls supplied in full (default: 50, minimum: 5 when context permits).")
     parser.add_argument("--python", default=None,
                         help="Project Python interpreter path, overriding .slipagent/project.json and venv discovery.")
-    parser.add_argument("--api-key", help="OpenRouter API key (or set OPENROUTER_API_KEY).")
+    parser.add_argument("--provider", choices=list(PROVIDERS), help="API provider (or set SLIPAGENT_PROVIDER).")
+    parser.add_argument("--api-key", help="Selected provider API key (or set its API_KEY environment variable).")
     parser.add_argument("--base-url", help="Override the API base URL.")
     parser.add_argument("--list-models", action="store_true",
-                        help="List models available to this API key and exit.")
+                        help="List catalogs from providers with configured API keys and exit.")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="Show full tool output and per-step token usage.")
     parser.add_argument("--no-color", action="store_true", help="Disable ANSI colour.")
@@ -2151,20 +2316,33 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def _list_models(args: argparse.Namespace) -> int:
-    config = Config.from_env(api_key=args.api_key, base_url=args.base_url)
-    client = OpenRouterClient(api_key=config.api_key, base_url=config.base_url)
-    try:
-        models = await client.list_models()
-    except (OpenRouterError, ConfigError) as exc:
-        print(f"slipagent: {exc}", file=sys.stderr)
+    from .config import load_dotenv
+    load_dotenv()
+    selected = configured_provider(args.provider)
+    provider_class(selected)
+    names = active_providers(keys={selected: args.api_key} if args.api_key else None)
+    if not names:
+        raise ConfigError("No active API providers. Set OPENROUTER_API_KEY or NVIDIA_API_KEY.")
+    renderer = Renderer(Style(_use_color(sys.stderr, args.no_color)), sys.stderr, args.verbose)
+    results = await asyncio.gather(*(fetch_catalog(name, base_url=(args.base_url if name == selected else None)
+                                    or os.environ.get(provider_class(name).base_url_env),
+                                    on_retry=renderer.retry_countdown) for name in names),
+                                   return_exceptions=True)
+    models: list[ModelInfo] = []
+    for name, result in zip(names, results):
+        if isinstance(result, BaseException):
+            if not isinstance(result, (APIError, ConfigError)):
+                raise result
+            print(f"slipagent: {name}: {result}", file=sys.stderr)
+        else:
+            models.extend(coding_models(result))
+    if not models:
         return 1
-    finally:
-        await client.aclose()
 
     style = Style(_use_color(sys.stdout, args.no_color))
     for model in sorted(models, key=lambda m: m.id):
         context = f"  {model.context_length:,} ctx" if model.context_length else ""
-        print(f"{model.id}{style.dim(context)}")
+        print(f"{model.selector}{style.dim(context)}")
     print(style.dim(f"\n{len(models)} models"), file=sys.stderr)
     return 0
 
@@ -2194,13 +2372,13 @@ async def _dispatch(args: argparse.Namespace, prompt: str | None) -> int:
     if args.list_models:
         try:
             return await _list_models(args)
-        except (ConfigError, OpenRouterConfigError) as exc:
+        except (ConfigError, APIConfigError) as exc:
             print(f"slipagent: {exc}", file=sys.stderr)
             return 2
 
     try:
         session = await build_session(args)
-    except (ConfigError, OpenRouterError) as exc:
+    except (ConfigError, APIError) as exc:
         print(f"slipagent: {exc}", file=sys.stderr)
         return 2
 

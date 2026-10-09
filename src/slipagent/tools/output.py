@@ -107,8 +107,8 @@ class CommandLog:
         errors = " ".join(f"{name}: {stream.error} Lost {stream.lost_bytes} UTF-8 bytes."
                           for name, stream in self.streams.items() if stream.error)
         arguments = json.dumps({"log_id": self.id, "stream": "stdout", "offset": 0, "limit": 8000})
-        return load_prompt("command-output-recovery.txt", log_id=self.id, arguments=arguments,
-            retention=load_prompt("command-output-saved.txt" if getattr(self.archive, "_persistent", None) else "command-output-temporary.txt"),
+        return load_prompt("command-output-recovery.md", log_id=self.id, arguments=arguments,
+            retention=load_prompt("command-output-saved.md" if getattr(self.archive, "_persistent", None) else "command-output-temporary.md"),
             errors=errors).rstrip()
 
 
@@ -168,7 +168,7 @@ class ReadCommandOutputTool(Tool):
     parameter_prompts = 'tools/read-command-output-parameters.json'
     name = "read_command_output"
     progress_exempt = True  # Re-reading a log tail is deliberate polling.
-    description_prompt = 'tools/read-command-output.txt'
+    description_prompt = 'tools/read-command-output.md'
     description = load_prompt(description_prompt)
     parameters = {"type": "object", "properties": {
         "log_id": {"type": "string"}, "step_id": {"type": "integer", "minimum": 1},

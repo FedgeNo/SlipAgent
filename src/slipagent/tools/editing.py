@@ -1,7 +1,7 @@
 """Pure edit planning: validate against one original, then publish once.
 
 Similarity is used only for error explanations. Replacement coordinates always
-come from exact matches (with the existing LF/CRLF equivalence).
+come from exact matches, with LF targets also matching CRLF or CR.
 """
 
 from __future__ import annotations

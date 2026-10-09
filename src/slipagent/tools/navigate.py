@@ -16,7 +16,7 @@ class ListDirTool(Tool):
     concurrent_safe = True
     instruction_path = "path"
     name = "list_dir"
-    description_prompt = 'tools/list-dir.txt'
+    description_prompt = 'tools/list-dir.md'
     description = load_prompt(description_prompt)
     parameters = {
         "type": "object",

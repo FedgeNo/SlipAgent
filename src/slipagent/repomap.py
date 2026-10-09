@@ -173,9 +173,9 @@ class RepositoryMap:
         def rank(name: str) -> tuple[float, str]:
             return -(relevance[name] + scores[name] * 20), name
         header = (
-            load_prompt('repository-map.txt') + '\n\n'
+            load_prompt('repository-map.md') + '\n\n'
         )
-        partial = load_prompt('repository-map-partial.txt') + '\n'
+        partial = load_prompt('repository-map-partial.md') + '\n'
         if len(header) + len(partial) > limit:
             return ""
         result = header

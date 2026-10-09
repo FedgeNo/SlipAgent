@@ -198,7 +198,7 @@ async def test_malformed_native_arguments_retry_before_entire_batch(bad):
 
 
 @pytest.mark.parametrize("carrier", ["function_call", "content_blocks", "embedded"])
-async def test_alternate_call_carriers_are_rejected(carrier):
+async def test_alternate_call_carriers_are_detected(carrier):
     first = wire("Reading.")
     call = native_call()
     if carrier == "function_call":
@@ -215,8 +215,8 @@ async def test_alternate_call_carriers_are_rejected(carrier):
     async with OpenRouterClient("test", transport=httpx.MockTransport(router.handle)) as client:
         agent = Agent(client, ToolRegistry([tool]), "test/native")
         assert await agent.run("Inspect the project.") == "Done."
-    assert tool.seen == []
-    assert "last response was rejected" in router.requests[1]["messages"][0]["content"]
+    assert tool.seen == [{"value": "A"}]
+    assert "last response was rejected" not in router.requests[1]["messages"][0]["content"]
 
 
 async def test_json_only_fallback_omits_native_parameters_and_replays_observations():
@@ -233,7 +233,7 @@ async def test_json_only_fallback_omits_native_parameters_and_replays_observatio
     assert tool.seen == [{"value": "A"}]
     for request in router.requests:
         assert "tools" not in request and "tool_choice" not in request
-        assert "BEGIN AVAILABLE TOOL DEFINITIONS" in request["messages"][0]["content"]
+        assert "# Available Tool Definitions" in request["messages"][0]["content"]
         assert all(message["role"] != "tool" and "tool_calls" not in message for message in request["messages"])
     transcript = "\n".join(message["content"] or "" for message in unpack_api_context(router.requests[1]["messages"]))
     assert "ACTUAL RESULT" in transcript
@@ -268,7 +268,7 @@ async def test_startup_detects_protocol_without_an_inference_call(tmp_path, monk
     from slipagent import cli
     from slipagent.config import DEFAULT_MODEL
     router = Router({DEFAULT_MODEL: params}, [])
-    monkeypatch.setattr(cli, "OpenRouterClient", lambda **kwargs: OpenRouterClient(**kwargs, transport=httpx.MockTransport(router.handle)))
+    monkeypatch.setattr(cli, "create_client", lambda provider, **kwargs: OpenRouterClient(**kwargs, transport=httpx.MockTransport(router.handle)))
     monkeypatch.setenv("SLIPAGENT_NO_DOTENV", "1")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test")
     monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
@@ -369,7 +369,6 @@ def test_fenced_record_with_tagged_calls_preserves_code_strings(tag):
 
 @pytest.mark.parametrize("suffix", [
     '\nHere is an example: <tool_call>{"name":"record","arguments":{}}</tool_call>',
-    '\n<tool_call>{"name":"record","arguments":{}}',
     '\n{"name":"record","arguments":{}}',
 ])
 def test_ambiguous_or_incomplete_additions_are_not_executed(suffix):

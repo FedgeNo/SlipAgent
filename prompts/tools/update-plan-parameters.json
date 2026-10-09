@@ -1,0 +1,4 @@
+{
+  "properties/objective": "The user-authorized outcome, at most 500 characters.",
+  "properties/stages": "One to eight stages with task, status, and evidence. Task: at most 500 characters. Evidence: at most 1000 characters."
+}

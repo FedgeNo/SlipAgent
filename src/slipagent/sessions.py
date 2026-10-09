@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from .context import ConversationHistory, CompletedStep
-from .openrouter import OpenRouterError
+from .api import APIError
 from .task import TaskMemory
 from .tools.output import CommandLog, OutputStream
 from .types import Message, Usage
@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from .agent import Agent
 
 
-class SessionError(OpenRouterError):
+class SessionError(APIError):
     """Session storage cannot safely save or restore its records."""
 
 
@@ -181,10 +181,7 @@ class SessionJournal:
                     source=self.directory / (parent + "-checkpoints") if parent is not None else None,
                 )
                 if any(batch["rewound"] for batch in checkpoints.batches):
-                    agent.registry.context_notes["file_rewind"] = (
-                        "File-edit batches were restored with /rewind in this session. Conversation history is retained; "
-                        "earlier tool results may describe files before restoration. Read current contents before editing."
-                    )
+                    agent.registry.context_notes["file_rewind"] = load_prompt('file-rewind.md', notice=load_prompt('session-rewind.md').strip())
             except OSError as exc:
                 raise SessionError(f"Cannot restore file checkpoints: {exc}") from exc
 
@@ -227,6 +224,7 @@ class SessionJournal:
 
     def step(self, step: Any) -> None:
         self._append("step", id=step.id, summary=step.summary,
+                     reasoning_summary=getattr(step, 'reasoning_summary', None),
                      compaction_status=getattr(step, "compaction_status", "pending"),
                      compaction_error=getattr(step, "compaction_error", None))
 
@@ -362,11 +360,14 @@ class SessionJournal:
                     raise ValueError("invalid saved step ID")
                 if saved.get("summary") is not None and (not isinstance(saved["summary"], str) or not saved["summary"].strip()):
                     raise ValueError("invalid saved summary")
+                if saved.get('reasoning_summary') is not None and not isinstance(saved['reasoning_summary'], str):
+                    raise ValueError('invalid saved reasoning summary')
             for step in history.steps:
                 saved = data["steps"].get(step.id, {})
                 step.summary = saved.get("summary")
                 step.results_summarized = step.summary is not None
                 if isinstance(step, CompletedStep):
+                    step.reasoning_summary = saved.get('reasoning_summary')
                     step.compaction_status = saved.get("compaction_status", "interrupted")
                     if step.compaction_status == "pending":
                         step.compaction_status = "interrupted"
@@ -494,5 +495,5 @@ class SessionJournal:
                 archive.logs[log.id] = log
                 self.log(log)
         agent.registry.context_notes["resume"] = (
-            load_prompt('session-resume.txt', session_id=data['id'], torn_notice=load_prompt('session-torn-entry.txt') if data['torn'] else '')
+            load_prompt('session-resume.md', session_id=data['id'], torn_notice=load_prompt('session-torn-entry.md') if data['torn'] else '')
         )

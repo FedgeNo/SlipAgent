@@ -1,5 +1,6 @@
 """State-changing commands apply only after the active tool batch has settled."""
 
+from slipagent.types import content_text
 import asyncio
 import io
 
@@ -65,7 +66,7 @@ async def test_commands_wait_for_tools_and_preserve_stop_and_request_budget(
         assert not session.extensions.get("deferred_commands")
         assert "Queued /" in session.renderer.stream.getvalue()
         if expected_calls == 2:
-            system = client.calls[1]["messages"][0].content
+            system = content_text(client.calls[1]["messages"][0].content)
             assert ("Danger Mode ON" in system) == expected_danger
     finally:
         release.set()

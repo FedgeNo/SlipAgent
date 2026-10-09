@@ -3,6 +3,7 @@
 from slipagent.types import decode_json_content
 
 import json
+from data_text_reader import read_data
 
 import pytest
 
@@ -45,7 +46,7 @@ async def test_old_echoes_are_excluded_from_context_but_originals_and_tool_data_
     assert response["user_prompt"] == [source]
     assert response["tool_results"][0]["content"] == source
     assert [message.to_api() for message in messages] == original
-    assert json.loads(history.steps[0].full_text())["response"] == legacy
+    assert read_data(history.steps[0].full_text())["response"] == legacy
 
 
 async def test_native_tool_only_history_has_no_invented_response_text():

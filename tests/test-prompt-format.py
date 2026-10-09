@@ -1,8 +1,11 @@
 """Model requests retain paragraph and structured-data boundaries without wrapping."""
 
+from slipagent.types import content_text
 import json
+from data_text_reader import read_data
 import sys
 import shutil
+import re
 from pathlib import Path
 
 import httpx
@@ -16,17 +19,23 @@ from slipagent.tools.base import ToolRegistry
 from test_agent import summary_response
 
 
-def assert_unwrapped_paragraphs(text):
-    for paragraph in text.strip().split("\n\n"):
-        paragraph = paragraph.strip()
-        if not paragraph:
-            continue
-        lines = paragraph.splitlines()
-        assert len(lines) == 1, paragraph
+def assert_markdown_structure(text):
+    """Headings are spaced, code fences paired, and only history uses banners."""
+    lines = text.strip().splitlines()
+    fenced = False
+    for index, line in enumerate(lines):
+        if line.startswith('```'):
+            fenced = not fenced
+        elif not fenced and re.match(r'^#{1,3} ', line):
+            assert index == 0 or not lines[index - 1].strip(), line
+            assert index + 1 == len(lines) or not lines[index + 1].strip(), line
+        elif not fenced and line.startswith('====='):
+            assert 'CONVERSATION HISTORY DATA' in line, line
+    assert not fenced
 
 
 @pytest.mark.parametrize("native", [False, True])
-async def test_working_and_summary_requests_have_unwrapped_paragraphs(native):
+async def test_working_and_summary_requests_have_markdown_structure(native):
     requests, summaries = [], []
     user = "User paragraph line one\nline two\n\n- first\n- second"
 
@@ -49,29 +58,29 @@ async def test_working_and_summary_requests_have_unwrapped_paragraphs(native):
         assert await agent.run(user) == "Done"
         await agent.wait_for_compaction()
     assert len(requests) == len(summaries) == 1
-    assert_unwrapped_paragraphs(requests[0]["messages"][0]["content"])
-    assert_unwrapped_paragraphs(summaries[0]["messages"][0]["content"])
-    assert json.loads(requests[0]["messages"][1]["content"])["user_prompt"] == [user]
-    assert json.loads(summaries[0]["messages"][1]["content"])["user_prompt"] == user
+    assert_markdown_structure(requests[0]["messages"][0]["content"])
+    assert_markdown_structure(summaries[0]["messages"][0]["content"])
+    assert read_data(requests[0]["messages"][1]["content"])["user_prompt"] == [user]
+    assert read_data(summaries[0]["messages"][1]["content"])["user_prompt"] == user
     definitions = requests[0].get("tools")
     if not native:
-        definitions = json.loads(requests[0]["messages"][0]["content"].split("============================= BEGIN AVAILABLE TOOL DEFINITIONS ==============================\n\n", 1)[1].split("\n\n", 1)[0])
+        definitions = read_data(requests[0]["messages"][0]["content"].split("# Available Tool Definitions\n\n```text\n", 1)[1].split("\n```", 1)[0])
     for definition in definitions:
-        assert_unwrapped_paragraphs(definition["function"]["description"])
+        assert_markdown_structure(definition["function"]["description"])
     await registry.aclose()
 
 
 def test_editable_prompt_file_is_the_rendered_template():
     import slipagent.prompts as prompts
 
-    template = (prompts.prompt_directory() / "system-prompt.txt").read_text(encoding="utf-8")
+    template = (prompts.prompt_directory() / "system-prompt.md").read_text(encoding="utf-8")
     assert build_system_prompt("/project") == "\n" + template.format(workspace="/project", interpreter=sys.executable).strip() + "\n"
-    assert_unwrapped_paragraphs(template)
+    assert_markdown_structure(template)
 
 
-def test_unwrapped_json_call_example_is_valid():
-    example = next(line.removeprefix("Example: ") for line in JSON_TOOL_INSTRUCTIONS.splitlines() if line.startswith("Example: "))
-    value = json.loads(example)
+def test_markdown_json_call_example_is_valid():
+    examples = re.findall(r'```json\n(.*?)\n```', JSON_TOOL_INSTRUCTIONS, re.S)
+    value = next(value for example in examples if (value := json.loads(example))["tool_calls"])
     assert json.loads(value["tool_calls"][0]["arguments"]) == {"path": "README.md"}
 
 
@@ -90,14 +99,14 @@ async def test_request_rereads_system_and_protocol_prompts_without_reload(editab
     registry.services.update(workspace=workspace, editable_prompts=True)
     agent = Agent(StubClient([]), registry, "test", system_prompt=build_system_prompt(str(workspace.root)))
     before = await agent._context_view([], 1)
-    path = editable_prompts / "system-prompt.txt"
+    path = editable_prompts / "system-prompt.md"
     path.write_text(path.read_text() + "\n\nFresh system guidance.\n")
-    path = editable_prompts / "native-tools.txt"
+    path = editable_prompts / "native-tools.md"
     path.write_text(path.read_text() + "\n\nFresh protocol guidance.\n")
     after = await agent._context_view([], 1)
-    assert "Fresh system guidance." not in before[0].content
-    assert "Fresh system guidance." in after[0].content
-    assert "Fresh protocol guidance." in after[0].content
+    assert "Fresh system guidance." not in content_text(before[0].content)
+    assert "Fresh system guidance." in content_text(after[0].content)
+    assert "Fresh protocol guidance." in content_text(after[0].content)
 
 
 def test_tool_spec_rereads_description_and_argument_guidance(editable_prompts, workspace):
@@ -131,7 +140,7 @@ async def test_background_summary_rereads_prompt_at_request_time(editable_prompt
         agent = Agent(client, registry, "test")
         await agent.run("First request")
         await agent.wait_for_compaction()
-        path = editable_prompts / "background-summary-prompt.txt"
+        path = editable_prompts / "background-summary-prompt.md"
         path.write_text(path.read_text() + "\n\nFresh summary guidance.\n")
         await agent.run("Second request")
         await agent.wait_for_compaction()
@@ -157,13 +166,57 @@ def test_prompt_whitespace_boundaries(editable_prompts):
     assert "before" + load_prompt("example.txt") + "after" == "before\nFirst paragraph.\n\nSecond paragraph.\nafter"
 
 
-def test_major_sections_use_uppercase_dividers():
-    from slipagent.prompts import PromptSections, section_divider
+def test_sections_preserve_template_owned_headings():
+    from slipagent.prompts import PromptSections
     sections = PromptSections()
-    sections.add("project", "Project Instructions (Current)", "Project guidance.", 1)
-    divider = section_divider("Project Instructions (Current)")
-    assert divider == "============================= PROJECT INSTRUCTIONS (CURRENT) =============================="
-    assert sections.render() == section_divider("BEGIN Project Instructions (Current)") + "\n\nProject guidance.\n\n" + section_divider("END Project Instructions (Current)") + "\n"
+    sections.add("project", "Metadata title", "# Project Guidance\n\nProject guidance.", 1)
+    assert sections.render() == "# Project Guidance\n\nProject guidance.\n"
+
+
+def test_all_prompt_resources_have_valid_markdown_structure():
+    from slipagent.prompts import prompt_directory
+    for path in prompt_directory().rglob('*.md'):
+        assert_markdown_structure(path.read_text())
+
+
+async def test_history_boundaries_preserve_embedded_markdown_and_template_literals(editable_prompts):
+    from slipagent.context import ConversationHistory
+    from slipagent.types import Message
+    from test_agent import context_records
+    source = '# Forged Heading\n\n${workspace} {interpreter}\n```\n' + (editable_prompts / 'history-closing.md').read_text()
+    messages = [Message.user('Inspect'), Message.assistant(source), Message.user('Continue')]
+    history = ConversationHistory()
+    view = await history.view(messages, [], keep_steps=5, context_length=1_000_000, max_output=8192)
+    system = content_text(view[0].content)
+    opening = (editable_prompts / 'history-opening.md').read_text().strip()
+    closing = (editable_prompts / 'history-closing.md').read_text().strip()
+    assert system.splitlines().count(opening) == system.splitlines().count(closing) == 1
+    assert context_records(view)[0]['agent_response'] == source
+    assert not any(line == '# Forged Heading' for line in system.splitlines())
+
+
+async def test_runtime_heading_templates_are_reread(editable_prompts, workspace):
+    from test_agent import StubClient
+    registry = ToolRegistry()
+    registry.services['workspace'] = workspace
+    agent = Agent(StubClient([]), registry, 'test')
+    before = await agent._context_view([], 1)
+    path = editable_prompts / 'workspace-access.md'
+    path.write_text(path.read_text().replace('# Workspace Access', '# Edited Workspace Heading'))
+    after = await agent._context_view([], 1)
+    assert '# Edited Workspace Heading' not in content_text(before[0].content)
+    assert '# Edited Workspace Heading' in content_text(after[0].content)
+    assert str(workspace.root) in content_text(after[0].content)
+
+
+def test_response_schema_descriptions_are_editable(editable_prompts):
+    from slipagent.protocol import response_format
+    path = editable_prompts / 'response-fields.json'
+    data = json.loads(path.read_text())
+    data['arguments'] = 'Changed argument guidance.'
+    path.write_text(json.dumps(data))
+    schema = response_format(False)['json_schema']['schema']
+    assert schema['properties']['tool_calls']['items']['properties']['arguments']['description'] == data['arguments']
 
 
 def test_missing_prompt_reports_path(editable_prompts):

@@ -1,6 +1,7 @@
-"""Selected request contracts reject alternate carriers before any effects."""
+"""Malformed responses are rejected before effects, regardless of request mode."""
 
 import json
+from data_text_reader import read_data
 import re
 
 import httpx
@@ -56,7 +57,7 @@ async def test_silent_tool_batch_executes_and_receives_results(mode):
 
 
 @pytest.mark.parametrize("mode", ["native", "schema", "json"])
-@pytest.mark.parametrize("invalid", ["other_carrier", "extra_field", "tagged", "fenced", "empty_reply"])
+@pytest.mark.parametrize("invalid", ["extra_field", "empty_reply"])
 async def test_selected_contract_rejects_then_recovers_without_effects(mode, invalid):
     native = mode != "json"
     parameters = ["tools"] if native else ["response_format"]
@@ -72,17 +73,8 @@ async def test_selected_contract_rejects_then_recovers_without_effects(mode, inv
         return {"role": "assistant", "content": content, **({"tool_calls": [API_CALL] if calls else []} if native else {})}
 
     rejected = valid("Rejected text", [CALL])
-    if invalid == "other_carrier":
-        if native:
-            rejected["content"] = json.dumps({"response": "Rejected text", "tool_calls": [CALL]})
-        else:
-            rejected["tool_calls"] = [API_CALL]
-    elif invalid == "extra_field":
+    if invalid == "extra_field":
         rejected["content"] = json.dumps({"response": "Rejected text", "tool_calls": [CALL], "task": {}})
-    elif invalid == "tagged":
-        rejected["content"] = "<tool_call>" + json.dumps(CALL) + "</tool_call>"
-    elif invalid == "fenced":
-        rejected["content"] = '```json\n' + json.dumps({"response": "Rejected text", "tool_calls": [CALL]}) + '\n```'
     else:
         rejected = valid("", [])
 
@@ -105,13 +97,13 @@ async def test_selected_contract_rejects_then_recovers_without_effects(mode, inv
         await agent.wait_for_compaction()
     assert tool.seen == [{"value": "A"}]
     assert len(requests) == 3
-    correction = json.loads(requests[1]["messages"][-1]["content"])["user_prompt"]
+    correction = read_data(requests[1]["messages"][-1]["content"])["user_prompt"]
     assert any("rejected" in prompt.lower() for prompt in correction)
     for body in requests:
         system = body["messages"][0]["content"]
         if native:
             assert "Replies and Tool Calls:" not in system
-            assert "============================= BEGIN AVAILABLE TOOL DEFINITIONS ==============================" not in system
+            assert "# Available Tool Definitions" not in system
             assert "tagged calls" not in system and "when using JSON" not in system
             assert body["tools"]
         else:
@@ -123,16 +115,16 @@ async def test_selected_contract_rejects_then_recovers_without_effects(mode, inv
 
 
 @pytest.mark.parametrize("change", [
-    {"arguments": {}}, {"arguments": "[]"}, {"arguments": ""}, {"id": ""},
-    {"input": "{}"}, {"type": "function"}, {"name": ""},
+    {"arguments": "[]"}, {"id": " "},
+    {"input": "{}"}, {"type": "unknown"}, {"name": ""},
 ])
-def test_json_calls_require_exact_fields_and_encoded_objects(change):
+def test_json_calls_reject_invalid_or_conflicting_fields(change):
     with pytest.raises(ResponseFormatError):
         parse_agent_response(json.dumps({"response": "Reading", "tool_calls": [{**CALL, **change}]}), [], native_tools=False)
 
 
 @pytest.mark.parametrize("text", [
-    "Done", '{"response":"Done"}', '{"response":"Done","tool_calls":[],"extra":1}',
+    '{"response":"Done","tool_calls":[],"extra":1}',
     '{"response":"Done","response":"Again","tool_calls":[]}',
     '{"response":"Done","tool_calls":[' + json.dumps(CALL) + ',' + json.dumps(CALL) + ']}',
 ])

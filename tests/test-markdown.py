@@ -25,8 +25,8 @@ def test_headings_share_style_and_body_bold_share_color_without_added_spacing():
     rows = renderer.render("# First\n## Second\nplain **bold**", 80)
     assert visible(rows) == ["First", "Second", "plain bold"]
     assert rows[0].fragments[0][0] == rows[1].fragments[0][0] == "bold #ffffff"
-    assert rows[2].fragments[0][0] == "#dddddd"
-    assert rows[2].fragments[-1][0] == "bold #dddddd"
+    assert rows[2].fragments[0][0] == "#e6e6e6"
+    assert rows[2].fragments[-1][0] == "bold #e6e6e6"
 
 
 @pytest.mark.parametrize("theme", THEMES)

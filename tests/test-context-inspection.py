@@ -2,6 +2,7 @@
 
 import io
 import json
+from data_text_reader import read_data
 
 import httpx
 import pytest
@@ -12,7 +13,7 @@ from slipagent.agent import Agent
 from slipagent.cli import Renderer, Style
 from slipagent.openrouter import OpenRouterClient
 from slipagent.tools.base import ToolRegistry
-from slipagent.types import Message, ToolSpec
+from slipagent.types import Message, ToolSpec, content_text
 from test_agent import RecordingTool, context_body, task_record
 
 
@@ -29,7 +30,7 @@ async def test_snapshot_matches_complete_wire_body_before_request(streaming):
     def transport(request):
         captured.append(json.loads(request.content))
         assert len(snapshots) == 1
-        assert json.loads(snapshots[-1]) == captured[-1]
+        assert snapshots[-1] == captured[-1]
         return httpx.Response(200, json=response())
     async with OpenRouterClient("private-test-key", transport=httpx.MockTransport(transport)) as client:
         await client.chat(
@@ -42,8 +43,9 @@ async def test_snapshot_matches_complete_wire_body_before_request(streaming):
         )
     assert captured[0]["messages"][0]["content"] == "System guidance."
     assert "tools" in captured[0] and "response_format" in captured[0]
-    assert "private-test-key" not in snapshots[0]
-    assert "Authorization" not in snapshots[0]
+    assert isinstance(snapshots[0], dict)
+    assert "private-test-key" not in content_text(snapshots[0])
+    assert "Authorization" not in content_text(snapshots[0])
     if streaming:
         assert captured[0]["stream"] is True and "reasoning" not in captured[0]
 
@@ -72,7 +74,7 @@ async def test_agent_snapshots_include_retry_prompt_and_matching_tool_results():
     assert "last response was rejected" not in snapshots[2]["messages"][0]["content"]
     record = context_records(snapshots[2]["messages"])[-2]
     assert record["tool_results"] == [{"call_id": "call-1", "tool_name": "record", "status": "success", "content": "EXACT TOOL RESULT"}]
-    assert json.loads(snapshots[2]["messages"][-1]["content"])["record_type"] == "current_step"
+    assert read_data(snapshots[2]["messages"][-1]["content"])["record_type"] == "current_step"
     renderer = Renderer(Style(False), io.StringIO(), False)
     for event in events:
         if event.kind == "context":
@@ -99,6 +101,6 @@ async def test_snapshot_uses_selected_compacted_context_and_stays_immutable():
         snapshots = [json.loads(event.text) for event in events if event.kind == "context"]
         assert snapshots == requests
         assert original not in json.dumps(snapshots[-1])
-        assert agent.history.steps[0].summary == context_records(snapshots[-1]["messages"])[0]["summary"]
+        assert agent.history.steps[0].summary == context_records(snapshots[-1]["messages"])[0]["compressed_summary"]
         agent.reset()
         assert snapshots[-1] == requests[-1]

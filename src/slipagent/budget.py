@@ -27,10 +27,10 @@ class ContextBudget:
             self.measurements = deque(maxlen=CALIBRATION_WINDOW)
         return self.scale
 
-    def observe(self, request: str, prompt_tokens: int) -> None:
+    def observe(self, request: dict[str, Any] | str, prompt_tokens: int) -> None:
         if prompt_tokens <= 0 or not request:
             return
-        body = json.loads(request)
+        body = json.loads(request) if isinstance(request, str) else request
         estimate = sum(estimate_tokens(json.dumps(message, ensure_ascii=False))
                        for message in body.get("messages", []))
         for key in ("tools", "response_format"):

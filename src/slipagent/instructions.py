@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .prompts import load_prompt, section_divider
+from .prompts import load_prompt
 
 import fnmatch
 import os
@@ -36,7 +36,7 @@ def _present(workspace: Workspace, relative: str) -> bool:
 
 
 def load_project_instructions(workspace: Workspace, scope: str = ".") -> str:
-    """Read root guidance and rule directories, preserving path-labelled text.
+    """Read guidance within a scope, preserving path-labelled text.
 
     Also used by the session instruction tracker before each working request.
     """
@@ -57,7 +57,7 @@ def load_project_instructions(workspace: Workspace, scope: str = ".") -> str:
         except (OSError, UnicodeError, RuntimeError, WorkspaceError) as exc:
             raise WorkspaceError(f"cannot read project instructions {relative}: {exc}") from exc
         seen.add(path)
-        sources.append(f"Instruction File: {relative}\n\n{content}\n")
+        sources.append(load_prompt('instruction-file.md', path=relative, content=content))
 
     for filename in INSTRUCTION_FILES:
         relative = (base / filename).as_posix()
@@ -145,7 +145,7 @@ class ProjectInstructions:
             changed = [scope for scope in sorted(relevant)
                        if current.get(scope, "") != self.delivered.get(scope, "")]
             if changed:
-                return (load_prompt('project-instructions-changed.txt', scopes=', '.join(changed)))
+                return (load_prompt('project-instructions-changed.md', scopes=', '.join(changed)))
         return None
 
     @staticmethod
@@ -153,7 +153,7 @@ class ProjectInstructions:
         sections = []
         for scope, content in snapshot.items():
             if content:
-                sections.append(section_divider("BEGIN Instruction Scope") + f"\n\nPath: {scope}/\n\n{content}\n\n" + section_divider("END Instruction Scope"))
+                sections.append(load_prompt('instruction-scope.md', scope=scope, content=content))
         if not sections:
             return ""
-        return (load_prompt('project-instructions-current.txt', scopes='\n\n'.join(sections)))
+        return (load_prompt('project-instructions-current.md', scopes='\n\n'.join(sections)))

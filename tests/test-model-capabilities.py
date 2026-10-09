@@ -131,7 +131,7 @@ async def test_startup_model_failure_keeps_session_available(tmp_path, monkeypat
             return httpx.Response(403, json={"error": {"message": "Model unavailable"}})
         transport = httpx.MockTransport(handle)
     original_registry = cli.build_default_registry
-    def new_client(**kwargs):
+    def new_client(provider, **kwargs):
         client = OpenRouterClient(**kwargs, transport=transport)
         clients.append(client)
         return client
@@ -139,7 +139,7 @@ async def test_startup_model_failure_keeps_session_available(tmp_path, monkeypat
         registry = original_registry(*args)
         registries.append(registry)
         return registry
-    monkeypatch.setattr(cli, "OpenRouterClient", new_client)
+    monkeypatch.setattr(cli, "create_client", new_client)
     monkeypatch.setattr(cli, "build_default_registry", new_registry)
     monkeypatch.setenv("SLIPAGENT_NO_DOTENV", "1")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test")
@@ -176,7 +176,7 @@ def transport_for(models, endpoints, requests, gets, replies=None):
         requests.append(body)
         content = replies[len(requests)-1] if replies else record()
         system = body["messages"][0]["content"]
-        native = "============================= BEGIN REPLIES AND NATIVE TOOL CALLS ==============================" in system
+        native = "# Replies and Native Tool Calls" in system
         text = json.dumps({"response": content["response"], "tool_calls": content["tool_calls"]})
         message = {"role": "assistant", "content": text}
         if native:
@@ -211,7 +211,7 @@ async def test_reasoning_uses_only_advertised_choices(parameters, efforts, expec
     assert requests[0].get("include_reasoning") is (True if parameters == ["include_reasoning"] else None)
     assert "response_format" not in requests[0]
     assert "user_prompt_compressed" not in requests[0]["messages"][0]["content"]
-    assert "plain assistant reply text" in requests[0]["messages"][0]["content"]
+    assert "Markdown reply text" in requests[0]["messages"][0]["content"]
     assert gets == ["/api/v1/models", "/api/v1/models/test/model/endpoints"]
 
 
@@ -220,12 +220,12 @@ async def test_format_and_context_use_only_compatible_endpoints():
     model = {"id": "test/model", "context_length": 1000000, "supported_parameters": params}
     endpoints = [endpoint(params, 1000000, "loose"),
                  endpoint([*params, "structured_outputs"], 128000, "strict"),
-                 endpoint([*params, "structured_outputs"], 8000, "offline", status=1)]
+                 endpoint([*params, "structured_outputs"], 16000, "offline", status=1)]
     requests, gets = [], []
     async with OpenRouterClient("test", transport=transport_for([model], {"test/model": endpoints}, requests, gets)) as client:
         agent = Agent(client, ToolRegistry(), "test/model")
         assert await agent.run("Do the task.") == "Done."
-        assert await agent._context_length() == 8000
+        assert await agent._context_length() == 16000
     assert requests[0]["response_format"]["type"] == "json_schema"
     assert requests[0]["provider"] == {"require_parameters": True, "only": ["strict", "offline"]}
 
@@ -332,7 +332,7 @@ async def test_startup_fetches_model_properties_and_remembers_explicit_choice(tm
     requests, gets = [], []
     transport = transport_for(models, {selected: [endpoint(params, context=128000)]}, requests, gets)
     original = OpenRouterClient
-    monkeypatch.setattr(cli, "OpenRouterClient", lambda **kwargs: original(**kwargs, transport=transport))
+    monkeypatch.setattr(cli, "create_client", lambda provider, **kwargs: original(**kwargs, transport=transport))
     monkeypatch.setenv("SLIPAGENT_NO_DOTENV", "1")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test")
     monkeypatch.delenv("OPENROUTER_MODEL", raising=False)

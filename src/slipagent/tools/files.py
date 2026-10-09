@@ -1,9 +1,7 @@
 """File tools: read, write, and precise-edit.
 
-`edit_file` deliberately requires an exact string match and rejects ambiguous
-matches. That strictness is what makes agent edits reliable: instead of
-guessing at line numbers, the model has to quote real text from the file it
-actually read, and a collision surfaces as an error it can fix.
+`edit_file` matches quoted source, treating LF as equivalent to CRLF or CR
+when the target contains no CR. Multiple matches require replace_all=true.
 """
 
 from __future__ import annotations
@@ -47,7 +45,7 @@ def _atomic_write(workspace: Workspace, target: Path, content: str) -> None:
 
 
 def _atomic_write_bytes(workspace: Workspace, target: Path, encoded: bytes) -> None:
-    """Publish complete UTF-8 bytes without truncating files or following hard links.
+    """Publish complete bytes without truncating files or following hard links.
 
     On POSIX, directory descriptors keep a swapped parent symlink from redirecting
     the write outside the workspace. Existing internal symlinks have already been
@@ -120,7 +118,7 @@ class ReadFileTool(Tool):
     concurrent_safe = True
     instruction_path = "path"
     name = "read_file"
-    description_prompt = 'tools/read-file.txt'
+    description_prompt = 'tools/read-file.md'
     description = load_prompt(description_prompt)
     parameters = {
         "type": "object",
@@ -214,7 +212,7 @@ class WriteFileTool(Tool):
     instruction_path = "path"
     mutates_workspace = True
     name = "write_file"
-    description_prompt = 'tools/write-file.txt'
+    description_prompt = 'tools/write-file.md'
     description = load_prompt(description_prompt)
     parameters = {
         "type": "object",
@@ -261,7 +259,7 @@ class EditFileTool(Tool):
     instruction_path = "path"
     mutates_workspace = True
     name = "edit_file"
-    description_prompt = 'tools/edit-file.txt'
+    description_prompt = 'tools/edit-file.md'
     description = load_prompt(description_prompt)
     parameters = {
         "type": "object",

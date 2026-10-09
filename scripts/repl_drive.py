@@ -1,4 +1,4 @@
-"""Dev-only: drive the REPL against the workspace's real OpenRouter configuration.
+"""Dev-only: drive the REPL using real provider configuration.
 
 This is a live manual utility; use demo_run.py for an offline stub session.
 

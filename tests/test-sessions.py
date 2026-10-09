@@ -43,7 +43,7 @@ async def test_resume_ignores_legacy_task_snapshot_and_retains_original_prompt(w
     assert restored.history.task.sources[1] == ["Original user request"]
     assert await restored.run("") == "Final answer"
     await restored.wait_for_compaction()
-    system = client.calls[0]["messages"][0].content
+    system = content_text(client.calls[0]["messages"][0].content)
     assert "Original user request" in system
     assert "Obsolete model interpretation" not in system
 
@@ -180,7 +180,7 @@ async def test_delete_confirmation_removes_only_current_session(tmp_path, metada
             assert all(message.role == "system" for message in session.agent.messages)
             assert not session.agent.pending and not session.agent.history.steps
             terminal.clear_transcript.assert_called_once()
-            assert "SlipAgent — OpenRouter compatible coding agent" in output.getvalue()
+            assert "SlipAgent — coding agent with selectable API providers" in output.getvalue()
             await cli._handle_command(session, "/sessions")
             assert journal.path is None
         else:

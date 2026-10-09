@@ -75,9 +75,10 @@ async def test_recent_thoughts_survive_summary_selection_but_never_enter_compact
 
 
 async def test_agent_passes_mode_to_working_requests():
-    agent, client = build_agent([completion("First"), completion("Second")])
+    first = completion("First")
+    first.message.reasoning = "Provider thought"
+    agent, client = build_agent([first, completion("Second")])
     await agent.run("Question")
-    agent.messages[-1].reasoning = "Provider thought"
     await agent.run("Continue")
     assert context_records(client.calls[-1]["messages"])[0]["reasoning"] == "Provider thought"
 

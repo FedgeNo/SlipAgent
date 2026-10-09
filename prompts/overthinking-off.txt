@@ -1,5 +1,0 @@
-============================= BEGIN OVERTHINKING MODE ==============================
-
-Overthinking Mode is disabled. Use replies and tool results as working evidence; retrieve original reasoning with `recall_history` when needed.
-
-============================= END OVERTHINKING MODE ==============================

@@ -1,8 +1,8 @@
 """MCP client: config parsing, protocol negotiation, and tool exposure.
 
-Every test drives a real subprocess over a real pipe via `mcp_stub_server.py`,
-so the JSON-RPC framing, the handshake, and process teardown are all exercised
-for real. No network is involved.
+Protocol and registry tests drive a subprocess via `mcp_stub_server.py`,
+exercising JSON-RPC framing, negotiation, and teardown without network access.
+Configuration and content tests exercise their helpers directly.
 """
 
 from __future__ import annotations

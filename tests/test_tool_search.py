@@ -211,9 +211,8 @@ async def test_glob_recursive_patterns_match_at_every_depth(
 ) -> None:
     """`**` spans zero or more directories, as the tool description promises.
 
-    Regression: plain `fnmatch` requires the literal `**` to match one path
-    component, so `**/*.py` silently missed top-level files and `src/**/*.ts`
-    matched nothing at all.
+    Plain `fnmatch` treats the slash after `**` literally, so `**/*.py` misses
+    top-level files and `src/**/*.ts` misses files directly inside `src`.
     """
     (workspace.root / "top.py").write_text("x", encoding="utf-8")
     (workspace.root / "test_top.py").write_text("x", encoding="utf-8")

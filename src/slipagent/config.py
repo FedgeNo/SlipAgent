@@ -18,9 +18,7 @@ from pathlib import Path
 
 DEFAULT_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
-# Deliberately high: the loop should finish real work, not stop because a task
-# happened to be long. The cap only exists to stop a model that is going in
-# circles.
+# Bound working-model requests, including retries, while allowing long tasks.
 DEFAULT_MAX_STEPS = 200
 DEFAULT_CONTEXT_STEPS = 50
 
@@ -91,11 +89,29 @@ def _read_preferences() -> dict[str, object]:
     return value
 
 
-def save_model_choice(model: str) -> None:
+def save_model_choice(model: str, provider: str = "openrouter") -> None:
     """Remember an explicitly selected model across projects and launches."""
     preferences = _read_preferences()
-    preferences["model"] = model
+    preferences["provider"] = provider
+    if provider == "openrouter":
+        preferences["model"] = model
+    models = preferences.setdefault("models", {})
+    if not isinstance(models, dict):
+        raise ConfigError("invalid provider model preferences")
+    models[provider] = model
     save_private_text(_preferences_path(), json.dumps(preferences) + "\n")
+
+
+def configured_provider(provider: str | None = None, *, environ: Mapping[str, str] | None = None,
+                        preferences: dict[str, object] | None = None) -> str:
+    """Resolve the preferred active provider without requiring its credential."""
+    from .providers import active_providers
+    env = os.environ if environ is None else environ
+    saved = _read_preferences() if preferences is None else preferences
+    active = active_providers(env)
+    remembered = str(saved.get("provider") or "openrouter")
+    default = remembered if remembered in active else next(iter(active), remembered)
+    return provider or env.get("SLIPAGENT_PROVIDER") or default
 
 
 def load_dotenv(start: Path | None = None, environ: dict[str, str] | None = None) -> Path | None:
@@ -184,6 +200,7 @@ class Config:
     max_tokens: int | None = None
     context_steps: int = DEFAULT_CONTEXT_STEPS
     overthinking: bool = True
+    provider: str = "openrouter"
 
     def __post_init__(self) -> None:
         if self.max_steps < 1:
@@ -200,6 +217,7 @@ class Config:
         cls,
         *,
         api_key: str | None = None,
+        provider: str | None = None,
         model: str | None = None,
         base_url: str | None = None,
         workspace: str | Path | None = None,
@@ -211,14 +229,26 @@ class Config:
         environ: dict[str, str] | None = None,
     ) -> Config:
         env = os.environ if environ is None else environ
-        explicit_model = model or env.get("OPENROUTER_MODEL")
+        shell_models = dict(env)
         if environ is None:
             load_dotenv()
-
-        resolved_key = api_key or env.get("OPENROUTER_API_KEY", "")
+        from .providers import provider_class
+        from .api import APIConfigError
+        preferences = _read_preferences()
+        selected = configured_provider(provider, environ=env, preferences=preferences)
+        try:
+            implementation = provider_class(selected)
+        except APIConfigError as exc:
+            raise ConfigError(str(exc)) from exc
+        models = preferences.get("models", {})
+        if not isinstance(models, dict):
+            raise ConfigError("invalid provider model preferences")
+        saved_model = models.get(selected) or (preferences.get("model") if selected == "openrouter" else None)
+        explicit_model = model or shell_models.get(implementation.model_env)
+        resolved_key = api_key or env.get(implementation.key_env, "")
         if not resolved_key.strip():
             raise ConfigError(
-                "No OpenRouter API key found. Set OPENROUTER_API_KEY "
+                f"No {selected} API key found. Set {implementation.key_env} "
                 "(see README.md) or pass --api-key."
             )
 
@@ -226,8 +256,9 @@ class Config:
 
         return cls(
             api_key=resolved_key.strip(),
-            model=explicit_model or str(_read_preferences().get("model") or env.get("OPENROUTER_MODEL") or DEFAULT_MODEL),
-            base_url=base_url or env.get("OPENROUTER_BASE_URL") or DEFAULT_BASE_URL,
+            model=explicit_model or str(saved_model or env.get(implementation.model_env) or implementation.default_model),
+            base_url=base_url or env.get(implementation.base_url_env) or implementation.default_base_url,
+            provider=selected,
             http_referer=env.get("OPENROUTER_REFERER") or None,
             app_title=env.get("OPENROUTER_TITLE") or "SlipAgent",
             workspace=root,

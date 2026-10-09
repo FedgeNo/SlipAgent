@@ -9,6 +9,7 @@ from slipagent.types import decode_json_content
 import asyncio
 import io
 import json
+from data_text_reader import read_data
 import re
 
 import httpx
@@ -22,7 +23,7 @@ from slipagent.agent import Agent, STOP_NOTICE, STEP_LIMIT_NOTICE
 from slipagent.cli import Renderer, Style, build_parser
 from slipagent.config import Config, ConfigError
 from slipagent.context import (
-    ContextError, ConversationHistory, RecallHistoryTool, SUMMARY_START,
+    ContextError, ConversationHistory, RecallHistoryTool, SUMMARY_START, message_tokens,
     SUMMARY_END, TOOL_SUMMARY_KEY, response_memory, tool_response_memory,
 )
 from slipagent.tools.base import ToolRegistry
@@ -48,7 +49,7 @@ def make_agent(responses, *, include_memory=True, **kwargs):
 
 
 def add_intermediate_posts(agent):
-    """Age a record past the five-call minimum without extra inference fixtures."""
+    """Age a record past the five-call retention target without extra inference fixtures."""
     agent.extend([Message.assistant("Intermediate response") for _ in range(4)])
 
 
@@ -156,7 +157,7 @@ async def test_only_50_full_posts_and_100_older_summaries_are_supplied(total):
     for step_id in range(1, total + 1):
         assert (f"FULL_QUESTION_{step_id:03d}" in wire) == (step_id > boundary)
         assert (f"FULL_ANSWER_{step_id:03d}" in wire) == (step_id > boundary)
-        assert (f"STORED_SUMMARY_{step_id:03d}" in wire) == (oldest_summary < step_id <= boundary)
+        assert (f"STORED_SUMMARY_{step_id:03d}" in wire) == (oldest_summary < step_id)
     assert len(history.steps) == total
     original = await RecallHistoryTool(history).invoke({"step_id": 1})
     assert "FULL_QUESTION_001" in content_text(original.content)
@@ -176,8 +177,8 @@ async def test_background_summary_contains_tool_findings_and_user_prompt():
     add_intermediate_posts(agent)
     await agent.run("next")
     archived = context_records(client.calls[2]["messages"])[0]
-    assert "User: read file" in archived["summary"]
-    assert "EXACT TOOL RESULT" in archived["summary"]
+    assert "User: read file" in archived["compressed_summary"]
+    assert "EXACT TOOL RESULT" in archived["compressed_summary"]
     assert not any(m.role == "tool" for m in unpack_context(client.calls[2]["messages"]))
     assert agent.history.steps[0].results_summarized
     full = await agent.registry.invoke("recall_history", {"step_id": 1})
@@ -191,7 +192,7 @@ async def test_over_budget_preserves_recent_tool_batch_without_extra_calls():
             ToolCall("a", "record", {"value": "one"}), ToolCall("b", "record", {"value": "two"})]),
         completion(reply(2, "Received excerpts.", "Model received bounded results.", "Two tools returned large payloads; only excerpts were visible.")),
     ])
-    agent._context_lengths[agent.model] = 9000
+    agent._context_lengths[agent.model] = 12000
     agent.registry.get("record").result = payload
     assert await agent.run("read") == "Received excerpts."
     assert len(client.calls) == 2
@@ -251,7 +252,7 @@ async def test_small_model_does_not_arbitrarily_halve_the_recent_budget():
     view = await history.view(messages, [], keep_steps=50,
                               context_length=262144, max_output=8192)
     assert any(context_body(message.content) == answer for message in unpack_context(view))
-    assert not any("Short stored summary." in (content_text(message.content)) for message in unpack_context(view))
+    assert context_records(view)[0]['compressed_summary'] == 'Short stored summary.'
 
 
 async def test_older_window_uses_original_when_summary_is_larger():
@@ -269,9 +270,9 @@ async def test_older_window_uses_original_when_summary_is_larger():
                               context_length=1000000, max_output=8192)
     wire = "\n".join(content_text(message.content) for message in unpack_context(view))
     assert "Short exact answer." in wire and "Latest exact answer." in wire
-    assert "INFLATED SUMMARY" not in wire
+    assert context_records(view)[0]['compressed_summary'] == history.steps[0].summary
     assert "LARGE SECOND ANSWER" not in wire and "Second answer compressed." in wire
-    assert "Latest answer compressed." not in wire
+    assert 'Latest answer compressed.' in wire
     assert [context_body(message.content) for message in unpack_context(view) if message.role == "user"] == [
         "first request", *("third request" for _ in range(5)), "current request",
     ]
@@ -287,7 +288,7 @@ async def test_shrunk_window_has_whole_turn_summary_and_full_latest_turn():
     ])
     agent.registry.get("record").result = "FULL LARGE TOOL OUTPUT " * 1000
     await agent.run("Original exact request")
-    agent._context_lengths[agent.model] = 9000
+    agent._context_lengths[agent.model] = 12000
     await agent.run("Follow-up exact request")
     view = client.calls[-1]["messages"]
     wire = "\n".join(content_text(message.content) for message in unpack_context(view))
@@ -335,7 +336,7 @@ async def test_under_budget_keeps_entire_recent_window_in_full():
     assert any(m.role == "tool" and m.tool_call_id == "c" and context_body(m.content) == "full tool result" for m in unpack_context(view))
 
 
-async def test_only_posts_outside_window_use_summaries():
+async def test_only_posts_outside_window_replace_originals_with_summaries():
     history = ConversationHistory()
     messages = [Message.user("oldest question"), Message.assistant("OLDEST FULL RESPONSE " * 1000),
                 Message.user("middle question"), Message.assistant("MIDDLE FULL RESPONSE " * 50),
@@ -359,8 +360,8 @@ async def test_only_posts_outside_window_use_summaries():
         "middle question", *("latest question" for _ in range(4)), "next question",
     ]
     assert history.steps[0].summary in wire
-    assert history.steps[1].summary not in wire
-    assert history.steps[2].summary not in wire
+    assert context_records(view)[1]['compressed_summary'] == history.steps[1].summary
+    assert context_records(view)[2]['compressed_summary'] == history.steps[2].summary
 
 
 async def test_missing_archived_summary_is_omitted_without_a_repair_call():
@@ -451,7 +452,7 @@ async def test_background_summaries_have_separate_requests_and_accounting():
     assert len(client.calls) == 2
     await agent.run("third question")
     assert len(client.calls) == 3
-    assert agent.history.steps[0].summary == context_records(client.calls[2]["messages"])[0]["summary"]
+    assert agent.history.steps[0].summary == context_records(client.calls[2]["messages"])[0]["compressed_summary"]
     assert not any(context_body(m.content).strip() == original for m in unpack_context(client.calls[2]["messages"]))
     assert len(client.summary_calls) == 3
     assert agent.usage.total_tokens == 45
@@ -637,7 +638,7 @@ async def test_cancel_during_response_preserves_existing_summaries_and_originals
     started = asyncio.Event()
     class BlockingClient(StubClient):
         async def chat(self, **kwargs):
-            if len(self.calls) == 2 and not kwargs["messages"][0].content.lstrip().startswith("Summarize one completed SlipAgent step"):
+            if len(self.calls) == 2 and not content_text(kwargs["messages"][0].content).lstrip().startswith("# Summarizing the Previous Turn"):
                 started.set()
                 await asyncio.Event().wait()
             return await super().chat(**kwargs)
@@ -690,7 +691,7 @@ async def test_recall_searches_full_original_and_pages_without_truncation_loss()
         if page["next_offset"] is None:
             break
         offset = page["next_offset"]
-    full = json.loads("".join(chunks))
+    full = read_data("".join(chunks))
     assert full["prompt"] == "user needle λ"
     assert full["response"] == "answer " * 500
     assert (await tool.invoke({"step_id": 999})).is_error
@@ -792,7 +793,8 @@ async def test_stored_summaries_over_budget_preserve_originals_without_extra_cal
                               context_length=14000, max_output=1000, summarize=unused)
     wire = "\n".join(content_text(message.content) for message in unpack_context(view))
     assert history.steps[0].summary not in wire
-    assert history.steps[14].summary in wire
+    assert context_records(view)[-2]['compressed_summary'] == history.steps[-1].summary
+    assert message_tokens(view) <= int(14000 * .85) - 1000
     assert any(context_body(message.content) == "answer 19 " * 300 for message in unpack_context(view))
     assert any(context_body(message.content) == "next" for message in unpack_context(view))
     assert [step.summary for step in history.steps] == summaries
@@ -920,7 +922,7 @@ async def test_memory_prompt_explains_background_summaries_and_retrieval(has_pre
                          Message.tool_result("c", "File contents.")])
     view = await ConversationHistory().view(messages, [], keep_steps=50,
                                             context_length=1000000, max_output=8192)
-    system = view[0].content
+    system = content_text(view[0].content)
     assert "Return one JSON object with exactly two fields" in system
     assert "The harness creates summaries separately" in system
     assert "recall_history" in system and "next_offset" in system
@@ -938,7 +940,7 @@ async def test_catalog_context_length_limits_full_history_and_is_cached():
     def respond(request):
         if request.method == "GET":
             catalog_calls.append(request)
-            return httpx.Response(200, json={"data": [{"id": "small/model", "context_length": 9000}]})
+            return httpx.Response(200, json={"data": [{"id": "small/model", "context_length": 12000}]})
         summary = summary_response(json.loads(request.content))
         if summary is not None:
             return httpx.Response(200, json=summary)
@@ -1010,4 +1012,5 @@ def test_config_and_cli_expose_post_window_without_separate_token_cap():
     assert config.context_steps == 12
     with pytest.raises(ConfigError):
         Config.from_env(environ={"OPENROUTER_API_KEY": "test"}, context_steps=0)
-    assert "--context-tokens" not in build_parser().format_help()
+    assert build_parser().parse_args([]).context_tokens is None
+    assert build_parser().parse_args(["--context-tokens", "32768"]).context_tokens == 32768

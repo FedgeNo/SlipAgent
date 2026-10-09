@@ -185,8 +185,7 @@ async def test_invoke_converts_exception_to_error_result() -> None:
 async def test_invoke_reports_a_type_error_from_inside_run_as_a_tool_fault() -> None:
     """A TypeError from the tool's own body is a tool bug, not a bad call.
 
-    Reporting it as "invalid arguments" would send the model off to correct
-    arguments that are already correct, and it would retry forever.
+    Reporting it as "invalid arguments" could prompt unnecessary argument retries.
     """
     result = await TypeErrorTool().invoke({"text": "hi"})
 

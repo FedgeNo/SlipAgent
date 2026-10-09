@@ -507,11 +507,6 @@ class TerminalUI:
             else:
                 event.current_buffer.delete()
 
-        @bindings.add("c-c")
-        @bindings.add(Keys.SIGINT)
-        def interrupt(event: KeyPressEvent) -> None:
-            event.app.exit(exception=KeyboardInterrupt)
-
         return bindings
 
     def set_interrupt_handler(self, callback: Callable[[], None]) -> None:
@@ -521,7 +516,7 @@ class TerminalUI:
     def _style(self) -> Style:
         return Style.from_dict({
             "status": MUTED_COLOR, "pulse": "bold ansicyan", "idle": "ansicyan", "user": USER_PROMPT_STYLE,
-            "context-system": "#ffff00",
+            "context-system": "#ffff00", "retry": "ansired",
             "menu-title": "bold", "menu-selected": "reverse bold",
         })
 
@@ -574,16 +569,34 @@ class TerminalUI:
         return False
 
     def _activity(self) -> StyleAndTextTuples:
+        retry_status = self.__dict__.get("_retry_status", "")
+        if retry_status and not self.stopping:
+            return [("class:retry", retry_status)]
+        command_status = self.__dict__.get("_command_status", "")
+        if command_status:
+            return [("class:idle", command_status)]
         if not self.working:
             return [("class:idle", "Ready")]
         frame = self.__dict__.get("_activity_frame", PULSE_FRAMES[int(time.monotonic() * 4) % len(PULSE_FRAMES)])
         label = "Stopping After This Step" if self.stopping else "Working (esc to interrupt)"
         return [("class:pulse", f"{frame} {label}")]
 
+    def set_retry_status(self, text: str) -> None:
+        """Show transient retry progress without appending a line each second."""
+        self.__dict__["_retry_status"] = text
+        self.app.invalidate()
+
     def set_working(self, working: bool, *, stopping: bool = False) -> None:
         self.working = working
         self.stopping = stopping
+        if not working:
+            self.__dict__["_retry_status"] = ""
         self._update_title()
+        self.app.invalidate()
+
+    def set_command_status(self, text: str) -> None:
+        """Distinguish settings changes from active model work."""
+        self.__dict__["_command_status"] = text
         self.app.invalidate()
 
     def set_title(self, title: str) -> None:

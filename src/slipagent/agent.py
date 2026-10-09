@@ -8,6 +8,8 @@ Events leave presentation and lifecycle controls with the CLI.
 
 from __future__ import annotations
 
+from .data_text import render_data
+
 import uuid
 import asyncio
 import json
@@ -17,7 +19,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Literal
 
-from .openrouter import OpenRouterClient
+from .api import APIClient
 from .config import DEFAULT_MAX_STEPS, DEFAULT_CONTEXT_STEPS
 from .context import (
     DEFAULT_CONTEXT_LENGTH,
@@ -36,9 +38,9 @@ from .checks import check_edit_batch
 from .checkpoints import FileCheckpoints, current_checkpoint
 from .prompts import PromptSections, load_prompt
 from .batching import run_batch
-from .openrouter import OpenRouterError, OpenRouterContextError, OpenRouterAPIError, OpenRouterTransportError, RETRYABLE_STATUS
+from .api import APIError, APIContextError, APIResponseError, APITransportError, RETRYABLE_STATUS
 from .mcp import MCPTool
-from .capabilities import ModelCapabilities
+from .capabilities import RequestProfile
 from .tools.base import ToolRegistry, ToolResult, current_invocation
 from .types import Message, ToolCall, ToolSpec, Usage
 
@@ -50,6 +52,7 @@ EventKind = Literal[
     "reasoning_delta",
     "stream_end",
     "retry",
+    "retry_wait",
     "user_message",
     "user_message_sent",
     "user_queue_reset",
@@ -78,12 +81,12 @@ EventHandler = Callable[[AgentEvent], None]
 
 def build_system_prompt(workspace: str, *, project_instructions: str = "") -> str:
     """Render the default system prompt for a given workspace root."""
-    prompt = load_prompt("system-prompt.txt").format(
+    prompt = load_prompt("system-prompt.md").format(
         workspace=workspace, interpreter=sys.executable
     )
     if project_instructions:
         prompt += (
-            load_prompt('project-instructions-initial.txt', project_instructions=project_instructions)
+            load_prompt('project-instructions-initial.md', project_instructions=project_instructions)
         )
     return prompt
 
@@ -106,7 +109,7 @@ class ContextStepLimit(Exception):
 class Agent:
     """Stateful conversation driver."""
 
-    client: OpenRouterClient
+    client: APIClient
     registry: ToolRegistry
     model: str
     max_steps: int = DEFAULT_MAX_STEPS
@@ -120,8 +123,13 @@ class Agent:
     usage: Usage = field(default_factory=Usage)
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     overthinking: bool = True
-    # Text the user typed while the agent was busy. Drained at the end of the
-    # step in which it arrived, so it reaches the model as ordinary user input.
+    planning: bool = True
+    context_tokens: int | None = None
+    reasoning_history_steps: int = 25
+    filtered_thoughts: bool = True
+    exposed_tools: tuple[str, ...] | None = None
+    # Input received while busy joins the conversation at a request or batch
+    # boundary, without separating tool calls from their results.
     pending: list[str] = field(default_factory=list)
     running: bool = field(default=False, init=False)
     stop_requested: bool = field(default=False, init=False)
@@ -134,9 +142,14 @@ class Agent:
     def __post_init__(self) -> None:
         if self.context_steps < 1:
             raise ValueError("context_steps must be at least 1")
+        if self.context_tokens is not None and self.context_tokens < 4096:
+            raise ValueError("context_tokens must be at least 4096")
+        if not 0 <= self.reasoning_history_steps <= 25:
+            raise ValueError("reasoning_history_steps must be between 0 and 25")
         if self.system_prompt is not None:
             self.messages.append(Message.system(self.system_prompt))
         self.registry.register(RecallHistoryTool(self.history))
+        self.set_planning(self.planning)
         self._compactor()
         jobs = self.registry.services.get("command_jobs")
         if jobs is not None:
@@ -195,7 +208,7 @@ class Agent:
         """Drain completed-step summaries when a caller needs settled memory."""
         await self._compactor().wait()
 
-    async def _archive_step(self, capabilities: ModelCapabilities | None) -> None:
+    async def _archive_step(self, capabilities: RequestProfile | None) -> None:
         self.history.sync(self.messages)
         step = self.history.steps[-1]
         if isinstance(step, CompletedStep):
@@ -204,6 +217,7 @@ class Agent:
                 return  # Preserve interrupted results without starting new work.
             self._compactor().submit(
                 step, self.client, self.model, capabilities, self.max_tokens,
+                history=self.history.steps[:-1][-25:],
             )
             # Start the isolated request now without waiting for its response.
             await asyncio.sleep(0)
@@ -266,9 +280,9 @@ class Agent:
             return
         completed = jobs.completions()
         if completed:
-            self.registry.context_notes["background_commands"] = json.dumps({
-                "completed": completed, "guidance": load_prompt('background-command-results.txt'),
-            }, ensure_ascii=False)
+            self.registry.context_notes["background_commands"] = {
+                "completed": completed, "guidance": load_prompt('background-command-results.md'),
+            }
             for job in completed:
                 self._emit(AgentEvent(kind="notice", text=f"Background command {job['job_id']} {job['state']} (exit {job['returncode']})."))
 
@@ -278,7 +292,7 @@ class Agent:
         self.history.sync(self.messages)
 
     async def _context_length(self) -> int:
-        if isinstance(self.client, OpenRouterClient):
+        if isinstance(self.client, APIClient):
             capabilities = await self.client.model_capabilities(self.model)
             if capabilities is not None:
                 length = capabilities.context_length or DEFAULT_CONTEXT_LENGTH
@@ -287,7 +301,7 @@ class Agent:
                 return length
         if self.model not in self._context_lengths:
             length = DEFAULT_CONTEXT_LENGTH
-            if isinstance(self.client, OpenRouterClient):
+            if isinstance(self.client, APIClient):
                 cached_length = self.client.catalog_context_length(self.model)
                 if cached_length is not None:
                     length = cached_length
@@ -300,7 +314,7 @@ class Agent:
         self._requests += 1
 
     async def _context_view(self, specs: list[ToolSpec], step: int, *,
-                            capabilities: ModelCapabilities | None = None, preview: bool = False,
+                            capabilities: RequestProfile | None = None, preview: bool = False,
                             repair: str = "", budget_fraction: float | None = None) -> list[Message]:
         """Assemble the exact model-visible state within its endpoint limits.
 
@@ -308,7 +322,8 @@ class Agent:
         the active history. Runtime diagnostics and service metadata are explicit
         input because the model cannot see terminal notices or local state.
         """
-        if capabilities is None and isinstance(self.client, OpenRouterClient):
+        specs = self._filter_specs(specs)
+        if capabilities is None and isinstance(self.client, APIClient):
             capabilities = await self.client.model_capabilities(self.model)
         length = await self._context_length() if capabilities is None else capabilities.context_length
         if capabilities is not None:
@@ -318,19 +333,33 @@ class Agent:
                 capabilities.validate_output_limit(self.max_tokens)
             except ValueError as exc:
                 raise ContextError(str(exc)) from exc
+        if self.context_tokens is not None:
+            length = min(length, self.context_tokens)
         sections = PromptSections()
+        if self.planning:
+            saved_plan = next(((prior.id, message.content['content'])
+                         for prior in reversed(self.history.steps)
+                         for message in reversed(prior.messages)
+                         if message.role == 'tool' and isinstance(message.content, dict)
+                         and message.content.get('tool') == 'update_plan'
+                         and message.content.get('status') == 'success'), None)
+            plan_record = load_prompt('working-plan-empty.md')
+            if saved_plan is not None:
+                plan_record = load_prompt('working-plan-record.md', step_id=saved_plan[0],
+                                          plan=render_data(saved_plan[1]))
+            sections.add('plan', 'Working Plan', load_prompt('working-plan.md',
+                         plan_record=plan_record.strip()), 45)
         workspace = self.registry.services.get("workspace")
         if workspace is not None and self.registry.services.get("editable_prompts"):
             self.system_prompt = build_system_prompt(str(workspace.root))
             if self.messages and self.messages[0].role == "system":
                 self.messages[0] = Message.system(self.system_prompt)
         if workspace is not None:
-            access = load_prompt('workspace-access-off.txt')
+            access = load_prompt('workspace-access-off.md')
             if workspace.access.danger:
-                access = (load_prompt('workspace-access-on.txt'))
-            sections.add("access", "Workspace Access", access +
-                         load_prompt('workspace-anchor.txt') + str(workspace.root) +
-                         load_prompt('workspace-permissions.txt'),
+                access = (load_prompt('workspace-access-on.md'))
+            sections.add("access", "Workspace Access",
+                         load_prompt('workspace-access.md', access=access.strip(), workspace=workspace.root),
                          15, owner="workspace")
         instructions = self.registry.services.get("project_instructions")
         if instructions is not None:
@@ -340,31 +369,30 @@ class Agent:
                 self.registry.services["instruction_snapshot"] = snapshot
         environment = self.registry.services.get("project_environment")
         if environment is not None:
-            sections.add("environment", "Project Python Environment", json.dumps(await environment.snapshot(), ensure_ascii=False), 30, owner="environment")
+            sections.add("environment", "Project Python Environment", load_prompt('environment-snapshot.md', environment=render_data(await environment.snapshot())), 30, owner="environment")
         native_tools = capabilities is None or capabilities.native_tools
         if capabilities is not None and (capabilities.format == "json_schema" or not native_tools):
             sections.add("schema", "Response Schema",
-                load_prompt('response-json.txt') + '\n\n'
-                + (load_prompt('response-native-json.txt')
-                   if native_tools else load_prompt('response-embedded-json.txt')),
+                load_prompt('response-json.md') + '\n\n'
+                + (load_prompt('response-native-json.md')
+                   if native_tools else load_prompt('response-embedded-json.md')),
                 0, owner="protocol", dynamic=False,
             )
         elif native_tools:
             sections.add("schema", "Reply Format",
-                         load_prompt('response-native-text.txt'),
+                         load_prompt('response-native-text.md'),
                          0, owner="protocol", dynamic=False)
         if capabilities is not None and not native_tools:
-            sections.add("tools", "Available Tool Definitions", json.dumps([spec.to_api() for spec in specs], ensure_ascii=False), 10, owner="tools", dynamic=False)
+            sections.add("tools", "Available Tool Definitions", load_prompt('tool-definitions.md', definitions=render_data([spec.to_api() for spec in specs])), 10, owner="tools", dynamic=False)
         servers = {tool.client.spec.name: tool.client.instructions for tool in self.registry.tools
                    if isinstance(tool, MCPTool) and tool.client.connected and tool.client.instructions}
         if servers:
             sections.add("mcp", "Connected MCP Server Guidance",
-                load_prompt('mcp-guidance.txt') + '\n\n'
-                + json.dumps(servers, ensure_ascii=False),
+                load_prompt('mcp-guidance.md', servers=render_data(servers)),
                 40, owner="mcp", dynamic=False,
             )
         if self.registry.context_notes:
-            sections.add("state", "Current Harness State", json.dumps(self.registry.context_notes, ensure_ascii=False), 50)
+            sections.add("state", "Current Harness State", load_prompt('harness-state.md', state=render_data(self.registry.context_notes)), 50)
         sections.add("repair", "Response Correction", repair.strip(), 60)
         extra_instructions = sections.render()
         budget = copy.copy(self._budget()) if preview else self._budget()
@@ -384,6 +412,8 @@ class Agent:
             ) if part.strip()),
             keep_steps=self.context_steps,
             overthinking=self.overthinking,
+            reasoning_history_steps=self.reasoning_history_steps,
+            filtered_thoughts=self.filtered_thoughts,
             context_length=int(length * budget_fraction),
             max_output=self.max_tokens or min(8192, max(256, length // 8)),
             native_tools=native_tools,
@@ -411,10 +441,8 @@ class Agent:
         """Queue a user message typed while the agent was mid-step.
 
         The REPL stays interactive during a step, so input can arrive before
-        the current step finishes. It is delivered with the next tool result
-        rather than interrupting the step, which keeps the tool-call protocol
-        valid: a user message cannot be spliced in between an assistant
-        tool-call message and its matching `tool` replies.
+        the current step finishes. It joins at a request or batch boundary,
+        keeping assistant tool calls together with their matching results.
         """
         message = text.strip()
         if message:
@@ -513,13 +541,36 @@ class Agent:
         self._emit(AgentEvent(kind="warning", step=self.max_steps, text=STEP_LIMIT_NOTICE))
         return STEP_LIMIT_NOTICE
 
+    def set_planning(self, enabled: bool) -> None:
+        """Change plan availability without discarding the retained plan."""
+        from .tools.planning import UpdatePlanTool
+        self.planning = enabled
+        if enabled:
+            if "update_plan" not in self.registry:
+                self.registry.register(UpdatePlanTool())
+        else:
+            self.registry.unregister("update_plan")
+
+    def _filter_specs(self, specs: list[ToolSpec]) -> list[ToolSpec]:
+        if self.exposed_tools is None:
+            return specs
+        allowed = set(self.exposed_tools) | {"recall_history"}
+        if self.planning:
+            allowed.add("update_plan")
+        else:
+            allowed.discard("update_plan")
+        missing = allowed - set(self.registry.names)
+        if missing:
+            raise ValueError(f"Unavailable tools in allowlist: {', '.join(sorted(missing))}")
+        return [spec for spec in specs if spec.name in allowed]
+
     async def _step(self, step: int) -> str | None:
         """One response and its complete tool batch; behavior reloads between steps."""
         self._notify_jobs()
         servers = self.registry.services.get("language_servers")
         if servers is not None:
             await servers.refresh()
-        specs = self.registry.specs()
+        specs = self._filter_specs(self.registry.specs())
         self._emit(AgentEvent(kind="step_start", step=step))
 
         try:
@@ -527,11 +578,9 @@ class Agent:
         except ContextStopped:
             return self._stop_notice(step)
 
-        capabilities = await self.client.model_capabilities(self.model) if isinstance(self.client, OpenRouterClient) else None
+        capabilities = await self.client.model_capabilities(self.model) if isinstance(self.client, APIClient) else None
         native_tools = capabilities is None or capabilities.native_tools
-        extra_body: dict[str, Any] = {
-            "provider": capabilities.provider_preferences() if capabilities is not None else {"require_parameters": True},
-        }
+        extra_body: dict[str, Any] = {}
         if capabilities is not None and capabilities.format == "json_schema":
             extra_body["response_format"] = agent_response_format(native_tools=native_tools)
         elif not native_tools:
@@ -546,7 +595,7 @@ class Agent:
             if self.pending:
                 context = await self._queued_context(specs, step, repair=repair, budget_fraction=budget_fraction)
             self._reserve_request()
-            request_text = ""
+            request_body: dict[str, Any] = {}
             diagnostic_id: int | None = None
             diagnostics = self.registry.services.get("request_diagnostics")
             def finish_attempt(outcome: str, *, detail: str = "", response: str = "", usage: Usage | None = None) -> None:
@@ -556,16 +605,16 @@ class Agent:
                     if diagnostics.error and self.registry.context_notes.get("request_diagnostics") != diagnostics.error:
                         self.registry.context_notes["request_diagnostics"] = diagnostics.error
                         self._emit(AgentEvent(kind="warning", text=f"Request diagnostics: {diagnostics.error}"))
-            def request_sent(request: str) -> None:
-                nonlocal request_text, diagnostic_id
-                request_text = request
+            def request_sent(request: dict[str, Any]) -> None:
+                nonlocal request_body, diagnostic_id
+                request_body = request
                 self._queued_messages_sent()
                 if diagnostics is not None:
                     diagnostic_id = diagnostics.begin(request, step=step, step_id=len(self.history.steps) + 1)
                 instructions = self.registry.services.get("project_instructions")
                 if instructions is not None:
                     instructions.presented(self.registry.services.get("instruction_snapshot", {}))
-                self._emit(AgentEvent(kind="context", step=step, text=request))
+                self._emit(AgentEvent(kind="context", step=step, text=json.dumps(request, ensure_ascii=False)))
             def delta(kind: str, chunk: str) -> None:
                 stream_guard.feed(kind, chunk)
                 if kind == "reasoning" and chunk:
@@ -575,7 +624,7 @@ class Agent:
                 "on_delta": delta,
                 "on_request": request_sent,
                 "single_attempt": True,
-            } if isinstance(self.client, OpenRouterClient) else {}
+            } if isinstance(self.client, APIClient) else {}
             try:
                 if not options:
                     self._queued_messages_sent()
@@ -608,7 +657,7 @@ class Agent:
                 self._emit(AgentEvent(kind="warning", step=step, text=str(exc)))
                 self.stopped = True
                 return str(exc)
-            except OpenRouterContextError as exc:
+            except APIContextError as exc:
                 finish_attempt("context_overflow", detail=str(exc))
                 self._emit(AgentEvent(kind="stream_end", step=step))
                 if self.stop_requested:
@@ -624,47 +673,45 @@ class Agent:
                 self._budget().fraction = budget_fraction
                 self._emit(AgentEvent(kind="retry", step=step, text=f"Provider context limit reached; retrying with less history ({overflows}/2). Originals are preserved."))
                 continue
-            except OpenRouterAPIError as exc:
+            except APIResponseError as exc:
                 self.usage = self.usage + exc.usage
                 step_usage = step_usage + exc.usage
                 finish_attempt("request_error", detail=str(exc), response=exc.partial_response or exc.body or "", usage=exc.usage)
                 self._emit(AgentEvent(kind="stream_end", step=step))
                 if self.stop_requested:
                     return self._stop_notice(step)
-                transient = isinstance(exc, OpenRouterTransportError) or exc.status_code in RETRYABLE_STATUS
-                if not transient or transport_retries >= self.client.retry.max_retries:
+                transient = isinstance(exc, APITransportError) or exc.status_code in RETRYABLE_STATUS
+                if not transient:
                     raise
                 if self._requests >= self.max_steps:
                     raise ContextStepLimit from exc
-                delay = self.client._backoff(transport_retries, exc.retry_after)
-                transport_retries += 1
-                try:
-                    await asyncio.wait_for(self._stop_event().wait(), timeout=delay)
-                except TimeoutError:
-                    pass
+                def countdown(error: str, seconds: int) -> None:
+                    self._emit(AgentEvent(kind="retry_wait", step=seconds, text=error))
+                retry = await self.client.wait_retry(transport_retries, exc, stop=self._stop_event(), on_retry=countdown)
                 if self._stop_event().is_set():
                     return self._stop_notice(step)
+                if not retry:
+                    raise
+                transport_retries += 1
                 continue
             except BaseException as exc:
                 finish_attempt("cancelled" if isinstance(exc, asyncio.CancelledError) else "request_error", detail=str(exc))
                 self._emit(AgentEvent(kind="stream_end", step=step))
                 raise
             attempts += 1
-            self._budget().observe(request_text, completion.usage.prompt_tokens)
+            self._budget().observe(request_body, completion.usage.prompt_tokens)
             self.usage = self.usage + completion.usage
             self._persist()
             step_usage = step_usage + completion.usage
             try:
                 if completion.response_error:
                     raise ResponseFormatError(completion.response_error, excerpt=completion.response_excerpt)
-                record = parse_agent_response(completion.text, completion.tool_calls,
-                                              native_tools=native_tools,
-                                              json_response=capabilities is not None and capabilities.format == "json_schema")
+                record = parse_agent_response(completion.text, completion.tool_calls, tools=specs)
                 record.text = _visible_response(record.text)
                 if not record.calls and not record.text.strip():
-                    raise ResponseFormatError(load_prompt("response-bookkeeping-error.txt"))
+                    raise ResponseFormatError(load_prompt("response-bookkeeping-error.md"))
                 if record.calls and completion.finish_reason == "length":
-                    raise ResponseFormatError(load_prompt("response-truncated-error.txt"))
+                    raise ResponseFormatError(load_prompt("response-truncated-error.md"))
                 # Check decoded reply text too: a JSON response envelope is
                 # structured output, but the prose inside it can still loop.
                 response_guard = StreamLoopGuard()
@@ -696,11 +743,11 @@ class Agent:
                 f"Retrying from the start (retry {attempts}/{MAX_MEMORY_ATTEMPTS - 1})."
             )))
             # Retry the complete round without adding unexecuted tool calls to history.
-            repair = load_prompt("response-repair.txt", rejection=rejection,
-                                 tool_channel=load_prompt("repair-native-tools.txt" if native_tools else "repair-json-tools.txt"))
+            repair = load_prompt("response-repair.md", rejection=rejection,
+                                 tool_channel=load_prompt("repair-native-tools.md" if native_tools else "repair-json-tools.md"))
             if rejected_excerpt:
                 repair += (
-                    load_prompt('rejected-output.txt') + '\n\n'
+                    load_prompt('rejected-output.md') + '\n\n'
                     + rejected_excerpt
                 )
             # Include diagnostics in the budget calculation, rather than append
@@ -755,7 +802,10 @@ class Agent:
                 lambda chunk: self._emit(AgentEvent(kind="tool_output", step=step, text=chunk, tool_call=tool_call))
             )
             try:
-                result = await self.registry.invoke(tool_call.name, tool_call.arguments)
+                if self.exposed_tools is not None and tool_call.name not in {spec.name for spec in specs}:
+                    result = ToolResult.error("This tool is not available in the current request.")
+                else:
+                    result = await self.registry.invoke(tool_call.name, tool_call.arguments)
             except Exception as exc:
                 result = ToolResult.error(f"Tool dispatch failed: {type(exc).__name__}: {exc}. Effects may be partial; inspect before retrying.")
             finally:
@@ -802,16 +852,20 @@ class Agent:
         # Anything typed mid-step joins here, after every tool result, so
         # the model sees it as a new instruction in a well-formed history.
         guidance, repeated = "", False
-        if not self.pending:
+        only_answers = bool(batch_results) and all(call.name == "answer" and not result.is_error for call, result in batch_results)
+        if not self.pending and not only_answers:
             guidance, repeated = self._loop_guard().observe(batch_results, self.registry, len(self.history.steps))
         if guidance:
             self.registry.context_notes["progress"] = guidance
-            self._emit(AgentEvent(kind="warning", step=step, text=guidance))
+            if repeated:
+                self._emit(AgentEvent(kind="warning", step=step, text=guidance))
         else:
             self.registry.context_notes.pop("progress", None)
         self._drain_pending()
 
         self._emit(AgentEvent(kind="step_end", step=step, usage=step_usage))
+        if only_answers:
+            return "\n\n".join(result.content["text"] for _, result in batch_results)
         if repeated:
             self.stopped = True
             return guidance

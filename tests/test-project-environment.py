@@ -126,8 +126,8 @@ async def test_environment_is_explicit_in_json_object_model_context(tmp_path):
         agent = Agent(object(), registry, "test")
         view = await agent._context_view(registry.specs(), 1, capabilities=profile)
         system = "\n".join(content_text(message.content) for message in view if message.role == "system")
-        assert "BEGIN PROJECT PYTHON ENVIRONMENT" in system
+        assert "# Project Python Environment" in system
         assert sys.executable in system and "-m pytest" in system
-        assert "plain assistant reply text" in system
+        assert "Markdown reply text" in system
     finally:
         await registry.aclose()

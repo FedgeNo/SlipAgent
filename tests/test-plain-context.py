@@ -5,6 +5,7 @@ from slipagent.types import content_text
 from slipagent.types import decode_json_content
 
 import json
+from data_text_reader import read_data
 import re
 
 import pytest
@@ -12,7 +13,7 @@ import pytest
 from slipagent.agent import build_system_prompt
 from slipagent.context import ConversationHistory, RecallHistoryTool
 from slipagent.instructions import ProjectInstructions
-from slipagent.prompts import PromptSections, section_divider
+from slipagent.prompts import PromptSections
 from slipagent.types import Message, ToolCall
 from test_agent import context_records
 
@@ -29,7 +30,8 @@ async def test_routine_context_keeps_post_counters_only_in_system_messages():
     view = await history.view(messages, [], keep_steps=5, context_length=1_000_000, max_output=8192)
     system = "\n".join(content_text(message.content) for message in view if message.role == "system")
     wire = "\n".join(content_text(message.content) for message in view if message.role != "system")
-    assert not re.search(r"(?m)^#{1,6} ", system + "\n" + wire)
+    assert "# Operating Instructions" in system
+    assert not re.search(r"(?m)^#{1,6} ", wire)
     assert not re.search(r"\bPost \d+", wire)
     for key in ("TASK_SOURCE_REVISION:",
                 '"current_prompt_step":', '"origin_step":', '"source_steps":'):
@@ -55,7 +57,8 @@ async def test_source_markdown_and_tool_protocol_are_preserved():
     assert [message.to_api() for message in messages] == before
     rendered = ProjectInstructions.render({".": source})
     assert source in rendered
-    assert rendered.endswith(section_divider("END Instruction Scope") + "\n")
+    assert "## Instruction Scope" in rendered
+    assert "**Path:** ./" in rendered
     assert not ProjectInstructions.render({".": source}).startswith("###")
 
 
@@ -67,16 +70,16 @@ async def test_record_ids_remain_usable_for_recall_and_stay_in_the_archive():
     assert "Step 1:" in listing["content"]
     recalled = decode_json_content((await tool.invoke({"step_id": 1, "sections": ["prompt", "response"]})).content)
     assert recalled["content"] == {"prompt": "Inspect the frobnicator", "response": "It works."}
-    assert json.loads(history.steps[0].full_text())["step"] == 1
+    assert read_data(history.steps[0].full_text())["step"] == 1
     assert set(history.steps[0].compaction_input()) == {
-        "user_prompt", "agent_response", "tool_calls", "tool_results",
+        "user_prompt", "agent_response", "tool_calls", "tool_results", "reasoning",
     }
 
 
 def test_prompt_sections_use_plain_labels_without_rewriting_their_content():
     sections = PromptSections()
     sections.add("project", "Project Instructions", "# User's Markdown\nDo the work.", 1)
-    assert sections.render() == section_divider("BEGIN Project Instructions") + "\n\n# User's Markdown\nDo the work.\n\n" + section_divider("END Project Instructions") + "\n"
+    assert sections.render() == "# User's Markdown\nDo the work.\n"
 
 
 @pytest.mark.parametrize("context_length", [9000, 1_000_000])

@@ -1,1 +1,0 @@
-Control returned automatically after the previous step; no new user instruction was received. Review the available tool results against the user request for this run and report the outcome. Request more tools only if fulfilling that request requires them. Otherwise, return your answer with no tool calls.

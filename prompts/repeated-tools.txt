@@ -1,5 +1,0 @@
-The same tool batch or repeating cycle (${tool_names}) returned unchanged results in steps ${first_step}–${last_step}.
-
-Those tools already ran. Change the approach: inspect the specific error, choose a different query or target, or report the blocker.
-
-If intentionally polling an external change with run_command, set poll=true; ordinary retries are not polling.

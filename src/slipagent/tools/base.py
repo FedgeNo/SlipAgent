@@ -299,7 +299,7 @@ class ToolRegistry:
                  services: dict[str, Any] | None = None, owns_services: bool = True) -> None:
         self._tools: dict[str, Tool] = {}
         self.builtin_names: frozenset[str] = frozenset()
-        self.context_notes: dict[str, str] = {}
+        self.context_notes: dict[str, Any] = {}
         self.services = services if services is not None else {}
         self.owns_services = owns_services
         self._closing: Lifetime | None = None

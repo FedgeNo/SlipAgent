@@ -5,13 +5,13 @@ required by the spec. A connected server's tools are wrapped in `MCPTool` and
 registered in the normal `ToolRegistry`, so the model sees them alongside the
 built-ins with no special-casing anywhere in the agent loop.
 
-Two protocol eras are supported, because servers in the wild speak both:
+The client implements two negotiation paths:
 
   modern (2026-07-28+) is stateless. Every request carries its version in
   `params._meta`, and a client probes with `server/discover` to learn what a server
   supports. An `UnsupportedProtocolVersionError` (-32022) means "modern, wrong
   version" and is retried against a mutually supported version; any other
-  failure means the server is legacy.
+  probe failure triggers the legacy handshake.
 
   legacy (<= 2025-11-25) requires an `initialize` handshake followed by a
   `notifications/initialized` notification before any other traffic.
@@ -28,6 +28,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from . import __version__
 from .tools.base import Tool, ToolRegistry, ToolResult, validate_schema_shape
 from .config import save_private_text
 from .lifecycle import finish_cleanup
@@ -47,7 +48,7 @@ META_CLIENT_INFO = "io.modelcontextprotocol/clientInfo"
 META_CLIENT_CAPABILITIES = "io.modelcontextprotocol/clientCapabilities"
 META_SERVER_INFO = "io.modelcontextprotocol/serverInfo"
 
-CLIENT_INFO = {"name": "slipagent", "version": "0.1.0"}
+CLIENT_INFO = {"name": "slipagent", "version": __version__}
 
 DEFAULT_CONFIG_NAME = ".mcp.json"
 DEFAULT_TIMEOUT = 30.0
@@ -317,7 +318,7 @@ class MCPClient:
             self._pump = self._stderr_pump = None
 
     async def _terminate(self, process: asyncio.subprocess.Process) -> None:
-        """SIGTERM, then SIGKILL, matching the spec's shutdown escalation."""
+        """Terminate, then kill if needed; target the process group on POSIX."""
         for force in (False, True):
             try:
                 if os.name == "posix":
@@ -678,7 +679,7 @@ class MCPClient:
         return tools
 
     def _request_meta(self) -> dict[str, Any] | None:
-        """Modern servers want per-request metadata; legacy ones must not get it."""
+        """Attach per-request metadata only on the modern negotiation path."""
         if self.era != "modern" or self.protocol_version is None:
             return None
         return self._meta(self.protocol_version)

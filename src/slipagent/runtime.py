@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from .cli import Session
 
 # Wire/state contracts and resource owners stay in the running frame.
-CORE_MODULES = frozenset({"", "runtime", "config", "types", "workspace", "tools.base", "mcp", "lifecycle"})
+CORE_MODULES = frozenset({"", "runtime", "config", "types", "data_text", "workspace", "tools.base", "mcp", "lifecycle"})
 POLL_INTERVAL = .5
 _CLASS_INTERNALS = frozenset({
     "__dict__", "__weakref__", "__slots__", "__module__", "__classcell__",
@@ -157,7 +157,7 @@ class RuntimeFrame:
         from .prompts import prompt_directory
         return {
             os.path.relpath(path, self.root): path.read_bytes()
-            for path in sorted([*self.root.rglob("*.py"), *prompt_directory().rglob("*.txt"), *prompt_directory().rglob("*.json")])
+            for path in sorted([*self.root.rglob("*.py"), *prompt_directory().rglob("*.md"), *prompt_directory().rglob("*.json")])
             if "__pycache__" not in path.parts
         }
 
@@ -252,6 +252,8 @@ class RuntimeFrame:
             raise ReloadError(f"Restart required for frame/contract edits: {', '.join(sorted(changed_core))}. Core modules cannot be changed without restart as they contain shared state and wire-level contracts.")
         package = types.ModuleType(prefix)
         package.__path__ = [str(self.root)]
+        # Keep stable package metadata available to generation-relative imports.
+        package.__dict__["__version__"] = importlib.import_module("slipagent").__version__
         sys.modules[prefix] = package
         for name in CORE_MODULES - {""}:
             sys.modules[f"{prefix}.{name}"] = importlib.import_module(f"slipagent.{name}")
@@ -330,6 +332,8 @@ class RuntimeFrame:
                 "cli": {"Renderer": ("emit", "handle", "user_prompt", "draw_prompt", "end_prompt")},
                 "context": {"ConversationHistory": ("view", "sync", "save_response", "clear")},
                 "openrouter": {"OpenRouterClient": ("chat", "key_info", "list_models", "aclose")},
+                "api": {"APIClient": ("chat", "prepare_payload", "model_capabilities", "aclose")},
+                "nvidia": {"NvidiaClient": ("chat", "prepare_payload", "model_capabilities", "aclose")},
                 "terminal": {"TerminalUI": ("refresh", "_layout", "_bindings", "_style", "write", "read_line", "set_working", "close")},
             }
             for name, contracts in methods.items():

@@ -1,0 +1,3 @@
+# API Tool Channel
+
+The object contains only `response`. Send tools through the API tool channel.

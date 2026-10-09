@@ -206,7 +206,7 @@ class GitTool(Tool):
 class GitStatusTool(GitTool):
     parameter_prompts = 'tools/git-status-parameters.json'
     name = "git_status"
-    description_prompt = 'tools/git-status.txt'
+    description_prompt = 'tools/git-status.md'
     description = load_prompt(description_prompt)
     parameters = {
         "type": "object",
@@ -224,7 +224,7 @@ class GitStatusTool(GitTool):
 class GitDiffTool(GitTool):
     parameter_prompts = 'tools/git-diff-parameters.json'
     name = "git_diff"
-    description_prompt = 'tools/git-diff.txt'
+    description_prompt = 'tools/git-diff.md'
     description = load_prompt(description_prompt)
     parameters = {
         "type": "object",
@@ -252,7 +252,7 @@ class GitDiffTool(GitTool):
 class GitLogTool(GitTool):
     parameter_prompts = 'tools/git-log-parameters.json'
     name = "git_log"
-    description_prompt = 'tools/git-log.txt'
+    description_prompt = 'tools/git-log.md'
     description = load_prompt(description_prompt)
     parameters = {
         "type": "object",
@@ -275,7 +275,7 @@ class GitLogTool(GitTool):
 class GitAddTool(GitTool):
     parameter_prompts = 'tools/git-add-parameters.json'
     name = "git_add"
-    description_prompt = 'tools/git-add.txt'
+    description_prompt = 'tools/git-add.md'
     description = load_prompt(description_prompt)
     parameters = {
         "type": "object",
@@ -322,7 +322,7 @@ class GitAddTool(GitTool):
 class GitCommitTool(GitTool):
     parameter_prompts = 'tools/git-commit-parameters.json'
     name = "git_commit"
-    description_prompt = 'tools/git-commit.txt'
+    description_prompt = 'tools/git-commit.md'
     description = load_prompt(description_prompt)
     parameters = {
         "type": "object",

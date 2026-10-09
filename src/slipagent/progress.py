@@ -7,11 +7,14 @@ from .prompts import load_prompt
 import hashlib
 import json
 import re
+import copy
+from typing import Any
 from collections.abc import Sequence
 
-from .openrouter import OpenRouterAPIError
+from .api import APIResponseError
 from .tools.base import ToolRegistry, ToolResult
-from .types import ToolCall
+from .types import ToolCall, decode_json_content
+from .data_text import render_data
 
 
 class LoopGuard:
@@ -23,10 +26,12 @@ class LoopGuard:
         self.signature = None
         self.count = 0
         self.recent: list[tuple[str, int, tuple[str, ...]]] = []
+        self.recent_calls: dict[int, list[dict[str, Any]]] = {}
 
     def observe(self, batch: Sequence[tuple[ToolCall, ToolResult]], registry: ToolRegistry,
                 step_id: int) -> tuple[str, bool]:
         records = []
+        calls = []
         for call, result in batch:
             tool = registry.get(call.name)
             if getattr(tool, "progress_exempt", False):
@@ -43,15 +48,19 @@ class LoopGuard:
                         content = content.removesuffix("\n" + log.notice())
                         break
             records.append((call.name, call.arguments, result.is_error, content))
+            calls.append(call.to_record())
         if not records:
             self.reset()
             return "", False
         encoded = json.dumps(records, sort_keys=True, ensure_ascii=True).encode()
         signature = hashlib.sha256(encoded).hexdigest()
-        if not hasattr(self, "recent"):
-            self.recent = []  # Migrate guards retained by an older generation.
+        if not hasattr(self, "recent_calls"):
+            self.recent = []  # Older generations did not retain exact calls.
+            self.recent_calls = {}
         self.recent.append((signature, step_id, tuple(record[0] for record in records)))
         self.recent = self.recent[-24:]
+        self.recent_calls[step_id] = copy.deepcopy(calls)
+        self.recent_calls = {step: self.recent_calls[step] for _, step, _ in self.recent}
         self.count = self.count + 1 if signature == self.signature else 1
         self.signature = signature
         signatures = [item[0] for item in self.recent]
@@ -66,8 +75,12 @@ class LoopGuard:
         names = ", ".join(dict.fromkeys(name for item in self.recent[-period:] for name in item[2]))
         if not stopping:
             return (
-                load_prompt('repeated-tools.txt', tool_names=names,
-                            first_step=self.recent[-period * 3][1], last_step=step_id), False,
+                load_prompt('repeated-tools.md', tool_names=names,
+                            first_step=self.recent[-period * 3][1], last_step=step_id,
+                            tool_calls=render_data([
+                                {"step": step, "tool_calls": decode_json_content(self.recent_calls[step])}
+                                for _, step, _ in self.recent[-period:]
+                            ])), False,
             )
         return (
             "Stopped: the same tool batch or cycle returned unchanged results again after recovery guidance. "
@@ -75,7 +88,7 @@ class LoopGuard:
         )
 
 
-class StreamLoopError(OpenRouterAPIError):
+class StreamLoopError(APIResponseError):
     """A response repeats itself; its partial calls must never execute."""
 
 

@@ -8,6 +8,7 @@ from ..workspace import Workspace
 from ..instructions import ProjectInstructions
 from ..environment import ProjectEnvironment, load_project_settings, load_project_options
 from .base import Tool, ToolRegistry, ToolResult, validate_arguments
+from .answer import AnswerTool
 from .files import EditFileTool, ReadFileTool, WriteFileTool, file_tools
 from .git import GitAddTool, GitCommitTool, GitDiffTool, GitLogTool, GitStatusTool, git_tools
 from .navigate import ListDirTool, navigate_tools
@@ -17,6 +18,7 @@ from .web import FetchPageTool, WebSearchTool, web_tools
 from .output import CommandArchive, ReadCommandOutputTool
 
 __all__ = [
+    "AnswerTool",
     "EditFileTool",
     "FetchPageTool",
     "GlobTool",
@@ -48,12 +50,13 @@ __all__ = [
 def build_default_registry(
     workspace: Workspace, exa_api_key: str | None = None, *, services: dict[str, Any] | None = None
 ) -> ToolRegistry:
-    """Every tool the harness ships with, bound to `workspace`.
+    """Build workspace tools; Agent attaches history and optional planning tools.
 
     Web tools are always registered so the model can see them; `web_search`
     reports a setup error at call time if no EXA_API_KEY is present.
     Passing services borrows live session owners during reload. Only initial
     construction creates the environment selector and command archive.
+    Code navigation is included only when language servers are configured.
     """
     from ..jobs import CommandJobs, CommandJobsTool
     from ..diagnostics import RequestDiagnostics
@@ -71,6 +74,7 @@ def build_default_registry(
     archive = services["command_archive"]
     registry = ToolRegistry(
         [
+            AnswerTool(),
             *file_tools(workspace),
             *search_tools(workspace),
             *navigate_tools(workspace),

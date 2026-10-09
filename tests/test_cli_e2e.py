@@ -1,12 +1,12 @@
 """End-to-end tests: the installed CLI against a stub OpenRouter server.
 
-These exercise the whole stack — argument parsing, config, transport, the agent
-loop, real tool execution on a real filesystem, and rendering — so a regression
-in any layer surfaces here rather than hiding behind unit test doubles.
+These exercise argument parsing, config, transport, the agent loop, real tool
+execution in disposable workspaces, and rendering against stub API responses.
 """
 
 from __future__ import annotations
 
+from slipagent.types import content_text
 import json
 import os
 import re
@@ -80,6 +80,9 @@ class StubOpenRouter:
                 self._send(step)
 
             def do_GET(self) -> None:  # noqa: N802
+                if self.path == "/nvidia/models":
+                    self._send({"data": []})
+                    return
                 params = ["tools", "response_format", "structured_outputs"]
                 if self.path.endswith("/endpoints"):
                     self._send({"data": {"endpoints": [{"tag": "stub-provider", "supported_parameters": params,
@@ -97,9 +100,15 @@ class StubOpenRouter:
 
     def __enter__(self) -> StubOpenRouter:
         self._thread.start()
+        self._previous_nvidia_url = os.environ.get("NVIDIA_BASE_URL")
+        os.environ["NVIDIA_BASE_URL"] = f"http://127.0.0.1:{self.port}/nvidia"
         return self
 
     def __exit__(self, *exc: object) -> None:
+        if self._previous_nvidia_url is None:
+            os.environ.pop("NVIDIA_BASE_URL", None)
+        else:
+            os.environ["NVIDIA_BASE_URL"] = self._previous_nvidia_url
         self._server.shutdown()
         self._server.server_close()
         self._thread.join(timeout=5)
@@ -167,6 +176,8 @@ def cli_environment(**overrides: str) -> dict[str, str]:
         "SLIPAGENT_STATE_DIR": os.environ["SLIPAGENT_STATE_DIR"],
         "PYTHONPATH": os.pathsep.join([GUARD_DIRECTORY, str(Path(__file__).resolve().parents[1] / "src")]),
     })
+    if "NVIDIA_BASE_URL" in os.environ:
+        env["NVIDIA_BASE_URL"] = os.environ["NVIDIA_BASE_URL"]
     env.update(overrides)
     return env
 
@@ -478,14 +489,20 @@ def test_repl_prints_the_answer_once_per_turn(project_dir: Path) -> None:
 
 def test_repl_reports_api_failure_without_crashing(project_dir: Path) -> None:
     """An unreachable server must produce an error, not a traceback."""
-    # Port 1 is reserved and closed; connection is refused immediately.
+    # Release an ephemeral local port to provoke a connection failure.
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     dead_port = sock.getsockname()[1]
     sock.close()
 
     proc = subprocess.run(
-        [sys.executable, "-m", "slipagent.cli",
+        # Exercise every retry without spending wall time in backoff. Retry
+        # policy/countdown timing has separate controlled-clock tests.
+        [sys.executable, "-c",
+         "from slipagent.api import APIClient\n"
+         "APIClient._backoff = lambda self, attempt, retry_after=None: 0\n"
+         "from slipagent.cli import main\n"
+         "raise SystemExit(main())\n",
          "--base-url", f"http://127.0.0.1:{dead_port}/api/v1"],
         cwd=project_dir,
         input="hello\n/exit\n",
@@ -785,8 +802,7 @@ def test_prompt_and_status_never_share_a_line_with_output(project_dir: Path) -> 
     for line in proc.stderr.splitlines():
         if re.search(r"(?:^|\s)>(?:\s|$)", line) is None:
             continue
-        # Either a prompt row (readouts, then the marker and the user's text)
-        # or the echo of a queued line — never both mashed together.
+        # A prompt or queued-input echo starts at its own marker.
         assert line.lstrip().startswith(">") or "free: " in line, line
 
 
@@ -879,11 +895,14 @@ def test_one_shot_step_limit_returns_failure(project_dir: Path) -> None:
     assert "step limit" in result.stdout
 
 
-def test_missing_key_for_list_models_is_reported_without_traceback(project_dir: Path) -> None:
-    result = subprocess.run([sys.executable, "-m", "slipagent.cli", "--list-models"],
-        cwd=project_dir, capture_output=True, text=True, timeout=5,
-        env=cli_environment(OPENROUTER_API_KEY=""))
+def test_model_listing_requires_an_active_provider(project_dir: Path) -> None:
+    with StubOpenRouter([]) as stub:
+        result = subprocess.run([sys.executable, "-m", "slipagent.cli", "--list-models", "--base-url", stub.base_url],
+            cwd=project_dir, capture_output=True, text=True, timeout=5,
+            env=cli_environment(OPENROUTER_API_KEY=""))
     assert result.returncode == 2
+    assert "No active API providers" in result.stderr
+    assert "stub/one" not in result.stdout
     assert "Traceback" not in result.stderr
 
 
@@ -1021,6 +1040,62 @@ async def test_mutating_commands_wait_until_turn_finishes(tmp_path, monkeypatch,
     finally:
         session.agent.running = False
         await _shutdown(session)
+
+
+async def test_command_help_accepts_optional_slash_without_executing_command(tmp_path, metadata_server):
+    import io
+    from slipagent import cli
+    session = await cli.build_session(cli.build_parser().parse_args(['--no-mcp', '-w', str(tmp_path)]))
+    output = io.StringIO()
+    session.renderer.stream = output
+    try:
+        for topic in ('init', 'mcp', 'model'):
+            replies = []
+            for argument in (topic, '/' + topic):
+                output.seek(0)
+                output.truncate()
+                assert not await cli._handle_command(session, '/help ' + argument)
+                replies.append(output.getvalue().strip())
+            assert replies[0] == replies[1]
+            assert f'Help: /{topic}' in replies[0]
+            if topic == 'mcp':
+                assert 'connect an MCP server over stdio' in replies[0]
+                assert '/mcp remove' in replies[0]
+            if topic == 'model':
+                assert '/model <selector>' in replies[0]
+                assert '/models' not in replies[0]
+        assert not (tmp_path / 'AGENTS.md').exists()
+        assert cli._command_help('') == cli.HELP
+        assert 'No help found' in cli._command_help('/nonexistent')
+    finally:
+        await cli._shutdown(session)
+
+
+async def test_planning_commands(tmp_path, metadata_server):
+    import io
+    from slipagent import cli
+    parser = cli.build_parser()
+    assert parser.parse_args([]).planning
+    assert parser.parse_args(["--planning"]).planning
+    assert not parser.parse_args(["--no-planning"]).planning
+    session = await cli.build_session(parser.parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    output = io.StringIO()
+    session.renderer.stream = output
+    try:
+        assert session.agent.planning
+        for command, enabled in [("/planning off", False), ("/planning off", False),
+                                 ("/planning", True), ("/planning on", True),
+                                 ("/planning invalid", True)]:
+            await cli._handle_command(session, command)
+            assert session.agent.planning is enabled
+            assert ("update_plan" in session.registry) is enabled
+            view = await session.agent._context_view(session.registry.specs(), 1)
+            assert ("# Working Plan" in content_text(view[0].content)) is enabled
+        assert "usage: /planning [on|off]" in output.getvalue()
+        for argument in ("", "on", "off"):
+            assert cli._changes_session("planning", argument)
+    finally:
+        await cli._shutdown(session)
 
 
 async def test_overthinking_commands(tmp_path, metadata_server):

@@ -19,7 +19,7 @@ from wcwidth import iter_graphemes, width as display_width
 # Foreground roles use separated hues; body and strong deliberately share a color.
 THEMES: dict[str, dict[str, str]] = {
     "dark": {
-        "body": "#dddddd", "heading": "#ffffff", "code": "#8be9fd",
+        "body": "#e6e6e6", "heading": "#ffffff", "code": "#8be9fd",
         "code-bg": "#20252d", "inline-bg": "#26343e", "link": "#82aaff",
         "quote": "#c4a7e7", "marker": "#8fbc8f", "keyword": "#c4a7e7",
         "string": "#a6e3a1", "number": "#f9c784", "comment": "#a6adb8",
@@ -33,7 +33,7 @@ THEMES: dict[str, dict[str, str]] = {
         "name": "#005f73", "operator": "#a12648", "syntax": "#282828",
     },
     "ironbow": {
-        "body": "#dddddd", "heading": "#ffffff", "code": "#ffd166",
+        "body": "#e6e6e6", "heading": "#ffffff", "code": "#ffd166",
         "code-bg": "#22162e", "inline-bg": "#38223d", "link": "#c5adff",
         "quote": "#f5a6d8", "marker": "#ffb86b", "keyword": "#df9aff",
         "string": "#ffd166", "number": "#ffb86b", "comment": "#b5a5bc",
@@ -372,7 +372,7 @@ class MarkdownStream:
 
 
 def code_blocks(source: str) -> list[str]:
-    """Exact top-level fenced bodies for clipboard commands."""
+    """Extract code blocks; preserve exact source for top-level fenced bodies."""
     renderer = MarkdownRenderer(color=False)
     result: list[str] = []
     lines = source.splitlines(keepends=True)

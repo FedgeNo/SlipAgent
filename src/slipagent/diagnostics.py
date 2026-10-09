@@ -37,8 +37,18 @@ class RequestDiagnostics:
 
     def use_directory(self, directory: Path) -> None:
         self.clear()
-        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.path = directory
+        try:
+            directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+            for path in directory.iterdir():
+                if path.is_file():
+                    self.used += path.stat().st_size
+                # Reserve existing attempt names even if their contents are
+                # incomplete; resuming must never replace earlier records.
+                if path.suffix == ".json" and path.stem.isascii() and path.stem.isdecimal():
+                    self.sequence = max(self.sequence, int(path.stem))
+        except OSError as exc:
+            self.error = str(exc)
 
     def clear(self) -> None:
         if self.temporary is not None:
@@ -63,14 +73,15 @@ class RequestDiagnostics:
             if os.path.exists(temporary):
                 os.unlink(temporary)
 
-    def begin(self, request: str, *, step: int, step_id: int) -> int | None:
+    def begin(self, request: dict[str, Any] | str, *, step: int, step_id: int) -> int | None:
         if self.error:
             return None
         try:
-            digest = hashlib.sha256(request.encode("utf-8")).hexdigest()
+            encoded = (request if isinstance(request, str) else json.dumps(request, ensure_ascii=False)).encode("utf-8")
+            digest = hashlib.sha256(encoded).hexdigest()
             snapshot = self.directory / (digest + ".json.gz")
             if not snapshot.exists():
-                self._write(snapshot, gzip.compress(request.encode("utf-8"), mtime=0))
+                self._write(snapshot, gzip.compress(encoded, mtime=0))
             self.sequence += 1
             record = {"version": 1, "attempt": self.sequence, "step": step, "step_id": step_id, "request": snapshot.name,
                       "created": datetime.now(timezone.utc).isoformat(), "outcome": "pending"}

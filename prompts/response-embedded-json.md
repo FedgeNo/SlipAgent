@@ -1,0 +1,3 @@
+# Embedded Tool Channel
+
+The object contains only `response` and `tool_calls`. Put planned calls in `tool_calls`; use [] for a final answer.

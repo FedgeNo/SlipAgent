@@ -13,7 +13,8 @@ import re
 import uuid
 from typing import Any
 
-from .types import ToolCall
+from .types import ToolCall, ToolSpec
+from .prompts import load_prompt
 
 RECORD_MAX_CHARS = 6000
 COMPRESSED_FIELDS = (
@@ -61,14 +62,14 @@ def agent_response_format(*, native_tools: bool) -> dict[str, Any]:
 
 
 def parse_agent_response(text: str, native_calls: list[ToolCall], *, native_tools: bool = True,
-                         json_response: bool = False) -> AgentResponse:
-    """Validate only the response contract selected before this request."""
-    if native_tools:
-        result = _parse_native_response(text, native_calls, json_response=json_response)
-    else:
-        if native_calls:
-            raise ResponseFormatError("Unexpected call channel for the supplied response contract.")
-        result = _parse_json_response(text)
+                         json_response: bool = False, tools: list[ToolSpec] | None = None) -> AgentResponse:
+    """Detect each response independently; request hints do not restrict carriers.
+
+    The legacy keyword arguments remain accepted for reload compatibility.
+    Tool schemas describe XML argument types, never a model's response format.
+    """
+    result = _detect_response(text, tools or [])
+    result.calls = combine_calls(normalize_calls([call.to_record() for call in native_calls]), result.calls)
     if not isinstance(result.text, str):
         raise ResponseFormatError("response must be a string.")
     if not result.text.strip() and not result.calls:
@@ -76,95 +77,184 @@ def parse_agent_response(text: str, native_calls: list[ToolCall], *, native_tool
     return result
 
 
-def _parse_json_response(text: str) -> AgentResponse:
-    value = _decode(text)
-    if not isinstance(value, dict) or set(value) != {"response", "tool_calls"}:
-        raise ResponseFormatError("Return exactly response and tool_calls in one JSON object.")
-    raw = value["tool_calls"]
-    if not isinstance(raw, list):
-        raise ResponseFormatError("tool_calls must be an array.")
-    for call in raw:
-        if not isinstance(call, dict) or set(call) != {"id", "name", "arguments"}:
-            raise ResponseFormatError("Each call must contain exactly id, name, and arguments.")
-        if not isinstance(call["id"], str) or not call["id"].strip():
-            raise ResponseFormatError("Each call requires a nonempty id.")
-        if not isinstance(call["arguments"], str) or not isinstance(_decode(call["arguments"]), dict):
-            raise ResponseFormatError("arguments must be a JSON-encoded object string.")
-    return AgentResponse(value["response"], normalize_calls(raw))
+def combine_calls(*sources: list[ToolCall]) -> list[ToolCall]:
+    """Combine carriers in order, preserving repeated calls within each carrier.
 
-
-def _parse_native_response(text: str, native_calls: list[ToolCall], *, json_response: bool) -> AgentResponse:
-    if any(not isinstance(call.id, str) or not call.id.strip() for call in native_calls):
-        raise ResponseFormatError("Each API call requires a nonempty id.")
-    calls = normalize_calls([call.to_record() for call in native_calls])
-    if calls and not text.strip():
-        return AgentResponse("", calls)
-    if json_response:
-        value = _decode(text)
-        if not isinstance(value, dict) or set(value) != {"response"}:
-            raise ResponseFormatError("Return exactly response in one JSON object.")
-        reply = value["response"]
-    else:
-        candidate = text.strip()
-        fence = re.fullmatch(r"```(?:json)?\s*\n(.*)\n```", candidate, re.DOTALL | re.IGNORECASE)
-        if fence:
-            candidate = fence[1].strip()
-        envelope = bool(re.match(r'\{\s*"(?:response|tool_calls|function_call|task)"\s*:', candidate))
-        if candidate.startswith("{"):
-            try:
-                value = _decode(candidate)
-            except ResponseFormatError:
-                pass
+    Mirrored calls match by ID or by name and exact JSON arguments. Multiplicity
+    is preserved, so two intentional equal calls in a batch still execute twice.
+    """
+    result: list[ToolCall] = []
+    def signature(call: ToolCall) -> tuple[str, str]:
+        return call.name, json.dumps(call.arguments, sort_keys=True, ensure_ascii=True)
+    for source in sources:
+        unmatched = list(result)
+        additions = []
+        for call in source:
+            same_id = next((prior for prior in result if prior.id == call.id), None)
+            if same_id is not None and signature(same_id) != signature(call):
+                raise ResponseFormatError("Conflicting tool calls share the same ID.")
+            prior = next((prior for prior in unmatched if prior.id == call.id), None)
+            if prior is None:
+                prior = next((prior for prior in unmatched if signature(prior) == signature(call)), None)
+            if prior is not None:
+                unmatched.remove(prior)
             else:
-                envelope = isinstance(value, dict) and bool(set(value) & {"response", "tool_calls", "function_call", "task"})
-        if envelope or candidate.startswith(("<tool_call>", "<function_call>")):
-            raise ResponseFormatError("Return plain assistant reply text in the supplied reply channel.")
-        reply = text
-    return AgentResponse(reply, calls)
+                additions.append(call)
+        result.extend(additions)
+    return normalize_calls([call.to_record() for call in result])
+
+
+def _detect_response(text: str, tools: list[ToolSpec]) -> AgentResponse:
+    candidate = text.strip().removeprefix("\ufeff").strip()
+    fence = re.fullmatch(r"```(?:json)?[ \t]*\r?\n(.*)\r?\n```", candidate, re.DOTALL | re.IGNORECASE)
+    if fence:
+        candidate = fence[1].strip()
+    # Decode envelopes before inspecting tags, so code strings stay inert.
+    if candidate.startswith("{") or re.match(r"```(?:json)?[ \t]*\r?\n\s*\{", candidate, re.IGNORECASE):
+        value, tagged = _response_object(candidate, tools=tools)
+        if isinstance(value, dict):
+            if set(value) & {"response", "tool_calls", "function_call", *COMPRESSED_FIELDS}:
+                allowed = {"response", "tool_calls", "function_call", *COMPRESSED_FIELDS}
+                if all(field in value for field in COMPRESSED_FIELDS):
+                    allowed.add("task")
+                if set(value) - allowed:
+                    raise ResponseFormatError("Unexpected response envelope fields.")
+                if any(field in value for field in COMPRESSED_FIELDS):
+                    calls = combine_calls(normalize_calls(value.get("tool_calls")),
+                                          normalize_calls(value.get("function_call")), tagged)
+                    legacy_value = {key: item for key, item in value.items() if key != "function_call"}
+                    legacy_value["tool_calls"] = [call.to_record() for call in calls]
+                    legacy = _parse_response(json.dumps(legacy_value), bool(value.get(COMPRESSED_FIELDS[0])), [])
+                    return AgentResponse(legacy.text, legacy.calls)
+                reply = value.get("response", "")
+                calls = combine_calls(normalize_calls(value.get("tool_calls")),
+                                      normalize_calls(value.get("function_call")), tagged)
+                return AgentResponse(reply, calls)
+    # Markdown examples are not call carriers. Only top-level tags are parsed.
+    if not fence:
+        offset = 0
+        in_fence = ""
+        for line in text.splitlines(keepends=True):
+            stripped = line.lstrip(" \t")
+            marker = re.match(r"(`{3,}|~{3,})", stripped)
+            if marker:
+                if not in_fence:
+                    in_fence = marker[1]
+                elif marker[1][0] == in_fence[0] and len(marker[1]) >= len(in_fence):
+                    in_fence = ""
+            elif (not in_fence and len(line) - len(stripped) < 4 and "\t" not in line[:len(line) - len(stripped)]
+                  and stripped.startswith(("<tool_call>", "<function_call>"))):
+                return AgentResponse(text[:offset].rstrip(), _tagged_calls(text[offset:], tools))
+            offset += len(line)
+    return AgentResponse(text, [])
+
+
+def _tagged_calls(text: str, tools: list[ToolSpec]) -> list[ToolCall]:
+    remaining = text.strip()
+    raw: list[dict[str, Any]] = []
+    decoder = json.JSONDecoder(object_pairs_hook=_object, parse_constant=_constant)
+    while remaining:
+        opening = re.match(r"<(tool_call|function_call)>\s*", remaining)
+        if opening is None:
+            raise ResponseFormatError("Expected a complete tagged tool call without trailing prose.")
+        remaining = remaining[opening.end():]
+        fence = re.match(r"```(?:json)?[ \t]*\r?\n", remaining, re.IGNORECASE)
+        if fence:
+            remaining = remaining[fence.end():].lstrip()
+        if remaining.startswith("<answer>"):
+            answer, closing, remaining = remaining[len("<answer>"):].partition("</answer>")
+            if not closing:
+                boundary = re.search(r"</(?:tool_call|function_call)>|<(?:tool_call|function_call)>", answer)
+                remaining = answer[boundary.start():] if boundary else ""
+                answer = answer[:boundary.start()] if boundary else answer
+            answer = answer[2:] if answer.startswith("\r\n") else answer.removeprefix("\n")
+            answer = answer[:-2] if answer.endswith("\r\n") else answer.removesuffix("\n")
+            raw.append({"name": "answer", "arguments": {"text": answer}})
+            remaining = remaining.lstrip()
+        elif remaining.startswith("<function="):
+            call, remaining = _qwen_call(remaining, tools)
+            raw.append(call)
+        else:
+            try:
+                _, end = decoder.raw_decode(remaining)
+            except (ValueError, RecursionError) as exc:
+                raise ResponseFormatError("Expected complete JSON inside tool-call tags.") from exc
+            calls = normalize_calls(_decode(remaining[:end]))
+            raw.extend(call.to_record() for call in calls)
+            remaining = remaining[end:].lstrip()
+        if fence:
+            if not remaining.startswith("```"):
+                raise ResponseFormatError("Missing closing code fence in tagged call.")
+            remaining = remaining[3:].lstrip()
+        closing = f"</{opening[1]}>"
+        if remaining.startswith(closing):
+            remaining = remaining[len(closing):].lstrip()
+        elif remaining and not remaining.startswith(("<tool_call>", "<function_call>")):
+            raise ResponseFormatError(f"Missing closing {closing}.")
+    return normalize_calls(raw)
+
+
+def _qwen_call(text: str, tools: list[ToolSpec]) -> tuple[dict[str, Any], str]:
+    function = re.match(r"<function=([^<>\s]+)>\s*", text)
+    if function is None:
+        raise ResponseFormatError("Invalid Qwen3-Coder function tag.")
+    name = function[1]
+    properties: dict[str, Any] = next((tool.parameters.get("properties", {}) for tool in tools if tool.name == name), {})
+    remaining = text[function.end():]
+    arguments: dict[str, Any] = {}
+    while remaining and not remaining.startswith(("</function>", "</tool_call>", "</function_call>", "<tool_call>", "<function_call>")):
+        parameter = re.match(r"<parameter=([^<>\s]+)>", remaining)
+        if parameter is None or parameter[1] in arguments:
+            raise ResponseFormatError("Invalid or duplicate Qwen3-Coder parameter.")
+        value, closing, remaining = remaining[parameter.end():].partition("</parameter>")
+        if not closing:
+            boundary = re.search(r"</(?:function|tool_call|function_call)>|<(?:tool_call|function_call)>", value)
+            remaining = value[boundary.start():] if boundary else ""
+            value = value[:boundary.start()] if boundary else value
+        # Qwen's framing adds one newline at each edge; preserve code whitespace.
+        value = value[2:] if value.startswith("\r\n") else value.removeprefix("\n")
+        value = value[:-2] if value.endswith("\r\n") else value.removesuffix("\n")
+        schema = properties.get(parameter[1], {})
+        kind = schema.get("type", "string")
+        arguments[parameter[1]] = value if kind == "string" or isinstance(kind, list) and "string" in kind else _decode(value)
+        remaining = remaining.lstrip()
+    return {"name": name, "arguments": arguments}, remaining.removeprefix("</function>").lstrip()
 
 
 def response_format(has_previous_results: bool, *, native_tools: bool = False) -> dict[str, Any]:
     """Describe legacy reply, actions, and three summaries."""
+    descriptions = json.loads(load_prompt("response-fields.json"))
     properties: dict[str, Any] = {
         "response": {
             "type": "string",
             "description": (
-                "Useful terminal text for the user. Prefer informative text alongside tool batches, "
-                "but an empty string is allowed when requesting tools. Nonempty text is required when no tools are requested.\n\n"
-                "Report important findings from any previous tool calls whose results are available, "
-                "including the conclusions or decisions based on them.\n\n"
-                "State your intentions and purpose for any new tool calls you request. "
-                "Report findings from those new calls only after their results arrive.\n\n"
-                "If there are no previous results, explain your intended action and purpose. "
-                "If there are no new calls, report your findings, answer, or the specific information "
-                "needed to proceed. Do not invent findings or calls to fill the response.\n\n"
-                "This response provides memory for future steps beyond any limited reasoning retention."
+                descriptions["response"]
             ),
         },
         "tool_calls": {
-            "type": "array", "description": "Ordered tools to execute after validation; [] for a final answer.",
+            "type": "array", "description": descriptions["tool_calls"],
             "items": {
                 "type": "object", "additionalProperties": False,
                 "required": ["id", "name", "arguments"],
                 "properties": {
-                    "id": {"type": "string", "minLength": 1, "description": "Nonempty identifier unique within this batch."},
-                    "name": {"type": "string", "minLength": 1, "description": "Exact advertised tool name."},
-                    "arguments": {"type": "string", "description": "JSON-encoded object matching the tool's parameter schema. Use '{}' for no arguments."},
+                    "id": {"type": "string", "minLength": 1, "description": descriptions["call_id"]},
+                    "name": {"type": "string", "minLength": 1, "description": descriptions["tool_name"]},
+                    "arguments": {"type": "string", "description": descriptions["arguments"]},
                 },
             },
         },
         "previous_tool_responses_compressed": {
             "type": "string", "maxLength": RECORD_MAX_CHARS,
-            "description": "Compress ALL actual results from the previous tool batch, including failures, findings, and verification. Never invent current tool outcomes. Empty only if no previous results were supplied.",
+            "description": descriptions["previous_results"],
             **({"minLength": 1} if has_previous_results else {"enum": [""]}),
         },
         "user_prompt_compressed": {
             "type": "string", "minLength": 1, "maxLength": RECORD_MAX_CHARS,
-            "description": "Compress the active user's request and corrections, preserving constraints, goals, paths, and identifiers. Include the ongoing request on continuation calls.",
+            "description": descriptions["user_request"],
         },
         "agent_response_compressed": {
             "type": "string", "minLength": 1, "maxLength": RECORD_MAX_CHARS,
-            "description": "Compress your response and ALL planned tool calls, decisions, and remaining work. Mark requested tools as pending; their outcomes are not available yet.",
+            "description": descriptions["current_step"],
         },
     }
     if native_tools:
@@ -282,7 +372,7 @@ def normalize_calls(raw: Any) -> list[ToolCall]:
 
 
 def merge_call_sources(*sources: list[ToolCall]) -> list[ToolCall]:
-    """Accept one batch or identical alternate representations, never a union.
+    """Legacy merger: accept one batch or identical alternate representations.
 
     Native IDs take precedence when a provider repeats its batch in content.
     Sequence and multiplicity matter: two intentional identical calls in one
@@ -301,7 +391,7 @@ def merge_call_sources(*sources: list[ToolCall]) -> list[ToolCall]:
     return first
 
 
-def _response_object(text: str) -> tuple[Any, list[ToolCall]]:
+def _response_object(text: str, *, tools: list[ToolSpec] | None = None) -> tuple[Any, list[ToolCall]]:
     """Read a complete record plus optional explicitly delimited JSON calls.
 
     Only whole code fences are unwrapped. We do not scan prose, the response
@@ -317,6 +407,10 @@ def _response_object(text: str) -> tuple[Any, list[ToolCall]]:
     record: Any = None
     calls: list[ToolCall] = []
     while remaining:
+        if remaining.startswith(("<tool_call>", "<function_call>")) and any(tag in remaining for tag in ("<function=", "<answer>")):
+            calls.extend(_tagged_calls(remaining, tools or []))
+            remaining = ""
+            break
         tag = next((tag for tag in ("tool_call", "function_call") if remaining.startswith(f"<{tag}>")), None)
         if tag:
             remaining = remaining[len(tag) + 2:].lstrip()
@@ -337,9 +431,10 @@ def _response_object(text: str) -> tuple[Any, list[ToolCall]]:
             remaining = remaining[3:].lstrip()
         if tag:
             closing = f"</{tag}>"
-            if not remaining.startswith(closing):
+            if remaining.startswith(closing):
+                remaining = remaining[len(closing):].lstrip()
+            elif remaining and not remaining.startswith(("<tool_call>", "<function_call>")):
                 raise ResponseFormatError(f"Missing closing {closing} after tool-call JSON.")
-            remaining = remaining[len(closing):].lstrip()
             calls.extend(normalize_calls(value))
         elif record is None:
             if not isinstance(value, dict):

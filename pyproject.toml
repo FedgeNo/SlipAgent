@@ -1,7 +1,7 @@
 [project]
 name = "slipagent"
-version = "0.2.0"
-description = "An agentic coding harness that drives OpenRouter models."
+version = "0.2.1"
+description = "An agentic coding harness with selectable OpenRouter and NVIDIA providers."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

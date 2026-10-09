@@ -378,7 +378,7 @@ class LanguageServers:
 class NavigateCodeTool(Tool):
     name = "navigate_code"
     instruction_path = "path"
-    description_prompt = 'tools/navigate-code.txt'
+    description_prompt = 'tools/navigate-code.md'
     description = load_prompt(description_prompt)
     parameters = {"type": "object", "properties": {
         "operation": {"type": "string", "enum": list(OPERATIONS)}, "path": {"type": "string"},

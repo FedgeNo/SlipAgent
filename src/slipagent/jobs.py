@@ -107,7 +107,7 @@ class CommandJobs:
 class CommandJobsTool(Tool):
     name = "command_jobs"
     progress_exempt = True
-    description_prompt = 'tools/command-jobs.txt'
+    description_prompt = 'tools/command-jobs.md'
     description = load_prompt(description_prompt)
     parameters = {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["list", "status", "wait", "stop"]},

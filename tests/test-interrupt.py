@@ -18,6 +18,72 @@ from test_agent import StubClient, call, completion
 from test_cli_e2e import metadata_server
 
 
+async def test_model_change_pause_resumes_and_preserves_submitted_input(tmp_path, monkeypatch, metadata_server):
+    session = await cli.build_session(cli.build_parser().parse_args(['--no-mcp', '-w', str(tmp_path)]))
+    session.renderer.stream = io.StringIO()
+    lines = asyncio.Queue()
+    first_started, finish_first = asyncio.Event(), asyncio.Event()
+    changing, finish_change = asyncio.Event(), asyncio.Event()
+    resumed, finish_second = asyncio.Event(), asyncio.Event()
+    requests = []
+
+    async def read(*args):
+        return await lines.get()
+
+    async def run(agent, prompt, **kwargs):
+        requests.append((prompt, kwargs))
+        agent.running = True
+        agent.stop_requested = False
+        agent.stopped = False
+        try:
+            if len(requests) == 1:
+                first_started.set()
+                await finish_first.wait()
+                return agent._stop_notice(1)
+            resumed.set()
+            await finish_second.wait()
+            agent._drain_pending()
+            return 'Done'
+        finally:
+            agent.running = False
+
+    async def model(*args):
+        changing.set()
+        await finish_change.wait()
+
+    monkeypatch.setattr(cli, '_read_line', read)
+    monkeypatch.setattr(cli, '_model_command', model)
+    monkeypatch.setattr(type(session.agent), 'run', run)
+    task = asyncio.create_task(cli._run_request(session, 'Inspect', session.renderer.style))
+    try:
+        await asyncio.wait_for(first_started.wait(), 2)
+        await lines.put('/model replacement')
+        async with asyncio.timeout(2):
+            while not session.agent.stop_requested:
+                await asyncio.sleep(0)
+        finish_first.set()
+        await asyncio.wait_for(changing.wait(), 2)
+        await lines.put('Keep this follow-up')
+        finish_change.set()
+        await asyncio.wait_for(resumed.wait(), 2)
+        async with asyncio.timeout(2):
+            while not session.agent.pending:
+                await asyncio.sleep(0)
+        finish_second.set()
+        assert await asyncio.wait_for(task, 2) is False
+        assert any(message.role == 'user' and message.content == 'Keep this follow-up'
+                   for message in session.agent.messages)
+        assert requests == [('Inspect', {}), ('', {'continue_run': True})]
+        output = session.renderer.stream.getvalue()
+        assert 'ask me to continue' not in output
+        assert 'applying queued commands' in output
+        assert 'continuing the current task' in output
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await cli._shutdown(session)
+
+
 @pytest.mark.parametrize("phase", ["request", "tools"])
 async def test_interrupt_preserves_results_and_prevents_continuation(tmp_path, monkeypatch, metadata_server, phase):
     session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))

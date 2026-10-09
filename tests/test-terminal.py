@@ -30,25 +30,27 @@ async def wait_until(predicate) -> None:
 
 
 @pytest.mark.parametrize("working", [False, True])
-def test_ctrl_c_exits_with_keyboard_interrupt_without_custom_stop_or_copy(display, monkeypatch, working):
+async def test_ctrl_c_has_no_application_binding_or_exit_action(display, working):
     sink, _, output, _, _ = display
-    exits = []
     with create_pipe_input() as pipe:
         ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
-        monkeypatch.setattr(ui.app, "exit", lambda **kwargs: exits.append(kwargs))
+        task = asyncio.create_task(ui.run())
         try:
             ui.working = working
             ui.input.text = "draft"
+            ui.input.buffer.cursor_position = len(ui.input.text)
             for key in (Keys.ControlC, Keys.SIGINT):
                 bindings = [binding for binding in ui._bindings().get_bindings_for_keys((key,))
                             if binding.keys == (key,)]
-                assert len(bindings) == 1
-                bindings[0].handler(SimpleNamespace(app=ui.app))
-            assert exits == [{"exception": KeyboardInterrupt}] * 2
-            assert ui.input.text == "draft"
+                assert not bindings
+            await wait_until(lambda: ui.app.is_running)
+            pipe.send_text('\x03x')
+            await wait_until(lambda: ui.input.text == 'draftx')
+            assert not task.done()
             assert ui._lines.empty()
         finally:
             ui.close()
+            await task
 
 
 @pytest.mark.parametrize("columns", [18, 100])
@@ -774,7 +776,7 @@ async def test_restored_transcript_replaces_output_and_scrolls_to_end(display):
             assert "System instructions" not in recorded and "opaque signature" not in recorded
             assert "Saved readable thoughts" in recorded and "Saved first answer" in recorded
             assert "read_file" in recorded and "Saved tool failure" in recorded
-            assert '{"status": [], "data": "Legacy tool output"}' in recorded
+            assert 'status: list (0 items):' in recorded and 'Legacy tool output' in recorded
             assert "\x1b[38;2;255;0;255m" in recorded
             assert "\x1b[38;2;255;102;102m" in recorded
             assert [message.to_api() for message in messages] == original
@@ -804,6 +806,12 @@ async def test_working_indicator_pulses_and_becomes_idle(display) -> None:
             await wait_until(lambda: "Stopping After This Step" in snapshot()[18])
             ui.set_working(False)
             await wait_until(lambda: "Ready" in snapshot()[18])
+            ui.set_command_status("Applying /model (Esc to interrupt)")
+            await wait_until(lambda: "Applying /model" in snapshot()[18])
+            assert not ui.working
+            ui.set_command_status("")
+            ui.set_working(True)
+            await wait_until(lambda: "Working" in snapshot()[18])
         finally:
             ui.close()
             await task
@@ -931,14 +939,14 @@ def test_startup_tool_list_keeps_hanging_indent_after_resize(display, tmp_path):
                 content = ui.transcript.content.create_content(columns, 17)
                 rows = ["".join(fragment[1] for fragment in content.get_line(i))
                         for i in range(content.line_count)]
-                start = next(i for i, row in enumerate(rows) if row.startswith("  tools:"))
+                start = next(i for i, row in enumerate(rows) if row.startswith("  Tools:"))
                 end = next(i for i in range(start + 1, len(rows)) if not rows[i].strip())
                 tool_rows = rows[start:end]
                 assert len(tool_rows) > 1
                 assert all(width(row) <= columns for row in tool_rows)
                 if columns > 13:
                     assert all(row.startswith(" " * 13) for row in tool_rows[1:])
-                assert "".join(row.strip().replace(" ", "") for row in tool_rows) == "tools:" + ",".join(tools)
+                assert "".join(row.strip().replace(" ", "") for row in tool_rows) == "Tools:" + ",".join(tools)
                 ordinary = next(i for i, row in enumerate(rows) if row.startswith("  ordinary"))
                 assert all(row.startswith("  ") for row in rows[ordinary:] if row.strip())
         finally:

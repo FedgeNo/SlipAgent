@@ -10,7 +10,7 @@ command_output: ContextVar[Callable[[str], None] | None] = ContextVar("command_o
 
 
 class OutputProgress:
-    """Throttle display updates; complete output remains in the command archive."""
+    """Throttle display updates independently of archived command output."""
 
     def __init__(self, publish: Callable[[str], None]) -> None:
         self.publish = publish

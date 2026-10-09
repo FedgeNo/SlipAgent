@@ -11,11 +11,6 @@ class PromptError(RuntimeError):
     """An editable prompt cannot be loaded."""
 
 
-def section_divider(title: str) -> str:
-    """Separate major model-input sections with a prominent plain-text title."""
-    return "=" * 29 + " " + title.upper() + " " + "=" * 30
-
-
 def prompt_directory() -> Path:
     """Use the checkout's visible folder, or the installed package resources."""
     package = Path(__file__).resolve().parent
@@ -37,7 +32,7 @@ def load_prompt(filename: str, **values: object) -> str:
 
 
 def __getattr__(name: str) -> str:
-    resources = {"SYSTEM_PROMPT": "system-prompt.txt", "COMPACTION_PROMPT": "background-summary-prompt.txt"}
+    resources = {"SYSTEM_PROMPT": "system-prompt.md", "COMPACTION_PROMPT": "background-summary-prompt.md"}
     if name not in resources:
         raise AttributeError(name)
     return load_prompt(resources[name])
@@ -65,6 +60,6 @@ class PromptSections:
         self.sections[name] = PromptSection(name, title, content, order, owner, dynamic)
 
     def render(self) -> str:
-        return "\n".join(f"{section_divider('BEGIN ' + section.title)}\n\n{section.content.strip()}\n\n{section_divider('END ' + section.title)}\n" for section in
+        return "\n".join(f"{section.content.strip()}\n" for section in
                            sorted(self.sections.values(), key=lambda item: (item.dynamic, item.order, item.name))
                            if section.content)

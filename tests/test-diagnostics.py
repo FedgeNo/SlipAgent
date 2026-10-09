@@ -5,6 +5,34 @@ import os
 from slipagent.diagnostics import RequestDiagnostics
 
 
+def test_resume_preserves_attempts_and_counts_existing_storage(tmp_path):
+    archive = RequestDiagnostics()
+    archive.use_directory(tmp_path)
+    first = archive.begin({"messages": []}, step=1, step_id=1)
+    archive.finish(first, "success")
+    original = (tmp_path / "00000001.json").read_bytes()
+    # Even an incomplete/corrupt record must not be replaced on resume.
+    (tmp_path / "00000005.json").write_bytes(b"incomplete")
+    resumed = RequestDiagnostics()
+    resumed.use_directory(tmp_path)
+    assert resumed.used == sum(path.stat().st_size for path in tmp_path.iterdir())
+    assert resumed.begin({"messages": []}, step=2, step_id=2) == 6
+    assert (tmp_path / "00000001.json").read_bytes() == original
+    assert (tmp_path / "00000005.json").read_bytes() == b"incomplete"
+
+
+def test_resume_obeys_existing_quota(tmp_path):
+    archive = RequestDiagnostics()
+    archive.use_directory(tmp_path)
+    archive.begin({"messages": []}, step=1, step_id=1)
+    original = {path.name: path.read_bytes() for path in tmp_path.iterdir()}
+    resumed = RequestDiagnostics(quota=sum(map(len, original.values())))
+    resumed.use_directory(tmp_path)
+    assert resumed.begin({"messages": []}, step=2, step_id=2) is None
+    assert "quota" in resumed.error
+    assert {path.name: path.read_bytes() for path in tmp_path.iterdir()} == original
+
+
 def test_exact_request_deduplication_and_failed_attempt_retention(tmp_path):
     archive = RequestDiagnostics()
     archive.use_directory(tmp_path / "requests")

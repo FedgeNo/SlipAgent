@@ -286,7 +286,7 @@ async def test_ignore_environment_and_config_worktree_redirects(repository: Work
     monkeypatch.setenv("GIT_DIR", str(outside / ".git"))
     monkeypatch.setenv("GIT_WORK_TREE", str(outside))
     monkeypatch.setenv("GIT_INDEX_FILE", str(outside / "redirected-index"))
-    # Write config directly through a clean subprocess environment, not the redirected Git.
+    # Write the config file directly to bypass the redirected Git environment.
     with (repository.root / ".git/config").open("a") as config:
         config.write(f"\n[core]\n\tworktree = {outside}\n")
     (repository.root / "new.txt").write_text("inside")

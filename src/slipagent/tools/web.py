@@ -2,7 +2,7 @@
 
 `web_search` needs an `EXA_API_KEY`. Without one the tool still registers but
 returns a clear setup error, so the model can tell the user what is missing
-instead of silently failing. `fetch_page` needs nothing.
+instead of silently failing. `fetch_page` needs no API key.
 """
 
 from __future__ import annotations
@@ -130,7 +130,7 @@ def html_to_text(markup: str, *, base_url: str = "") -> tuple[str, str | None]:
 class WebSearchTool(Tool):
     parameter_prompts = 'tools/web-search-parameters.json'
     name = "web_search"
-    description_prompt = 'tools/web-search.txt'
+    description_prompt = 'tools/web-search.md'
     description = load_prompt(description_prompt)
     parameters = {
         "type": "object",
@@ -247,7 +247,7 @@ class _PublicTransport(httpx.AsyncHTTPTransport):
 class FetchPageTool(Tool):
     parameter_prompts = 'tools/fetch-page-parameters.json'
     name = "fetch_page"
-    description_prompt = 'tools/fetch-page.txt'
+    description_prompt = 'tools/fetch-page.md'
     description = load_prompt(description_prompt)
     parameters = {
         "type": "object",

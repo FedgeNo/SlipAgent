@@ -49,9 +49,8 @@ an offline smoke test.
 
 ## Find the Owner of the Change
 
-The [module responsibility map in AGENTS.md](AGENTS.md#module-responsibilities)
-is the shared index for humans and agents. It is kept in the project instruction
-file so the model receives it before choosing which source files to inspect.
+Use [Internal Contracts](docs/architecture.md) to locate the component that owns
+the behavior, along with any module map supplied by local project instructions.
 
 Read callers and tests before editing a contract. The model only knows the
 instructions, definitions, history, and observations in the outgoing request.
@@ -154,22 +153,25 @@ valid recovery using disposable package copies when modifying this machinery.
   state, use the selected project environment, and report skipped/failed checks
   to the model without implying that edits themselves failed.
 - Store the original prompt, reply, tool calls, and results as independently
-  retrievable parts. Recent steps use all originals; older steps use a whole-step
-  summary only when it costs fewer tokens, otherwise the original. Never supply
-  both versions of a step. Use the model allowance without a separate history
-  token cap. Omit older records before reducing the recent window below its
-  five-call minimum, and only reduce it when those calls cannot fit. Reconsider
+  retrievable parts. Recent steps include originals and available compressed
+  analysis in one record. Older steps use a whole-step summary when it costs
+  fewer tokens than the original representation; otherwise they include originals
+  and available analysis. Budget the combined record. Use the model allowance,
+  subject to an explicit `--context-tokens` cap. Omit older records before reducing
+  the recent window, whose minimum target is five steps. Reconsider
   omitted records on each request so they can return when space becomes available.
-- Summarize each completed step in a separate background request containing only
-  those four parts. Never include the thread or project/task state. Test reset,
+- Summarize each completed step in a separate background request containing its
+  prompt, reply, calls, results and thoughts, plus up to 25 preceding steps for
+  context. Compress only the completed target step; return factual memory and filtered
+  thoughts separately. Never include project instruction scaffolding. Test reset,
   cancellation, late results, and model/profile changes. Summary completion must
   not hide tool results before the working model receives them.
 - Allow ordinary replies and null-content native calls without schema support.
   The optional strict schema contains only reply text and embedded calls where
   needed. Memory is not a required response envelope.
-- Preserve the active goal and constraints independently of short follow-ups.
-  Missing source instructions must be supplied before actions proceed; an
-  excerpt or request to retrieve them does not prove the model has read them.
+- Retain the latest original user input independently of compression. The optional
+  working plan records model-maintained stages; it does not replace user instructions.
+  An excerpt or retrieval request does not establish delivery of omitted guidance.
 - Keep every observation's success/error status in model context. Report lost
   output honestly and distinguish a preview from retained data that can be paged.
 - Supply reload failures, project environment selection, and scoped MCP guidance
@@ -185,7 +187,9 @@ valid recovery using disposable package copies when modifying this machinery.
   Never install a server implicitly or relaunch an archived job on resume.
 - Normalize alternate response formats before validation. Keep native tool IDs,
   batch order, exact arguments, and matching observations intact. Duplicate
-  representations must not execute twice; conflicting batches require a retry.
+  calls mirrored across carriers match one-for-one by ID or exact name/arguments;
+  distinct calls and same-carrier repetitions remain. Conflicting reuse of an ID
+  is rejected.
   Extend parser tests with complete wire responses, streamed fragments, and
   malformed cases before adding another format. Do not infer actions from prose.
 - Fetch protocol capabilities at startup and explicit model selection, cache

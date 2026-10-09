@@ -2,6 +2,8 @@
 
 from slipagent.types import content_text
 
+import json
+from data_text_reader import read_data
 import pytest
 
 from test_agent import unpack_context, context_records
@@ -37,13 +39,15 @@ async def test_current_run_command_survives_tool_results_without_entering_histor
                               context_length=1_000_000, max_output=8192)
     current = context_records(view)[-1]
     assert current["record_type"] == "current_step"
-    assert 'User request for this run (JSON array of user-authored messages): ["Current request"]' in content_text(view[0].content)
+    retained = content_text(view[0].content).split('## Original Messages\n\n', 1)[1]
+    request_text = retained.split('```text\n', 1)[1].split('\n```', 1)[0]
+    assert read_data(request_text) == ["Current request"]
     assert current["is_tool_result_response"] is True
     assert "step_id 2" in content_text(view[0].content)
     assert "overall goal for this run" in content_text(view[0].content)
     assert "multiple steps ago" in content_text(view[0].content)
-    assert "no new user instruction was received" in content_text(view[0].content)
-    assert "A new user request was received" not in content_text(view[0].content)
+    assert "without new user input" in content_text(view[0].content)
+    assert "This turn includes new user input" not in content_text(view[0].content)
     assert [step.full_text() for step in history.steps] == originals
     assert all("User Request for This Run" not in step.compaction_input() for step in history.steps)
     messages.extend([Message.assistant("Done"), Message.user("New request")])
@@ -51,8 +55,8 @@ async def test_current_run_command_survives_tool_results_without_entering_histor
                               context_length=1_000_000, max_output=8192)
     assert context_records(view)[-1]["user_prompt"] == ["New request"]
     assert "step_id 4" in content_text(view[0].content)
-    assert "A new user request was received" in content_text(view[0].content)
-    assert "no new user instruction was received" not in content_text(view[0].content)
+    assert "This turn includes new user input" in content_text(view[0].content)
+    assert "without new user input" not in content_text(view[0].content)
 
 
 async def test_large_recent_originals_use_the_model_allowance_above_200000_tokens():
@@ -63,6 +67,42 @@ async def test_large_recent_originals_use_the_model_allowance_above_200000_token
     supplied = [context_body(message.content) for message in unpack_context(view) if message.role == "assistant"]
     assert supplied == answers
     assert 200_000 < message_tokens(view) < 850_000 - 8192
+
+
+async def test_ready_summary_joins_original_in_one_record_without_rewriting_history():
+    history = ConversationHistory()
+    messages = [Message.user('Inspect'), Message.assistant('Reading', [ToolCall('r', 'read_file', {'path': 'a.py'})]),
+                Message.tool_result('r', 'EXACT ORIGINAL'), Message.user('Continue')]
+    options = dict(keep_steps=50, context_length=100000, max_output=1000)
+    pending = await history.view(messages, [], **options)
+    original = history.steps[0].full_text()
+    assert 'compressed_summary' not in context_records(pending)[0]
+    history.steps[0].summary = 'Observations: The file contained EXACT ORIGINAL.'
+    ready = await history.view(messages, [], **options)
+    records = context_records(ready)
+    assert len(records) == 2
+    assert records[0] == {**context_records(pending)[0], 'compressed_summary': history.steps[0].summary}
+    assert records[1]['record_type'] == 'current_step'
+    assert 'compressed_summary' not in records[1]
+    assert message_tokens(ready) > message_tokens(pending)
+    assert history.steps[0].full_text() == original
+
+
+async def test_combined_history_is_budgeted_and_does_not_duplicate_steps():
+    history, messages = conversation(['Original ' * 400 for _ in range(12)])
+    for step in history.steps:
+        step.summary = 'Observations: ' + 'Analysis ' * 500
+    view = await history.view(messages, [], keep_steps=50, context_length=20000, max_output=1000)
+    records = context_records(view)[:-1]
+    assert len({record['step_id'] for record in records}) == len(records)
+    assert len(records) < 12
+    assert any(record['representation'] == 'full' for record in records)
+    for record in records:
+        if record['representation'] == 'full':
+            assert record['compressed_summary'] == history.steps[record['step_id'] - 1].summary
+            assert record['agent_response'] == 'Original ' * 400
+    assert message_tokens(view) <= int(20000 * .85) - 1000
+    assert len(history.steps) == 12
 
 
 async def test_five_recent_originals_take_priority_over_older_history():
@@ -92,7 +132,7 @@ async def test_larger_summary_falls_back_to_original_roles_and_tool_pairing(nati
     assert [message.role for message in restored[1:4]] == ["user", "assistant", "tool"]
     assert restored[2].tool_calls == messages[1].tool_calls
     assert restored[3].tool_call_id == "read" and context_body(restored[3].content) == "EXACT TOOL RESULT"
-    assert "INFLATED SUMMARY" not in "\n".join(content_text(message.content) for message in unpack_context(view))
+    assert context_records(view)[0]['compressed_summary'] == history.steps[0].summary
     assert [step.full_text() for step in history.steps] == originals
 
 
@@ -159,7 +199,7 @@ async def test_equal_cost_summary_keeps_the_original(token_scale):
     view = await history.view(messages, [], keep_steps=5, context_length=1_000_000,
                               max_output=8192, token_scale=token_scale)
     assert context_records(view)[0]["agent_response"] == "ORIGINAL " * 100
-    assert step.summary not in "\n".join(content_text(message.content) for message in unpack_context(view))
+    assert context_records(view)[0]['compressed_summary'] == step.summary
 
 
 async def test_mixed_older_originals_and_summaries_keep_chronological_order():
@@ -169,7 +209,8 @@ async def test_mixed_older_originals_and_summaries_keep_chronological_order():
     view = await history.view(messages, [], keep_steps=5, context_length=1_000_000, max_output=8192)
     wire = "\n".join(content_text(message.content) for message in unpack_context(view))
     assert wire.index("SUMMARY 1") < wire.index("Second original") < wire.index("SUMMARY 3") < wire.index("Recent 0")
-    assert "FIRST " not in wire and "THIRD " not in wire and "EXPANDED SECOND SUMMARY" not in wire
+    assert "FIRST " not in wire and "THIRD " not in wire
+    assert context_records(view)[1]['compressed_summary'] == history.steps[1].summary
     assert [context_body(message.content) for message in unpack_context(view) if message.role == "user"] == [
         "Question 2", *[f"Question {index}" for index in range(4, 9)], "Current question",
     ]
@@ -193,4 +234,4 @@ async def test_summary_comparison_uses_the_same_json_records_for_all_tool_profil
     for native in (True, False):
         view = await history.view(messages, [], keep_steps=5, context_length=1_000_000, max_output=8192,
                                   native_tools=native, text_tool_history=not native)
-    assert context_records(view)[0] == {"record_type": "history_step", "representation": "compressed", "step_id": step.id, "summary": step.summary}
+    assert context_records(view)[0] == {"record_type": "history_step", "representation": "compressed", "step_id": step.id, "compressed_summary": step.summary}

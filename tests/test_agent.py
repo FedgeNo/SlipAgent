@@ -11,7 +11,8 @@ from slipagent.agent import Agent, AgentEvent, STEP_LIMIT_NOTICE, build_system_p
 from slipagent.tools.base import Tool, ToolRegistry, ToolResult
 from slipagent.types import Completion, Message, ToolCall, Usage, decode_json_content, content_text
 from slipagent.context import response_memory, tool_response_memory
-from slipagent.prompts import section_divider, load_prompt
+from slipagent.prompts import load_prompt
+from data_text_reader import input_data, read_data
 
 
 def context_messages(messages):
@@ -20,9 +21,9 @@ def context_messages(messages):
         message = source if isinstance(source, Message) else Message.from_api(source)
         yield message
         if message.role == "system":
-            _, marker, body = content_text(message.content).partition(section_divider("BEGIN Conversation History Data"))
+            _, marker, body = content_text(message.content).partition("\n" + load_prompt("history-opening.md").strip() + "\n")
             if marker:
-                records, _ = json.JSONDecoder().raw_decode(body.lstrip())
+                records = read_data(body.lstrip())
                 yield from (Message.user(record) for record in records)
 
 
@@ -32,14 +33,14 @@ def context_records(messages):
     for message in context_messages(messages):
         raw = message.to_api() if isinstance(message, Message) else message
         if raw["role"] != "system":
-            record = json.loads(raw["content"])
+            record = input_data(raw["content"])
             assert record["record_type"] in {"history_step", "current_step"}
             records.append(record)
     return records
 
 
 def unpack_context(messages):
-    """Compare original parts in JSON input with older behavioral fixtures.
+    """Compare original parts in literal input records with older behavioral fixtures.
 
     This is only an assertion/fixture reader. Clients retain the real JSON
     requests, which format-specific tests inspect using context_records.
@@ -48,7 +49,7 @@ def unpack_context(messages):
     for source in context_messages(messages):
         message = source if isinstance(source, Message) else Message.from_api(source)
         try:
-            record = decode_json_content(message.content)
+            record = input_data(message.content)
         except ValueError:
             record = None
         if not isinstance(record, dict) or record.get("record_type") not in {"history_step", "current_step"}:
@@ -56,7 +57,7 @@ def unpack_context(messages):
             continue
         result.extend(Message.user(text) for text in record.get("user_prompt", []))
         if record["representation"] == "compressed":
-            result.append(Message.assistant(record["summary"]))
+            result.append(Message.assistant(record["compressed_summary"]))
         elif record["representation"] == "excerpt":
             result.append(Message.assistant(json.dumps(record, ensure_ascii=False)))
         else:
@@ -66,8 +67,8 @@ def unpack_context(messages):
             for item in record.get("tool_results", []):
                 content = item["content"]
                 if item["status"] != "unknown":
-                    content = json.dumps({"tool": item["tool_name"], "call_id": item["call_id"],
-                                          "status": item["status"], "content": content}, ensure_ascii=False)
+                    content = {"tool": item["tool_name"], "call_id": item["call_id"],
+                               "status": item["status"], "content": content}
                 result.append(Message.tool_result(item["call_id"], content))
     return result
 
@@ -88,7 +89,7 @@ def context_body(content: str | None) -> str:
     """Read original content inside the harness heading/observation envelope."""
     if isinstance(content, dict):
         return content.get("content", content_text(content))
-    text = content or ""
+    text = content_text(content)
     if text.lstrip().startswith(("## System Instructions", "## Current User Request", "### Step ",
                         "============================= BEGIN SYSTEM INSTRUCTIONS (FULL) ==============================", "System Instructions (Full):", "Current User Request (Full):",
                         "Conversation Record (Full):", "Conversation Record (Excerpt):",
@@ -107,11 +108,11 @@ def context_body(content: str | None) -> str:
 def summary_response(body):
     """Serve isolated compaction without consuming the scripted working steps."""
     messages = body.get("messages", [])
-    if not messages or not (messages[0].get("content") or "").lstrip().startswith("Summarize one completed SlipAgent step"):
+    if not messages or not (messages[0].get("content") or "").lstrip().startswith("# Summarizing the Previous Turn"):
         return None
-    source = json.loads(messages[1]["content"])
+    source = input_data(messages[1]["content"])
     text = f"User: {source['user_prompt'][:300]}; agent: {source['agent_response'][:300]}; results: {str(source['tool_results'])[:300]}"
-    return {"choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
+    return {"choices": [{"message": {"role": "assistant", "content": json.dumps({'summary': text, 'reasoning_summary': ''})}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 0, "completion_tokens": 0, "cost": 0}}
 
 
@@ -122,7 +123,7 @@ def context_step_ids(messages):
         if message["role"] != "user":
             continue
         try:
-            record = json.loads(message.get("content") or "")
+            record = input_data(message.get("content") or "")
         except ValueError:
             continue
         if not isinstance(record, dict):
@@ -158,7 +159,7 @@ def inline_memory(text: str | None, messages: list[dict[str, Any]]) -> str:
 def structured_message(message: dict[str, Any], messages: list[dict[str, Any]], *, include_memory: bool = True) -> dict[str, Any]:
     """Supply canned replies in the response contract requested by the harness."""
     system = "\n".join(m.get("content") or "" for m in messages if m["role"] == "system")
-    if "============================= BEGIN REPLIES AND NATIVE TOOL CALLS ==============================" in system:
+    if "# Replies and Native Tool Calls" in system:
         text = message.get("content") or "Requesting tools."
         if text.lstrip().startswith('{"response"'):
             return message
@@ -198,8 +199,7 @@ def structured_message(message: dict[str, Any], messages: list[dict[str, Any]], 
 class StubClient:
     """Returns canned completions and records the requests it received.
 
-    The message list is copied per call: the agent reuses one mutable list, so
-    storing the reference would let later appends rewrite history.
+    Copy each message list so later mutations cannot rewrite recorded requests.
     """
 
     def __init__(self, responses: list[Completion], *, include_memory: bool = True) -> None:
@@ -209,10 +209,11 @@ class StubClient:
         self.summary_calls: list[dict[str, Any]] = []
 
     async def chat(self, **kwargs: Any) -> Completion:
-        if kwargs["messages"][0].content.lstrip().startswith("Summarize one completed SlipAgent step"):
+        if content_text(kwargs["messages"][0].content).lstrip().startswith("# Summarizing the Previous Turn"):
             self.summary_calls.append(kwargs)
             source = decode_json_content(kwargs["messages"][1].content)
-            return Completion(Message.assistant(f"User: {source['user_prompt'][:300]}; agent: {source['agent_response'][:300]}; results: {str(source['tool_results'])[:300]}"), "stub", usage=Usage(cost=0))
+            text = f"User: {source['user_prompt'][:300]}; agent: {source['agent_response'][:300]}; results: {str(source['tool_results'])[:300]}"
+            return Completion(Message.assistant(json.dumps({'summary': text, 'reasoning_summary': source.get('reasoning', '')})), "stub", usage=Usage(cost=0))
         self.calls.append({**kwargs, "messages": list(kwargs["messages"])})
         if not self.responses:
             raise AssertionError("stub client ran out of responses")
@@ -306,9 +307,9 @@ async def test_error_status_reaches_model_and_archive():
     await agent.run("Task")
     result = next(m for m in unpack_context(client.calls[1]["messages"]) if m.role == "tool")
     assert result.content["status"] == "error"
-    assert '"tool": "record"' in content_text(result.content)
+    assert result.content["tool"] == "record"
     assert "same body" in content_text(result.content)
-    assert '"status": "error"' in content_text(next(m for m in agent.messages if m.role == "tool").content)
+    assert next(m for m in agent.messages if m.role == "tool").content["status"] == "error"
 
 
 async def test_broken_dispatch_cannot_leave_an_unanswered_tool_batch():
@@ -361,8 +362,8 @@ async def test_tool_result_is_appended_with_matching_id() -> None:
     assert decode_json_content(tool_messages[0].content)["content"] == "payload"
 
 
-async def test_assistant_tool_turn_sends_null_content() -> None:
-    """Tool-call steps must carry null content, not an empty string."""
+async def test_assistant_tool_turn_preserves_reply_text() -> None:
+    """Tool-call steps retain any accompanying reply text in history."""
     agent, _ = build_agent(
         [
             completion(text="thinking out loud", tool_calls=[call(value="x")]),
@@ -595,7 +596,7 @@ async def test_a_failing_call_does_not_abort_the_rest_of_the_batch() -> None:
 
 
 def test_system_prompt_asks_for_batched_tool_calls() -> None:
-    """Regression: the model defaults to one call per step without this."""
+    """The prompt encourages batching independent calls."""
     prompt = build_system_prompt("/tmp/ws")
 
     assert "Batch all predictable independent calls in one step" in prompt
@@ -613,7 +614,7 @@ def test_system_prompt_allows_splitting_on_real_dependencies() -> None:
 def test_system_prompt_allows_silent_tool_batches_and_requires_final_output() -> None:
     prompt = build_system_prompt("/tmp/ws")
 
-    assert "empty text is allowed when requesting tools" in load_prompt("native-tools.txt")
+    assert "Empty text is still allowed when requesting tools" in load_prompt("native-tools.md")
     assert "End the run with a useful, nonempty answer and no tool calls" in prompt
 
 
@@ -673,7 +674,7 @@ async def test_tools_are_advertised_when_present() -> None:
     await agent.run("go")
 
     tools = client.calls[0]["tools"]
-    assert [spec.name for spec in tools] == ["recall_history", "record"]
+    assert [spec.name for spec in tools] == ["recall_history", "record", "update_plan"]
 
 
 async def test_session_id_is_stable_across_steps() -> None:

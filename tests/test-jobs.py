@@ -68,7 +68,7 @@ async def test_completion_is_announced_once_without_starting_a_model_turn(worksp
         agent._notify_jobs()
         agent._notify_jobs()
         assert len(events) == 1 and events[0].kind == "notice"
-        assert key in agent.registry.context_notes["background_commands"]
+        assert key in {job["job_id"] for job in agent.registry.context_notes["background_commands"]["completed"]}
         assert not agent.running
     finally:
         await agent.registry.aclose()

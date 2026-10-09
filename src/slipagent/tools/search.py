@@ -37,7 +37,7 @@ class GrepTool(Tool):
     concurrent_safe = True
     instruction_path = "path"
     name = "grep"
-    description_prompt = 'tools/grep.txt'
+    description_prompt = 'tools/grep.md'
     description = load_prompt(description_prompt)
     parameters = {
         "type": "object",
@@ -185,7 +185,7 @@ class GlobTool(Tool):
     concurrent_safe = True
     instruction_path = "path"
     name = "glob"
-    description_prompt = 'tools/glob.txt'
+    description_prompt = 'tools/glob.md'
     description = load_prompt(description_prompt)
     parameters = {
         "type": "object",
@@ -269,19 +269,15 @@ class GlobTool(Tool):
 def _matches_glob(relative_path: str, pattern: str) -> bool:
     if _match_components(relative_path.split("/"), pattern.split("/")):
         return True
-    # fnmatch treats '*' as crossing '/', which differs from most people's
-    # intuition for patterns like '*.py'. Try a basename match as well.
+    # Unqualified patterns such as '*.py' also match nested basenames.
     return fnmatch.fnmatch(relative_path.rsplit("/", 1)[-1], pattern)
 
 
 def _match_components(path_parts: list[str], pattern_parts: list[str]) -> bool:
     """Match a split path against a split pattern, honouring `**`.
 
-    Plain `fnmatch` has no notion of `**`: it requires the literal `**` to be
-    matched by one path component, so `fnmatch('a/b.py', '**/*.py')` is False.
-    Since the tool description promises `**/test_*.py` and `src/**/*.ts` work,
-    `**` is handled here as "zero or more path components", the usual shell and
-    gitignore convention. Every other component is matched with plain fnmatch.
+    `**` consumes zero or more complete path components. Other components
+    use fnmatch independently, so ordinary wildcards cannot cross separators.
     """
     if not pattern_parts:
         return not path_parts

@@ -12,7 +12,34 @@ from typing import Any
 EFFORT_ORDER = ("max", "xhigh", "high", "medium", "low", "minimal")
 
 
-class ModelCapabilities:
+class RequestProfile:
+    """Provider-independent capabilities used by context and response handling."""
+
+    def __init__(self, *, parameters: set[str], context_length: int,
+                 max_prompt_tokens: int | None = None, max_completion_tokens: int | None = None,
+                 format: str | None = None) -> None:
+        self.parameters = parameters
+        self.context_length = context_length
+        self.max_prompt_tokens = max_prompt_tokens
+        self.max_completion_tokens = max_completion_tokens
+        self.format = format
+        self.tool_choices: list[dict[str, bool] | None] = []
+
+    @property
+    def native_tools(self) -> bool:
+        """The cached routing profile, never a guess based on the model name."""
+        return "tools" in self.parameters
+
+    def validate_output_limit(self, max_tokens: int | None) -> None:
+        if max_tokens is None:
+            return
+        if "max_tokens" not in self.parameters:
+            raise ValueError("The selected endpoints do not support an output token limit.")
+        if self.max_completion_tokens is not None and max_tokens > self.max_completion_tokens:
+            raise ValueError(f"Requested output limit exceeds the endpoint limit of {self.max_completion_tokens:,} tokens.")
+
+
+class ModelCapabilities(RequestProfile):
     """Capabilities shared by the endpoints allowed to handle this request."""
 
     def __init__(self, model: dict[str, Any], endpoints: list[dict[str, Any]]) -> None:
@@ -80,11 +107,6 @@ class ModelCapabilities:
         self.max_completion_tokens = _limit(compatible, "max_completion_tokens")
         self.tool_choices = [entry.get("supports_tool_choice") for entry in compatible]
 
-    @property
-    def native_tools(self) -> bool:
-        """The cached routing profile, never a guess based on the model name."""
-        return "tools" in self.parameters
-
     def provider_preferences(self) -> dict[str, Any]:
         preferences: dict[str, Any] = {"require_parameters": True}
         if self.providers:
@@ -93,13 +115,6 @@ class ModelCapabilities:
             preferences["ignore"] = self.ignored_providers
         return preferences
 
-    def validate_output_limit(self, max_tokens: int | None) -> None:
-        if max_tokens is None:
-            return
-        if "max_tokens" not in self.parameters:
-            raise ValueError("The selected endpoints do not support an output token limit.")
-        if self.max_completion_tokens is not None and max_tokens > self.max_completion_tokens:
-            raise ValueError(f"Requested output limit exceeds the endpoint limit of {self.max_completion_tokens:,} tokens.")
 
 
 def _reasoning_allowed(entry: dict[str, Any]) -> bool:

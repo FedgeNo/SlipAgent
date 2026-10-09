@@ -6,7 +6,7 @@ To finish this run, provide a useful, nonblank final answer in the supplied repl
 
 ## Requesting Tools
 
-Use the native API tools supplied with this request. Request all predictable independent calls together as one tool call batch; audited reads may run concurrently, while results retain the supplied order. Their outcomes appear in the next request's `history_step.tool_results`, matched to `tool_calls` by `call_id`.
+Use the native API tools supplied with this request. Request all predictable independent calls together as one tool call batch; audited reads may run concurrently, while results retain the supplied order. In the next request's `history`, each call carries its outcome under `result` or `error`.
 
 ## Reply Text
 

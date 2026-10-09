@@ -45,9 +45,9 @@ project guidance comes from this refreshed service rather than a stale suffix.
 Tool-call arguments, structured tool results, observation envelopes, input records,
 and frozen compaction inputs remain dictionaries or lists internally. External JSON
 text is decoded at entry. File contents and command output remain literal string
-fields. Model-facing messages and terminal output render structured values as
-labelled literal text, without JSON escaping. Journals and HTTP transport encode
-JSON only at their destination boundaries. The request callback carries a
+fields. Working-model user input serializes one complete JSON object; system data
+sections, compression inputs, and terminal output use labelled literal text.
+Journals and HTTP transport encode JSON only at their destination boundaries. The request callback carries a
 dictionary to diagnostics and token accounting. Complete history selections return
 structured content; partial character pages return fragments of its literal-text presentation. Resume
 accepts both legacy text observations and structured journal observations.
@@ -81,12 +81,11 @@ Context construction proceeds in this order:
    a rejected generation cannot leave global prompt registrations behind.
    Static headings belong to editable templates; `PromptSections` renders their
    content without adding wrappers. Markdown uses `#`, `##`, and `###` for the
-   instruction hierarchy, fenced examples, and field tables. Only imported
-   history retains opening and closing equals-sign warnings, loaded from
-   `history-opening.md` and `history-closing.md`.
+   instruction hierarchy, fenced examples, and field tables. History occupies
+   the separate user-input JSON object rather than a system-prompt section.
    Prompt paragraphs occupy one physical line, without fixed-width wrapping. Two newlines separate paragraphs, headings, topic groups, task fields, tool guidance, examples, and assembled sections. Single newlines remain for meaningful item boundaries, metadata fields, code, and other structured content.
    Loaded instruction-file contents and original conversation text stay intact.
-   The input uses a system prefix followed by labelled records with literal text blocks. The inspector
+   The input uses system instructions followed by one JSON user-input object. The inspector
    displays the final body rather than reconstructing it separately.
 3. Up to 100 older records precede the recent full window. Each retained step
    occupies one object. Full records contain originals plus available compressed
@@ -96,21 +95,27 @@ Context construction proceeds in this order:
    checks the fully assembled request, including excerpts, against the allowance.
    Both native-tool and embedded-tool profiles receive the same record format;
    ties keep originals, with complete tool batches intact. Every step has its
-   own object in the system prompt's history list. Objects remain structured until
-   `Message.to_api()` renders literal text through `data_text.py`; the HTTP client
-   JSON-encodes the complete payload. Text fields are not embedded JSON strings.
+   own object in the user input's `history` list. `JSONInput` keeps the input
+   structured until `Message.to_api()` serializes the whole object through
+   `data_text.py`; the HTTP client then encodes the provider transport envelope.
+   Nested objects are never pre-serialized. Literal rendering remains available
+   for system data sections, compression input, and archive retrieval.
    The full window targets 50 calls by default, with a floor of 5 on the requested
    window size. Under model context pressure, selection drops the oldest older
    records first, then reduces the full window oldest-first, below 5 if necessary.
    Boundaries and representation caches belong to one view: later requests can
    restore omitted records as large calls age into smaller summaries. There is
    no persistent omission marker. `--context-tokens` can cap total working context.
-   `records.py` encodes full steps with `record_type`, `representation`, `user_prompt`,
+   `records.py` represents saved full steps with `record_type`, `representation`, `user_prompt`,
    `agent_response`, `tool_calls`, and `tool_results`. Prompts remain an array so
    queued inputs retain their boundaries. Calls use `call_id`, `tool_name`, and
    argument objects; results use matching IDs, names, status, and content.
    The harness's exact observation envelope is unpacked, while arbitrary JSON
-   inside tool output remains content. Unknown legacy status stays `unknown`.
+   inside tool output remains content. `linked_tool_results` projects observations
+   onto their matching calls for the working input: `result` for success, `error`
+   for failure, and `unclassified_result` for unknown legacy status. It preserves
+   raw values and leaves saved records unchanged. Legacy observations without a
+   call retain their ID and name without invented arguments.
    The selected records form a contiguous suffix of stored history. The current
    step number is supplied as metadata. Every full, compressed, excerpt,
    and current bundle also includes its exact `step_id` as metadata for
@@ -121,27 +126,27 @@ Context construction proceeds in this order:
    remain intact; user and tool content, arguments, and archived originals are
    not rewritten. This avoids teaching the reply format through artificial
    assistant-message prefixes, including when resuming an older session.
-4. A `current_step` object before history in the system prompt contains current
-   input verbatim. The final user messages contain original user text or a
-   blank user message when no new input exists, without the record envelope. An empty
-   prompt array with `is_tool_result_response=true` marks a response to earlier tool results. If the supplied results satisfy the user's request, return the result with no tool calls to finish; request more tools only when necessary work remains.
-   Continuation steps carry the active user
-   prompt with their full records. Newly returned results cannot leave the full
+4. Current-step metadata in the system prompt supplies `step_id` and
+   `is_tool_result_response`. One user-input JSON object contains `user_message`
+   (the first new message, or `""`), `additional_user_messages`,
+   `retained_user_request`, `history`, and `errors`. Tool errors belong to their
+   calls; `errors` holds harness corrections not attached to a call. Keys label
+   content without inserting labels into its values. If the supplied results
+   satisfy the user's request, return the result with no tool calls to finish;
+   request more tools only when necessary work remains.
+   Newly returned results cannot leave the full
    window before the working model receives them, even when their independent
    summary finishes first. Oversized observations use an `excerpt` record with
    original-part retrieval instructions as a last resort. Text fragments and
    omitted-character counts occupy separate fields; clipping never splices
-   descriptive markers into message text.
-   The latest completed step with tools is placed once in its own system block,
-   between `BEGIN PREVIOUS TURN TOOL RESULTS` and `END PREVIOUS TURN TOOL RESULTS`,
-   after the older history block. Request assembly does not append these blocks,
-   tool definitions, or the empty continuation message to archived turns.
-5. `TaskMemory.prompt_supplement` ensures the current user prompt is supplied,
-   even after its original step is compressed. It reuses a full copy already
-   selected or fills the current-step object's prompt array with the retained
-   original. Its source step ID stays in the system
-   task metadata, rather than the user-message label. Supplemental
-   input counts against the endpoint budget. The active prompt is independent
+   descriptive markers into message text. Excerpted calls use `result_excerpt`,
+   `error_excerpt`, or `unclassified_result_excerpt`; other bounded messages
+   occupy `response_excerpts`. Request assembly does not append its JSON envelope,
+   tool definitions, or system guidance to archived turns.
+5. `TaskMemory` retains original requests independently of compression. Request
+   assembly supplies the active source messages in `retained_user_request`,
+   with their source step ID in system task metadata. Retained input counts
+   against the endpoint budget. The active prompt is independent
    of the historical representation of the call that first received it.
 
 The selected model's context/prompt limits constrain the whole request. The

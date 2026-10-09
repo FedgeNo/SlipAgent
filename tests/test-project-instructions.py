@@ -184,6 +184,8 @@ async def test_stable_prompt_prefix_survives_new_user_input():
     second = content_text(context[0].content)
     boundary = "# User Request for This Run"
     assert first.split(boundary)[0] == second.split(boundary)[0]
-    assert "First task" in second and "Additional constraint" in second
-    assert any("Additional constraint" in (content_text(message.content)) for message in context[1:])
+    from data_text_reader import request_input
+    assert request_input(context)["user_message"] == "First task"
+    assert request_input(context)["additional_user_messages"] == ["Additional constraint"]
+    assert "First task" not in second and "Additional constraint" not in second
     assert "Additional constraint" not in first

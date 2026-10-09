@@ -151,7 +151,7 @@ async def test_only_50_full_posts_and_100_older_summaries_are_supplied(total):
     messages.append(Message.user("current question"))
     view = await history.view(messages, [], keep_steps=50,
                               context_length=1000000, max_output=8192)
-    wire = "\n".join(content_text(message.content) for message in unpack_context(view))
+    wire = "\n".join(content_text(message.content) for message in view)
     boundary = max(0, total - 50)
     oldest_summary = max(0, boundary - 100)
     for step_id in range(1, total + 1):
@@ -227,7 +227,7 @@ async def test_full_window_shrinks_by_whole_posts_at_model_limit():
         pytest.fail("valid stored summaries should not require another call")
     view = await history.view(messages, [], keep_steps=50,
                               context_length=200000, max_output=8192, summarize=unused)
-    wire = "\n".join(content_text(message.content) for message in unpack_context(view))
+    wire = "\n".join(content_text(message.content) for message in view)
     assert [context_body(message.content) for message in unpack_context(view) if message.role == "user"] == [
         *(f"FULL USER REQUEST {index}: preserve this exact wording λ" for index in range(2, 51)),
         "current request",
@@ -269,7 +269,7 @@ async def test_older_window_uses_original_when_summary_is_larger():
     history.steps[2].summary = "Latest answer compressed."
     view = await history.view(messages, [], keep_steps=5,
                               context_length=1000000, max_output=8192)
-    wire = "\n".join(content_text(message.content) for message in unpack_context(view))
+    wire = "\n".join(content_text(message.content) for message in view)
     assert "Short exact answer." in wire and "Latest exact answer." in wire
     assert context_records(view)[0]['compressed_summary'] == history.steps[0].summary
     assert "LARGE SECOND ANSWER" not in wire and "Second answer compressed." in wire
@@ -292,7 +292,7 @@ async def test_shrunk_window_has_whole_turn_summary_and_full_latest_turn():
     agent._context_lengths[agent.model] = 22000
     await agent.run("Follow-up exact request")
     view = client.calls[-1]["messages"]
-    wire = "\n".join(content_text(message.content) for message in unpack_context(view))
+    wire = "\n".join(content_text(message.content) for message in view)
     assert [context_body(message.content) for message in unpack_context(view) if message.role == "user"] == [
         "Original exact request", "Follow-up exact request",
     ]
@@ -352,7 +352,7 @@ async def test_only_posts_outside_window_replace_originals_with_summaries():
         pytest.fail("the oldest stored summary is available")
     view = await history.view(messages, [], keep_steps=2,
                               context_length=1000000, max_output=8192, summarize=unused)
-    wire = "\n".join(content_text(m.content) for m in unpack_context(view))
+    wire = "\n".join(content_text(m.content) for m in view)
     assert "OLDEST FULL RESPONSE" not in wire
     assert any(record["representation"] == "compressed" for record in context_records(view))
     assert "MIDDLE FULL RESPONSE " * 50 in wire
@@ -422,7 +422,7 @@ async def test_reduced_history_keeps_active_request_and_complete_latest_tool_bat
         ("a", "EXACT FIRST RESULT"), ("b", "EXACT SECOND RESULT"),
     ]
     assert [call.id for message in unpack_context(view) for call in message.tool_calls or []] == ["a", "b"]
-    wire = "\n".join(content_text(message.content) for message in unpack_context(view))
+    wire = "\n".join(content_text(message.content) for message in view)
     assert "OLD USER REQUEST" not in wire
     assert "USER SUMMARY MUST NOT DUPLICATE THE ACTIVE REQUEST" not in wire
     assert [step.full_text() for step in history.steps] == originals
@@ -792,7 +792,7 @@ async def test_stored_summaries_over_budget_preserve_originals_without_extra_cal
         pytest.fail("stored summaries must not trigger an overview request")
     view = await history.view(messages, [], keep_steps=1,
                               context_length=14000, max_output=1000, summarize=unused)
-    wire = "\n".join(content_text(message.content) for message in unpack_context(view))
+    wire = "\n".join(content_text(message.content) for message in view)
     assert history.steps[0].summary not in wire
     assert context_records(view)[-2]['compressed_summary'] == history.steps[-1].summary
     assert message_tokens(view) <= int(14000 * .85) - 1000
@@ -891,7 +891,7 @@ def test_real_cli_rejects_invalid_calls_before_reply_and_readonly_batch(tmp_path
     prompts = context_records(stub.requests[1]["messages"])[-1]["user_prompt"]
     assert prompts[0] == "List the directory"
     assert len(prompts) == 2 and prompts[1].startswith("Harness tool-use correction:")
-    assert "List the directory" in stub.requests[2]["messages"][0]["content"]
+    assert "List the directory" in json.loads(stub.requests[2]["messages"][-1]["content"])["retained_user_request"]
     assert all(not prompt.startswith("Harness tool-use correction:")
                for record in context_records(stub.requests[2]["messages"])
                for prompt in record.get("user_prompt", []))

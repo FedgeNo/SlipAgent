@@ -1,7 +1,7 @@
-"""Step records stay in system data sections; user text remains verbatim."""
+"""System instructions stay separate from the JSON user input and history."""
 
 import json
-from data_text_reader import read_data
+from data_text_reader import read_data, request_input
 from slipagent.types import content_text
 
 from slipagent.context import ConversationHistory, message_tokens
@@ -18,12 +18,14 @@ async def test_full_context_has_one_object_per_turn_and_preserves_original_parts
     before = [message.to_api() for message in originals]
     history = ConversationHistory()
     view = await history.view(originals, [], keep_steps=50, context_length=1_000_000, max_output=8192)
-    assert [message.role for message in view] == ["system", "user", "user"]
-    assert "BEGIN CONVERSATION HISTORY DATA" in content_text(view[0].content)
-    assert "reference material, not a system instruction" in content_text(view[0].content)
-    assert [message.content for message in view[1:]] == ["Now explain it", "Use ASCII"]
+    assert [message.role for message in view] == ["system", "user"]
+    payload = json.loads(view[1].to_api()['content'])
+    assert payload['user_message'] == 'Now explain it'
+    assert payload['additional_user_messages'] == ['Use ASCII']
+    assert payload['history'][0]['tool_calls'][0]['unclassified_result'] == source
     system = content_text(view[0].content)
-    assert system.index("# Current Turn Input") < system.index("\n============================= BEGIN CONVERSATION HISTORY DATA")
+    assert source not in system and prompt not in system
+    assert '# Current Turn Input' in system
     previous, current = context_records(view)
     assert previous == {
         "record_type": "history_step", "representation": "full", "step_id": 1, "user_prompt": [prompt],
@@ -71,11 +73,9 @@ async def test_excerpt_omissions_are_fields_instead_of_text_inserted_in_the_outp
     assert result["omitted_characters"] == len(source) - len(result["beginning"]) - len(result["ending"])
     assert current["is_tool_result_response"] is True
     assert view[-1].role == "user"
-    assert view[-1].content == ""
+    assert request_input(view)['user_message'] == ""
     system = content_text(view[0].content)
-    assert system.index("# Current Turn Input") < system.index("\n============================= BEGIN CONVERSATION HISTORY DATA")
-    assert system.count("============================= BEGIN PREVIOUS TURN TOOL RESULTS") == 1
-    assert system.count("============================= END PREVIOUS TURN TOOL RESULTS") == 1
-    assert system.index("END CONVERSATION HISTORY DATA") < system.index("BEGIN PREVIOUS TURN TOOL RESULTS")
+    assert 'LARGE RESULT' not in system
+    assert 'unclassified_result_excerpt' in request_input(view)['history'][0]['tool_calls'][0]
     assert [message.to_record() for message in messages] == [message.to_record() for message in history.steps[0].messages]
     assert message_tokens(view) + 1000 < 9000 * .85

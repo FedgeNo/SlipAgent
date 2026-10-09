@@ -23,8 +23,8 @@ from .tools.base import Tool, ToolResult
 from .types import Message, ToolCall, ToolSpec, content_text
 from .protocol import COMPRESSED_FIELDS, ResponseRecord, response_format
 from .task import TaskMemory
-from .records import record_message, step_record
-from .data_text import MessageSections, render_data
+from .records import linked_tool_results, record_message, step_record
+from .data_text import JSONInput, MessageSections, render_data
 
 DEFAULT_CONTEXT_LENGTH = 1_000_000
 MIN_FULL_STEPS = 5
@@ -544,7 +544,7 @@ class ConversationHistory:
                 load_prompt('tool-result-response.md')
             )
             sections.append(
-                load_prompt('user-request.md', step_id=self.task.current_prompt_step, input_guidance=input_guidance, user_messages=render_data(self.task.sources[self.task.current_prompt_step]))
+                load_prompt('user-request.md', step_id=self.task.current_prompt_step, input_guidance=input_guidance)
             )
         instructions = "\n" + "\n\n".join(section.strip() for section in sections if section.strip()) + "\n"
         pinned = [message for message in messages if message.role == "system"]
@@ -552,38 +552,28 @@ class ConversationHistory:
             pinned = [*pinned[:-1], Message.system((pinned[-1].content or "").rstrip() + "\n" + instructions)]
         else:
             pinned = [Message.system("\n" + instructions)]
-        history_begin = load_prompt('history-opening.md').strip()
-        history_end = load_prompt('history-closing.md').strip()
         system_prefix = (pinned[-1].content or "").rstrip() + "\n\n"
-        history_prefix = system_prefix + history_begin + "\n\n"
-        history_suffix = "\n\n" + history_end + "\n"
-        pinned[-1] = Message.system(MessageSections([history_prefix, [], history_suffix]))
+        metadata = {"step_id": len(self.steps) + 1,
+                    "is_tool_result_response": not any(message.role == "user" for message in messages[self.cursor:])}
+        pinned[-1] = Message.system(MessageSections([system_prefix, load_prompt("current-turn.md"), metadata]))
 
-        def assemble(selected: list[Message], current: list[Message]) -> list[Message]:
+        def assemble(selected: list[Message]) -> list[Message]:
             # Only the request projection changes; archives retain their roles.
-            user_input = [message for message in tail_messages if message.role == "user"]
-            if not user_input:
-                user_input = [Message.user("")]
-            recent_results: list[Any] = []
-            if selected and self.steps and self.steps[-1].has_results:
-                if selected[-1].content.get("step_id") == self.steps[-1].id:
-                    recent_results = [selected[-1].content]
-                    selected = selected[:-1]
-            result_sections: list[Any] = []
-            if recent_results:
-                result_sections = [
-                    "\n" + load_prompt("tool-results-opening.md"), recent_results,
-                    load_prompt("tool-results-closing.md"),
-                ]
-            return [*pinned[:-1], Message.system(MessageSections([
-                system_prefix, load_prompt("current-turn.md"),
-                *[message.content for message in current],
-                "\n\n" + history_begin + "\n\n",
-                [message.content for message in selected], history_suffix, *result_sections,
-            ])), *user_input]
+            user_text = [message.content for message in tail_messages if message.role == "user"]
+            source_step = self.task.current_prompt_step
+            payload = {
+                "user_message": user_text[0] if user_text else "",
+                "additional_user_messages": user_text[1:],
+                "retained_user_request": self.task.sources[source_step] if source_step is not None else [],
+                "history": [linked_tool_results(message.content) for message in selected],
+                "errors": [user_corrections] if user_corrections.strip() else [],
+            }
+            return [*pinned, Message.user(JSONInput(payload))]
 
         tail_messages = [message for message in messages[self.cursor:] if message.role != "system"]
-        tail = [record_message(step_record(tail_messages, current=True, step_id=len(self.steps) + 1))]
+        # Budget the same input fields that will be sent, including the retained
+        # request and corrections even when no new user message was supplied.
+        tail = [assemble([])[-1]]
         overhead = tokens(pinned)
         if not text_tool_history:
             overhead += math.ceil(estimate_tokens(json.dumps([spec.to_api() for spec in specs])) * token_scale)
@@ -640,25 +630,14 @@ class ConversationHistory:
                 result.extend(older_parts[index])
             return result
 
-        def current_input(selected: list[Message]) -> list[Message]:
-            current = self.task.prompt_supplement(selected + tail) or tail
-            if user_corrections.strip():
-                record = dict(current[-1].content)
-                record["user_prompt"] = [*record["user_prompt"], load_prompt('tool-use-correction.md', correction=user_corrections.strip()).strip()]
-                current = [*current[:-1], record_message(record)]
-            return current
-
         while True:
             memory_start = max(memory_start, boundary - MAX_CONTEXT_SUMMARIES)
             older = older_context(memory_start, boundary)
             offset = boundary - initial_boundary
             full = [message for part in parts[offset:] for message in part]
-            # Prompt retention is the harness's responsibility. Even when its
-            # original step is compressed, supply its exact text and source ID.
-            current = current_input(older + full)
-            budget = available - tokens(older) - tokens(current)
+            budget = available - tokens(older) - tail_tokens
             if sum(sizes[offset:]) <= budget:
-                candidate = assemble(older + full, current)
+                candidate = assemble(older + full)
                 if tokens(candidate) <= rendered_limit:
                     return candidate
             # Drop older records before shortening the full window. Start from
@@ -676,8 +655,7 @@ class ConversationHistory:
                     excerpt = self.steps[-1].excerpt_context_messages(int(excerpt_budget / token_scale))
                     if excerpt is None:
                         break
-                    current = current_input(excerpt)
-                    candidate = assemble(older + excerpt, current)
+                    candidate = assemble(older + excerpt)
                     cost = tokens(candidate)
                     if cost <= rendered_limit:
                         return candidate

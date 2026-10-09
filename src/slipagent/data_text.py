@@ -1,7 +1,8 @@
-"""Render structured model input without JSON-escaping its text values."""
+"""Render raw message data as JSON input or labelled instruction sections."""
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -14,7 +15,16 @@ class MessageSections:
     parts: list[Any]
 
 
+@dataclass
+class JSONInput:
+    """Raw user-input fields, encoded together only at the message boundary."""
+
+    data: dict[str, Any]
+
+
 def render_content(value: Any) -> str:
+    if isinstance(value, JSONInput):
+        return json.dumps(value.data, ensure_ascii=False)
     if isinstance(value, MessageSections):
         return "".join(render_content(part) for part in value.parts)
     if value is None:

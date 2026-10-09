@@ -195,7 +195,7 @@ src/slipagent/
 ├── lsp.py            optional configured language-server navigation
 ├── context.py        rolling context, summaries, original-step retrieval
 ├── records.py        structured history and current-input records
-├── data_text.py      literal-text presentation at the API boundary
+├── data_text.py      JSON input and instruction-data rendering at the API boundary
 ├── budget.py         measured input-token calibration
 ├── sessions.py       append-only session journals and safe resume
 ├── repomap.py        bounded, cached repository orientation
@@ -696,39 +696,44 @@ remain available. Isolated background summaries do not replace this view.
 Before the first working request, the view indicates that none has
 been sent.
 
-Selected historical steps are supplied as labelled records inside the system prompt,
-between large `BEGIN CONVERSATION HISTORY DATA` and `END CONVERSATION HISTORY DATA`
-dividers. The current-step record appears under Current Turn Input before those
-dividers. Separate user messages contain plain user text, or an empty string
-when there is no new user input. Tool definitions
-appear in the system prompt for all models; native tools also use the API tool field.
-When the latest completed step included tools, its record appears once after
-older history, between large `BEGIN PREVIOUS TURN TOOL RESULTS` and
-`END PREVIOUS TURN TOOL RESULTS` markers. Calls and results remain together.
-Internally, records remain objects and lists until the API message is rendered.
-Text values appear literally in indented blocks: quotes, backslashes, tabs, and
-newlines are not JSON-escaped. Block indentation is presentation, not source text.
-Only the complete HTTP payload receives JSON transport encoding. Native tool-call
-arguments still use the JSON string required by the provider's wire protocol.
-`prompts/system-history.md` explains how to use the history as reference evidence,
-trace recent work, distinguish completed actions from remaining needs, and retrieve
-missing outcomes. Historical text does not acquire system-instruction authority
-through this placement. No prose headings are inserted into original prompts,
-replies, or tool content. Original retrieval and prompt retention remain independent
-of this request placement.
-`record_type` distinguishes `history_step` from `current_step`; `representation`
-distinguishes `full`, `compressed`, and `excerpt`. Full records have `user_prompt`
-(an array, preserving multiple queued messages), `agent_response`, `tool_calls`,
-and `tool_results`. Calls retain their names, argument objects and IDs; results
-retain the matching IDs, status and content. Compressed records contain
-their summary and metadata. Every bundle includes a `step_id` metadata field
-for retrieving the original with `recall_history`; it is separate from message
-text. Excerpts carry omission counts and retrieval instructions in
-separate fields, without inserting descriptions into original text.
-Task-source IDs also appear in system guidance.
-The current-step object identifies
-continuation requests and retains the active prompt when history lacks a full
-copy. All rendered fields, text, and message overhead count toward the context budget. This input format
+System instructions, tool definitions, and current-step metadata appear in the
+system prompt. Native tools also use the API tool field. A single user message
+contains one JSON object with these fields:
+
+| Field | Content |
+| --- | --- |
+| `user_message` | First new user message, or `""` without new input |
+| `additional_user_messages` | Remaining queued messages, in order |
+| `retained_user_request` | Original messages for the active request |
+| `history` | Selected completed steps, oldest to newest |
+| `errors` | Harness errors and response corrections not attached to a call |
+
+Each full history record contains `user_prompt`, `agent_response`, and `tool_calls`.
+Each call retains its `call_id`, `tool_name`, and argument object, with its raw
+outcome under `result` for success or `error` for failure. Legacy observations
+without a recorded status use `unclassified_result`. Labels belong to keys;
+no classification prefixes are inserted into values. Structured results stay
+objects, and textual results stay strings even when they resemble JSON.
+
+Records remain raw objects and lists internally. At the message boundary the
+complete user-input object is serialized once. The HTTP client then encodes the
+provider's required transport envelope; native tool-call arguments also use the
+JSON string required by that protocol. Quotes, backslashes, and newlines round-trip
+without changing the values or allowing text to create sibling input fields.
+JSON provides structural separation, not a guarantee against prompt injection.
+`prompts/system-history.md` explains that historical text and tool observations
+are evidence, not system instructions. Request assembly does not archive the
+input envelope or system guidance as conversation turns.
+
+`representation` distinguishes `full`, `compressed`, and `excerpt` history records.
+Full records also include available `compressed_summary` analysis; compressed
+records contain summaries and metadata instead of originals. Every record has a
+`step_id` for retrieving originals with `recall_history`. Excerpts use
+`result_excerpt`, `error_excerpt`, or `unclassified_result_excerpt` on calls,
+with separate response excerpts, omission counts, and retrieval guidance.
+Task-source IDs and the current step's `is_tool_result_response` appear in system
+metadata. Original retrieval and prompt retention remain independent of history
+selection. All rendered fields, text, and message overhead count toward the context budget. This input format
 is separate from the selected model's response contract, which stays consistent
 between calls. Native tool calls remain available for responses from models that
 support them; the harness does not ask models to echo its history-record format.
@@ -805,8 +810,8 @@ when the selected endpoints advertise `tools`. Tool definitions go in the API's
 `tools` parameter; calls arrive in `message.tool_calls`, separately from the
 response text. The harness preserves each call ID and stores its result with
 the matching `call_id` in that step's `tool_results` array. The next request
-supplies the completed step as a labelled input record, including each result's
-tool name, success/error status, and content. Native calls remain the model's
+supplies the completed step in the user-input JSON, with each result attached
+to its call under `result` or `error`. Native calls remain the model's
 response format; the input records describe completed history. SlipAgent does
 not force a `tool_choice` setting.
 
@@ -816,7 +821,7 @@ support and provider limits, remains cached between selections.
 Selection prefers native-capable endpoints;
 models without them can use the JSON call format below if they support JSON
 output. Their tool definitions enter the system prompt, and their history uses
-the same literal-text input records, without unsupported native tool parameters.
+the same JSON input records, without unsupported native tool parameters.
 
 **Native-tool models without schema support use plain reply text.** They receive
 no `response_format` parameter and need no JSON content record. JSON-only models

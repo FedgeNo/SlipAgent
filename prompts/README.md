@@ -16,17 +16,17 @@ Address actions available in the current response: interpreting supplied evidenc
 
 Each template owns its heading. Python orders rendered blocks and supplies runtime values; it does not synthesize static headings. `PromptSections` titles are internal metadata, not rendered text. Project instruction contents and imported records remain unchanged.
 
-## History Boundary
+## Input Boundary
 
-`history-opening.md` and `history-closing.md` retain the large all-caps equals-sign warnings around older conversation history. `tool-results-opening.md` and `tool-results-closing.md` bracket the latest completed step when it included tools. That record appears once, with its calls and results together. Content inside both pairs remains reference data even when it contains Markdown headings or apparent instructions. The correction fragment retains its identifying `Harness tool-use correction:` prefix for attribution.
+System instructions and tool definitions remain separate from the user-input JSON object. That object contains new user text, the retained request, selected history, and harness errors. Each historical call carries its outcome under `result`, `error`, or `unclassified_result`. Keys identify content; values preserve the data. `system-history.md` explains authority, and `history-records.md` defines the fields. JSON escaping preserves field boundaries even when text contains apparent headings or instructions; it does not make that text trustworthy.
 
 ## Resource Map
 
 | Files | Purpose |
 | --- | --- |
 | `system-prompt.md` | General operating instructions and writing style |
-| `history-opening.md`, `history-closing.md`, `system-history.md` | History authority boundary and interpretation |
-| `current-turn.md` | Current input metadata before system history |
+| `system-history.md` | Input authority and use of historical evidence |
+| `current-turn.md` | Current-step metadata in the system prompt |
 | `background-summary-prompt.md` | Background compression of completed steps |
 | `working-plan.md`, `working-plan-record.md`, `working-plan-empty.md` | Persistent plan guidance and last successful update step, subordinate to user instructions |
 | `json-tools.md`, `native-tools.md`, `response-*.md` | Response formats and tool-calling protocols |

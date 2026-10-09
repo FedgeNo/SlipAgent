@@ -39,15 +39,13 @@ async def test_current_run_command_survives_tool_results_without_entering_histor
                               context_length=1_000_000, max_output=8192)
     current = context_records(view)[-1]
     assert current["record_type"] == "current_step"
-    retained = content_text(view[0].content).split('## Original Messages\n\n', 1)[1]
-    request_text = retained.split('```text\n', 1)[1].split('\n```', 1)[0]
-    assert read_data(request_text) == ["Current request"]
+    payload = json.loads(view[-1].to_api()['content'])
+    assert payload['retained_user_request'] == ["Current request"]
     assert current["is_tool_result_response"] is True
     assert "step_id 2" in content_text(view[0].content)
-    assert "overall goal for this run" in content_text(view[0].content)
-    assert "multiple steps ago" in content_text(view[0].content)
+    assert 'Current request' not in content_text(view[0].content)
     assert "No new user message was supplied" in content_text(view[0].content)
-    assert view[-1].content == ""
+    assert payload['user_message'] == ""
     assert "This turn includes new user input" not in content_text(view[0].content)
     assert [step.full_text() for step in history.steps] == originals
     assert all("User Request for This Run" not in step.compaction_input() for step in history.steps)

@@ -13,12 +13,14 @@ from test_agent import RecordingTool, StubClient, call, completion, task_record
 
 
 async def test_oversized_new_results_allow_next_request_and_exact_recall():
-    payload = "large result " * 70_000 + "THE EXACT TAIL"
+    payload = "large result " * 210_000 + "THE EXACT TAIL"
     client = StubClient([completion(tool_calls=[call(value="read")]), completion("done")])
     agent = Agent(client=client, registry=ToolRegistry([RecordingTool(payload)]), model="test")
     assert await agent.run("Inspect the result") == "done"
     sent = "\n".join(content_text(m.content) for m in client.calls[1]["messages"])
-    assert "Excerpt" in sent and "recall_history" in sent
+    from data_text_reader import request_input
+    assert request_input(client.calls[1]["messages"])["history"][-1]["representation"] == "excerpt"
+    assert "recall_history" in sent
     assert message_tokens(client.calls[1]["messages"]) <= 1_000_000 * .85 - 8192
     result = await agent.registry.invoke("recall_history", {"step_id": 1, "call_id": "call_record", "offset": 0, "limit": 100})
     page = decode_json_content(result.content)

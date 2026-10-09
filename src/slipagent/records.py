@@ -1,8 +1,8 @@
 """Structured input records, separate from the model's response/tool-call protocol.
 
-The outgoing system prompt carries current input before selected completed-step
-objects; user messages carry plain input or an empty string. Originals retain their
-roles in storage. Text fields render literally at the API boundary.
+The user-input JSON carries new text and selected history, with tool outcomes
+attached to their calls. Saved originals retain their roles and separate results.
+Values remain structured until the outgoing message is rendered.
 """
 
 from __future__ import annotations
@@ -10,6 +10,35 @@ from __future__ import annotations
 from typing import Any
 
 from .types import Message
+
+
+def linked_tool_results(record: dict[str, Any]) -> dict[str, Any]:
+    """Project each observation under its call without altering saved records."""
+    if record.get("representation") == "excerpt":
+        projected = {key: value for key, value in record.items() if key != "messages"}
+        calls = []
+        responses = []
+        for entry in record["messages"]:
+            if entry["role"] == "tool":
+                key = {"success": "result_excerpt", "error": "error_excerpt"}.get(entry["status"], "unclassified_result_excerpt")
+                calls.append({"call_id": entry["call_id"], "tool_name": entry["tool_name"], key: entry["content_excerpt"]})
+            else:
+                responses.append(entry)
+        projected.update(tool_calls=calls, response_excerpts=responses)
+        return projected
+    if "tool_results" not in record:
+        return record
+    projected = {key: value for key, value in record.items() if key != "tool_results"}
+    calls = [dict(call) for call in record.get("tool_calls", [])]
+    for result in record["tool_results"]:
+        call = next((call for call in calls if call["call_id"] == result["call_id"]), None)
+        if call is None:
+            call = {"call_id": result["call_id"], "tool_name": result["tool_name"]}
+            calls.append(call)
+        key = {"success": "result", "error": "error"}.get(result["status"], "unclassified_result")
+        call[key] = result["content"]
+    projected["tool_calls"] = calls
+    return projected
 
 
 def record_message(record: dict[str, Any]) -> Message:

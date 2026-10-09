@@ -71,5 +71,53 @@ def current_input(messages):
         if role == 'system':
             _, marker, body = content_text(content).partition(load_prompt('current-turn.md'))
             if marker:
-                return read_data(body)
+                metadata = read_data(body)
+                payload = request_input(messages)
+                prompts = ([payload['user_message']] if payload['user_message'] else []) + payload['additional_user_messages']
+                supplied = [text for record in payload['history'] for text in record.get('user_prompt', [])]
+                if not prompts and '\n'.join(payload['retained_user_request']) not in supplied and not all(text in supplied for text in payload['retained_user_request']):
+                    prompts = list(payload['retained_user_request'])
+                prompts += [load_prompt('tool-use-correction.md', correction=error).strip() for error in payload['errors']]
+                return {'record_type': 'current_step', 'representation': 'full',
+                        'user_prompt': prompts, 'agent_response': None, 'tool_calls': [], 'tool_results': [], **metadata}
     raise AssertionError('Current Turn Input missing from system prompt')
+
+
+def request_input(messages):
+    import json
+    from slipagent.types import Message
+    from slipagent.data_text import JSONInput
+    for message in messages:
+        role = message.role if isinstance(message, Message) else message['role']
+        content = message.content if isinstance(message, Message) else message['content']
+        if role == 'user':
+            return content.data if isinstance(content, JSONInput) else json.loads(content)
+    raise AssertionError('JSON user input missing')
+
+
+def history_records(payload):
+    """Restore the archived shape for existing behavioral assertions."""
+    for original in payload['history']:
+        if original['representation'] == 'excerpt':
+            record = {key: value for key, value in original.items() if key not in ('tool_calls', 'response_excerpts')}
+            entries = list(original['response_excerpts'])
+            for call in original['tool_calls']:
+                for key, status in [('result_excerpt', 'success'), ('error_excerpt', 'error'), ('unclassified_result_excerpt', 'unknown')]:
+                    if key in call:
+                        entries.append({'role': 'tool', 'content_excerpt': call[key], 'call_id': call['call_id'], 'tool_name': call['tool_name'], 'status': status})
+            record['messages'] = entries
+            yield record
+            continue
+        if original['representation'] != 'full':
+            yield original
+            continue
+        record = dict(original)
+        calls, results = [], []
+        for source in original['tool_calls']:
+            call = dict(source)
+            for key, status in [('result', 'success'), ('error', 'error'), ('unclassified_result', 'unknown')]:
+                if key in call:
+                    results.append({'call_id': call['call_id'], 'tool_name': call['tool_name'], 'status': status, 'content': call.pop(key)})
+            calls.append(call)
+        record.update(tool_calls=calls, tool_results=results)
+        yield record

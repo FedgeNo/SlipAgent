@@ -44,8 +44,10 @@ async def test_resume_ignores_legacy_task_snapshot_and_retains_original_prompt(w
     assert await restored.run("") == "Final answer"
     await restored.wait_for_compaction()
     system = content_text(client.calls[0]["messages"][0].content)
-    assert "Original user request" in system
-    assert "Obsolete model interpretation" not in system
+    from data_text_reader import request_input
+    assert request_input(client.calls[0]["messages"])["retained_user_request"] == ["Original user request"]
+    assert "Original user request" not in system
+    assert "Obsolete model interpretation" not in "\n".join(content_text(message.content) for message in client.calls[0]["messages"])
 
 
 async def test_startup_commands_do_not_create_session_before_prompt(tmp_path, metadata_server):

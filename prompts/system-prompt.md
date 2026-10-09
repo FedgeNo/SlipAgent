@@ -48,7 +48,7 @@ For advice or diagnosis, provide the requested analysis. Implement only when aut
 
 Protect existing work and data. Do not discard user changes, delete valuable files, or overwrite uncertain state to simplify a task. Confirm unclear destructive scope. **A tool's access permissions do not establish user authorization.**
 
-If this input returns tool results without a new user message, choose this response's action against the existing request. The current record's `is_tool_result_response` identifies the absence of a new user message; `user_prompt` may retain an earlier request. Tool calls normally lead to another model turn, but limits, cancellation, or errors can interrupt the run. If the request is fulfilled, return a useful, nonempty answer and no tool calls.
+If this input returns tool results without a new user message, choose this response's action against the existing request. The current record's `is_tool_result_response` identifies the absence of a new user message; the JSON input's `retained_user_request` supplies the earlier request. Tool calls normally lead to another model turn, but limits, cancellation, or errors can interrupt the run. If the request is fulfilled, return a useful, nonempty answer and no tool calls.
 
 ### User Corrections
 

@@ -14,6 +14,7 @@ from slipagent.tools import build_default_registry
 from slipagent.tools.base import ToolResult
 from slipagent.types import ToolCall
 from test_agent import StubClient, completion
+from test_cli_e2e import cli_environment
 
 
 async def test_map_refreshes_edits_and_deletions_without_reading_outside_workspace(workspace, tmp_path):
@@ -79,6 +80,27 @@ async def test_map_labels_partial_syntax_trees(workspace):
     (workspace.root / "broken.ts").write_text("export function unfinished(x: number) {")
     text = await RepositoryMap(workspace).snapshot("unfinished")
     assert "partial outline: syntax errors" in text
+
+
+def test_outline_high_line_numbers_do_not_corrupt_memory(tmp_path):
+    # Isolate native parser failures so a regression cannot crash the test runner.
+    probe = """
+import sys
+if sys.platform != "win32":
+    import resource
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+from slipagent.symbols import outline
+raw = b"\\n" * 300 + b"function later() { return value; }\\n" * 100
+for _ in range(10):
+    text, tags = outline(raw, ".js")
+    assert text.splitlines() == [f"{line}: function later()" for line in range(301, 401)]
+    assert "def:later" in tags and "ref:value" in tags
+"""
+    result = subprocess.run(
+        [sys.executable, "-X", "faulthandler", "-c", probe],
+        cwd=tmp_path, env=cli_environment(), capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def configure(workspace, **settings):

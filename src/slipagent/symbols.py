@@ -69,7 +69,8 @@ def outline(raw: bytes, suffix: str) -> tuple[str, set[str]]:
                 end = body.start_byte if body is not None else signature_node.end_byte
                 header = raw[node.start_byte:min(end, node.start_byte + 16000)].decode("utf-8", errors="replace")
                 header = re.sub(r"\s+", " ", header).strip().rstrip(";{ ")[:4000]
-                declarations.append(f"{node.start_point.row + 1}: {header}")
+                # Tuple indexing avoids Tree-sitter 0.26.0's borrowed-reference Point.row getter.
+                declarations.append(f"{node.start_point[0] + 1}: {header}")
         if (node.type in {"identifier", "type_identifier", "field_identifier", "property_identifier", "name", "constant"}
                 and len(references) < 100_000):
             # Exclude declaration names, but retain their separate usages.

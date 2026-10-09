@@ -1,0 +1,7 @@
+{
+    "z-ai/glm-5.3": {
+        "tool_channel": "embedded",
+        "xml_tool_calls": true,
+        "sections": ["models/glm-5.3.md"]
+    }
+}

@@ -107,6 +107,51 @@ async def test_native_calls_execute_once_and_results_round_trip_with_ids():
     assert [event.text for event in events if event.kind == "assistant_text"] == ["Reading.", "Done."]
 
 
+@pytest.mark.parametrize("parameters", [["tools", "structured_outputs"], ["tools"]])
+@pytest.mark.parametrize("format", ["json", "xml"])
+async def test_glm_53_requests_embedded_calls_and_executes_them(parameters, format):
+    model = "z-ai/glm-5.3"
+    content = json.dumps({"response": "Recording.", "tool_calls": [
+        {"name": "record", "arguments": {"value": "A"}},
+    ]}) if format == "json" else '<function_calls><invoke name="record"><parameter name="value">A</parameter></invoke></function_calls>'
+    router = Router({model: parameters}, [
+        {"role": "assistant", "content": content},
+        {"role": "assistant", "content": json.dumps({"response": "Done.", "tool_calls": []})},
+    ])
+    tool = RecordingTool()
+    registry = ToolRegistry([tool])
+    async with OpenRouterClient("dummy", transport=httpx.MockTransport(router.handle)) as client:
+        agent = Agent(client, registry, model)
+        assert await agent.run("Record A") == "Done."
+        await agent.wait_for_compaction()
+    assert tool.seen == [{"value": "A"}]
+    for request in router.requests:
+        assert "tools" not in request
+        assert "all requested calls inside `tool_calls`" in request["messages"][0]["content"]
+        assert "# Tool Calls in This Response" in request["messages"][0]["content"]
+        assert "Send tools through the API tool channel" not in request["messages"][0]["content"]
+        if "structured_outputs" in parameters:
+            assert "tool_calls" in request["response_format"]["json_schema"]["schema"]["required"]
+        else:
+            assert request["response_format"] == {"type": "json_object"}
+    await registry.aclose()
+
+
+@pytest.mark.parametrize("model", ["z-ai/glm-5.3-prime", "z-ai/glm-5.3-flash", "z-ai/glm-5.2", "other/model"])
+async def test_other_models_keep_native_tool_channel(model):
+    router = Router({model: ["tools", "structured_outputs"]}, [wire()])
+    registry = ToolRegistry([RecordingTool()])
+    async with OpenRouterClient("dummy", transport=httpx.MockTransport(router.handle)) as client:
+        agent = Agent(client, registry, model)
+        assert await agent.run("Say done") == "Done."
+        await agent.wait_for_compaction()
+    request = router.requests[0]
+    assert request["tools"]
+    assert "tool_calls" not in request["response_format"]["json_schema"]["schema"]["properties"]
+    assert "# Tool Calls in This Response" not in request["messages"][0]["content"]
+    await registry.aclose()
+
+
 @pytest.mark.parametrize("bad", ["Reading", "not JSON"])
 async def test_native_calls_accept_normal_content_without_memory(bad):
     router = Router({"test/native": ["tools", "response_format"]}, [

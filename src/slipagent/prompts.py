@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 from string import Template
+from typing import Any
 
 
 class PromptError(RuntimeError):
@@ -36,6 +38,25 @@ def __getattr__(name: str) -> str:
     if name not in resources:
         raise AttributeError(name)
     return load_prompt(resources[name])
+
+
+def model_prompt_profile(model: str) -> dict[str, Any]:
+    """Load an exact model's optional prompt sections and tool-channel override."""
+    try:
+        profiles = json.loads(load_prompt("model-profiles.json"))
+    except ValueError as exc:
+        raise PromptError(f"Invalid model-profiles.json: {exc}") from exc
+    if not isinstance(profiles, dict):
+        raise PromptError("model-profiles.json must map model IDs to profiles")
+    profile = profiles.get(model, {})
+    if not isinstance(profile, dict) or profile.get("tool_channel") not in (None, "native", "embedded"):
+        raise PromptError(f"Invalid prompt profile for {model}")
+    sections = profile.get("sections", [])
+    if not isinstance(sections, list) or any(not isinstance(path, str) for path in sections):
+        raise PromptError(f"Prompt sections for {model} must be a list of filenames")
+    if not isinstance(profile.get("xml_tool_calls", False), bool):
+        raise PromptError(f"xml_tool_calls for {model} must be a boolean")
+    return profile
 
 
 @dataclass(frozen=True)

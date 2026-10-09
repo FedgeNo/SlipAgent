@@ -62,13 +62,14 @@ def agent_response_format(*, native_tools: bool) -> dict[str, Any]:
 
 
 def parse_agent_response(text: str, native_calls: list[ToolCall], *, native_tools: bool = True,
-                         json_response: bool = False, tools: list[ToolSpec] | None = None) -> AgentResponse:
+                         json_response: bool = False, tools: list[ToolSpec] | None = None,
+                         xml_tool_calls: bool = False) -> AgentResponse:
     """Detect each response independently; request hints do not restrict carriers.
 
     The legacy keyword arguments remain accepted for reload compatibility.
     Tool schemas describe XML argument types, never a model's response format.
     """
-    result = _detect_response(text, tools or [])
+    result = _detect_response(text, tools or [], xml_tool_calls=xml_tool_calls)
     result.calls = combine_calls(normalize_calls([call.to_record() for call in native_calls]), result.calls)
     if not isinstance(result.text, str):
         raise ResponseFormatError("response must be a string.")
@@ -104,14 +105,20 @@ def combine_calls(*sources: list[ToolCall]) -> list[ToolCall]:
     return normalize_calls([call.to_record() for call in result])
 
 
-def _detect_response(text: str, tools: list[ToolSpec]) -> AgentResponse:
+def _detect_response(text: str, tools: list[ToolSpec], *, xml_tool_calls: bool = False) -> AgentResponse:
     candidate = text.strip().removeprefix("\ufeff").strip()
+    if xml_tool_calls:
+        xml_fence = re.fullmatch(r"```xml[ \t]*\r?\n(.*)\r?\n```", candidate, re.DOTALL | re.IGNORECASE)
+        if xml_fence:
+            candidate = xml_fence[1].strip()
+        if candidate.startswith(("<function_calls>", "<tool_call>", "<function_call>")):
+            return AgentResponse("", _tagged_calls(candidate, tools))
     fence = re.fullmatch(r"```(?:json)?[ \t]*\r?\n(.*)\r?\n```", candidate, re.DOTALL | re.IGNORECASE)
     if fence:
         candidate = fence[1].strip()
     # Decode envelopes before inspecting tags, so code strings stay inert.
     if candidate.startswith("{") or re.match(r"```(?:json)?[ \t]*\r?\n\s*\{", candidate, re.IGNORECASE):
-        value, tagged = _response_object(candidate, tools=tools)
+        value, tagged = _response_object(candidate, tools=tools, xml_tool_calls=xml_tool_calls)
         if isinstance(value, dict):
             if set(value) & {"response", "tool_calls", "function_call", *COMPRESSED_FIELDS}:
                 allowed = {"response", "tool_calls", "function_call", *COMPRESSED_FIELDS}
@@ -127,6 +134,10 @@ def _detect_response(text: str, tools: list[ToolSpec]) -> AgentResponse:
                     legacy = _parse_response(json.dumps(legacy_value), bool(value.get(COMPRESSED_FIELDS[0])), [])
                     return AgentResponse(legacy.text, legacy.calls)
                 reply = value.get("response", "")
+                if xml_tool_calls and isinstance(reply, str):
+                    embedded = _detect_response(reply, tools, xml_tool_calls=True)
+                    reply = embedded.text
+                    tagged = combine_calls(tagged, embedded.calls)
                 calls = combine_calls(normalize_calls(value.get("tool_calls")),
                                       normalize_calls(value.get("function_call")), tagged)
                 return AgentResponse(reply, calls)
@@ -143,7 +154,7 @@ def _detect_response(text: str, tools: list[ToolSpec]) -> AgentResponse:
                 elif marker[1][0] == in_fence[0] and len(marker[1]) >= len(in_fence):
                     in_fence = ""
             elif (not in_fence and len(line) - len(stripped) < 4 and "\t" not in line[:len(line) - len(stripped)]
-                  and stripped.startswith(("<tool_call>", "<function_call>"))):
+                  and stripped.startswith(("<tool_call>", "<function_call>") + (("<function_calls>",) if xml_tool_calls else ()))):
                 return AgentResponse(text[:offset].rstrip(), _tagged_calls(text[offset:], tools))
             offset += len(line)
     return AgentResponse(text, [])
@@ -154,6 +165,13 @@ def _tagged_calls(text: str, tools: list[ToolSpec]) -> list[ToolCall]:
     raw: list[dict[str, Any]] = []
     decoder = json.JSONDecoder(object_pairs_hook=_object, parse_constant=_constant)
     while remaining:
+        if remaining.startswith("<function_calls>"):
+            block, closing, remaining = remaining.partition("</function_calls>")
+            if not closing:
+                raise ResponseFormatError("Missing closing </function_calls>.")
+            raw.extend(_xml_calls(block + closing, tools))
+            remaining = remaining.lstrip()
+            continue
         opening = re.match(r"<(tool_call|function_call)>\s*", remaining)
         if opening is None:
             raise ResponseFormatError("Expected a complete tagged tool call without trailing prose.")
@@ -192,6 +210,37 @@ def _tagged_calls(text: str, tools: list[ToolSpec]) -> list[ToolCall]:
         elif remaining and not remaining.startswith(("<tool_call>", "<function_call>")):
             raise ResponseFormatError(f"Missing closing {closing}.")
     return normalize_calls(raw)
+
+
+def _xml_calls(text: str, tools: list[ToolSpec]) -> list[dict[str, Any]]:
+    """Decode explicit invoke/parameter XML, preserving parameter string values."""
+    from xml.etree import ElementTree
+    try:
+        root = ElementTree.fromstring(text)
+    except ElementTree.ParseError as exc:
+        raise ResponseFormatError(f"Invalid tool-call XML: {exc}") from exc
+    calls = []
+    for invoke in root:
+        if invoke.tag != "invoke":
+            raise ResponseFormatError("Expected an invoke element in function_calls.")
+        name = invoke.get("name")
+        properties: dict[str, Any] = next((tool.parameters.get("properties", {}) for tool in tools if tool.name == name), {})
+        arguments = {}
+        for parameter in invoke:
+            key = parameter.get("name")
+            if parameter.tag != "parameter" or not key or key in arguments or len(parameter):
+                raise ResponseFormatError("Expected named, nonduplicated text parameters in invoke.")
+            value = parameter.text or ""
+            kind = properties.get(key, {}).get("type")
+            if kind == "string" or isinstance(kind, list) and "string" in kind:
+                arguments[key] = value
+            else:
+                try:
+                    arguments[key] = _decode(value)
+                except ResponseFormatError:
+                    arguments[key] = value
+        calls.append({"id": invoke.get("id"), "name": name, "arguments": arguments})
+    return calls
 
 
 def _qwen_call(text: str, tools: list[ToolSpec]) -> tuple[dict[str, Any], str]:
@@ -380,7 +429,7 @@ def merge_call_sources(*sources: list[ToolCall]) -> list[ToolCall]:
     return first
 
 
-def _response_object(text: str, *, tools: list[ToolSpec] | None = None) -> tuple[Any, list[ToolCall]]:
+def _response_object(text: str, *, tools: list[ToolSpec] | None = None, xml_tool_calls: bool = False) -> tuple[Any, list[ToolCall]]:
     """Read a complete record plus optional explicitly delimited JSON calls.
 
     Only whole code fences are unwrapped. We do not scan prose, the response
@@ -396,6 +445,10 @@ def _response_object(text: str, *, tools: list[ToolSpec] | None = None) -> tuple
     record: Any = None
     calls: list[ToolCall] = []
     while remaining:
+        if xml_tool_calls and remaining.startswith("<function_calls>"):
+            calls.extend(_tagged_calls(remaining, tools or []))
+            remaining = ""
+            break
         if remaining.startswith(("<tool_call>", "<function_call>")) and any(tag in remaining for tag in ("<function=", "<answer>")):
             calls.extend(_tagged_calls(remaining, tools or []))
             remaining = ""

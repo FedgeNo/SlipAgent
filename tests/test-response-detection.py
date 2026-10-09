@@ -23,6 +23,34 @@ FLAT = {"id": "one", "name": "record", "arguments": {"value": "A"}}
 SPEC = ToolSpec("record", "Record", {"properties": {"value": {"type": "string"}}})
 
 
+INVOKE = '<function_calls><invoke name="record"><parameter name="value">A</parameter></invoke></function_calls>'
+
+
+@pytest.mark.parametrize("text", [INVOKE, 'Reading.\n' + INVOKE,
+    '```xml\n' + INVOKE + '\n```',
+    json.dumps({"response": "Reading.", "tool_calls": []}) + '\n' + INVOKE,
+    json.dumps({"response": INVOKE, "tool_calls": []}),
+    XML, '<tool_call>' + json.dumps(FLAT) + '</tool_call>',
+])
+def test_model_profile_accepts_json_and_xml_call_carriers(text):
+    embedded = parse_agent_response(text, [], tools=[SPEC], xml_tool_calls=True)
+    assert [(c.name, c.arguments) for c in embedded.calls] == [("record", {"value": "A"})]
+    result = parse_agent_response(text, [ToolCall("native", "record", {"value": "A"})], tools=[SPEC], xml_tool_calls=True)
+    assert [(c.id, c.name, c.arguments) for c in result.calls] == [("native", "record", {"value": "A"})]
+
+
+def test_xml_profile_preserves_repeated_calls_and_parameter_values():
+    text = '<function_calls><invoke name="record"><parameter name="value">  a &lt; b\n</parameter></invoke></function_calls>'
+    result = parse_agent_response(text + text, [], tools=[SPEC], xml_tool_calls=True)
+    assert [c.arguments for c in result.calls] == [{"value": "  a < b\n"}] * 2
+
+
+def test_xml_invoke_carrier_is_opt_in_and_examples_stay_inert():
+    assert parse_agent_response(INVOKE, [], tools=[SPEC]).calls == []
+    example = 'Example:\n```xml\n' + INVOKE + '\n```'
+    assert parse_agent_response(example, [], tools=[SPEC], xml_tool_calls=True).calls == []
+
+
 @pytest.mark.parametrize("streamed", [False, True])
 @pytest.mark.parametrize("call", [
     {"index": 0, "id": "glm-call", "type": "function", "function": {"name": "record", "arguments": '{"value":"A"}'}, "metadata": {}},

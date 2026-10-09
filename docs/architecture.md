@@ -206,6 +206,15 @@ Native routes without schemas request plain reply text. JSON-only routes request
 `response` and `tool_calls` on every step, including final answers.
 Selection preflight publishes neither the model nor its profile on failure.
 
+`prompts/model-profiles.json` applies exact-model prompt sections and optional
+tool-channel overrides at request construction. GLM-5.3 uses embedded calls:
+its schema includes `tool_calls`, its system prompt explains that channel, and
+native tool definitions are omitted from the API body but remain in the system
+prompt. Its profile also enables invoke/parameter XML parsing in assistant
+output. Native API calls are still accepted if returned. Other models retain
+their capability-selected channel. Profile edits and model switches apply when
+the next request is built; no model-specific instructions are hard-coded in Python.
+
 `protocol.py` detects response formats independently of request capabilities.
 Plain replies, JSON envelopes, whole JSON fences, legacy summary records, tagged
 JSON calls, and Qwen3-Coder calls share one normalization boundary. The API adapter

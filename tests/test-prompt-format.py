@@ -93,6 +93,24 @@ def editable_prompts(tmp_path, monkeypatch):
     return directory
 
 
+async def test_model_prompt_sections_reload_and_follow_model_selection(editable_prompts):
+    from test_agent import StubClient
+    registry = ToolRegistry()
+    agent = Agent(StubClient([]), registry, "custom/model")
+    profile = editable_prompts / "model-profiles.json"
+    profile.write_text(json.dumps({"custom/model": {"sections": ["custom.md", "second.md"]}}))
+    (editable_prompts / "custom.md").write_text("# Custom\n\nFirst model instruction.")
+    (editable_prompts / "second.md").write_text("# Second\n\nSecond model instruction.")
+    first = content_text((await agent._context_view([], 1))[0].content)
+    assert first.index("First model instruction.") < first.index("Second model instruction.")
+    (editable_prompts / "custom.md").write_text("# Custom\n\nUpdated model instruction.")
+    assert "Updated model instruction." in content_text((await agent._context_view([], 1))[0].content)
+    agent.model = "unrelated/model"
+    other = content_text((await agent._context_view([], 1))[0].content)
+    assert "Updated model instruction." not in other and "Second model instruction." not in other
+    await registry.aclose()
+
+
 async def test_request_rereads_system_and_protocol_prompts_without_reload(editable_prompts, workspace):
     from test_agent import StubClient
     registry = ToolRegistry()

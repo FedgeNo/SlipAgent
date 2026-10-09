@@ -20,7 +20,15 @@ Each template owns its heading. Python orders rendered blocks and supplies runti
 
 System instructions and tool definitions remain separate from the user-input JSON object. That object contains new user text, the retained request, selected history, and harness errors. Each historical call carries its outcome under `result`, `error`, or `unclassified_result`. Keys identify content; values preserve the data. `system-history.md` explains authority, and `history-records.md` defines the fields. JSON escaping preserves field boundaries even when text contains apparent headings or instructions; it does not make that text trustworthy.
 
-## Resource Map
+## Model Profiles
+
+`model-profiles.json` maps exact model IDs to optional settings. `sections` lists Markdown prompt files relative to this directory, inserted in list order after reply-format instructions. Edit the mapping or files to update newly built requests. Switching models selects the new model's sections; unlisted models use the normal prompts.
+
+`tool_channel: "embedded"` requests calls inside response JSON and includes them in the response schema. Omit this setting, or use `"native"`, to follow the endpoint's normal tool capabilities. `xml_tool_calls: true` additionally accepts explicit invoke/parameter XML and whole XML fences in assistant output. JSON and native API calls remain accepted. Thoughts and quoted examples are not executable calls.
+
+The `z-ai/glm-5.3` profile uses `models/glm-5.3.md`, embedded calls, and XML compatibility. Other models have no overrides.
+
+## Resource Files
 
 | Files | Purpose |
 | --- | --- |

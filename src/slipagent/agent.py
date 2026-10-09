@@ -36,7 +36,7 @@ from .budget import ContextBudget
 from .repomap import RepositoryMap
 from .checks import check_edit_batch
 from .checkpoints import FileCheckpoints, current_checkpoint
-from .prompts import PromptSections, load_prompt
+from .prompts import PromptSections, load_prompt, model_prompt_profile
 from .batching import run_batch
 from .api import APIError, APIContextError, APIResponseError, APITransportError, RETRYABLE_STATUS
 from .mcp import MCPTool
@@ -370,8 +370,8 @@ class Agent:
         environment = self.registry.services.get("project_environment")
         if environment is not None:
             sections.add("environment", "Project Python Environment", load_prompt('environment-snapshot.md', environment=render_data(await environment.snapshot())), 30, owner="environment")
-        native_tools = capabilities is None or capabilities.native_tools
-        if capabilities is not None and (capabilities.format == "json_schema" or not native_tools):
+        native_tools = self._uses_native_tools(capabilities)
+        if not native_tools or capabilities is not None and capabilities.format == "json_schema":
             sections.add("schema", "Response Schema",
                 load_prompt('response-json.md') + '\n\n'
                 + (load_prompt('response-native-json.md')
@@ -382,6 +382,9 @@ class Agent:
             sections.add("schema", "Reply Format",
                          load_prompt('response-native-text.md'),
                          0, owner="protocol", dynamic=False)
+        for index, filename in enumerate(model_prompt_profile(self.model).get("sections", [])):
+            sections.add(f"model_{index}", filename, load_prompt(filename),
+                         5, owner="model", dynamic=False)
         sections.add("tools", "Available Tool Definitions", load_prompt('tool-definitions.md', definitions=render_data([spec.to_api() for spec in specs])), 10, owner="tools", dynamic=False)
         servers = {tool.client.spec.name: tool.client.instructions for tool in self.registry.tools
                    if isinstance(tool, MCPTool) and tool.client.connected and tool.client.instructions}
@@ -416,7 +419,7 @@ class Agent:
             context_length=int(length * budget_fraction),
             max_output=self.max_tokens or min(8192, max(256, length // 8)),
             native_tools=native_tools,
-            text_tool_history=capabilities is not None and not native_tools,
+            text_tool_history=not native_tools,
             schema=agent_response_format(native_tools=native_tools) if capabilities is not None and capabilities.format == "json_schema" else None,
             token_scale=token_scale,
         )
@@ -428,9 +431,15 @@ class Agent:
                 raise
             # Orientation is optional; it must never displace the current task.
             context = await history.view(self.messages, specs, extra_instructions=extra_instructions, **view_options)
-        if capabilities is not None and not native_tools:
+        if not native_tools:
             context = tool_history_as_text(context)
         return context
+
+    def _uses_native_tools(self, capabilities: RequestProfile | None) -> bool:
+        channel = model_prompt_profile(self.model).get("tool_channel")
+        if channel == "embedded":
+            return False
+        return capabilities is None or capabilities.native_tools
 
     @property
     def total_cost(self) -> float | None:
@@ -578,7 +587,7 @@ class Agent:
             return self._stop_notice(step)
 
         capabilities = await self.client.model_capabilities(self.model) if isinstance(self.client, APIClient) else None
-        native_tools = capabilities is None or capabilities.native_tools
+        native_tools = self._uses_native_tools(capabilities)
         extra_body: dict[str, Any] = {}
         if capabilities is not None and capabilities.format == "json_schema":
             extra_body["response_format"] = agent_response_format(native_tools=native_tools)
@@ -637,7 +646,7 @@ class Agent:
                 completion = await self.client.chat(
                     model=self.model,
                     messages=context,
-                    tools=(specs or None) if capabilities is None or native_tools else None,
+                    tools=(specs or None) if native_tools else None,
                     extra_body=extra_body,
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,
@@ -709,7 +718,8 @@ class Agent:
             try:
                 if completion.response_error:
                     raise ResponseFormatError(completion.response_error, excerpt=completion.response_excerpt)
-                record = parse_agent_response(completion.text, completion.tool_calls, tools=specs)
+                record = parse_agent_response(completion.text, completion.tool_calls, tools=specs,
+                                              xml_tool_calls=model_prompt_profile(self.model).get("xml_tool_calls", False))
                 record.text = _visible_response(record.text)
                 if not record.calls and not record.text.strip():
                     raise ResponseFormatError(load_prompt("response-bookkeeping-error.md"))

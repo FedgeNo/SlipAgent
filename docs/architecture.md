@@ -686,7 +686,10 @@ compatible edits to its behavior can subsequently reload.
 
 `RequestDiagnostics` uses a sidecar directory attached by `SessionJournal.begin`.
 Each working attempt records its run-step and history-step IDs, UTC time, request snapshot reference,
-outcome, reported usage, and bounded response/error excerpts. Exact final request
+outcome, reported usage, and complete response/error details. A separate compressed
+response captures all provider fields before parsing. Streaming choices, calls,
+and reasoning blocks are assembled by index; text fragments join into continuous
+fields. Interrupted and rejected responses are retained too. Exact final request
 JSON is gzip-compressed and deduplicated by SHA-256; no authentication headers are
 captured. Pending records survive a crash and remain visibly unsettled. Atomic
 owner-only writes and fsync preserve earlier records when storage fails. A

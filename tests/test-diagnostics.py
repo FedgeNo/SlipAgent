@@ -2,7 +2,12 @@ import gzip
 import json
 import os
 
+import httpx
+import pytest
+
 from slipagent.diagnostics import RequestDiagnostics
+from slipagent.openrouter import OpenRouterClient
+from slipagent.types import Message
 
 
 def test_resume_preserves_attempts_and_counts_existing_storage(tmp_path):
@@ -61,3 +66,55 @@ def test_quota_preserves_existing_requests_and_reports_failure(tmp_path):
     assert "quota" in archive.error
     assert archive.begin("later", step=2, step_id=2) is None
     assert "first" in archive.read(first)
+
+
+@pytest.mark.parametrize("streamed", [False, True])
+async def test_complete_response_saved_before_parsing_without_fragment_list(tmp_path, streamed):
+    archive = RequestDiagnostics()
+    archive.use_directory(tmp_path)
+    attempt = archive.begin({"messages": []}, step=1, step_id=1)
+    thought = "some reasoning\n" * 2000
+    message = {"role": "assistant", "reasoning": thought, "content": '```json\n{"response":"done"}\n```',
+               "provider_extra": {"preserve": True},
+               "tool_calls": [{"index": 0, "function": {"name": "record", "arguments": '{broken'}, "extra": "keep"}]}
+    full = {"id": "response-id", "provider": "stub", "choices": [{"index": 0, "message": message, "finish_reason": "tool_calls"}]}
+    def handle(request):
+        if not streamed:
+            return httpx.Response(200, json=full)
+        events = [
+            {"id": "response-id", "provider": "stub", "choices": [{"index": 0, "delta": {"reasoning": thought[:16000]}}]},
+            {"choices": [{"index": 0, "delta": {**message, "reasoning": thought[16000:]}, "finish_reason": "tool_calls"}]},
+        ]
+        return httpx.Response(200, headers={"content-type": "text/event-stream"},
+                              text=''.join('data: ' + json.dumps(event) + '\n\n' for event in events) + 'data: [DONE]\n\n')
+    async with OpenRouterClient("dummy", transport=httpx.MockTransport(handle)) as client:
+        completion = await client.chat(model="test", messages=[Message.user("test")],
+                                       on_delta=(lambda *args: None) if streamed else None,
+                                       on_response=lambda body: archive.response(attempt, body))
+    assert completion.response_error
+    archive.finish(attempt, "rejected", response=thought)
+    record = json.loads((tmp_path / "00000001.json").read_text())
+    body = json.loads(gzip.decompress((tmp_path / record["provider_response"]).read_bytes()))
+    assert body["provider"] == "stub"
+    assert body["choices"][0]["delta" if streamed else "message"] == message
+    assert record["response_excerpt"] == thought
+    assert thought in archive.read(attempt).replace('\\n', '\n')
+
+
+async def test_partial_response_is_logged_when_stream_breaks(tmp_path):
+    archive = RequestDiagnostics()
+    archive.use_directory(tmp_path)
+    attempt = archive.begin({}, step=1, step_id=1)
+    class Broken(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'data: {"choices":[{"delta":{"reasoning":"partial","tool_calls":[{"index":0,"function":{"arguments":"{unfinished"}}]}}]}\n\n'
+            raise httpx.ReadError("disconnected")
+    async with OpenRouterClient("dummy", transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Broken())
+    )) as client:
+        with pytest.raises(Exception, match="interrupted"):
+            await client.chat(model="test", messages=[Message.user("test")], single_attempt=True,
+                              on_delta=lambda *args: None, on_response=lambda body: archive.response(attempt, body))
+    body = json.loads(gzip.decompress((tmp_path / "00000001-response.json.gz").read_bytes()))
+    assert body["choices"][0]["delta"]["reasoning"] == "partial"
+    assert body["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"] == "{unfinished"

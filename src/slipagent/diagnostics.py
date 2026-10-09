@@ -98,8 +98,22 @@ class RequestDiagnostics:
         try:
             path = self.directory / f"{attempt:08d}.json"
             record = json.loads(path.read_text())
-            record.update(outcome=outcome, detail=detail[:4000], response_excerpt=response[:16000],
+            record.update(outcome=outcome, detail=detail, response_excerpt=response,
                           response_characters=len(response), usage=usage)
+            self._write(path, json.dumps(record, ensure_ascii=False).encode("utf-8"))
+        except (OSError, ValueError) as exc:
+            self.error = str(exc)
+
+    def response(self, attempt: int | None, body: dict[str, Any]) -> None:
+        """Save the complete provider response before normalization."""
+        if attempt is None or self.error:
+            return
+        try:
+            path = self.directory / f"{attempt:08d}.json"
+            record = json.loads(path.read_text())
+            name = f"{attempt:08d}-response.json.gz"
+            self._write(self.directory / name, gzip.compress(json.dumps(body, ensure_ascii=False).encode("utf-8"), mtime=0))
+            record["provider_response"] = name
             self._write(path, json.dumps(record, ensure_ascii=False).encode("utf-8"))
         except (OSError, ValueError) as exc:
             self.error = str(exc)
@@ -114,7 +128,11 @@ class RequestDiagnostics:
             raise ValueError("Unknown request attempt")
         record = json.loads((self.directory / f"{attempt:08d}.json").read_text())
         request = gzip.decompress((self.directory / record["request"]).read_bytes()).decode("utf-8")
-        return json.dumps(record, indent=2, ensure_ascii=False) + "\n\n" + request
+        result = json.dumps(record, indent=2, ensure_ascii=False) + "\n\n" + request
+        if record.get("provider_response"):
+            result += "\n\nProvider response (complete; stream deltas joined):\n"
+            result += gzip.decompress((self.directory / record["provider_response"]).read_bytes()).decode("utf-8")
+        return result
 
     async def aclose(self) -> None:
         self.clear()

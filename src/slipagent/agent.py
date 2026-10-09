@@ -618,10 +618,14 @@ class Agent:
                 stream_guard.feed(kind, chunk)
                 if kind == "reasoning" and chunk:
                     self._emit(AgentEvent(kind="reasoning_delta", step=step, text=chunk))
+            def response_received(body: dict[str, Any]) -> None:
+                if diagnostics is not None:
+                    diagnostics.response(diagnostic_id, body)
             stream_guard = StreamLoopGuard()
             options: dict[str, Any] = {
                 "on_delta": delta,
                 "on_request": request_sent,
+                "on_response": response_received,
                 "single_attempt": True,
             } if isinstance(self.client, APIClient) else {}
             try:

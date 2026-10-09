@@ -151,6 +151,7 @@ class APIClient:
         extra_body: dict[str, Any] | None = None,
         on_delta: Callable[[str, str], None] | None = None,
         on_request: Callable[[dict[str, Any]], None] | None = None,
+        on_response: Callable[[dict[str, Any]], None] | None = None,
         request_profile: RequestProfile | None = None,
         single_attempt: bool = False,
         disable_timeout: bool = False,
@@ -216,21 +217,37 @@ class APIClient:
             # Capture the final request body before transport, without headers.
             on_request(copy.deepcopy(payload))
         if on_delta is not None:
-            return await self._stream_request(payload, on_delta, single_attempt=single_attempt, disable_timeout=disable_timeout)
+            return await self._stream_request(payload, on_delta, single_attempt=single_attempt, disable_timeout=disable_timeout, on_response=on_response)
         transport_options: dict[str, Any] = {"timeout": None} if disable_timeout else {}
-        raw = await self._request("POST", "/chat/completions", single_attempt=single_attempt, json=payload, **transport_options)
+        raw = await self._request("POST", "/chat/completions", single_attempt=single_attempt, json=payload, on_response=on_response, **transport_options)
         return _parse_completion(raw)
 
-    async def _stream_request(self, payload: dict[str, Any], on_delta: Callable[[str, str], None], *, single_attempt: bool = False, disable_timeout: bool = False) -> Completion:
+    async def _stream_request(self, payload: dict[str, Any], on_delta: Callable[[str, str], None], *, single_attempt: bool = False, disable_timeout: bool = False,
+                              on_response: Callable[[dict[str, Any]], None] | None = None) -> Completion:
         transport_options: dict[str, Any] = {"timeout": None} if disable_timeout else {}
         observed = False
         attempt = 0
         while True:
             state: _StreamCompletion | None = None
+            captured: dict[str, Any] = {}
+            data: list[str] = []
+            def capture_event(event: str) -> None:
+                if on_response is None or event == "[DONE]":
+                    return
+                try:
+                    value = json.loads(event)
+                except ValueError:
+                    captured.setdefault("unparsed_events", []).append(event)
+                    return
+                if isinstance(value, dict):
+                    _merge_response(captured, value)
+                else:
+                    captured.setdefault("unparsed_events", []).append(value)
             try:
                 async with self._client.stream("POST", f"{self.base_url}/chat/completions", json=payload, **transport_options) as response:
                     if response.status_code >= 400:
                         await response.aread()
+                        captured = _response_body(response)
                         error = _build_error(response)
                         error.retry_after = response.headers.get("retry-after")
                         if not single_attempt and response.status_code in RETRYABLE_STATUS and await self.wait_retry(attempt, error):
@@ -240,6 +257,7 @@ class APIClient:
                     # Gateways and test servers may return a regular completion.
                     if "application/json" in response.headers.get("content-type", ""):
                         await response.aread()
+                        captured = _response_body(response)
                         raw = _decode_json(response)
                         embedded = raw.get("error")
                         code = embedded.get("code") if isinstance(embedded, dict) else None
@@ -258,19 +276,21 @@ class APIClient:
                             raise
                         return completion
                     state = _StreamCompletion(on_delta)
-                    data: list[str] = []
                     async for line in response.aiter_lines():
                         if line.startswith("data:"):
                             data.append(line[5:].lstrip(" "))
                         elif not line and data:
                             event = "\n".join(data)
                             data.clear()
+                            capture_event(event)
                             if event == "[DONE]":
                                 return state.completion()
                             observed = True
                             state.add(event)
                     if data:
                         event = "\n".join(data)
+                        data.clear()
+                        capture_event(event)
                         if event != "[DONE]":
                             observed = True
                             state.add(event)
@@ -297,6 +317,11 @@ class APIClient:
                     observed = False
                     continue
                 raise
+            finally:
+                if on_response is not None:
+                    if data:
+                        capture_event("\n".join(data))
+                    on_response(captured)
 
     async def list_models(self) -> list[ModelInfo]:
         """Return the model catalog.
@@ -346,7 +371,8 @@ class APIClient:
         return {"retry": self.retry, "on_retry": self.on_retry}
 
     async def _request(
-        self, method: str, path: str, *, single_attempt: bool = False, **kwargs: Any
+        self, method: str, path: str, *, single_attempt: bool = False,
+        on_response: Callable[[dict[str, Any]], None] | None = None, **kwargs: Any
     ) -> dict[str, Any]:
         url = f"{self.base_url}{path}"
         attempt = 0
@@ -360,6 +386,8 @@ class APIClient:
                 attempt += 1
                 continue
 
+            if on_response is not None:
+                on_response(_response_body(response))
             if response.status_code < 400:
                 raw = _decode_json(response)
                 error_body = raw.get("error")
@@ -677,6 +705,51 @@ def _extract_error_message(response: httpx.Response) -> str:
         if payload.get("message"):
             return str(payload["message"])
     return "no error detail"
+
+
+def _response_body(response: httpx.Response) -> dict[str, Any]:
+    """Capture the response body before validation, without request headers."""
+    try:
+        value = response.json()
+    except ValueError:
+        return {"body": response.text}
+    return value if isinstance(value, dict) else {"body": value}
+
+
+def _merge_response(target: dict[str, Any], incoming: dict[str, Any]) -> None:
+    """Assemble provider deltas for diagnostics independently of tool parsing.
+
+    Indexed arrays retain choice/call/reasoning-block identities. Text fragments
+    join in place; unknown fields remain available for inspecting provider formats.
+    """
+    for key, value in incoming.items():
+        if value is None and key in target:
+            continue
+        if isinstance(value, dict):
+            if not isinstance(target.get(key), dict):
+                target[key] = {}
+            _merge_response(target[key], value)
+        elif isinstance(value, list):
+            if key in {"choices", "tool_calls", "reasoning_details", "content"}:
+                items = target.setdefault(key, [])
+                for position, part in enumerate(value):
+                    if not isinstance(part, dict):
+                        items.append(copy.deepcopy(part))
+                        continue
+                    index = part.get("index", position)
+                    match = next((item for i, item in enumerate(items)
+                                  if isinstance(item, dict) and item.get("index", i) == index), None)
+                    if match is None:
+                        match = {}
+                        items.append(match)
+                    _merge_response(match, part)
+            else:
+                target.setdefault(key, []).extend(copy.deepcopy(value))
+        elif isinstance(value, str) and key in {"content", "reasoning", "reasoning_content", "text", "summary", "arguments", "name", "refusal"}:
+            previous = target.get(key)
+            target[key] = previous + value if isinstance(previous, str) else value
+        else:
+            target[key] = value
 
 
 def _content_parts(content: Any) -> tuple[str, list[dict[str, Any]]]:

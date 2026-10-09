@@ -895,7 +895,10 @@ partial tool arguments and rejected replies never execute or enter accepted hist
 Authentication, credit, and permanent request failures remain errors.
 
 `/requests` lists the latest 20 attempts; `/requests 3` displays attempt 3's
-final request body, outcome, and bounded response/error excerpt. Request JSON
+final request body, outcome, and complete response/error details. Complete provider
+responses are captured before parsing, with streaming text and reasoning joined
+into continuous fields rather than individual fragments. Provider metadata and
+tool-call fields are retained, including partial responses on failure. Request JSON
 is deduplicated and gzip-compressed in private files beside the session journal,
 without authentication headers. These diagnostics are never supplied as history
 or sent for compaction. Diagnostic writes have a separate **32 MiB quota**;

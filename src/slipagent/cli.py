@@ -2322,7 +2322,8 @@ async def _list_models(args: argparse.Namespace) -> int:
     provider_class(selected)
     names = active_providers(keys={selected: args.api_key} if args.api_key else None)
     if not names:
-        raise ConfigError("No active API providers. Set OPENROUTER_API_KEY or NVIDIA_API_KEY.")
+        keys = ", ".join(provider_class(name).key_env for name in PROVIDERS)
+        raise ConfigError(f"No active API providers. Set one of: {keys}.")
     renderer = Renderer(Style(_use_color(sys.stderr, args.no_color)), sys.stderr, args.verbose)
     results = await asyncio.gather(*(fetch_catalog(name, base_url=(args.base_url if name == selected else None)
                                     or os.environ.get(provider_class(name).base_url_env),

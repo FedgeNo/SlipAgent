@@ -1,7 +1,7 @@
 # SlipAgent
 
 **A terminal coding agent designed for free models with large context windows on
-[OpenRouter](https://openrouter.ai) and [NVIDIA](https://build.nvidia.com), with a harness you can modify while it runs.**
+[OpenRouter](https://openrouter.ai), [NVIDIA](https://build.nvidia.com), and [Kilo](https://kilo.ai/gateway), with a harness you can modify while it runs.**
 
 SlipAgent gives a model tools to read, search, edit, test, and commit code in a
 project directory. It keeps asking the model what to do next until the task is
@@ -157,6 +157,16 @@ NVIDIA defaults to `nvidia/nemotron-3-ultra-550b-a55b`, without OpenRouter's `:f
 
 Search reads only providers with configured API keys, including keys supplied for the current session. Providers without keys are neither queried nor listed. Duplicate model IDs remain separate choices. A provider's catalog failure is reported while results from the others remain available. Selection checks credentials are present, loads capabilities, and validates the context budget before replacing the current client. Same-provider changes let existing summaries continue; provider changes cancel and drain pending summaries before closing their client. Originals remain available. Authentication is established by an authenticated API request, not by catalog access.
 
+For Kilo Gateway, add `KILO_API_KEY=your-key` to the ignored `.env`, then run
+`slipagent --provider kilo`. Its default is `kilo-auto/free`, Kilo's automatic
+free-model selector. `/models free` searches the active catalogs;
+`/model kilo::<model-id>` selects an exact Kilo model. SlipAgent fetches Kilo's
+`/models` endpoint for model IDs, prices, context/output limits, tool support,
+and reasoning options. Advertised reasoning efforts use the highest supported
+level; otherwise reasoning is enabled when advertised. Catalog entries and free
+availability can change. Missing models are rejected without substituting a paid
+model. Kilo does not supply account quotas through this integration.
+
 NVIDIA's catalog does not publish tool/schema support or context limits. The built-in verified profile covers Nemotron 3 Ultra: native tools, plain replies, a conservative 1,000,000-token context budget, and at most 32,768 output tokens. Other NVIDIA models appear in search but require an explicit capability profile before use. Unknown prices and limits are not shown as free or unlimited. Free hosted availability and rate limits remain provider-controlled.
 
 Python callers select the same modules programmatically:
@@ -216,6 +226,7 @@ src/slipagent/
 ├── providers.py      provider registry and client factory
 ├── openrouter.py     OpenRouter routing, capabilities, and key information
 ├── nvidia.py         NVIDIA direct API, model profiles, and reasoning controls
+├── kilo.py           Kilo Gateway and live catalog capabilities
 ├── capabilities.py   endpoint selection, native tools, JSON/reasoning, limits
 ├── terminal.py       prompt, transcript, layout, key bindings, styles
 ├── palette.py        shared terminal colors and ANSI foreground codes
@@ -352,6 +363,9 @@ export OPENROUTER_API_KEY="sk-or-..."
 | `NVIDIA_API_KEY` | — | Required for NVIDIA inference. |
 | `NVIDIA_MODEL` | `nvidia/nemotron-3-ultra-550b-a55b` | NVIDIA model ID. |
 | `NVIDIA_BASE_URL` | `https://integrate.api.nvidia.com/v1` | NVIDIA endpoint override. |
+| `KILO_API_KEY` | — | Required for Kilo inference and catalog activation. |
+| `KILO_MODEL` | `kilo-auto/free` | Kilo model ID. |
+| `KILO_BASE_URL` | `https://api.kilo.ai/api/gateway` | Kilo endpoint override. |
 | `OPENROUTER_API_KEY` | — | Required for OpenRouter inference. |
 | `OPENROUTER_MODEL` | `nvidia/nemotron-3-ultra-550b-a55b:free` | Default model slug. |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Point at a gateway or mock. |
@@ -1052,7 +1066,7 @@ Useful flags:
 | `--python` | Explicit project interpreter, overriding project-file settings and discovery. |
 | `--temperature`, `--max-tokens` | Sampling controls. |
 | `-v, --verbose` | Show full tool output and per-step token usage. |
-| `--provider` | Select `openrouter` or `nvidia`. |
+| `--provider` | Select `openrouter`, `nvidia`, or `kilo`. |
 | `--list-models` | Print catalogs for providers with configured API keys and qualified model selectors. |
 | `--api-key` | Override the API key for this process; an environment variable avoids putting it in shell history. |
 | `--base-url` | Override the API base URL, for example for a local test gateway. |

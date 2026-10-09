@@ -15,7 +15,7 @@ from offline.sitecustomize import GUARD_DIRECTORY
 def isolated_session_storage(tmp_path: Path, monkeypatch):
     """Tests and children use dummy credentials, guarded networking and scratch state."""
     for name in tuple(os.environ):
-        if name.startswith(("OPENROUTER_", "NVIDIA_", "SLIPAGENT_", "EXA_")):
+        if name.startswith(("OPENROUTER_", "NVIDIA_", "KILO_", "SLIPAGENT_", "EXA_")):
             monkeypatch.delenv(name)
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setenv("SLIPAGENT_NO_DOTENV", "1")

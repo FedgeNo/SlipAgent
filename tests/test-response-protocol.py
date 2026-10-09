@@ -129,7 +129,6 @@ async def test_only_separate_reasoning_streams_while_json_and_tools_wait():
     {"extra": "field"},
     {"tool_calls": [{"id": "c", "name": "record", "arguments": "[]"}]},
     {"tool_calls": [{"id": "c", "name": "record", "arguments": "{broken}"}]},
-    {"tool_calls": [{"id": "c", "name": "record", "arguments": "{}"}] * 2},
     {"response": ""}, {"agent_response_compressed": "x" * 6001},
     {"agent_response_compressed": "a" * 3001, "user_prompt_compressed": "b" * 3001},
 ])

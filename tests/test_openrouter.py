@@ -173,7 +173,7 @@ async def test_parses_tool_calls() -> None:
     assert completion.tool_calls[0].arguments == {"path": "README.md"}
 
 
-async def test_rejects_empty_tool_arguments() -> None:
+async def test_empty_tool_arguments_default_to_an_object() -> None:
     body = tool_call_body()
     body["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] = ""
     client = make_client(lambda r: httpx.Response(200, json=body))
@@ -181,8 +181,10 @@ async def test_rejects_empty_tool_arguments() -> None:
     completion = await client.chat(model="m", messages=[Message.user("hi")])
     await client.aclose()
 
-    assert completion.response_error
-    assert completion.tool_calls == []
+    assert completion.response_error is None
+    assert [(call.id, call.name, call.arguments) for call in completion.tool_calls] == [
+        ("call_1", "read_file", {}),
+    ]
 
 
 async def test_response_without_choices_is_an_error() -> None:

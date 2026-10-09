@@ -537,21 +537,40 @@ class _StreamCompletion:
                     self.content += content
                     if content:
                         self.on_delta("content", content)
-                for fragment in delta.get("tool_calls") or []:
+                fragments = delta.get("tool_calls") or []
+                if isinstance(fragments, dict):
+                    fragments = [fragments]
+                for position, fragment in enumerate(fragments):
                     index = fragment.get("index")
                     if type(index) is not int or index < 0:
-                        raise ValueError("tool fragments need a nonnegative index")
+                        # IDs identify interleaved calls; otherwise use their
+                        # position in the delta, including single-call streams.
+                        identifier = fragment.get("id")
+                        matching = next((i for i, c in self.calls.items()
+                                         if identifier and c["id"] == identifier), None)
+                        index = matching if matching is not None else position
+                        if (matching is None and identifier and index in self.calls
+                                and self.calls[index]["id"] not in ("", identifier)):
+                            index = max(self.calls) + 1
                     call = self.calls.setdefault(index, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
-                    if set(fragment) - {"index", "id", "type", "function"}:
-                        call["invalid_fields"] = True
-                    if "type" in fragment:
-                        call["type"] = fragment["type"]
-                    call["id"] += fragment.get("id") or ""
-                    function = fragment.get("function") or {}
-                    if set(function) - {"name", "arguments"}:
-                        call["invalid_fields"] = True
-                    call["function"]["name"] += function.get("name") or ""
-                    call["function"]["arguments"] += function.get("arguments") or ""
+                    identifier = fragment.get("id")
+                    if isinstance(identifier, str) and identifier != call["id"]:
+                        call["id"] += identifier
+                    function = fragment.get("function")
+                    if not isinstance(function, dict):
+                        function = fragment
+                    name = function.get("name") or fragment.get("name")
+                    if isinstance(name, str):
+                        call["function"]["name"] += name
+                    arguments = next((source[field] for source in (function, fragment)
+                                      for field in ("arguments", "input", "parameters")
+                                      if source.get(field) is not None), None)
+                    if arguments is not None:
+                        previous = call["function"]["arguments"]
+                        if isinstance(arguments, str) and isinstance(previous, str):
+                            call["function"]["arguments"] += arguments
+                        else:
+                            call["function"]["arguments"] = arguments
                 legacy = delta.get("function_call")
                 if legacy is not None:
                     if not isinstance(legacy, dict):
@@ -703,21 +722,8 @@ def _parse_completion(raw: dict[str, Any]) -> Completion:
         response_excerpt = ""
         try:
             content, blocks = _content_parts(wire.get("content"))
-            raw_calls = wire.get("tool_calls", [])
-            if raw_calls is None:
-                raw_calls = []
-            if not isinstance(raw_calls, list):
-                raise ResponseFormatError("API tool_calls must be an array.")
-            for call in raw_calls:
-                if (not isinstance(call, dict) or set(call) != {"id", "type", "function"}
-                        or call["type"] != "function" or not isinstance(call["id"], str)
-                        or not call["id"].strip() or not isinstance(call["function"], dict)
-                        or set(call["function"]) != {"name", "arguments"}
-                        or not isinstance(call["function"]["arguments"], str)):
-                    raise ResponseFormatError("API calls require id, type=function, and function with name and JSON-encoded arguments.")
-                if not call["function"]["arguments"].strip():
-                    raise ResponseFormatError("API arguments must be a JSON-encoded object string; use '{}' for no arguments.")
-            calls = combine_calls(normalize_calls(raw_calls), normalize_calls(wire.get("function_call")), normalize_calls(blocks))
+            calls = combine_calls(normalize_calls(wire.get("tool_calls")),
+                                  normalize_calls(wire.get("function_call")), normalize_calls(blocks))
         except ResponseFormatError as exc:
             response_error = str(exc)
             response_excerpt = json.dumps({"invalid_message_prefix": json.dumps(wire, ensure_ascii=True)[:1500]})

@@ -329,43 +329,32 @@ def normalize_calls(raw: Any) -> list[ToolCall]:
     for index, item in enumerate(raw):
         if not isinstance(item, dict):
             raise ResponseFormatError(f"tool_calls[{index}] must be an object.")
-        call_type = item.get("type", "function")
-        if not isinstance(call_type, str) or call_type not in {"function", "tool_use"}:
-            raise ResponseFormatError(f"tool_calls[{index}] has an unsupported call type.")
-        function = item.get("function", item)
+        function = item.get("function")
         if not isinstance(function, dict):
-            raise ResponseFormatError(f"tool_calls[{index}].function must be an object.")
-        name = function.get("name")
+            function = item
+        name = function.get("name") or item.get("name")
         if not isinstance(name, str) or not name.strip():
             raise ResponseFormatError("Tool name must be a nonempty string.")
         _decode(json.dumps(name, ensure_ascii=True))
-        if "function" in item and any(key in item for key in ("name", "arguments", "input", "parameters")):
-            raise ResponseFormatError("Conflicting flat and nested function fields in one tool call.")
-        argument_fields = [key for key in ("arguments", "input", "parameters") if key in function]
-        if len(argument_fields) > 1:
-            raise ResponseFormatError("Conflicting argument fields in one tool call.")
-        arguments = function[argument_fields[0]] if argument_fields else {}
+        # Prefer nested arguments, then flat aliases; provider metadata is not
+        # part of the executable call contract.
+        arguments: Any = next((source[key] for source in (function, item)
+                          for key in ("arguments", "input", "parameters")
+                          if source.get(key) is not None), {})
         try:
             arguments = _decode(arguments) if isinstance(arguments, str) and arguments.strip() else arguments
             if arguments is None or isinstance(arguments, str) and not arguments.strip():
                 arguments = {}
             if not isinstance(arguments, dict):
                 raise ResponseFormatError("Tool arguments must decode to an object.")
-            # Objects from API adapters need the same Unicode/number checks as
-            # encoded arguments. The marker is used by older client adapters.
-            if "__invalid_arguments__" in arguments:
-                raise ResponseFormatError("Invalid tool arguments returned by the provider.")
+            # Preserve valid JSON values without modifying tool payloads.
             _decode(json.dumps(arguments, ensure_ascii=True))
         except ResponseFormatError as exc:
             raise ResponseFormatError(f"tool_calls[{index}].arguments: {exc}", excerpt=exc.excerpt) from exc
         call_id = item.get("id")
-        if call_id is None or call_id == "":
+        if not isinstance(call_id, str) or not call_id.strip() or call_id in ids:
             call_id = "call_" + uuid.uuid4().hex
-        if not isinstance(call_id, str) or not call_id.strip():
-            raise ResponseFormatError("Tool id must be a nonempty string when supplied.")
         _decode(json.dumps(call_id, ensure_ascii=True))
-        if call_id in ids:
-            raise ResponseFormatError("Tool IDs must be unique within the response.")
         ids.add(call_id)
         calls.append(ToolCall(call_id, name, arguments))
     return calls

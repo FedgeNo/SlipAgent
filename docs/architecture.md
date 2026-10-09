@@ -216,9 +216,15 @@ while distinct calls are combined. Conflicting shared IDs reject the batch.
 Qwen argument conversion uses tool parameter schemas, preserving string whitespace
 and entities. No model-specific response-format memory is used. Requests retain
 their preferred output instructions and API capability profiles.
-Complete streamed responses are validated before effects. Malformed or truncated
-batches, conflicting fields, and duplicate IDs within a carrier reject the entire
-response. Explanatory code examples and reasoning are never scanned for actions.
+Complete streamed responses are normalized before effects. Calls need a tool
+name and object arguments; arguments may arrive as JSON text or an object, and
+omitted arguments default to an empty object. Extra metadata and optional type
+labels do not reject calls. Nested function fields take precedence over flat
+fields; argument aliases are read in order: `arguments`, `input`, `parameters`.
+Usable IDs are preserved, while missing, invalid, or repeated IDs receive unique
+local IDs. Streams use supplied indexes, otherwise call IDs or delta positions.
+Malformed or truncated argument JSON still rejects the response. Explanatory
+code examples and reasoning are never scanned for actions.
 An empty reply is valid only when accompanied by tool calls.
 
 The built-in `answer` tool returns its text as a user-visible answer. A successful

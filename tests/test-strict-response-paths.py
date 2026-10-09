@@ -115,18 +115,22 @@ async def test_selected_contract_rejects_then_recovers_without_effects(mode, inv
 
 
 @pytest.mark.parametrize("change", [
-    {"arguments": "[]"}, {"id": " "},
-    {"input": "{}"}, {"type": "unknown"}, {"name": ""},
+    {"arguments": "[]"}, {"name": ""},
 ])
-def test_json_calls_reject_invalid_or_conflicting_fields(change):
+def test_json_calls_require_executable_name_and_arguments(change):
     with pytest.raises(ResponseFormatError):
         parse_agent_response(json.dumps({"response": "Reading", "tool_calls": [{**CALL, **change}]}), [], native_tools=False)
+
+
+@pytest.mark.parametrize("change", [{"id": " "}, {"input": "{}"}, {"type": "unknown"}])
+def test_json_calls_use_arguments_despite_optional_metadata(change):
+    result = parse_agent_response(json.dumps({"response": "Reading", "tool_calls": [{**CALL, **change}]}), [])
+    assert [(c.name, c.arguments) for c in result.calls] == [("record", {"value": "A"})]
 
 
 @pytest.mark.parametrize("text", [
     '{"response":"Done","tool_calls":[],"extra":1}',
     '{"response":"Done","response":"Again","tool_calls":[]}',
-    '{"response":"Done","tool_calls":[' + json.dumps(CALL) + ',' + json.dumps(CALL) + ']}',
 ])
 def test_json_final_and_batch_structure_is_strict(text):
     with pytest.raises(ResponseFormatError):
@@ -152,7 +156,7 @@ def test_native_plain_replies_reject_response_containers(text):
     {"extra": "field"}, {"type": "tool_use"},
     {"function": {"name": "record", "arguments": CALL["arguments"], "input": {"value": "A"}}},
 ])
-async def test_streamed_call_fields_are_validated_without_running_tools(change):
+async def test_streamed_calls_execute_with_extra_or_optional_fields(change):
     requests = []
     tool = RecordingTool()
     registry = ToolRegistry([tool])
@@ -160,7 +164,7 @@ async def test_streamed_call_fields_are_validated_without_running_tools(change):
 
     class Frames(httpx.AsyncByteStream):
         async def __aiter__(self):
-            for delta, finish in [({"content": "Rejected"}, None), ({"tool_calls": [fragment]}, "tool_calls")]:
+            for delta, finish in [({"content": "Reading"}, None), ({"tool_calls": [fragment]}, "tool_calls")]:
                 yield ("data: " + json.dumps({"choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}) + "\n\n").encode()
             yield b"data: [DONE]\n\n"
 
@@ -180,6 +184,6 @@ async def test_streamed_call_fields_are_validated_without_running_tools(change):
         agent = Agent(client, registry, "test")
         assert await agent.run("Inspect") == "Done"
         await agent.wait_for_compaction()
-    assert tool.seen == [] and len(requests) == 2
-    assert "last response was rejected" in requests[1]["messages"][0]["content"]
+    assert tool.seen == [{"value": "A"}] and len(requests) == 2
+    assert "last response was rejected" not in requests[1]["messages"][0]["content"]
     await registry.aclose()

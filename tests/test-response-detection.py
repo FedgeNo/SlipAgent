@@ -23,6 +23,70 @@ FLAT = {"id": "one", "name": "record", "arguments": {"value": "A"}}
 SPEC = ToolSpec("record", "Record", {"properties": {"value": {"type": "string"}}})
 
 
+@pytest.mark.parametrize("streamed", [False, True])
+@pytest.mark.parametrize("call", [
+    {"index": 0, "id": "glm-call", "type": "function", "function": {"name": "record", "arguments": '{"value":"A"}'}, "metadata": {}},
+    {"function": {"name": "record", "arguments": {"value": "A"}, "extra": True}},
+    {"name": "record", "input": {"value": "A"}, "type": "custom", "id": None},
+    {"name": "record", "parameters": {"value": "A"}, "id": 7},
+])
+def test_tool_calls_need_only_name_and_arguments(streamed, call):
+    if streamed:
+        stream = _StreamCompletion(lambda *args: None)
+        stream.add(json.dumps({"choices": [{"delta": {"tool_calls": [call]}, "finish_reason": "tool_calls"}]}))
+        completion = stream.completion()
+    else:
+        completion = _parse_completion({"choices": [{"message": {"tool_calls": [call]}, "finish_reason": "tool_calls"}]})
+    assert completion.response_error is None
+    assert [(c.name, c.arguments) for c in completion.tool_calls] == [("record", {"value": "A"})]
+    assert completion.tool_calls[0].id
+
+
+def test_missing_arguments_and_repeated_ids_are_normalized():
+    completion = _parse_completion({"choices": [{"message": {"tool_calls": [
+        {"id": "same", "name": "list_dir"}, {"id": "same", "name": "list_dir"},
+    ]}}]})
+    assert completion.response_error is None
+    assert [c.arguments for c in completion.tool_calls] == [{}, {}]
+    assert len({c.id for c in completion.tool_calls}) == 2
+
+
+def test_stream_without_indexes_preserves_fragmented_arguments():
+    stream = _StreamCompletion(lambda *args: None)
+    for fragment in [
+        {"id": "one", "function": {"name": "record", "arguments": '{"value":'}},
+        {"id": "one", "function": {"arguments": '"A"}'}},
+    ]:
+        stream.add(json.dumps({"choices": [{"delta": {"tool_calls": [fragment]}}]}))
+    stream.add(json.dumps({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}))
+    completion = stream.completion()
+    assert completion.response_error is None
+    assert [(c.id, c.arguments) for c in completion.tool_calls] == [("one", {"value": "A"})]
+
+
+def test_stream_uses_available_ids_to_link_interleaved_calls():
+    stream = _StreamCompletion(lambda *args: None)
+    for fragment in [
+        {"id": "one", "function": {"name": "record", "arguments": '{"value":'}},
+        {"id": "two", "function": {"name": "record", "arguments": '{"value":'}},
+        {"id": "two", "function": {"arguments": '"B"}'}},
+        {"id": "one", "function": {"arguments": '"A"}'}},
+    ]:
+        stream.add(json.dumps({"choices": [{"delta": {"tool_calls": [fragment]}}]}))
+    stream.add(json.dumps({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}))
+    completion = stream.completion()
+    assert completion.response_error is None
+    assert [(c.id, c.arguments) for c in completion.tool_calls] == [("one", {"value": "A"}), ("two", {"value": "B"})]
+
+
+def test_native_call_uses_flat_arguments_when_nested_arguments_are_absent():
+    completion = _parse_completion({"choices": [{"message": {"tool_calls": {
+        "id": "keep-me", "function": {"name": "record"}, "input": {"value": "A"},
+    }}}]})
+    assert completion.response_error is None
+    assert [(c.id, c.name, c.arguments) for c in completion.tool_calls] == [("keep-me", "record", {"value": "A"})]
+
+
 @pytest.mark.parametrize("native_tools,json_response", [(True, False), (True, True), (False, False)])
 @pytest.mark.parametrize("content", [
     XML, "Reading.\n" + XML,

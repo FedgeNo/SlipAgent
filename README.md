@@ -644,7 +644,12 @@ Saved command output and edit diffs have clickable **View Output** or **View
 Diff** references. `/view` lists records; `/view NUMBER [LINE]` opens one at a
 specific line. These viewers are read-only: arrows, Page Up/Down, Home/End, and
 the mouse wheel navigate; **Esc** closes the viewer without interrupting agent
-work. Notifications and your input draft remain visible. Diffs use distinct
+work. File and inspection-record viewers use private file-backed snapshots and
+disk-backed line indexes, decoding JSON records in bounded chunks. Very long
+lines use bounded display segments; source line links still target logical lines.
+An open file that changes, is replaced, or disappears on disk keeps its snapshot
+and offers **Reload [Ctrl+R]**. Reload failure leaves the snapshot available.
+Notifications and your input draft remain visible. Diffs use distinct
 colors for headers, hunks, additions, and deletions; short edit diffs also appear
 in the feed. No editing or saving is enabled in these viewers.
 

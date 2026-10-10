@@ -14,7 +14,7 @@ import json
 import os
 import tempfile
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -99,11 +99,16 @@ class CommandLog:
             try:
                 output = self.streams["stdout"]
                 error = self.streams["stderr"]
-                self.artifact_record = store.save(self.command,
-                    output.path.read_text(encoding="utf-8") if output.path else "",
-                    error=(error.path.read_text(encoding="utf-8") if error.path else "") +
-                          ("\n" + "\n".join(stream.error for stream in self.streams.values() if stream.error)
-                           if any(stream.error for stream in self.streams.values()) else ""),
+                def chunks(path: Path | None, suffix: str = "") -> Iterator[str]:
+                    if path is not None:
+                        with path.open(encoding="utf-8", newline="") as source:
+                            while chunk := source.read(4096):
+                                yield chunk
+                    if suffix:
+                        yield suffix
+                self.artifact_record = store.save(self.command, chunks(output.path),
+                    error=chunks(error.path, "\n" + "\n".join(stream.error for stream in self.streams.values() if stream.error)
+                                 if any(stream.error for stream in self.streams.values()) else ""),
                     kind=getattr(self, "artifact_kind", "command_output"), step_id=self.step_id, call_id=self.call_id)
             except (OSError, UnicodeError, ValueError) as exc:
                 self.artifact_error = str(exc)

@@ -166,6 +166,37 @@ async def test_input_wheel_scrolls_wrapped_draft_without_moving_cursor_or_feed(d
             await task
 
 
+async def test_file_viewer_detects_external_changes_and_reloads_without_whole_file_reads(display, tmp_path, monkeypatch):
+    from pathlib import Path
+    sink, _, output, _, snapshot = display
+    path = tmp_path / "live.txt"
+    path.write_text("original\n")
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: "Ready" in snapshot()[17])
+            def no_full_read(*args, **kwargs):
+                raise AssertionError("File viewer must not call read_text")
+            monkeypatch.setattr(Path, "read_text", no_full_read)
+            await ui._inspect_file("live.txt")
+            await wait_until(lambda: "original" in snapshot()[1])
+            original = ui._viewer_window.content.lines
+            path.write_text("external change\n")
+            await wait_until(lambda: "File changed on disk" in snapshot()[0])
+            assert "original" in snapshot()[1]
+            pipe.send_text("\x12")
+            await wait_until(lambda: "external change" in snapshot()[1])
+            assert original.text.closed
+            assert "File changed on disk" not in snapshot()[0]
+            path.unlink()
+            await wait_until(lambda: "File changed on disk" in snapshot()[0])
+            assert "external change" in snapshot()[1]
+        finally:
+            ui.close()
+            await task
+
+
 async def test_sidebar_wheel_scrolls_each_pane_and_uses_menu_colors(display):
     sink, _, output, screen, snapshot = display
     with create_pipe_input() as pipe:

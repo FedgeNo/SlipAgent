@@ -616,13 +616,14 @@ user-home `.SlipAgent` directory (or `SLIPAGENT_STATE_DIR`), outside the checkou
 `/reset` starts a new conversation with the default title. With `--no-session`,
 renaming lasts only for the current conversation in the running process.
 
-On an interactive terminal, six fixed rows sit at the bottom of the screen:
-a pulsing activity indicator, three rows for wrapping input, an empty line,
-and the readout `<cwd>  │  model: <slug>  │  free: <n>`. Another empty row
+On an interactive terminal, seven fixed rows sit at the bottom of the screen:
+a pulsing activity indicator, five rows for wrapping input,
+and the readout `<cwd>  │  model: <slug>  │  free: <n>`. An empty row
 separates this area from the scrolling transcript. Output and redraws preserve
 partially typed input. Input and output wrap at word boundaries to the terminal
 width and reflow when you resize it. Wrapping preserves the submitted prompt's
-original text. The mouse wheel scrolls the transcript, preserving
+original text. The mouse wheel scrolls overflowing input when hovered and scrolls
+the transcript over the output area, preserving
 your draft and prompt history. Scrolling back pauses automatic scrolling until you
 return to the bottom. The CWD is the workspace where tools run; long paths
 and model names shorten to fit narrow terminals.
@@ -701,7 +702,7 @@ count is fetched from OpenRouter at startup and refreshed every 15 minutes,
 including while idle or working.
 
 The underlined **Commands** link beside **Ready**, or `/menu`, replaces the
-five-row input footer with a heading, a scrolling list of all commands with their
+seven-row input footer with a heading, a five-row scrolling list of all commands with their
 help syntax and descriptions, and `↑/↓ or wheel = move | Enter or click = select | Esc = back` on
 the bottom line, with shorter wording on narrow terminals.
 Use the mouse wheel or arrow keys to move, and click an item or press Enter to

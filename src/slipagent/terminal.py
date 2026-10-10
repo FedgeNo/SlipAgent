@@ -41,7 +41,7 @@ from .explorer import folder_opener, open_folder
 from .viewers import TextViewControl, DiffViewControl
 from .types import ToolCall
 
-FOOTER_ROWS = 5
+FOOTER_ROWS = 7
 PULSE_FRAMES = ("▌", "▛", "▀", "▜", "▐", "▟", "▄", "▙")
 MIN_REDRAW_INTERVAL = 1 / 30
 
@@ -156,6 +156,27 @@ class TranscriptWindow(Window):
         self.horizontal_scroll = 0
 
 
+class InputWindow(TranscriptWindow):
+    """Allow wheel inspection without changing the draft or its cursor."""
+
+    def scroll(self, rows: int) -> None:
+        self.__dict__["_manual_scroll"] = True
+        self._following = False
+        super().scroll(rows)
+
+    def _scroll(self, ui_content: UIContent, width: int, height: int) -> None:
+        buffer = getattr(self.content, "buffer", None)
+        state = (buffer.text, buffer.cursor_position, width) if buffer is not None else None
+        if self.__dict__.get("_input_state") != state:
+            self.__dict__["_manual_scroll"] = False
+            self._pending_scroll = 0
+        self.__dict__["_input_state"] = state
+        if self.__dict__.get("_manual_scroll", False):
+            super()._scroll(ui_content, width, height)
+        else:
+            Window._scroll(self, ui_content, width, height)
+
+
 class TerminalUI:
     """Persistent buffers/application with replaceable presentation methods.
 
@@ -191,12 +212,14 @@ class TerminalUI:
         self._password = False
         self._input_label = "> "
         self.input = TextArea(
-            height=3, multiline=False, wrap_lines=True,
+            height=5, multiline=False, wrap_lines=True,
             prompt=lambda: self._input_label,
             password=Condition(lambda: self._password), accept_handler=lambda buffer: self._accept(buffer),
             style="class:user",
         )
-        self.input.window.height = Dimension.exact(3)
+        self.input.window = InputWindow(self.input.control)
+        self.input.window.style = "class:text-area class:user"
+        self.input.window.height = Dimension.exact(5)
         self.transcript = TranscriptWindow(TranscriptControl(lambda width: self._transcript_content(width)))
         self.app: Application[None] = Application(
             layout=self._layout(), key_bindings=self._bindings(),
@@ -216,6 +239,10 @@ class TerminalUI:
         self._ensure_menu()
         self._ensure_viewer()
         self._ensure_inspection()
+        if not isinstance(self.input.window, InputWindow):
+            self.input.window = InputWindow(self.input.control)
+            self.input.window.style = "class:text-area class:user"
+        self.input.window.height = Dimension.exact(FOOTER_ROWS - 2)
         self._menu_window.height = Dimension.exact(FOOTER_ROWS - 2)
         # Attach during layout rebuilds so existing sessions gain input wrapping.
         processors = self.input.control.input_processors or []
@@ -265,6 +292,7 @@ class TerminalUI:
         self._inspection_panel = HSplit([
             HSplit([Window(FormattedTextControl("Touched Files"), height=1, style="class:menu-title"),
                     self._files_window]),
+            Window(height=1),
             HSplit([Window(FormattedTextControl("Calls"), height=1, style="class:menu-title"),
                     self._calls_window]),
         ], width=lambda: Dimension.exact(max(1, self.output.get_size().columns // 4)))
@@ -339,7 +367,7 @@ class TerminalUI:
                         self.open_viewer(f"{call['tool']} — {call['call_id']}", json.dumps(call, ensure_ascii=False, indent=2))
                 return None
             label = f"{key} [{value}]" if files else f"{value['tool']} [{value['status']}]"
-            style = "class:clickable" + (" class:hover" if self.__dict__.get("_hovered_control") == ("inspection", files, key) else "")
+            style = "class:clickable class:menu-item" + (" class:hover" if self.__dict__.get("_hovered_control") == ("inspection", files, key) else "")
             fragments.append((style, label, click))
             fragments.append(("", "\n"))
         return fragments
@@ -501,7 +529,7 @@ class TerminalUI:
                     self._menu_index = index
                     self._finish_menu(self._menu_options[index][0])
                 return None
-            style = "class:clickable" + (" class:menu-selected" if selected else "")
+            style = "class:clickable class:menu-item" + (" class:menu-selected" if selected else "")
             if self.__dict__.get("_hovered_control") == ("menu", index):
                 style += " class:hover"
             fragments.append((style,
@@ -887,6 +915,7 @@ class TerminalUI:
             "context-system": "#ffff00", "retry": "ansired",
             "menu-title": "bold", "menu-selected": "reverse bold",
             "clickable": "underline", "hover": "reverse",
+            "menu-item": "#999999",
             "diff-added": "#66dd88", "diff-removed": "#ff6666",
             "diff-header": "bold #ffdd66", "diff-hunk": "#66ccff",
         })
@@ -920,10 +949,20 @@ class TerminalUI:
                 self._selection_dragging = False
             if event.event_type in (MouseEventType.SCROLL_UP, MouseEventType.SCROLL_DOWN):
                 size = self.output.get_size()
+                if self._menu_future is None and size.rows - FOOTER_ROWS + 1 <= event.position.y < size.rows - 1:
+                    window = self.input.window
+                    if isinstance(window, InputWindow):
+                        window.scroll(-3 if event.event_type == MouseEventType.SCROLL_UP else 3)
+                    app.invalidate()
+                    return None
                 if self.__dict__.get("_inspection_visible") and size.columns >= 60 and event.position.x >= size.columns - size.columns // 4 and event.position.y < size.rows - FOOTER_ROWS - 1 and self._menu_future is None:
-                    height = size.rows - FOOTER_ROWS - 1
-                    window = self._files_window if event.position.y < height // 2 else self._calls_window
-                    window.scroll(-3 if event.event_type == MouseEventType.SCROLL_UP else 3)
+                    screen = app.renderer._last_screen
+                    if screen is not None:
+                        for pane in (self._files_window, self._calls_window):
+                            position = screen.visible_windows_to_write_positions.get(pane)
+                            if position is not None and position.ypos <= event.position.y < position.ypos + position.height:
+                                pane.scroll(-3 if event.event_type == MouseEventType.SCROLL_UP else 3)
+                                break
                     app.invalidate()
                     return None
                 self._scroll_output(-3 if event.event_type == MouseEventType.SCROLL_UP else 3)
@@ -940,7 +979,7 @@ class TerminalUI:
                 if previous_hover != self.__dict__.get("_hovered_control"):
                     app.invalidate()
 
-        # Wheel events target the active menu or output view. Clicks retain
+        # Wheel events target the input under the pointer, active menu, or output. Clicks retain
         # their normal behavior in the input field when no menu is open.
         handlers = MouseHandlers()
         size = self.output.get_size()

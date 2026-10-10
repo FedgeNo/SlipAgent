@@ -38,7 +38,7 @@ async def test_read_only_viewer_scrolls_targets_lines_keeps_work_running_and_esc
         ui.set_interrupt_handler(interrupted)
         task = asyncio.create_task(ui.run())
         try:
-            await wait_until(lambda: "Ready" in snapshot()[19])
+            await wait_until(lambda: "Ready" in snapshot()[17])
             ui.input.text = "unfinished draft"
             ui.set_working(True)
             ui.notify("Still working.")
@@ -52,7 +52,7 @@ async def test_read_only_viewer_scrolls_targets_lines_keeps_work_running_and_esc
             assert ui.input.text == "unfinished draft"
             assert ui.working
             pipe.send_text("\x1b[F")
-            await wait_until(lambda: "line 099" in "\n".join(snapshot()[:18]))
+            await wait_until(lambda: "line 099" in "\n".join(snapshot()[:16]))
             pipe.send_text("\x1b[H")
             await wait_until(lambda: "line 000" in snapshot()[1])
             pipe.send_text("\x1b")
@@ -105,7 +105,7 @@ async def test_inspection_panel_toggles_by_combo_and_click_and_opens_files_and_c
             call = ToolCall("call-1", "read_file", {"path": "demo.txt"})
             ui.track_call(call, 1)
             ui.finish_call(call, 1, "file contents", False)
-            await wait_until(lambda: "Inspect [Ctrl+O]" in snapshot()[19])
+            await wait_until(lambda: "Inspect [Ctrl+O]" in snapshot()[17])
             pipe.send_text("\x0f")
             await wait_until(lambda: "Touched Files" in snapshot()[0])
             assert snapshot()[0].index("Touched Files") == 75
@@ -121,9 +121,69 @@ async def test_inspection_panel_toggles_by_combo_and_click_and_opens_files_and_c
             assert ui._viewer_active
             pipe.send_text("\x1b")
             await wait_until(lambda: not ui._viewer_active)
-            pipe.send_text("\x1b[<0;90;20M\x1b[<0;90;20m")
+            pipe.send_text("\x1b[<0;90;18M\x1b[<0;90;18m")
             await wait_until(lambda: not ui._inspection_visible)
             await wait_until(lambda: "Touched Files" not in snapshot()[0])
+        finally:
+            ui.close()
+            await task
+
+
+async def test_input_wheel_scrolls_wrapped_draft_without_moving_cursor_or_feed(display):
+    sink, size, output, screen, snapshot = display
+    size[0] = Size(rows=24, columns=30)
+    screen.resize(lines=24, columns=30)
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: ">" in snapshot()[18])
+            ui.write("feed stays here")
+            text = " ".join(f"word{n:02d}" for n in range(80))
+            pipe.send_text(text)
+            await wait_until(lambda: "word79" in "\n".join(snapshot()[18:23]))
+            before = snapshot()[18:23]
+            cursor = ui.input.buffer.cursor_position
+            history = ui.input.buffer.history.get_strings()
+            pipe.send_text("\x1b[<64;5;20M" * 30)
+            await wait_until(lambda: "word00" in snapshot()[18])
+            assert snapshot()[18:23] != before
+            assert ui.input.text == text and ui.input.buffer.cursor_position == cursor
+            assert ui.input.buffer.history.get_strings() == history
+            assert "feed stays here" in snapshot()[0]
+            pipe.send_text("\x1b[<65;5;20M" * 30)
+            await wait_until(lambda: "word79" in "\n".join(snapshot()[18:23]))
+            pipe.send_text("\x1b[<64;5;20M" * 30)
+            await wait_until(lambda: "word00" in snapshot()[18])
+            pipe.send_text("X")
+            await wait_until(lambda: "word79X" in "\n".join(snapshot()[18:23]))
+            assert ui.input.text == text + "X"
+        finally:
+            ui.close()
+            await task
+
+
+async def test_sidebar_wheel_scrolls_each_pane_and_uses_menu_colors(display):
+    sink, _, output, screen, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        for n in range(30):
+            ui.track_call(ToolCall(f"call{n}", "read_file" if n % 2 else "write_file", {"path": f"file{n}"}), n)
+        task = asyncio.create_task(ui.run())
+        try:
+            ui.toggle_inspection()
+            await wait_until(lambda: "file29" in snapshot()[1])
+            assert snapshot()[8][75:].strip() == ""
+            assert screen.buffer[1][75].fg == "999999"
+            assert screen.buffer[0][75].fg != "999999"
+            calls = [row[75:] for row in snapshot()[9:16]]
+            pipe.send_text("\x1b[<65;80;2M" * 3)
+            await wait_until(lambda: "file29" not in snapshot()[1])
+            assert [row[75:] for row in snapshot()[9:16]] == calls
+            files = [row[75:] for row in snapshot()[:8]]
+            pipe.send_text("\x1b[<65;80;11M" * 3)
+            await wait_until(lambda: [row[75:] for row in snapshot()[9:16]] != calls)
+            assert [row[75:] for row in snapshot()[:8]] == files
         finally:
             ui.close()
             await task
@@ -154,7 +214,7 @@ async def test_notifications_remain_visible_in_menu_context_and_after_resize(dis
             assert snapshot()[23].index("Saved changes.") == 100 - len("Saved changes.")
             ui.write("feed contents\n" * 50)
             choice = asyncio.create_task(ui.choose("Commands", [("one", "One")]))
-            await wait_until(lambda: snapshot()[19].strip() == "Commands")
+            await wait_until(lambda: snapshot()[17].strip() == "Commands")
             assert snapshot()[23].rstrip().endswith("Saved changes.")
             pipe.send_text("\x1b")
             await choice
@@ -401,7 +461,7 @@ async def test_long_reasoning_stream_keeps_input_and_stop_responsive(display):
                 ui.write_chunk("\x1b[2m" + word + "\x1b[0m")
                 pipe.send_text(word)
                 await asyncio.sleep(.04)
-            await wait_until(lambda: "Now check the result." in snapshot()[20])
+            await wait_until(lambda: "Now check the result." in snapshot()[18])
             pipe.send_text("\x15/stop\r")
             assert await asyncio.wait_for(ui.read_line(), 1) == "/stop"
         finally:
@@ -460,37 +520,40 @@ async def test_menu_uses_footer_and_scrolls_selection_through_refresh_and_resize
         choice = None
         try:
             ui.write("Transcript stays visible")
-            await wait_until(lambda: "Ready" in snapshot()[19])
-            before = snapshot()[:18]
+            await wait_until(lambda: "Ready" in snapshot()[17])
+            before = snapshot()[:16]
             choice = asyncio.create_task(ui.choose("Commands", [
                 (str(i), f"Option {i} — A saved conversation title with additional details")
                 for i in range(12)
             ]))
-            await wait_until(lambda: snapshot()[19].strip() == "Commands")
-            assert snapshot()[:18] == before
+            await wait_until(lambda: snapshot()[17].strip() == "Commands")
+            assert snapshot()[:16] == before
             assert snapshot()[23].startswith("↑↓/wheel move | Enter/click select | Esc")
-            assert "› Option 0" in snapshot()[20]
+            assert "› Option 0" in snapshot()[18]
+            assert "Option 4" in snapshot()[22]
+            assert screen.buffer[18][0].fg == "999999"
+            assert screen.buffer[17][0].fg != "999999"
             pipe.send_text("\x1b[A" + "\x1b[B" * 8)
-            await wait_until(lambda: "› Option 8" in "\n".join(snapshot()[20:23]))
-            assert "Option 0" not in "\n".join(snapshot()[20:23])
+            await wait_until(lambda: "› Option 8" in "\n".join(snapshot()[18:23]))
+            assert "Option 0" not in "\n".join(snapshot()[18:23])
             pipe.send_text("\x1b[B" * 8)
-            await wait_until(lambda: "› Option 11" in "\n".join(snapshot()[20:23]))
+            await wait_until(lambda: "› Option 11" in "\n".join(snapshot()[18:23]))
             pipe.send_text("\x1b[A" * 8)
-            await wait_until(lambda: "› Option 3" in "\n".join(snapshot()[20:23]))
-            assert "Option 11" not in "\n".join(snapshot()[20:23])
+            await wait_until(lambda: "› Option 3" in "\n".join(snapshot()[18:23]))
+            assert "Option 11" not in "\n".join(snapshot()[18:23])
             ui.refresh()
             size[0] = Size(rows=24, columns=40)
             screen.resize(lines=24, columns=40)
             ui.app._on_resize()
-            await wait_until(lambda: "› Option 3" in "\n".join(snapshot()[20:23]))
+            await wait_until(lambda: "› Option 3" in "\n".join(snapshot()[18:23]))
             assert snapshot()[23].startswith("↑↓/wheel Enter/click Esc")
             pipe.send_text("\x1b[A" * 3)
-            await wait_until(lambda: "› Option 0" in "\n".join(snapshot()[20:23]))
+            await wait_until(lambda: "› Option 0" in "\n".join(snapshot()[18:23]))
             pipe.send_text("\x1b[B" * 3)
-            await wait_until(lambda: "› Option 3" in "\n".join(snapshot()[20:23]))
+            await wait_until(lambda: "› Option 3" in "\n".join(snapshot()[18:23]))
             pipe.send_text("\r")
             assert await asyncio.wait_for(choice, 3) == "3"
-            await wait_until(lambda: "Ready" in snapshot()[19])
+            await wait_until(lambda: "Ready" in snapshot()[17])
             assert ui._lines.empty()
         finally:
             ui.close()
@@ -512,15 +575,15 @@ async def test_menu_supports_wheel_navigation_and_clicking_wrapped_items(display
             for i in range(12)
         ]))
         try:
-            await wait_until(lambda: snapshot()[19].strip() == "Commands")
+            await wait_until(lambda: snapshot()[17].strip() == "Commands")
             pipe.send_text("\x1b[<65;5;21M")
             await wait_until(lambda: ui._menu_index == 3)
             pipe.send_text("\x1b[<64;5;21M")
             await wait_until(lambda: ui._menu_index == 0)
             pipe.send_text("\x1b[B")
-            await wait_until(lambda: "› Option 1" in "\n".join(snapshot()[20:23]))
+            await wait_until(lambda: "› Option 1" in "\n".join(snapshot()[18:23]))
             rows = snapshot()
-            row = next(i for i in range(20, 23) if "Option " in rows[i] and "›" not in rows[i])
+            row = next(i for i in range(18, 23) if "Option " in rows[i] and "›" not in rows[i])
             selected = rows[row].split("Option ")[1].split()[0]
             # On a narrow screen, click the continuation of an unselected item.
             if columns == 40 and row + 1 < 23:
@@ -541,31 +604,31 @@ async def test_ready_commands_link_preserves_draft_and_inserts_command(display):
         ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
         task = asyncio.create_task(ui.run())
         try:
-            await wait_until(lambda: "Ready  Commands" in snapshot()[19])
-            assert screen.buffer[19][7].underscore
+            await wait_until(lambda: "Ready  Commands" in snapshot()[17])
+            assert screen.buffer[17][7].underscore
             pipe.send_text("unfinished draft")
-            await wait_until(lambda: "unfinished draft" in snapshot()[20])
-            pipe.send_text("\x1b[<35;8;20M")
-            await wait_until(lambda: snapshot() and screen.buffer[19][7].reverse)
+            await wait_until(lambda: "unfinished draft" in snapshot()[18])
+            pipe.send_text("\x1b[<35;8;18M")
+            await wait_until(lambda: snapshot() and screen.buffer[17][7].reverse)
             pipe.send_text("\x1b[<35;1;1M")
-            await wait_until(lambda: snapshot() and not screen.buffer[19][7].reverse)
-            pipe.send_text("\x1b[<0;8;20M\x1b[<0;8;20m")
+            await wait_until(lambda: snapshot() and not screen.buffer[17][7].reverse)
+            pipe.send_text("\x1b[<0;8;18M\x1b[<0;8;18m")
             await wait_until(lambda: ui._menu_future is not None)
             options = command_menu_options()
             assert ui._menu_options == options
             index = next(i for i, (value, _) in enumerate(options) if value == "/rename ")
             assert "<name>" in options[index][1]
             ui._move_menu(index)
-            await wait_until(lambda: "› /rename <name>" in "\n".join(snapshot()[20:23]))
+            await wait_until(lambda: "› /rename <name>" in "\n".join(snapshot()[18:23]))
             pipe.send_text("\r")
             await wait_until(lambda: ui.input.text == "/rename ")
             assert "unfinished draft" in ui.input.buffer.history.get_strings()
             assert ui.input.buffer.cursor_position == len("/rename ")
             assert ui._lines.empty()
             ui.set_working(True)
-            await wait_until(lambda: "Commands" not in snapshot()[19])
+            await wait_until(lambda: "Commands" not in snapshot()[17])
             ui.set_working(False)
-            await wait_until(lambda: "Ready  Commands" in snapshot()[19])
+            await wait_until(lambda: "Ready  Commands" in snapshot()[17])
         finally:
             ui.close()
             await task
@@ -669,12 +732,12 @@ async def test_danger_status_suffix_is_red_last_and_survives_resize(display, tmp
             start = snapshot()[23].index("Danger Mode")
             assert all(screen.buffer[23][column].fg == "ff6666" for column in range(start, start + len("Danger Mode")))
             choice = asyncio.create_task(ui.choose("Commands", [("one", "One")]))
-            await wait_until(lambda: snapshot()[19].strip() == "Commands")
+            await wait_until(lambda: snapshot()[17].strip() == "Commands")
             assert " | Danger Mode" in snapshot()[23]
             assert "Enter/click select" in snapshot()[23]
             pipe.send_text("\x1b")
             assert await asyncio.wait_for(choice, 3) is None
-            await wait_until(lambda: "Ready" in snapshot()[19])
+            await wait_until(lambda: "Ready" in snapshot()[17])
             size[0] = Size(rows=24, columns=35)
             screen.resize(lines=24, columns=35)
             ui.app._on_resize()
@@ -697,7 +760,7 @@ async def test_menu_cancellation_preserves_input_history_scroll_and_running_turn
         task = asyncio.create_task(ui.run())
         choice = None
         try:
-            await wait_until(lambda: "Ready" in snapshot()[19])
+            await wait_until(lambda: "Ready" in snapshot()[17])
             pipe.send_text("previous prompt\r")
             assert await asyncio.wait_for(ui.read_line(), 3) == "previous prompt"
             pipe.send_text("draft in progress\x1b[D")
@@ -710,13 +773,13 @@ async def test_menu_cancellation_preserves_input_history_scroll_and_running_turn
             await wait_until(lambda: "line 69" in "\n".join(snapshot()[:17]))
             ui._scroll_output(-10)
             await wait_until(lambda: "line 69" not in "\n".join(snapshot()[:17]))
-            before = snapshot()[:18]
+            before = snapshot()[:16]
             choice = asyncio.create_task(ui.choose("Commands", [("one", "One"), ("two", "Two")]))
-            await wait_until(lambda: "Commands" in snapshot()[19])
+            await wait_until(lambda: "Commands" in snapshot()[17])
             pipe.send_text("ignored\x7f\x1b[A\x1c" + cancel_key)
             assert await asyncio.wait_for(choice, 3) is None
-            await wait_until(lambda: "Working (esc to interrupt)" in snapshot()[19])
-            assert snapshot()[:18] == before
+            await wait_until(lambda: "Working (esc to interrupt)" in snapshot()[17])
+            assert snapshot()[:16] == before
             assert ui.input.buffer.text == "draft in progress"
             assert ui.input.buffer.cursor_position == cursor
             assert ui.input.buffer.history.get_strings() == history
@@ -741,7 +804,7 @@ async def test_escape_interrupts_directly_and_preserves_draft(display):
         ui.set_working(True)
         task = asyncio.create_task(ui.run())
         try:
-            await wait_until(lambda: "Working" in snapshot()[19])
+            await wait_until(lambda: "Working" in snapshot()[17])
             pipe.send_text("keep this draft")
             await wait_until(lambda: ui.input.buffer.text == "keep this draft")
             pipe.send_text("\x1b")
@@ -760,18 +823,18 @@ async def test_menu_releases_waiter_on_close_or_cancellation(display, cancel_tas
         ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
         task = asyncio.create_task(ui.run())
         try:
-            await wait_until(lambda: "Ready" in snapshot()[19])
+            await wait_until(lambda: "Ready" in snapshot()[17])
             # Refresh migrates terminals created before menus were available.
             del ui._menu_future
             ui.refresh()
             assert await ui.choose("Empty", []) is None
             choice = asyncio.create_task(ui.choose("Commands", [("one", "One")]))
-            await wait_until(lambda: "Commands" in snapshot()[19])
+            await wait_until(lambda: "Commands" in snapshot()[17])
             if cancel_task:
                 choice.cancel()
                 with pytest.raises(asyncio.CancelledError):
                     await choice
-                await wait_until(lambda: "Ready" in snapshot()[19])
+                await wait_until(lambda: "Ready" in snapshot()[17])
                 pipe.send_text("still usable\r")
                 assert await asyncio.wait_for(ui.read_line(), 3) == "still usable"
             else:
@@ -788,17 +851,17 @@ async def test_footer_stays_fixed_while_transcript_scrolls_and_input_survives(di
         ui = TerminalUI(lambda width: "CWD │ model: stub/model │ free: 42", sink, input=pipe, output=output)
         task = asyncio.create_task(ui.run())
         try:
-            await wait_until(lambda: ">" in snapshot()[20])
+            await wait_until(lambda: ">" in snapshot()[18])
             pipe.send_text("partially typed")
-            await wait_until(lambda: "partially typed" in snapshot()[20])
+            await wait_until(lambda: "partially typed" in snapshot()[18])
             for number in range(50):
                 ui.write(f"output {number}")
             ui.set_working(True)
             await wait_until(lambda: "output 49" in "\n".join(snapshot()[:17]))
             rows = snapshot()
-            assert rows[17].strip() == ""
-            assert "Working" in rows[19]
-            assert "partially typed" in rows[20]
+            assert rows[16].strip() == ""
+            assert "Working" in rows[17]
+            assert "partially typed" in rows[18]
             assert rows[23].rstrip().endswith(ui._notification_text())
             assert "model: stub/model" in rows[23]
             assert "free: 42" in rows[23]
@@ -823,13 +886,13 @@ async def test_latest_user_prompt_stays_pinned_until_next_prompt_reaches_top(dis
             await wait_until(lambda: "> Keep the original task visible" in "\n".join(snapshot()[:17]))
             assert snapshot()[0].strip() == "Startup information"
             pipe.send_text("unfinished draft")
-            await wait_until(lambda: "unfinished draft" in snapshot()[20])
+            await wait_until(lambda: "unfinished draft" in snapshot()[18])
             ui.write("\n".join(f"result {i}" for i in range(50)))
             await wait_until(lambda: snapshot()[0].rstrip() == "> Keep the original task visible")
             assert "result 49" in "\n".join(snapshot()[1:17])
             assert screen.buffer[0][0].fg == "ffffff"
             assert screen.buffer[0][0].bg == "004000"
-            assert "unfinished draft" in snapshot()[20]
+            assert "unfinished draft" in snapshot()[18]
             assert "readout" in snapshot()[23]
 
             before = snapshot()[1:17]
@@ -848,7 +911,7 @@ async def test_latest_user_prompt_stays_pinned_until_next_prompt_reaches_top(dis
             await wait_until(lambda: snapshot()[0].rstrip() == "> The next task")
             assert "next result 49" in "\n".join(snapshot()[1:17])
             assert "queued" not in snapshot()[0]
-            assert "unfinished draft" in snapshot()[20]
+            assert "unfinished draft" in snapshot()[18]
         finally:
             ui.close()
             await task
@@ -868,7 +931,7 @@ async def test_pinned_prompt_follows_scrollback_in_both_directions(display):
                 ui.write("\n".join(f"{prompt.splitlines()[0]} output {i}" for i in range(40)))
             await wait_until(lambda: snapshot()[0].rstrip() == "> Third task")
             pipe.send_text("unfinished draft")
-            await wait_until(lambda: "unfinished draft" in snapshot()[20])
+            await wait_until(lambda: "unfinished draft" in snapshot()[18])
 
             async def scroll_to(text, offset=0):
                 content = ui.transcript.content.create_content(size[0].columns, 17)
@@ -888,7 +951,7 @@ async def test_pinned_prompt_follows_scrollback_in_both_directions(display):
             ):
                 await scroll_to(text, offset)
                 await wait_until(lambda: snapshot()[0].rstrip() == pinned)
-                assert "unfinished draft" in snapshot()[20]
+                assert "unfinished draft" in snapshot()[18]
                 assert "readout" in snapshot()[23]
 
             # A wheel event on the header crosses back into the previous task.
@@ -1067,7 +1130,7 @@ async def test_restored_transcript_replaces_output_and_scrolls_to_end(display):
             await renderer.restore_transcript(messages, [])
             await wait_until(lambda: "Saved final answer" in "\n".join(snapshot()[:17]))
             assert snapshot()[0].rstrip() == "> Saved next task"
-            assert "unfinished draft" in snapshot()[20]
+            assert "unfinished draft" in snapshot()[18]
             assert "readout" in snapshot()[23]
             recorded = "\n".join(ui._raw_output)
             assert "Unrelated old transcript" not in recorded
@@ -1097,19 +1160,19 @@ async def test_working_indicator_pulses_and_becomes_idle(display) -> None:
         task = asyncio.create_task(ui.run())
         try:
             ui.set_working(True)
-            await wait_until(lambda: "Working" in snapshot()[19])
-            first = snapshot()[19]
-            await wait_until(lambda: snapshot()[19] != first)
+            await wait_until(lambda: "Working" in snapshot()[17])
+            first = snapshot()[17]
+            await wait_until(lambda: snapshot()[17] != first)
             ui.set_working(True, stopping=True)
-            await wait_until(lambda: "Stopping After This Step" in snapshot()[19])
+            await wait_until(lambda: "Stopping After This Step" in snapshot()[17])
             ui.set_working(False)
-            await wait_until(lambda: "Ready" in snapshot()[19])
+            await wait_until(lambda: "Ready" in snapshot()[17])
             ui.set_command_status("Applying /model (Esc to interrupt)")
-            await wait_until(lambda: "Applying /model" in snapshot()[19])
+            await wait_until(lambda: "Applying /model" in snapshot()[17])
             assert not ui.working
             ui.set_command_status("")
             ui.set_working(True)
-            await wait_until(lambda: "Working" in snapshot()[19])
+            await wait_until(lambda: "Working" in snapshot()[17])
         finally:
             ui.close()
             await task
@@ -1160,17 +1223,17 @@ async def test_footer_resizes_and_wraps_input_above_notices_and_readout(display)
         ui = TerminalUI(lambda width: f"({width}) free: 42", sink, input=pipe, output=output)
         task = asyncio.create_task(ui.run())
         try:
-            await wait_until(lambda: ">" in snapshot()[20])
+            await wait_until(lambda: ">" in snapshot()[18])
             size[0] = Size(rows=16, columns=40)
             screen.resize(lines=16, columns=40)
             ui.app.invalidate()
             await wait_until(lambda: f"({ui._readout_width()})" in snapshot()[15])
             pipe.send_text("long input " * 8)
-            await wait_until(lambda: "long input" in snapshot()[12])
+            await wait_until(lambda: "long input" in snapshot()[10])
             rows = snapshot()
-            assert rows[10].strip() == ""
-            assert "Ready" in rows[11]
-            assert "long input" in rows[12]
+            assert rows[8].strip() == ""
+            assert "Ready" in rows[9]
+            assert "long input" in rows[10]
             assert rows[15].rstrip().endswith(ui._notification_text())
             assert "free: 42" in rows[15]
         finally:
@@ -1187,20 +1250,20 @@ async def test_input_word_wrap_preserves_editing_submission_and_resize(display) 
         task = asyncio.create_task(ui.run())
         text = "alpha beta gamma delta epsilon"
         try:
-            await wait_until(lambda: ">" in snapshot()[20])
+            await wait_until(lambda: ">" in snapshot()[18])
             pipe.send_text(text)
-            await wait_until(lambda: "epsilon" in snapshot()[21])
-            assert snapshot()[20].rstrip() == "> alpha beta gamma"
-            assert snapshot()[21].rstrip() == "delta epsilon"
+            await wait_until(lambda: "epsilon" in snapshot()[19])
+            assert snapshot()[18].rstrip() == "> alpha beta gamma"
+            assert snapshot()[19].rstrip() == "delta epsilon"
             assert ui.input.buffer.text == text
             pipe.send_text("\x1b[D" * len("delta epsilon") + "X")
-            await wait_until(lambda: "Xdelta epsilon" in snapshot()[21])
+            await wait_until(lambda: "Xdelta epsilon" in snapshot()[19])
             assert ui.input.buffer.text == "alpha beta gamma Xdelta epsilon"
             size[0] = Size(rows=24, columns=40)
             screen.resize(lines=24, columns=40)
             ui.app.invalidate()
-            await wait_until(lambda: "gamma Xdelta epsilon" in snapshot()[20])
-            assert snapshot()[21].strip() == ""
+            await wait_until(lambda: "gamma Xdelta epsilon" in snapshot()[18])
+            assert snapshot()[19].strip() == ""
             pipe.send_text("\r")
             assert await ui.read_line() == "alpha beta gamma Xdelta epsilon"
             assert ui.input.buffer.history.get_strings()[-1] == "alpha beta gamma Xdelta epsilon"
@@ -1263,10 +1326,10 @@ async def test_input_wrap_handles_wide_words_and_long_identifiers(display, text,
         ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
         task = asyncio.create_task(ui.run())
         try:
-            await wait_until(lambda: ">" in snapshot()[20])
+            await wait_until(lambda: ">" in snapshot()[18])
             pipe.send_text(text)
-            await wait_until(lambda: second in snapshot()[21])
-            assert snapshot()[20].rstrip() == first
+            await wait_until(lambda: second in snapshot()[19])
+            assert snapshot()[18].rstrip() == first
             pipe.send_text("\r")
             assert await ui.read_line() == text
         finally:
@@ -1297,7 +1360,9 @@ async def test_turn_token_counts_follow_output_without_blank_line(monkeypatch):
 
 @pytest.mark.parametrize("color", [True, False])
 async def test_context_toggle_shows_ordered_system_prompts_and_preserves_draft(display, color):
-    sink, _, output, screen, snapshot = display
+    sink, size, output, screen, snapshot = display
+    size[0] = Size(rows=26, columns=100)
+    screen.resize(lines=26, columns=100)
     with create_pipe_input() as pipe:
         ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output, color=color)
         renderer = Renderer(Style(color), sink, False)
@@ -1305,10 +1370,10 @@ async def test_context_toggle_shows_ordered_system_prompts_and_preserves_draft(d
         task = asyncio.create_task(ui.run())
         try:
             renderer.emit("Ordinary transcript.")
-            await wait_until(lambda: "Ordinary transcript." in "\n".join(snapshot()[:17]))
+            await wait_until(lambda: "Ordinary transcript." in "\n".join(snapshot()[:19]))
             pipe.send_text("unfinished draft")
             await wait_until(lambda: "unfinished draft" in snapshot()[20])
-            before = snapshot()[:17]
+            before = snapshot()[:19]
             request = json.dumps({"model": "test/model", "messages": [
                 {"role": "system", "content": "SYSTEM ONE"},
                 {"role": "system", "content": "SYSTEM TWO"},
@@ -1316,21 +1381,21 @@ async def test_context_toggle_shows_ordered_system_prompts_and_preserves_draft(d
                 {"role": "assistant", "content": "PREVIOUS ANSWER"},
             ]})
             renderer.handle(AgentEvent(kind="context", text=request))
-            assert snapshot()[:17] == before
+            assert snapshot()[:19] == before
             pipe.send_text("\x1c")
-            await wait_until(lambda: "SYSTEM TWO" in "\n".join(snapshot()[:17]))
-            visible = "\n".join(snapshot()[:17])
+            await wait_until(lambda: "SYSTEM TWO" in "\n".join(snapshot()[:19]))
+            visible = "\n".join(snapshot()[:19])
             assert visible.index("SYSTEM ONE") < visible.index("SYSTEM TWO") < visible.index("USER REQUEST") < visible.index("PREVIOUS ANSWER")
             for text in ["SYSTEM ONE", "SYSTEM TWO"]:
                 rows = snapshot()
                 row = next(index for index, value in enumerate(rows) if text in value)
                 assert screen.buffer[row][rows[row].index(text)].fg == ("ffff00" if color else "default")
             assert "unfinished draft" in snapshot()[20]
-            assert "readout" in snapshot()[23]
+            assert "readout" in snapshot()[25]
             ui.refresh()
-            assert "SYSTEM ONE" in "\n".join(snapshot()[:17])
+            assert "SYSTEM ONE" in "\n".join(snapshot()[:19])
             pipe.send_text("\x1c")
-            await wait_until(lambda: snapshot()[:17] == before)
+            await wait_until(lambda: snapshot()[:19] == before)
             assert ui.input.buffer.text == "unfinished draft"
             assert ui.input.buffer.cursor_position == len("unfinished draft")
             assert ui._lines.empty()
@@ -1380,13 +1445,13 @@ async def test_password_prompt_masks_value_and_restores_normal_input(display) ->
         task = asyncio.create_task(ui.run())
         ask = asyncio.create_task(ui.ask("key: ", password=True))
         try:
-            await wait_until(lambda: "key:" in snapshot()[20])
+            await wait_until(lambda: "key:" in snapshot()[18])
             pipe.send_text("secret-value")
-            await wait_until(lambda: "************" in snapshot()[20])
+            await wait_until(lambda: "************" in snapshot()[18])
             assert "secret-value" not in "\n".join(snapshot())
             pipe.send_text("\r")
             assert await ask == "secret-value"
-            await wait_until(lambda: ">" in snapshot()[20])
+            await wait_until(lambda: ">" in snapshot()[18])
         finally:
             ask.cancel()
             ui.close()
@@ -1399,7 +1464,7 @@ async def test_eof_stays_closed_after_current_turn(display) -> None:
         ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
         task = asyncio.create_task(ui.run())
         try:
-            await wait_until(lambda: ">" in snapshot()[20])
+            await wait_until(lambda: ">" in snapshot()[18])
             pipe.send_text("\x04")
             assert await asyncio.wait_for(ui.read_line(), 2) is None
             assert await asyncio.wait_for(ui.read_line(), 2) is None
@@ -1423,19 +1488,19 @@ def test_user_prompts_have_blank_lines_on_both_sides(queued) -> None:
     assert lines[-2:] == ["", "next output"]
 
 
-@pytest.mark.parametrize("mouse_row", [5, 18, 20, 24])
+@pytest.mark.parametrize("mouse_row", [5, 17, 18, 24])
 async def test_mouse_wheel_scrolls_transcript_without_changing_input(display, mouse_row) -> None:
     sink, _, output, _, snapshot = display
     with create_pipe_input() as pipe:
         ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
         task = asyncio.create_task(ui.run())
         try:
-            await wait_until(lambda: ">" in snapshot()[20])
+            await wait_until(lambda: ">" in snapshot()[18])
             pipe.send_text("old prompt\r")
             assert await ui.read_line() == "old prompt"
             history = ui.input.buffer.history.get_strings()
             pipe.send_text("draft")
-            await wait_until(lambda: "draft" in snapshot()[20])
+            await wait_until(lambda: "draft" in snapshot()[18])
             for number in range(50):
                 ui.write(f"output {number}")
             await wait_until(lambda: "output 49" in "\n".join(snapshot()[:17]))
@@ -1453,7 +1518,7 @@ async def test_mouse_wheel_scrolls_transcript_without_changing_input(display, mo
             await wait_until(lambda: "new output" in "\n".join(snapshot()[:17]))
             ui.write("following output")
             await wait_until(lambda: "following output" in "\n".join(snapshot()[:17]))
-            assert "draft" in snapshot()[20]
+            assert "draft" in snapshot()[18]
             assert ui.input.buffer.history.get_strings() == history
             pipe.send_text("\r")
             assert await ui.read_line() == "draft"
@@ -1483,7 +1548,7 @@ async def test_wheel_scrolls_inside_wrapped_lines_and_survives_resize(display) -
             await wait_until(lambda: snapshot()[0].startswith("00xxx"))
             pipe.send_text("\x1b[<65;1;5M" * 30)
             await wait_until(lambda: "29xxx" in "\n".join(snapshot()[:9]))
-            assert ">" in snapshot()[12]
+            assert ">" in snapshot()[10]
         finally:
             ui.close()
             await task
@@ -1495,7 +1560,7 @@ async def test_wheel_events_without_coordinates_preserve_prompt_history(display)
         ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
         task = asyncio.create_task(ui.run())
         try:
-            await wait_until(lambda: ">" in snapshot()[20])
+            await wait_until(lambda: ">" in snapshot()[18])
             pipe.send_text("previous prompt\r")
             assert await ui.read_line() == "previous prompt"
             for number in range(50):
@@ -1543,7 +1608,7 @@ async def test_output_wraps_at_words_preserves_spacing_and_reflows_on_resize(dis
                 "", "Name    Count", "alpha   12", "beta    3",
             ]
             assert snapshot()[5].rstrip() == "    one two three four five"
-            assert ">" in snapshot()[20]
+            assert ">" in snapshot()[18]
             assert snapshot()[23].rstrip().endswith(ui._notification_text())
             assert "readout" in snapshot()[23]
         finally:
@@ -1578,9 +1643,9 @@ async def test_streaming_chunks_wrap_reflow_and_keep_the_footer_and_draft(displa
         renderer.terminal = ui
         task = asyncio.create_task(ui.run())
         try:
-            await wait_until(lambda: ">" in snapshot()[20])
+            await wait_until(lambda: ">" in snapshot()[18])
             pipe.send_text("draft")
-            await wait_until(lambda: "draft" in snapshot()[20])
+            await wait_until(lambda: "draft" in snapshot()[18])
             renderer.handle(AgentEvent(kind="assistant_delta", text="alpha be"))
             await wait_until(lambda: "alpha be" in snapshot()[1])
             renderer.handle(AgentEvent(kind="assistant_delta", text="ta gamma delta epsilon"))
@@ -1598,8 +1663,8 @@ async def test_streaming_chunks_wrap_reflow_and_keep_the_footer_and_draft(displa
             rows = snapshot()
             row = next(index for index, value in enumerate(rows) if "Response rejected" in value)
             assert screen.buffer[row][2].fg == "ff6666"
-            assert "draft" in rows[20]
-            assert rows[17].strip() == ""
+            assert "draft" in rows[18]
+            assert rows[16].strip() == ""
             assert rows[23].rstrip().endswith(ui._notification_text())
             assert "readout" in rows[23]
         finally:
@@ -1624,7 +1689,7 @@ async def test_requested_colors_apply_to_user_input_tool_calls_and_errors(displa
             renderer.emit("white detail")
             await wait_until(lambda: "request failed" in "\n".join(snapshot()[:17]))
             pipe.send_text("draft")
-            await wait_until(lambda: "draft" in snapshot()[20])
+            await wait_until(lambda: "draft" in snapshot()[18])
             for text, expected in [
                 ("> request", "ffffff"), ("list_dir", "ff00ff"),
                 ("tool failed", "ff6666"), ("request failed", "ff6666"), ("draft", "ffffff"),
@@ -1697,7 +1762,7 @@ async def test_output_unit_gaps_render_without_separating_model_text_and_tools(d
                 "", "command response", "second line", "", "Checking files.",
                 "  ⚙ list_dir({})", "    result", "", "Finished.", "", "next command response",
             ]
-            assert ">" in snapshot()[20]
+            assert ">" in snapshot()[18]
         finally:
             ui.close()
             await task

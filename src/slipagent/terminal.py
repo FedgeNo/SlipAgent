@@ -274,7 +274,9 @@ class TerminalUI:
         suffix = callback() if callback is not None else ""
         remaining = max(0, self.output.get_size().columns - display_width(
             fragment_list_to_text(to_formatted_text(ANSI(suffix)))))
-        hint = "↑/↓ = move | Enter = select | Esc = back"
+        hint = "↑/↓ or wheel = move | Enter or click = select | Esc = back"
+        if len(hint) > remaining:
+            hint = "↑↓/wheel move | Enter/click select | Esc"
         if len(hint) > remaining:
             hint = hint[:remaining - 1] + "…" if remaining else ""
         return ANSI(hint + suffix)

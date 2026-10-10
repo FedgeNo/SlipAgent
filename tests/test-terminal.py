@@ -320,7 +320,7 @@ async def test_menu_uses_footer_and_scrolls_selection_through_refresh_and_resize
             ]))
             await wait_until(lambda: "Commands" in snapshot()[18])
             assert snapshot()[:18] == before
-            assert snapshot()[23].strip() == "↑/↓ = move | Enter = select | Esc = back"
+            assert snapshot()[23].strip() == "↑/↓ or wheel = move | Enter or click = select | Esc = back"
             assert "› Option 0" in snapshot()[19]
             pipe.send_text("\x1b[A" + "\x1b[B" * 8)
             await wait_until(lambda: "› Option 8" in "\n".join(snapshot()[19:23]))
@@ -335,7 +335,7 @@ async def test_menu_uses_footer_and_scrolls_selection_through_refresh_and_resize
             screen.resize(lines=24, columns=40)
             ui.app._on_resize()
             await wait_until(lambda: "› Option 3" in "\n".join(snapshot()[19:23]))
-            assert "Enter = select | Esc = back" in snapshot()[23]
+            assert snapshot()[23].strip() == "↑↓/wheel move | Enter/click select | Esc"
             pipe.send_text("\x1b[A" * 3)
             await wait_until(lambda: "› Option 0" in "\n".join(snapshot()[19:23]))
             pipe.send_text("\x1b[B" * 3)
@@ -406,7 +406,7 @@ async def test_danger_status_suffix_is_red_last_and_survives_resize(display, tmp
             choice = asyncio.create_task(ui.choose("Commands", [("one", "One")]))
             await wait_until(lambda: "Commands" in snapshot()[18])
             assert snapshot()[23].rstrip().endswith(" | Danger Mode")
-            assert "Enter = select" in snapshot()[23]
+            assert "Enter or click = select" in snapshot()[23]
             pipe.send_text("\x1b")
             assert await asyncio.wait_for(choice, 3) is None
             await wait_until(lambda: "Ready" in snapshot()[18])

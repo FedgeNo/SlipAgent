@@ -8,6 +8,8 @@ Returns matching lines as `path:line: text`.
 
 Searches text files up to 32 MB and returns complete matching lines, up to 100,000 matches. Use `max_results` for a smaller selection.
 
+Searches have a 120-second timeout.
+
 ## Choosing a Search
 
 Use `include` as a glob to narrow the file set (for example '*.py' or 'src/**/*.ts').

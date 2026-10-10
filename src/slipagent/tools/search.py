@@ -24,7 +24,7 @@ from .grep import worker_source
 MAX_GREP_RESULTS = 100_000
 MAX_GREP_FILE_BYTES = 32_000_000
 MAX_GLOB_RESULTS = 100_000
-GREP_TIMEOUT = 10.0
+GREP_TIMEOUT = 120.0
 
 
 def _looks_binary(chunk: bytes) -> bool:

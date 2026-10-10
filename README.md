@@ -1156,7 +1156,7 @@ The model gets these built-in tools:
 | `read_file` | Read a whole UTF-8 file up to 32 MB with numbered lines; optional offset/limit ranges, without a line cap. Model context limits still apply. |
 | `write_file` | Create or overwrite a file, making parent directories. |
 | `edit_file` | Replace one exact string or an `edits` array against one original file. All matches must validate before an atomic write; returns a bounded diff and helpful match diagnostics. |
-| `grep` | Regex search across file contents, with an optional glob filter. |
+| `grep` | Regex search across file contents, with an optional glob filter and a 120-second timeout. |
 | `glob` | Find files and directories by name pattern. |
 | `list_dir` | List one directory, directories first. |
 | `run_command` | Run a shell command and capture output; `background=true` returns a managed job ID. |

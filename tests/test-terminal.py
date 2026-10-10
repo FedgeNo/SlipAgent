@@ -178,8 +178,7 @@ def test_refresh_migrates_legacy_transcript_and_keeps_live_state(display):
         # State left by the previous implementation before its methods reload.
         ui._raw_output = ["\x1b[1mfirst\x1b[0m", "growing reply"]
         del ui._continuation_indents
-        for name in ("_pinned_prompt", "_prompt_pending"):
-            del ui.__dict__[name]
+        del ui._pinned_prompt
         ui.transcript.content = FormattedTextControl("old display")
         ui._transcript = [("", "old cached text")]
         ui._wrapped_spans = [(0, 0)]
@@ -512,7 +511,7 @@ async def test_footer_stays_fixed_while_transcript_scrolls_and_input_survives(di
             await task
 
 
-async def test_latest_user_prompt_pins_at_top_and_releases_on_next_prompt(display):
+async def test_latest_user_prompt_stays_pinned_until_next_prompt_reaches_top(display):
     sink, _, output, screen, snapshot = display
     with create_pipe_input() as pipe:
         ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
@@ -543,7 +542,8 @@ async def test_latest_user_prompt_pins_at_top_and_releases_on_next_prompt(displa
             await wait_until(lambda: "result 49" in "\n".join(snapshot()[1:17]))
 
             renderer.user_prompt("The next task", queued=True)
-            await wait_until(lambda: snapshot()[0].rstrip() != "> Keep the original task visible")
+            await wait_until(lambda: "> The next task" in "\n".join(snapshot()[1:17]))
+            assert snapshot()[0].rstrip() == "> Keep the original task visible"
             assert "> The next task" in "\n".join(snapshot()[:17])
             ui.write("\n".join(f"next result {i}" for i in range(50)))
             await wait_until(lambda: snapshot()[0].rstrip() == "> The next task")
@@ -726,8 +726,7 @@ async def test_pinned_line_requires_green_prompt_prefix_and_survives_reload(disp
             await wait_until(lambda: snapshot()[0].rstrip() == "> Saved task")
             assert screen.buffer[0][0].fg == "ffffff"
             # Rebuild from the file, as for a session without prompt metadata.
-            for name in ("_pinned_prompt", "_prompt_pending"):
-                del ui.__dict__[name]
+            del ui._pinned_prompt
             ui.refresh()
             ui.write("after refresh")
             await wait_until(lambda: "after refresh" in "\n".join(snapshot()[1:17]))

@@ -625,8 +625,8 @@ and model names shorten to fit narrow terminals.
 
 The nearest preceding green line starting with `>` pins to the top as you scroll.
 Scrolling up into an older task shows its prompt line; scrolling down restores
-the newer one. Submitting another task or queued follow-up releases the header
-until the new prompt reaches the top or you scroll again. The pinned prompt uses
+the newer one. Submitting another task or queued follow-up keeps the preceding
+prompt pinned until the new prompt reaches the top. The pinned prompt uses
 one line, shortening at a word boundary with `…` when needed and adjusting on resize. The
 complete original remains in scrollback. The context view keeps its own layout.
 

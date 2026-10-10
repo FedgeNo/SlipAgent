@@ -310,25 +310,14 @@ class TerminalUI:
         """Migrate header state; prompt locations come from the transcript file."""
         if hasattr(self, "_pinned_prompt"):
             return
-        chunk = getattr(self, "_prompt_chunk", None)
-        pinned = getattr(self, "_prompt_pinned", False)
         self._pinned_prompt: tuple[int, int] | None = None
-        self._prompt_pending = chunk is not None and not pinned
         self._wrapped_columns = 0
 
     def _pinned_prompt_height(self, columns: int | None = None) -> int:
         size = self.output.get_size()
         self._transcript_content(size.columns if columns is None else columns)
         assert self._flow is not None
-        selected = self._flow.prompt_at(self.transcript.vertical_scroll)
-        if self._prompt_pending:
-            # New input releases the old header; scrolling explicitly resumes
-            # browsing, otherwise wait for the newest prompt to reach the top.
-            if selected is not None and selected == self._flow.prompt_at(self._line_count):
-                self._prompt_pending = False
-            else:
-                selected = None
-        self._pinned_prompt = selected
+        self._pinned_prompt = self._flow.prompt_at(self.transcript.vertical_scroll)
         if self._pinned_prompt is None:
             return 0
         # One header row, leaving at least one transcript row above the footer.
@@ -421,8 +410,6 @@ class TerminalUI:
             self._move_menu(rows)
             return
         window = self.context_window if self.context_visible else self.transcript
-        if not self.context_visible and rows:
-            self._prompt_pending = False
         window.scroll(rows)
         self.app.invalidate()
 
@@ -633,7 +620,6 @@ class TerminalUI:
         self._flow = None
         self._wrapped_columns = self._wrapped_count = self._line_count = 0
         self._pinned_prompt = None
-        self._prompt_pending = False
         self.context_visible = False
         self.transcript.vertical_scroll = self.transcript.vertical_scroll_2 = 0
         self.scroll_to_end()
@@ -650,10 +636,6 @@ class TerminalUI:
     ) -> None:
         """Append a block, optionally aligning wrapped rows of selected source lines."""
         self._ensure_transcript()
-        if user_prompt:
-            self._ensure_prompt()
-            self._pinned_prompt = None
-            self._prompt_pending = True
         if continuation_indents:
             self._continuation_indents[len(self._raw_output)] = dict(continuation_indents)
         self._block_starts.add(len(self._raw_output))

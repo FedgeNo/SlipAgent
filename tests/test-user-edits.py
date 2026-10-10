@@ -37,7 +37,7 @@ async def test_agent_finishes_all_tools_before_opening_editor_and_waits_before_n
     tool = RecordingTool()
     client = StubClient([completion(tool_calls=[ToolCall("one", "record", {"value": "first"}), ToolCall("two", "record", {"value": "second"})]), completion("done")])
     agent = Agent(client, ToolRegistry([tool]), "test/model")
-    terminal = SimpleNamespace(_editor_active=False, notify=Mock(), _touched_files={}, write=Mock())
+    terminal = SimpleNamespace(_editor_active=False, notify=Mock(), _touched_items={}, write=Mock())
     async def opened(path, *, line):
         assert tool.seen == [{"value": "first"}, {"value": "second"}]
         terminal._editor_active = True
@@ -76,7 +76,7 @@ async def test_saved_user_edit_survives_resume_and_is_distinct_from_user_message
     agent = Agent(client, ToolRegistry(), "test/model")
     journal = SessionJournal(str(tmp_path), tmp_path / "sessions")
     agent.registry.services["session_journal"] = journal
-    terminal = SimpleNamespace(_touched_files={}, write_artifact_reference=Mock(), notify=Mock(), write=Mock())
+    terminal = SimpleNamespace(_touched_items={}, write_artifact_reference=Mock(), notify=Mock(), write=Mock())
     session = SimpleNamespace(agent=agent, registry=agent.registry)
     edits = UserEdits(session, terminal)
     path = tmp_path / "file.txt"

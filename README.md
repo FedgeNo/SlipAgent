@@ -635,7 +635,9 @@ available controls. Folder-launch failures also remain in the transcript.
 
 Click **Inspect [Ctrl+O]** or press **Ctrl+O** to show or hide the inspection
 panel on the right side of the feed. It occupies one quarter of the terminal
-width, with **Touched Files** above **Calls**. Click a file to edit it, or a call
+width, with **Touched** above **Calls**. This list includes inspected
+directories, which open in the file explorer when one is available.
+Click a file to edit it, or a call
 to inspect its decoded arguments and result as labelled fields with literal text
 and line breaks. The mouse wheel scrolls the section under
 the pointer. Terminals narrower than 60 columns temporarily hide the panel.

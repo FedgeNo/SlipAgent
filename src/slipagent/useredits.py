@@ -69,7 +69,7 @@ class UserEdits:
                 self.terminal.notify("Edit saved; diff archive failed.")
                 self.terminal.write(f"Could not archive user edit: {exc}")
         edits[key] = entry
-        self.terminal._touched_files[str(path)] = "user edited"
+        self.terminal._touched_items[str(path)] = "user edited"
         self.session.agent._persist()
 
     def close(self) -> None:

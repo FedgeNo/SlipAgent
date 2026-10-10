@@ -370,8 +370,8 @@ async def test_inspection_panel_toggles_by_combo_and_click_and_opens_files_and_c
             ui.finish_call(call, 1, 'file contents\n"quoted" and literal \\n', False)
             await wait_until(lambda: "Inspect [Ctrl+O]" in snapshot()[17])
             pipe.send_text("\x0f")
-            await wait_until(lambda: "Touched Files" in snapshot()[0])
-            assert snapshot()[0].index("Touched Files") == 75
+            await wait_until(lambda: "Touched" in snapshot()[0])
+            assert snapshot()[0].index("Touched") == 75
             assert "Calls" in snapshot()[9]
             assert "demo.txt [read]" in snapshot()[1]
             assert "read_file [completed]" in snapshot()[10]
@@ -389,7 +389,7 @@ async def test_inspection_panel_toggles_by_combo_and_click_and_opens_files_and_c
             await wait_until(lambda: not ui._viewer_active)
             pipe.send_text("\x1b[<0;90;18M\x1b[<0;90;18m")
             await wait_until(lambda: not ui._inspection_visible)
-            await wait_until(lambda: "Touched Files" not in snapshot()[0])
+            await wait_until(lambda: "Touched" not in snapshot()[0])
         finally:
             ui.close()
             await task
@@ -493,19 +493,54 @@ def test_inspection_panel_tracks_shell_references_without_claiming_changes(displ
         ui.__dict__["_project_directory"] = tmp_path
         call = ToolCall("shell-1", "run_command", {"command": 'rg -e "not a path" source > output; mystery hidden'})
         ui.track_call(call, 1)
-        assert ui._touched_files == {"output": "shell write (inferred)", "source": "shell read (inferred)"}
+        assert ui._touched_items == {"output": "shell write (inferred)", "source": "shell read (inferred)"}
         tracking = ui._inspection_calls[(1, "shell-1")]["shell_tracking"]
         assert tracking["incomplete"] and tracking["limitations"]
         ui.finish_call(call, 1, "exit code: 1", True)
-        assert ui._touched_files["output"] == "shell write (inferred)"
+        assert ui._touched_items["output"] == "shell write (inferred)"
         read = ToolCall("read-1", "read_file", {"path": "source"})
         ui.track_call(read, 2)
         ui.finish_call(read, 2, "contents", False)
-        assert ui._touched_files["source"] == "read"
+        assert ui._touched_items["source"] == "read"
         ui.track_call(ToolCall("shell-2", "run_command", {"command": "cat source"}), 3)
-        assert ui._touched_files["source"] == "read"
+        assert ui._touched_items["source"] == "read"
         ui.track_call(ToolCall("shell-3", "run_command", {"command": "cat output > output"}), 4)
-        assert ui._touched_files["output"] == "shell read/write (inferred)"
+        assert ui._touched_items["output"] == "shell read/write (inferred)"
+
+
+@pytest.mark.parametrize("available", [False, True])
+async def test_inspection_directories_use_explorer_without_editor_hold(display, tmp_path, monkeypatch, available):
+    from unittest.mock import AsyncMock, Mock
+    from prompt_toolkit.data_structures import Point
+    from prompt_toolkit.mouse_events import MouseEvent, MouseEventType, MouseButton
+    sink, _, output, _, _ = display
+    (tmp_path / "directory").mkdir()
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
+        ui._folder_opener = ("test-opener",) if available else None
+        explore = AsyncMock()
+        coordinator = SimpleNamespace(request=AsyncMock(), close=Mock())
+        monkeypatch.setattr(ui, "_explore_directory", explore)
+        ui.__dict__["_user_edits"] = coordinator
+        try:
+            for name, arguments in [("list_dir", {}), ("grep", {"path": "directory"}), ("glob", {"path": "directory"})]:
+                call = ToolCall(name, name, arguments)
+                ui.track_call(call, 1)
+                ui.finish_call(call, 1, {}, False)
+            assert ui._touched_items == {".": "read", "directory": "read"}
+            fragments = ui._inspection_entries(files=True)
+            entry = next(fragment for fragment in fragments if fragment[1].startswith("directory"))
+            assert ("class:clickable" in entry[0]) is available
+            if available:
+                entry[2](MouseEvent(Point(0, 0), MouseEventType.MOUSE_UP, MouseButton.LEFT, frozenset()))
+                await asyncio.sleep(0)
+                explore.assert_awaited_once_with(tmp_path / "directory")
+            else:
+                assert len(entry) == 2
+                explore.assert_not_awaited()
+            coordinator.request.assert_not_awaited()
+        finally:
+            ui._close_transcript()
 
 
 def test_inspection_panel_records_partial_path_operations(display):
@@ -516,9 +551,9 @@ def test_inspection_panel_records_partial_path_operations(display):
         ui.track_call(call, 1)
         ui.finish_call(call, 1, {"changes": [{"path": "copy/child", "action": "created", "kind": "file"}],
                                  "error": "disk full"}, True)
-        assert ui._touched_files["copy/child"] == "created"
+        assert ui._touched_items["copy/child"] == "created"
         assert ui._inspection_calls[(1, "copy-1")]["status"] == "error"
-        assert ui._touched_files["original"] == "requested"
+        assert ui._touched_items["original"] == "requested"
 
 
 async def test_notifications_remain_visible_in_menu_context_and_after_resize(display):

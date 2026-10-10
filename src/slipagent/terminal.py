@@ -297,15 +297,17 @@ class TerminalUI:
 
     def _ensure_inspection(self) -> None:
         if "_inspection_visible" in self.__dict__:
+            if "_touched_items" not in self.__dict__:
+                self.__dict__["_touched_items"] = self.__dict__.pop("_touched_files", {})
             return
         self._inspection_visible = False
-        self._touched_files: dict[str, str] = {}
+        self._touched_items: dict[str, str] = {}
         self._inspection_calls: dict[tuple[int, str], dict[str, Any]] = {}
         self._files_window = TranscriptWindow(FormattedTextControl(lambda: self._inspection_entries(files=True)))
         self._calls_window = TranscriptWindow(FormattedTextControl(lambda: self._inspection_entries(files=False)))
         self._files_window._following = self._calls_window._following = False
         self._inspection_panel = HSplit([
-            HSplit([Window(FormattedTextControl("Touched Files"), height=1, style="class:menu-title"),
+            HSplit([Window(FormattedTextControl("Touched"), height=1, style="class:menu-title"),
                     self._files_window]),
             Window(height=1),
             HSplit([Window(FormattedTextControl("Calls"), height=1, style="class:menu-title"),
@@ -381,21 +383,23 @@ class TerminalUI:
                     display = str(shell_target)
                     if shell_target.is_relative_to(root):
                         display = shell_target.relative_to(root).as_posix()
-                    previous = self._touched_files.get(display, "")
+                    previous = self._touched_items.get(display, "")
                     if not previous or previous.startswith("shell "):
                         modes = set(reference["access"].split("/"))
                         if previous:
                             modes.update(previous.removeprefix("shell ").removesuffix(" (inferred)").split("/"))
                         access = "/".join(mode for mode in ("read", "write", "delete") if mode in modes)
-                        self._touched_files[display] = f"shell {access} (inferred)"
+                        self._touched_items[display] = f"shell {access} (inferred)"
         path = call.arguments.get("path")
-        if isinstance(path, str) and call.name in {"read_file", "write_file", "edit_file"}:
-            self._touched_files.setdefault(path, "requested")
+        if path is None and call.name in {"list_dir", "grep", "glob"}:
+            path = "."
+        if isinstance(path, str) and call.name in {"read_file", "write_file", "edit_file", "list_dir", "grep", "glob"}:
+            self._touched_items.setdefault(path, "requested")
         if call.name in {"copy_path", "move_path", "delete_path", "create_directory"}:
             for key in ("path", "source", "destination"):
                 target = call.arguments.get(key)
                 if isinstance(target, str):
-                    self._touched_files.setdefault(target, "requested")
+                    self._touched_items.setdefault(target, "requested")
         self.app.invalidate()
 
     def finish_call(self, call: ToolCall, step: int, result: Any, error: bool) -> None:
@@ -405,14 +409,16 @@ class TerminalUI:
             saved.update(status="error" if error else "completed", result=result)
             if call.name in {"copy_path", "move_path", "delete_path", "create_directory"} and isinstance(result, dict):
                 for change in result.get("changes", []):
-                    self._touched_files[change["path"]] = change["action"]
+                    self._touched_items[change["path"]] = change["action"]
             path = call.arguments.get("path")
-            if not error and isinstance(path, str) and path in self._touched_files:
-                if call.name == "read_file" and self._touched_files[path].startswith("shell "):
-                    self._touched_files[path] = "read"
-                self._touched_files[path] = "modified" if call.name != "read_file" else self._touched_files.get(path, "read")
-                if self._touched_files[path] == "requested":
-                    self._touched_files[path] = "read"
+            if path is None and call.name in {"list_dir", "grep", "glob"}:
+                path = "."
+            if not error and isinstance(path, str) and path in self._touched_items:
+                if call.name == "read_file" and self._touched_items[path].startswith("shell "):
+                    self._touched_items[path] = "read"
+                self._touched_items[path] = "modified" if call.name not in {"read_file", "list_dir", "grep", "glob"} else self._touched_items.get(path, "read")
+                if self._touched_items[path] == "requested":
+                    self._touched_items[path] = "read"
             store = self.__dict__.get("_artifact_store")
             if store is not None:
                 saved["artifacts"] = [record for record in store.records.values() if record["call_id"] == call.id]
@@ -424,10 +430,16 @@ class TerminalUI:
 
     def _inspection_entries(self, *, files: bool) -> StyleAndTextTuples:
         fragments: StyleAndTextTuples = []
-        entries: list[tuple[Any, Any]] = list(reversed(list(self._touched_files.items()))) if files else list(reversed(list(self._inspection_calls.items())))
+        entries: list[tuple[Any, Any]] = list(reversed(list(self._touched_items.items()))) if files else list(reversed(list(self._inspection_calls.items())))
         if not entries:
             return [("class:status", "None yet")]
         for key, value in entries:
+            root = self.__dict__.get("_project_directory")
+            try:
+                directory = files and root is not None and (root / str(key)).is_dir()
+            except OSError:
+                directory = False
+            clickable = not directory or self.__dict__.get("_folder_opener") is not None
             def click(event: MouseEvent, key: Any = key) -> object:
                 if event.event_type == MouseEventType.MOUSE_MOVE:
                     self.__dict__["_hovered_control"] = ("inspection", files, key)
@@ -439,12 +451,20 @@ class TerminalUI:
                         self.app.create_background_task(self._inspect_call(call))
                 return None
             label = f"{key} [{value}]" if files else f"{value['tool']} [{value['status']}]"
-            style = "class:clickable class:menu-item" + (" class:hover" if self.__dict__.get("_hovered_control") == ("inspection", files, key) else "")
-            fragments.append((style, label, click))
+            style = "class:menu-item"
+            if clickable:
+                style += " class:clickable" + (" class:hover" if self.__dict__.get("_hovered_control") == ("inspection", files, key) else "")
+                fragments.append((style, label, click))
+            else:
+                fragments.append((style, label))
             fragments.append(("", "\n"))
         return fragments
 
     async def _inspect_file(self, path: str, *, line: int = 1) -> None:
+        root = self.__dict__.get("_project_directory")
+        if root is not None and (root / path).is_dir():
+            await self._explore_directory(root / path)
+            return
         coordinator = self.__dict__.get("_user_edits")
         if coordinator is not None:
             root = self.__dict__.get("_project_directory")
@@ -1375,7 +1395,7 @@ class TerminalUI:
         self.__dict__.setdefault("_directory_links", {}).clear()
         self.__dict__.setdefault("_file_links", {}).clear()
         self.__dict__.setdefault("_artifact_links", {}).clear()
-        self.__dict__.setdefault("_touched_files", {}).clear()
+        self.__dict__.setdefault("_touched_items", {}).clear()
         self.__dict__.setdefault("_inspection_calls", {}).clear()
         if self.__dict__.get("_viewer_active"):
             self.close_viewer()

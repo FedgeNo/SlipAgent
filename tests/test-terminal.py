@@ -104,7 +104,7 @@ async def test_inspection_panel_toggles_by_combo_and_click_and_opens_files_and_c
         try:
             call = ToolCall("call-1", "read_file", {"path": "demo.txt"})
             ui.track_call(call, 1)
-            ui.finish_call(call, 1, "file contents", False)
+            ui.finish_call(call, 1, 'file contents\n"quoted" and literal \\n', False)
             await wait_until(lambda: "Inspect [Ctrl+O]" in snapshot()[17])
             pipe.send_text("\x0f")
             await wait_until(lambda: "Touched Files" in snapshot()[0])
@@ -119,6 +119,9 @@ async def test_inspection_panel_toggles_by_combo_and_click_and_opens_files_and_c
             pipe.send_text("\x1b[<0;78;11M\x1b[<0;78;11m")
             await wait_until(lambda: "call-1" in snapshot()[0])
             assert ui._viewer_active
+            text = "\n".join(ui._viewer_window.content.lines)
+            assert '  file contents\n  "quoted" and literal \\n' in text
+            assert 'result:\n' in text
             pipe.send_text("\x1b")
             await wait_until(lambda: not ui._viewer_active)
             pipe.send_text("\x1b[<0;90;18M\x1b[<0;90;18m")

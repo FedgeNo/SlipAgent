@@ -3,10 +3,26 @@
 from __future__ import annotations
 
 import re
+import json
+from typing import Any
 
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 from prompt_toolkit.layout.controls import UIContent, UIControl
+
+
+def call_view_text(value: Any, indent: int = 0) -> str:
+    """Present decoded fields while preserving literal text and line breaks."""
+    pad = " " * indent
+    if isinstance(value, dict):
+        return "\n\n".join(pad + str(key) + ":\n" + call_view_text(item, indent + 2)
+                            for key, item in value.items()) or pad + "{}"
+    if isinstance(value, list):
+        return "\n\n".join(pad + f"[{index}]\n" + call_view_text(item, indent + 2)
+                            for index, item in enumerate(value)) or pad + "[]"
+    if isinstance(value, str):
+        return "\n".join(pad + line for line in value.split("\n"))
+    return pad + json.dumps(value, ensure_ascii=False)
 
 
 class TextViewControl(UIControl):

@@ -38,7 +38,7 @@ from .palette import MUTED_COLOR, USER_PROMPT_STYLE
 from .markdown import THEMES, MarkdownRenderer, code_blocks
 from .clipboard import clipboard_sequence, copy_to_clipboard
 from .explorer import folder_opener, open_folder
-from .viewers import TextViewControl, DiffViewControl
+from .viewers import TextViewControl, DiffViewControl, call_view_text
 from .types import ToolCall
 
 FOOTER_ROWS = 7
@@ -364,7 +364,7 @@ class TerminalUI:
                         self.app.create_background_task(self._inspect_file(str(key)))
                     else:
                         call = self._inspection_calls[key]
-                        self.open_viewer(f"{call['tool']} — {call['call_id']}", json.dumps(call, ensure_ascii=False, indent=2))
+                        self.open_viewer(f"{call['tool']} — {call['call_id']}", call_view_text(call))
                 return None
             label = f"{key} [{value}]" if files else f"{value['tool']} [{value['status']}]"
             style = "class:clickable class:menu-item" + (" class:hover" if self.__dict__.get("_hovered_control") == ("inspection", files, key) else "")

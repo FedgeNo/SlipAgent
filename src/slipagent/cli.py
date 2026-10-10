@@ -220,6 +220,12 @@ def _literal_tool_output(text: str) -> str:
     return re.sub(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]", lambda match: f"\\x{ord(match[0]):02x}", text)
 
 
+def _command_feed_summary(text: str) -> str:
+    """Keep command status in the feed; streams remain in inspection records."""
+    marker = re.search(r"(?m)^--- (?:stdout|stderr) ---$", text)
+    return text[:marker.start()].rstrip() if marker is not None else text.rstrip()
+
+
 # --------------------------------------------------------------------------- #
 # Event rendering
 # --------------------------------------------------------------------------- #
@@ -389,7 +395,10 @@ class Renderer:
                     self.handle(AgentEvent(kind="assistant_text", text=result.content["text"]))
                     continue
                 if result.content:
-                    body = _literal_tool_output(result.text())
+                    body = result.text()
+                    if self.terminal is not None and restored_call is not None and restored_call.name == "run_command":
+                        body = _command_feed_summary(body)
+                    body = _literal_tool_output(body)
                     if result.is_error:
                         self.emit(self.style.red(f"  ✗ {body}"), block=self._model_block)
                     else:
@@ -515,6 +524,8 @@ class Renderer:
                     self.terminal.write_directory_reference(path)
 
         elif event.kind == "tool_output":
+            if self.terminal is not None:
+                return
             self._tool_streamed = True
             # Commands may emit terminal controls, including split escape
             # sequences. Display them literally instead of executing them.
@@ -528,7 +539,11 @@ class Renderer:
                 return
             if self.terminal is not None and event.tool_call is not None:
                 self.terminal.finish_call(event.tool_call, event.step, result.content, result.is_error)
-            if result.is_error:
+            if self.terminal is not None and event.tool_call is not None and event.tool_call.name == "run_command":
+                body = _literal_tool_output(_command_feed_summary(result.text()))
+                color = self.style.red if result.is_error else self.style.dim
+                self.emit(color(f"  {'✗' if result.is_error else '✓'} {body}"), block=self._model_block)
+            elif result.is_error:
                 # Errors are the most useful signal; always surface them.
                 self.emit(self.style.red(f"  ✗ {result.text()}"), block=self._model_block)
             elif event.tool_call is not None and event.tool_call.name == "answer":

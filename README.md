@@ -1389,6 +1389,10 @@ workspace. The workspace check is not an operating-system sandbox.
 
 ## Shell File Tracking
 
+In the interactive feed, commands show their status and a link to inspect saved
+output. Stdout and stderr stay in the output viewer and model history instead of
+being printed into the feed. One-shot command-line output remains available.
+
 The inspection panel tracks literal shell file references as **inferred** reads,
 writes, or deletions. It recognizes common file and search commands, output
 options, wrappers, redirections, and literal working-directory changes.

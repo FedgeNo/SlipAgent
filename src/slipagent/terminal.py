@@ -12,6 +12,7 @@ from typing import TextIO
 from prompt_toolkit import Application
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.data_structures import Point
+from prompt_toolkit.document import Document
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import ANSI, StyleAndTextTuples, to_formatted_text
 from prompt_toolkit.formatted_text.utils import fragment_list_to_text
@@ -260,11 +261,16 @@ class TerminalUI:
                 fragments.append(("", "\n"))
             selected = index == self._menu_index
             def select(event: MouseEvent, index: int = index) -> object:
+                if event.event_type == MouseEventType.MOUSE_MOVE:
+                    self.__dict__["_hovered_control"] = ("menu", index)
                 if event.event_type == MouseEventType.MOUSE_UP and event.button == MouseButton.LEFT:
                     self._menu_index = index
                     self._finish_menu(self._menu_options[index][0])
                 return None
-            fragments.append(("class:menu-selected" if selected else "",
+            style = "class:clickable" + (" class:menu-selected" if selected else "")
+            if self.__dict__.get("_hovered_control") == ("menu", index):
+                style += " class:hover"
+            fragments.append((style,
                               ("› " if selected else "  ") + label, select))
         return fragments
 
@@ -312,6 +318,28 @@ class TerminalUI:
     def _finish_menu(self, value: str | None) -> None:
         if self._menu_future is not None and not self._menu_future.done():
             self._menu_future.set_result(value)
+
+    def insert_command(self, command: str) -> None:
+        """Retain the ordinary draft in input history without submitting it."""
+        self.input.buffer.append_to_history()
+        self.input.buffer.reset(document=Document(command, len(command)))
+        self.app.layout.focus(self.input)
+        self.app.invalidate()
+
+    async def _choose_command(self) -> None:
+        if self.working or self._menu_future is not None or self._input_label != "> ":
+            return
+        from .cli import command_menu_options
+        selected = await self.choose("Commands", command_menu_options())
+        if selected is not None:
+            self.insert_command(selected)
+
+    def _commands_mouse(self, event: MouseEvent) -> object:
+        if event.event_type == MouseEventType.MOUSE_MOVE:
+            self.__dict__["_hovered_control"] = "commands"
+        elif event.event_type == MouseEventType.MOUSE_UP and event.button == MouseButton.LEFT:
+            self.app.create_background_task(self._choose_command())
+        return None
 
     def _ensure_prompt(self) -> None:
         """Migrate header state; prompt locations come from the transcript file."""
@@ -512,6 +540,7 @@ class TerminalUI:
             "status": MUTED_COLOR, "pulse": "bold ansicyan", "idle": "ansicyan", "user": USER_PROMPT_STYLE,
             "context-system": "#ffff00", "retry": "ansired",
             "menu-title": "bold", "menu-selected": "reverse bold",
+            "clickable": "underline", "hover": "reverse",
         })
 
     def refresh(self) -> None:
@@ -536,13 +565,16 @@ class TerminalUI:
         original = app.renderer.mouse_handlers
 
         def mouse_handler(event: MouseEvent) -> object:
+            previous_hover = self.__dict__.get("_hovered_control")
+            if event.event_type == MouseEventType.MOUSE_MOVE:
+                self.__dict__["_hovered_control"] = None
             if event.event_type == MouseEventType.MOUSE_DOWN:
                 self._selection_dragging = False
             if event.event_type in (MouseEventType.SCROLL_UP, MouseEventType.SCROLL_DOWN):
                 self._scroll_output(-3 if event.event_type == MouseEventType.SCROLL_UP else 3)
                 app.invalidate()
                 return None
-            if self._menu_future is not None and event.event_type != MouseEventType.MOUSE_UP:
+            if self._menu_future is not None and event.event_type not in (MouseEventType.MOUSE_UP, MouseEventType.MOUSE_MOVE):
                 return None  # Keep focus on the menu until selection/cancellation.
             try:
                 return original.mouse_handlers[event.position.y][event.position.x](event)
@@ -550,6 +582,8 @@ class TerminalUI:
                 # Releases outside the transcript must also end its drag.
                 if event.event_type == MouseEventType.MOUSE_UP:
                     self._selection_dragging = False
+                if previous_hover != self.__dict__.get("_hovered_control"):
+                    app.invalidate()
 
         # Wheel events target the active menu or output view. Clicks retain
         # their normal behavior in the input field when no menu is open.
@@ -570,7 +604,13 @@ class TerminalUI:
         if command_status:
             return [("class:idle", command_status)]
         if not self.working:
-            return [("class:idle", "Ready")]
+            fragments: StyleAndTextTuples = [("class:idle", "Ready")]
+            if self._input_label == "> ":
+                style = "class:clickable"
+                if self.__dict__.get("_hovered_control") == "commands":
+                    style += " class:hover"
+                fragments.extend([("", "  "), (style, "Commands", self._commands_mouse)])
+            return fragments
         frame = self.__dict__.get("_activity_frame", PULSE_FRAMES[int(time.monotonic() * 4) % len(PULSE_FRAMES)])
         label = "Stopping After This Step" if self.stopping else "Working (esc to interrupt)"
         return [("class:pulse", f"{frame} {label}")]

@@ -83,10 +83,10 @@ Commands
 
   /help [command]      show all help, or help for one command (with or without /)
   /config-show         show active interpreter, model, and workspace settings
-  /menu                open the arrow-key command menu; Enter selects, Esc closes
+  /menu                browse commands and insert a selection into the input
   /theme <name>        dark, light, monochrome, or ironbow Markdown palette
-  /markdown [source|rendered] toggle Markdown source view (F2)
-  /copy [auto|text|markdown|code [number]] copy the latest reply (F3)
+  /markdown [source|rendered]  toggle Markdown source view (F2)
+  /copy [auto|text|markdown|code [number]]  copy the latest reply (F3)
   /danger [on]         disable workspace path confinement (queues while working)
   /danger off          restore workspace path confinement (queues while working)
   /danger status       show whether danger mode is active
@@ -141,34 +141,30 @@ Background commands use command_jobs and read_command_output for control/output.
 Esc immediately interrupts agent work, active tools, and background jobs.
 Inside a chooser, Esc only closes the chooser. Completed results are preserved."""
 
-# Each entry is a complete command, dispatched through the same checks as typed
-# input. Commands needing arguments remain available through the ordinary prompt.
-MENU_OPTIONS = [
-    ("/help", "Help"),
-    ("/markdown", "Toggle Markdown Source"),
-    ("/copy", "Copy Latest Reply"),
-    ("/tools", "Available Tools"),
-    ("/model", "Current Model"),
-    ("/models", "Browse Models"),
-    ("/temperature", "Temperature"),
-    ("/key status", "API Key Status"),
-    ("/cost", "Token Usage and Cost"),
-    ("/task", "Active Task"),
-    ("/sessions", "Saved Sessions"),
-    ("/resume", "Resume Session"),
-    ("/fork", "Fork Current Session"),
-    ("/delete", "Delete Current Session"),
-    ("/rewind", "Rewind File Edits"),
-    ("/requests", "Request Diagnostics"),
-    ("/mcp", "MCP Servers"),
-    ("/reload", "Reload Components"),
-    ("/generations", "Reload Generation"),
-    ("/init", "Initialize Project Guidance"),
-    ("/stop", "Stop After This Step"),
-    ("/task new", "Start a New Task"),
-    ("/reset", "Start a New Conversation"),
-    ("/quit", "Quit"),
-]
+def command_menu_options() -> list[tuple[str, str]]:
+    """Use help's syntax and descriptions without inserting argument placeholders."""
+    options: list[tuple[str, str]] = []
+    for line in HELP.splitlines():
+        if not line.startswith("  /"):
+            if line.startswith(" ") and options and line.strip():
+                value, label = options[-1]
+                options[-1] = value, label + " " + line.strip()
+            continue
+        fields = re.split(r" {2,}", line.strip(), maxsplit=1)
+        syntax = fields[0]
+        description = fields[1] if len(fields) > 1 else ""
+        words = syntax.split()
+        prefix = []
+        for word in words:
+            if word.startswith(("[", "<")) or "|" in word:
+                break
+            prefix.append(word)
+        value = " ".join(prefix) + (" " if len(prefix) < len(words) else "")
+        options.append((value, syntax + (" — " + description if description else " —")))
+    return options
+
+
+MENU_OPTIONS = command_menu_options()
 
 # Divider between the working directory and the free-call readout.
 _READOUT_SEP = "  │  "
@@ -1491,10 +1487,7 @@ async def _execute_command(session: Session, line: str) -> bool:
         else:
             selected = await terminal.choose("Commands", MENU_OPTIONS)
             if selected is not None:
-                if session.agent.running and _background_command(selected):
-                    _start_background_command(session, selected)
-                else:
-                    return await _execute_command(session, selected)
+                terminal.insert_command(selected)
         return False
 
     if _changes_session(command, argument) and (session.agent.running or session.extensions.get("deferred_commands")):

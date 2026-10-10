@@ -556,7 +556,7 @@ In the REPL:
 | Command | Effect |
 | --- | --- |
 | `/help [command]` | Show all help or one command's help; `/help init` and `/help /init` are equivalent |
-| `/menu` | Open the command menu in the input area; Up/Down move, Enter selects, Escape closes |
+| `/menu` | Browse all commands and their arguments; selecting one inserts it into the input |
 | `/danger` or `/danger on` | Disable workspace path confinement; queues while working |
 | `/danger off` | Restore workspace path confinement; queues while working |
 | `/danger status` | Show the current access mode |
@@ -658,14 +658,17 @@ The startup screen lists the available commands and basic usage. The free-call
 count is fetched from OpenRouter at startup and refreshed every 15 minutes,
 including while idle or working.
 
-`/menu` replaces the six-row input footer with a heading, a scrolling list of
-commands, and `↑/↓ or wheel = move | Enter or click = select | Esc = back` on
+The underlined **Commands** link beside **Ready**, or `/menu`, replaces the
+six-row input footer with a heading, a scrolling list of all commands with their
+help syntax and descriptions, and `↑/↓ or wheel = move | Enter or click = select | Esc = back` on
 the bottom line, with shorter wording on narrow terminals.
 Use the mouse wheel or arrow keys to move, and click an item or press Enter to
 select it. The transcript stays visible above it. Escape closes the menu without running
-anything, preserving your draft and scroll position. Selecting an item runs its
-usual slash command, including the same restrictions while the agent is working.
-Commands that need arguments are still entered at the normal prompt.
+anything, preserving your draft and scroll position. Selecting an item saves the
+current draft in input history and inserts the command into the input without
+running it. Add any arguments and press Enter to submit it. The Commands link
+appears only while ready. Clickable controls are underlined and invert their
+colors on hover.
 
 State-changing commands queue in order while the agent works. They apply after
 the current response and complete tool batch finish. Settings changes then resume

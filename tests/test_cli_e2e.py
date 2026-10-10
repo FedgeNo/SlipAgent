@@ -1153,7 +1153,7 @@ async def test_danger_commands_preserve_mode_through_reset_and_resume(tmp_path, 
 
 
 @pytest.mark.parametrize("selection", [None, "/tools", "/reset", "/quit", "/models"])
-async def test_menu_dispatch_preserves_command_checks(tmp_path, monkeypatch, metadata_server, selection):
+async def test_menu_inserts_selection_without_dispatch(tmp_path, monkeypatch, metadata_server, selection):
     import asyncio
     import io
     from unittest.mock import AsyncMock, Mock
@@ -1170,18 +1170,15 @@ async def test_menu_dispatch_preserves_command_checks(tmp_path, monkeypatch, met
     monkeypatch.setattr(cli, "_models_command", models)
     session.agent.running = True
     try:
-        assert await cli._handle_command(session, "/menu") is (selection == "/quit")
+        assert await cli._handle_command(session, "/menu") is False
         terminal.choose.assert_awaited_once_with("Commands", cli.MENU_OPTIONS)
-        if selection == "/tools":
-            assert "read_file" in output.getvalue()
-        elif selection == "/reset":
-            assert "Queued /reset" in output.getvalue()
-            assert session.agent.messages
-        elif selection == "/models":
-            assert "Queued /models" in output.getvalue()
-            models.assert_not_awaited()
+        if selection is not None:
+            terminal.insert_command.assert_called_once_with(selection)
         else:
-            assert output.getvalue() == ""
+            terminal.insert_command.assert_not_called()
+        models.assert_not_awaited()
+        assert output.getvalue() == ""
+        assert not session.extensions.get("deferred_commands")
     finally:
         session.agent.running = False
         await cli._shutdown(session)
@@ -1420,16 +1417,19 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             os.write(master, b"/danger off\r")
             wait_for(lambda: "Danger Mode" not in screen.display[23])
             os.write(master, b"/menu\r")
-            wait_for(lambda: "Enter = select | Esc = back" in screen.display[23])
+            wait_for(lambda: "Enter or click = select" in screen.display[23])
             assert screen.display[18].strip() == "Commands"
             os.write(master, b"\x1b")
             wait_for(lambda: "Ready" in screen.display[18])
             assert not stub.requests
             os.write(master, b"/menu\r")
-            wait_for(lambda: "Enter = select | Esc = back" in screen.display[23])
+            wait_for(lambda: "Enter or click = select" in screen.display[23])
             from slipagent.cli import MENU_OPTIONS
             tools_index = next(index for index, (command, _) in enumerate(MENU_OPTIONS) if command == "/tools")
             os.write(master, b"\x1b[B" * tools_index + b"\r")
+            wait_for(lambda: "Ready" in screen.display[18] and "/tools" in screen.display[19])
+            assert "read_file" not in "\n".join(screen.display[:17])
+            os.write(master, b"\r")
             wait_for(lambda: "Ready" in screen.display[18] and "read_file" in "\n".join(screen.display[:17]))
             assert not stub.requests
             os.write(master, b"go\r")

@@ -318,7 +318,7 @@ async def test_menu_uses_footer_and_scrolls_selection_through_refresh_and_resize
                 (str(i), f"Option {i} — A saved conversation title with additional details")
                 for i in range(12)
             ]))
-            await wait_until(lambda: "Commands" in snapshot()[18])
+            await wait_until(lambda: snapshot()[18].strip() == "Commands")
             assert snapshot()[:18] == before
             assert snapshot()[23].strip() == "↑/↓ or wheel = move | Enter or click = select | Esc = back"
             assert "› Option 0" in snapshot()[19]
@@ -364,7 +364,7 @@ async def test_menu_supports_wheel_navigation_and_clicking_wrapped_items(display
             for i in range(12)
         ]))
         try:
-            await wait_until(lambda: "Commands" in snapshot()[18])
+            await wait_until(lambda: snapshot()[18].strip() == "Commands")
             pipe.send_text("\x1b[<65;5;21M")
             await wait_until(lambda: ui._menu_index == 3)
             pipe.send_text("\x1b[<64;5;21M")
@@ -372,16 +372,54 @@ async def test_menu_supports_wheel_navigation_and_clicking_wrapped_items(display
             pipe.send_text("\x1b[B")
             await wait_until(lambda: "› Option 1" in "\n".join(snapshot()[19:23]))
             rows = snapshot()
-            row = next(i for i in range(19, 23) if "Option 0" in rows[i])
+            row = next(i for i in range(19, 22) if "Option " in rows[i] and "›" not in rows[i])
+            selected = rows[row].split("Option ")[1].split()[0]
             # On a narrow screen, click the continuation of an unselected item.
             if columns == 40:
                 row += 1
             pipe.send_text(f"\x1b[<0;5;{row + 1}M\x1b[<0;5;{row + 1}m")
-            assert await asyncio.wait_for(choice, 3) == "0"
+            assert await asyncio.wait_for(choice, 3) == selected
             assert ui._lines.empty()
         finally:
             ui.close()
             await choice
+            await task
+
+
+async def test_ready_commands_link_preserves_draft_and_inserts_command(display):
+    from slipagent.cli import command_menu_options
+    sink, _, output, screen, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: "Ready  Commands" in snapshot()[18])
+            assert screen.buffer[18][7].underscore
+            pipe.send_text("unfinished draft")
+            await wait_until(lambda: "unfinished draft" in snapshot()[19])
+            pipe.send_text("\x1b[<35;8;19M")
+            await wait_until(lambda: snapshot() and screen.buffer[18][7].reverse)
+            pipe.send_text("\x1b[<35;1;1M")
+            await wait_until(lambda: snapshot() and not screen.buffer[18][7].reverse)
+            pipe.send_text("\x1b[<0;8;19M\x1b[<0;8;19m")
+            await wait_until(lambda: ui._menu_future is not None)
+            options = command_menu_options()
+            assert ui._menu_options == options
+            index = next(i for i, (value, _) in enumerate(options) if value == "/rename ")
+            assert "<name>" in options[index][1]
+            ui._move_menu(index)
+            await wait_until(lambda: "› /rename <name>" in "\n".join(snapshot()[19:23]))
+            pipe.send_text("\r")
+            await wait_until(lambda: ui.input.text == "/rename ")
+            assert "unfinished draft" in ui.input.buffer.history.get_strings()
+            assert ui.input.buffer.cursor_position == len("/rename ")
+            assert ui._lines.empty()
+            ui.set_working(True)
+            await wait_until(lambda: "Commands" not in snapshot()[18])
+            ui.set_working(False)
+            await wait_until(lambda: "Ready  Commands" in snapshot()[18])
+        finally:
+            ui.close()
             await task
 
 
@@ -404,7 +442,7 @@ async def test_danger_status_suffix_is_red_last_and_survives_resize(display, tmp
             start = snapshot()[23].index("Danger Mode")
             assert all(screen.buffer[23][column].fg == "ff6666" for column in range(start, start + len("Danger Mode")))
             choice = asyncio.create_task(ui.choose("Commands", [("one", "One")]))
-            await wait_until(lambda: "Commands" in snapshot()[18])
+            await wait_until(lambda: snapshot()[18].strip() == "Commands")
             assert snapshot()[23].rstrip().endswith(" | Danger Mode")
             assert "Enter or click = select" in snapshot()[23]
             pipe.send_text("\x1b")

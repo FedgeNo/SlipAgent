@@ -351,6 +351,40 @@ async def test_menu_uses_footer_and_scrolls_selection_through_refresh_and_resize
             await task
 
 
+@pytest.mark.parametrize("columns", [40, 100])
+async def test_menu_supports_wheel_navigation_and_clicking_wrapped_items(display, columns):
+    sink, size, output, screen, snapshot = display
+    size[0] = Size(rows=24, columns=columns)
+    screen.resize(lines=24, columns=columns)
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        task = asyncio.create_task(ui.run())
+        choice = asyncio.create_task(ui.choose("Commands", [
+            (str(i), f"Option {i} with enough description to wrap on a narrow screen")
+            for i in range(12)
+        ]))
+        try:
+            await wait_until(lambda: "Commands" in snapshot()[18])
+            pipe.send_text("\x1b[<65;5;21M")
+            await wait_until(lambda: ui._menu_index == 3)
+            pipe.send_text("\x1b[<64;5;21M")
+            await wait_until(lambda: ui._menu_index == 0)
+            pipe.send_text("\x1b[B")
+            await wait_until(lambda: "› Option 1" in "\n".join(snapshot()[19:23]))
+            rows = snapshot()
+            row = next(i for i in range(19, 23) if "Option 0" in rows[i])
+            # On a narrow screen, click the continuation of an unselected item.
+            if columns == 40:
+                row += 1
+            pipe.send_text(f"\x1b[<0;5;{row + 1}M\x1b[<0;5;{row + 1}m")
+            assert await asyncio.wait_for(choice, 3) == "0"
+            assert ui._lines.empty()
+        finally:
+            ui.close()
+            await choice
+            await task
+
+
 async def test_danger_status_suffix_is_red_last_and_survives_resize(display, tmp_path):
     from types import SimpleNamespace
     from slipagent.workspace import Workspace

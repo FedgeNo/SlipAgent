@@ -259,8 +259,13 @@ class TerminalUI:
             if index:
                 fragments.append(("", "\n"))
             selected = index == self._menu_index
+            def select(event: MouseEvent, index: int = index) -> object:
+                if event.event_type == MouseEventType.MOUSE_UP and event.button == MouseButton.LEFT:
+                    self._menu_index = index
+                    self._finish_menu(self._menu_options[index][0])
+                return None
             fragments.append(("class:menu-selected" if selected else "",
-                              ("› " if selected else "  ") + label))
+                              ("› " if selected else "  ") + label, select))
         return fragments
 
     def _menu_hint(self) -> ANSI:
@@ -535,7 +540,7 @@ class TerminalUI:
                 self._scroll_output(-3 if event.event_type == MouseEventType.SCROLL_UP else 3)
                 app.invalidate()
                 return None
-            if self._menu_future is not None:
+            if self._menu_future is not None and event.event_type != MouseEventType.MOUSE_UP:
                 return None  # Keep focus on the menu until selection/cancellation.
             try:
                 return original.mouse_handlers[event.position.y][event.position.x](event)

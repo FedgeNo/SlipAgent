@@ -660,7 +660,8 @@ including while idle or working.
 
 `/menu` replaces the six-row input footer with a heading, a scrolling list of
 commands, and `↑/↓ = move | Enter = select | Esc = back` on the bottom line.
-The transcript stays visible above it. Escape closes the menu without running
+Use the mouse wheel or arrow keys to move, and click an item or press Enter to
+select it. The transcript stays visible above it. Escape closes the menu without running
 anything, preserving your draft and scroll position. Selecting an item runs its
 usual slash command, including the same restrictions while the agent is working.
 Commands that need arguments are still entered at the normal prompt.

@@ -201,7 +201,7 @@ class SessionJournal:
     def record(self, agent: Agent) -> None:
         if self.path is None:
             # Startup commands and previews do not create empty conversations.
-            if not agent.pending and not any(message.role == "user" for message in agent.messages):
+            if not agent.pending and not agent.registry.context_notes.get("user_edits") and not any(message.role == "user" for message in agent.messages):
                 return
             self.begin(agent, title=self.title)
             return
@@ -221,7 +221,8 @@ class SessionJournal:
         state = {"task_start": agent.history.task.start_message,
                  "usage": asdict(agent.usage), "pending": list(agent.pending),
                  "queued_message_indices": list(agent.queued_messages),
-                 "model": agent.model, "temperature": agent.temperature}
+                 "model": agent.model, "temperature": agent.temperature,
+                 "user_edits": agent.registry.context_notes.get("user_edits", {})}
         if state != self.state:
             self._append("state", **state)
             self.state = copy.deepcopy(state)
@@ -438,6 +439,8 @@ class SessionJournal:
         agent.history._request = loaded._request
         agent.history.task = loaded.task
         agent.pending = list(data["state"]["pending"])
+        if data["state"].get("user_edits"):
+            agent.registry.context_notes["user_edits"] = data["state"]["user_edits"]
         agent.queued_messages.update({index: messages[index].content or ""
                                       for index in data["state"].get("queued_message_indices", [])})
         agent.usage = data["usage"]

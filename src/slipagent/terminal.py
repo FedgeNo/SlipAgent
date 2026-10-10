@@ -15,7 +15,7 @@ from prompt_toolkit import Application
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.document import Document
-from prompt_toolkit.filters import Condition
+from prompt_toolkit.filters import Condition, to_filter
 from prompt_toolkit.formatted_text import ANSI, StyleAndTextTuples, to_formatted_text
 from prompt_toolkit.formatted_text.utils import fragment_list_to_text
 from prompt_toolkit.input import Input
@@ -235,6 +235,8 @@ class TerminalUI:
         self._title_pulse_bound = True
 
     def _layout(self) -> Layout:
+        self._ensure_editor()
+        self._ensure_options()
         self._ensure_context()
         self._ensure_prompt()
         self._ensure_menu()
@@ -251,16 +253,28 @@ class TerminalUI:
             self.input.control.input_processors = [*processors, WordWrapInput()]
         if self._input_label == "you › ":
             self._input_label = "> "
+        activity_row = VSplit([Window(FormattedTextControl(lambda: self._activity()), height=1),
+                              Window(FormattedTextControl(self._inspect_link), height=1, width=lambda: self._right_control_width(), align=WindowAlign.RIGHT)])
+        scroll_row = VSplit([
+            Window(FormattedTextControl(lambda: self._activity()), height=1,
+                   width=lambda: max(0, (self.output.get_size().columns - 18) // 2)),
+            Window(FormattedTextControl(self._scroll_bottom_link), height=1, width=18),
+            Window(FormattedTextControl(self._inspect_link), height=1, align=WindowAlign.RIGHT),
+        ])
         footer = HSplit([
-            VSplit([Window(FormattedTextControl(lambda: self._activity()), height=1),
-                    Window(FormattedTextControl(self._inspect_link), height=1, width=18, align=WindowAlign.RIGHT)]),
-            self.input,
+            DynamicContainer(lambda: scroll_row if self._show_scroll_bottom() else activity_row),
+            DynamicContainer(lambda: self._editor_panel.controls if self._editor_active else self.input),
             self._bottom_row(menu=False),
         ], height=FOOTER_ROWS)
         menu_footer = HSplit([
             Window(FormattedTextControl(lambda: self._menu_title), height=1, style="class:menu-title"),
             self._menu_window,
             self._bottom_row(menu=True),
+        ], height=FOOTER_ROWS)
+        setting_footer = HSplit([
+            Window(FormattedTextControl("Folder Opener"), height=1, style="class:menu-title"),
+            self._options_panel.field,
+            self._bottom_row(menu=False),
         ], height=FOOTER_ROWS)
         context = HSplit([
             Window(FormattedTextControl("Context — latest model request | Ctrl+\\: close"), height=1, style="class:status"),
@@ -273,12 +287,12 @@ class TerminalUI:
             content=Window(TranscriptControl(self._pinned_prompt_content)),
         )])
         return Layout(HSplit([
-            VSplit([DynamicContainer(lambda: self._viewer_container if self._viewer_active else
+            VSplit([DynamicContainer(lambda: self._editor_container if self._editor_active else self._viewer_container if self._viewer_active else
                                      context if self.context_visible else transcript),
                     ConditionalContainer(self._inspection_panel, Condition(lambda: self._inspection_visible and self.output.get_size().columns >= 60))]),
             Window(height=1),
-            DynamicContainer(lambda: menu_footer if self._menu_future is not None else footer),
-        ]), focused_element=self._menu_window if self._menu_future is not None else
+            DynamicContainer(lambda: menu_footer if self._menu_future is not None else setting_footer if self._options_field_active else footer),
+        ]), focused_element=self._menu_window if self._menu_future is not None else self._options_panel.field if self._options_field_active else self._editor_input if self._editor_active else
             self._viewer_window if self._viewer_active else self.input)
 
     def _ensure_inspection(self) -> None:
@@ -313,7 +327,42 @@ class TerminalUI:
                 self.toggle_inspection()
             return None
         style = "class:clickable" + (" class:hover" if self.__dict__.get("_hovered_control") == "inspect" else "")
-        return [(style, "Inspect [Ctrl+O]", click)]
+        def options(event: MouseEvent) -> object:
+            if event.event_type == MouseEventType.MOUSE_MOVE:
+                self.__dict__["_hovered_control"] = "options"
+            elif event.event_type == MouseEventType.MOUSE_UP and event.button == MouseButton.LEFT:
+                self.app.create_background_task(self._options_panel.show())
+            return None
+        option_style = "class:clickable" + (" class:hover" if self.__dict__.get("_hovered_control") == "options" else "")
+        return [(style, "Inspect [Ctrl+O]" if self._right_control_width() > 18 else "Inspect", click),
+                ("", "  "), (option_style, "Options", options), ("", " ")]
+
+    def _right_control_width(self) -> int:
+        return 30 if self.output.get_size().columns >= 80 else 18
+
+    def _show_scroll_bottom(self) -> bool:
+        return not (self.transcript._following or self._viewer_active or self._editor_active or self.context_visible)
+
+    def _scroll_bottom_link(self) -> StyleAndTextTuples:
+        def click(event: MouseEvent) -> object:
+            if event.event_type == MouseEventType.MOUSE_MOVE:
+                self.__dict__["_hovered_control"] = "scroll-bottom"
+            elif event.event_type == MouseEventType.MOUSE_UP and event.button == MouseButton.LEFT:
+                self.scroll_to_end()
+            return None
+        style = "class:clickable"
+        if self.__dict__.get("_hovered_control") == "scroll-bottom":
+            style += " class:hover"
+        return [("", " "), (style, "Scroll to Bottom", click), ("", " ")]
+
+    def _ensure_options(self) -> None:
+        if "_options_panel" not in self.__dict__:
+            from .options import OptionsPanel
+            self._options_field_active = False
+            self._options_panel = OptionsPanel(self)
+            wrap_lines = self._options_panel.values.get("wrap", True)
+            self._editor_input.wrap_lines = wrap_lines
+            self._editor_input.window.wrap_lines = to_filter(wrap_lines)
 
     def track_call(self, call: ToolCall, step: int) -> None:
         self._ensure_inspection()
@@ -396,6 +445,15 @@ class TerminalUI:
         return fragments
 
     async def _inspect_file(self, path: str, *, line: int = 1) -> None:
+        coordinator = self.__dict__.get("_user_edits")
+        if coordinator is not None:
+            root = self.__dict__.get("_project_directory")
+            if root is not None:
+                await coordinator.request(root / path, line)
+            return
+        await self._read_file(path, line=line)
+
+    async def _read_file(self, path: str, *, line: int = 1) -> None:
         request = self._new_viewer_request()
         root = self.__dict__.get("_project_directory")
         if root is None:
@@ -432,6 +490,30 @@ class TerminalUI:
         request = int(self.__dict__.get("_viewer_request", 0)) + 1
         self.__dict__["_viewer_request"] = request
         return request
+
+    def _ensure_editor(self) -> None:
+        if "_editor_panel" not in self.__dict__:
+            from .editorui import EditorPanel
+            self._editor_panel = EditorPanel(self)
+            self._editor_active = False
+            self._editor_input = self._editor_panel.input
+            self._editor_container = self._editor_panel.container
+
+    async def _open_editor_now(self, path: Path, *, line: int = 1) -> None:
+        self._ensure_editor()
+        await self._editor_panel.open(path, line)
+
+    async def _save_editor(self) -> None:
+        await self._editor_panel.save()
+
+    async def _close_editor(self) -> None:
+        await self._editor_panel.close()
+
+    async def _reload_editor(self) -> None:
+        await self._editor_panel.reload()
+
+    def _change_editor_page(self, delta: int) -> None:
+        self._editor_panel.change_page(delta)
 
     def _ensure_viewer(self) -> None:
         if "_viewer_active" in self.__dict__:
@@ -480,11 +562,16 @@ class TerminalUI:
         source = self.__dict__.get("_viewer_source")
         if source is not None:
             scroll = self._viewer_window.vertical_scroll
-            await self._inspect_file(str(source))
+            await self._read_file(str(source))
             self._viewer_window.vertical_scroll = scroll
             self.app.invalidate()
 
     def open_viewer(self, title: str, text: str | IndexedText, *, diff: bool = False, line: int = 1) -> None:
+        if self.__dict__.get("_editor_active"):
+            if isinstance(text, IndexedText):
+                text.close()
+            self.notify("Close the editor before opening a viewer.")
+            return
         self._ensure_viewer()
         self._new_viewer_request()
         old = self._viewer_window.content
@@ -583,7 +670,7 @@ class TerminalUI:
 
     def _bottom_row(self, *, menu: bool) -> VSplit:
         return VSplit([
-            Window(FormattedTextControl(lambda: self._menu_hint() if menu else self._status_fragments()),
+            Window(FormattedTextControl(lambda: self._menu_hint() if menu else ANSI("Enter: Save | Esc: Cancel") if self._options_field_active else self._status_fragments()),
                    height=1, style="class:status"),
             Window(width=1, height=1),
             self._notification_window(),
@@ -602,7 +689,11 @@ class TerminalUI:
     def _notification_text(self) -> str:
         text = self.__dict__.get("_notification", "")
         if not text:
-            tips = ["Drag across output to copy text."]
+            tips = ["Select and right-click for text options."]
+            if self._editor_active:
+                tips = ["Ctrl+S saves; Esc closes the editor.", "Ctrl+PgUp/PgDn changes file pages."]
+            elif self._viewer_active:
+                tips = ["Scroll to inspect; Esc closes the viewer."]
             if not self.working and self._input_label == "> " and self._menu_future is None:
                 tips.append("Click Commands to browse commands.")
             if self.__dict__.get("_folder_opener") is not None:
@@ -674,7 +765,7 @@ class TerminalUI:
         finally:
             self._menu_future = None
             self._menu_options = []
-            self.app.layout.focus(self.input)
+            self.app.layout.focus(self._editor_input if self._editor_active else self._viewer_window if self._viewer_active else self.input)
             self.app.invalidate()
 
     def _move_menu(self, rows: int) -> None:
@@ -768,6 +859,39 @@ class TerminalUI:
         links[len(self._raw_output)] = directory
         label = re.sub(r"[\x00-\x1f\x7f]", lambda match: f"\\x{ord(match[0]):02x}", str(directory))
         self.write(f"    {label}\n")
+
+    def write_file_reference(self, value: str, *, line: int = 1) -> None:
+        root = self.__dict__.get("_project_directory")
+        if root is None:
+            return
+        try:
+            path = (root / value).resolve()
+            if not path.is_file():
+                return
+        except (OSError, ValueError):
+            return
+        links = self.__dict__.setdefault("_file_links", {})
+        links[len(self._raw_output)] = (path, line)
+        label = re.sub(r"[\x00-\x1f\x7f]", lambda match: f"\\x{ord(match[0]):02x}", value)
+        self.write(f"    {label}:{line}\n")
+
+    def _file_at(self, point: Point) -> tuple[Path, int] | None:
+        if self._flow is None:
+            return None
+        rows = self._flow.content_rows()
+        row = self._flow.get_row(point.y) if 0 <= point.y < len(self._flow.rows) else (
+            rows[point.y - len(self._flow.rows)] if 0 <= point.y - len(self._flow.rows) < len(rows) else [])
+        column = 0
+        for style, text, *_ in row:
+            end = column + display_width(text)
+            if column <= point.x < end:
+                for token in style.split():
+                    if token.startswith("class:file-"):
+                        reference = self.__dict__.get("_file_links", {}).get(int(token.removeprefix("class:file-")))
+                        if isinstance(reference, tuple) and len(reference) == 2 and isinstance(reference[0], Path) and isinstance(reference[1], int):
+                            return reference[0], reference[1]
+            column = end
+        return None
 
     def _directory_at(self, point: Point) -> Path | None:
         if self._flow is None or self.__dict__.get("_folder_opener") is None:
@@ -901,7 +1025,48 @@ class TerminalUI:
     def _bindings(self) -> KeyBindings:
         bindings = KeyBindings()
         in_menu = Condition(lambda: self._menu_future is not None)
-        in_viewer = Condition(lambda: self.__dict__.get("_viewer_active", False)) & ~in_menu
+        in_setting = Condition(lambda: self.__dict__.get("_options_field_active", False))
+        in_editor = Condition(lambda: self.__dict__.get("_editor_active", False)) & ~in_menu & ~in_setting
+        in_viewer = Condition(lambda: self.__dict__.get("_viewer_active", False)) & ~in_menu & ~in_editor & ~in_setting
+
+        @bindings.add("f4", filter=~in_menu & ~in_setting)
+        def options_screen(event: KeyPressEvent) -> None:
+            self.app.create_background_task(self._options_panel.show())
+
+        @bindings.add("escape", filter=in_setting, eager=True)
+        def cancel_setting(event: KeyPressEvent) -> None:
+            self._options_panel.cancel()
+
+        @bindings.add("tab", filter=in_editor)
+        def editor_tab(event: KeyPressEvent) -> None:
+            if not self._editor_panel.busy:
+                self._editor_input.buffer.insert_text(" " * self._options_panel.values.get("tab_width", 4))
+
+        @bindings.add("c-z", filter=in_editor)
+        @bindings.add("c-y", filter=in_editor)
+        def editor_undo(event: KeyPressEvent) -> None:
+            if not self._editor_panel.busy:
+                if event.key_sequence[-1].key == Keys.ControlZ:
+                    self._editor_input.buffer.undo()
+                else:
+                    self._editor_input.buffer.redo()
+
+        @bindings.add("c-s", filter=in_editor)
+        def save_editor(event: KeyPressEvent) -> None:
+            self.app.create_background_task(self._save_editor())
+
+        @bindings.add("escape", filter=in_editor, eager=True)
+        def close_editor(event: KeyPressEvent) -> None:
+            self.app.create_background_task(self._close_editor())
+
+        @bindings.add("c-r", filter=in_editor)
+        def reload_editor(event: KeyPressEvent) -> None:
+            self.app.create_background_task(self._reload_editor())
+
+        @bindings.add("c-pageup", filter=in_editor)
+        @bindings.add("c-pagedown", filter=in_editor)
+        def page_editor(event: KeyPressEvent) -> None:
+            self._change_editor_page(-1 if event.key_sequence[-1].key == Keys.ControlPageUp else 1)
 
         @bindings.add("c-o")
         def inspect_panel(event: KeyPressEvent) -> None:
@@ -932,11 +1097,11 @@ class TerminalUI:
             self._viewer_window._pending_scroll = 0
             self.app.invalidate()
 
-        @bindings.add("f2", filter=~in_menu & ~in_viewer)
+        @bindings.add("f2", filter=~in_menu & ~in_viewer & ~in_editor & ~in_setting)
         def toggle_markdown(event: KeyPressEvent) -> None:
             self.configure_markdown(source=not self.__dict__.get("_markdown_source", False))
 
-        @bindings.add("f3", filter=~in_menu & ~in_viewer)
+        @bindings.add("f3", filter=~in_menu & ~in_viewer & ~in_editor & ~in_setting)
         def copy_response(event: KeyPressEvent) -> None:
             if self.last_markdown():
                 self.copy_response()
@@ -955,7 +1120,7 @@ class TerminalUI:
         def cancel_menu(event: KeyPressEvent) -> None:
             self._finish_menu(None)
 
-        @bindings.add("escape", filter=~in_menu & ~in_viewer, eager=True)
+        @bindings.add("escape", filter=~in_menu & ~in_viewer & ~in_editor & ~in_setting, eager=True)
         def stop_now(event: KeyPressEvent) -> None:
             callback = getattr(self, "_interrupt_callback", None)
             if callback is not None:
@@ -965,12 +1130,12 @@ class TerminalUI:
         def ignore_menu_text(event: KeyPressEvent) -> None:
             pass
 
-        @bindings.add("c-\\", filter=~in_menu & ~in_viewer)
+        @bindings.add("c-\\", filter=~in_menu & ~in_viewer & ~in_editor & ~in_setting)
         def toggle_context(event: KeyPressEvent) -> None:
             self.context_visible = not self.context_visible
             self.app.invalidate()
 
-        in_context = Condition(lambda: self.context_visible) & ~in_menu & ~in_viewer
+        in_context = Condition(lambda: self.context_visible) & ~in_menu & ~in_viewer & ~in_editor & ~in_setting
 
         @bindings.add("up", filter=in_context)
         @bindings.add("down", filter=in_context)
@@ -1002,7 +1167,7 @@ class TerminalUI:
         def scroll_down(event: KeyPressEvent) -> None:
             self._scroll_output(3)
 
-        @bindings.add("c-d", filter=~in_menu & ~in_viewer)
+        @bindings.add("c-d", filter=~in_menu & ~in_viewer & ~in_editor & ~in_setting)
         def eof(event: KeyPressEvent) -> None:
             if not event.current_buffer.text:
                 self._end_input()
@@ -1021,6 +1186,7 @@ class TerminalUI:
             "context-system": "#ffff00", "retry": "ansired",
             "menu-title": "bold", "menu-selected": "reverse bold",
             "clickable": "underline", "hover": "reverse",
+            "diff-number": MUTED_COLOR,
             "menu-item": "#999999",
             "diff-added": "#66dd88", "diff-removed": "#ff6666",
             "diff-header": "bold #ffdd66", "diff-hunk": "#66ccff",
@@ -1055,7 +1221,14 @@ class TerminalUI:
                 self._selection_dragging = False
             if event.event_type in (MouseEventType.SCROLL_UP, MouseEventType.SCROLL_DOWN):
                 size = self.output.get_size()
+                if self._editor_active and event.position.y < size.rows - FOOTER_ROWS - 1 and self._menu_future is None:
+                    if not (self._inspection_visible and size.columns >= 60 and event.position.x >= size.columns - size.columns // 4):
+                        self._editor_input.window.vertical_scroll = max(0, self._editor_input.window.vertical_scroll + (-3 if event.event_type == MouseEventType.SCROLL_UP else 3))
+                        app.invalidate()
+                        return None
                 if self._menu_future is None and size.rows - FOOTER_ROWS + 1 <= event.position.y < size.rows - 1:
+                    if self._editor_active:
+                        return None
                     window = self.input.window
                     if isinstance(window, InputWindow):
                         window.scroll(-3 if event.event_type == MouseEventType.SCROLL_UP else 3)
@@ -1111,20 +1284,26 @@ class TerminalUI:
 
     def _activity(self) -> StyleAndTextTuples:
         fragments = self._activity_status()
-        if self._viewer_active:
+        if self._viewer_active or self._editor_active:
+            mode = "editor" if self._editor_active else "viewer"
             def close(event: MouseEvent) -> object:
                 if event.event_type == MouseEventType.MOUSE_MOVE:
-                    self.__dict__["_hovered_control"] = "exit-viewer"
+                    self.__dict__["_hovered_control"] = "exit-" + mode
                 elif event.event_type == MouseEventType.MOUSE_UP and event.button == MouseButton.LEFT:
-                    self.close_viewer()
+                    if mode == "editor":
+                        self.app.create_background_task(self._close_editor())
+                    else:
+                        self.close_viewer()
                 return None
-            style = "class:clickable" + (" class:hover" if self.__dict__.get("_hovered_control") == "exit-viewer" else "")
-            if display_width(fragment_list_to_text(fragments)) + len("  ESC to exit viewer ") > self.output.get_size().columns - 18:
+            style = "class:clickable" + (" class:hover" if self.__dict__.get("_hovered_control") == "exit-" + mode else "")
+            if display_width(fragment_list_to_text(fragments)) + len("  ESC to exit viewer ") > self.output.get_size().columns - self._right_control_width():
                 fragments = []
-            fragments.extend([("", "  ESC to " if fragments else "ESC to "), (style, "exit viewer", close), ("", " ")])
+            fragments.extend([("", "  ESC to " if fragments else "ESC to "), (style, "exit " + mode, close), ("", " ")])
         return fragments
 
     def _activity_status(self) -> StyleAndTextTuples:
+        if self._editor_active:
+            return [("class:idle", "Agent Held")]
         retry_status = self.__dict__.get("_retry_status", "")
         if retry_status and not self.stopping:
             return [("class:retry", retry_status)]
@@ -1194,6 +1373,7 @@ class TerminalUI:
         self._raw_output = archive
         self._block_starts.clear()
         self.__dict__.setdefault("_directory_links", {}).clear()
+        self.__dict__.setdefault("_file_links", {}).clear()
         self.__dict__.setdefault("_artifact_links", {}).clear()
         self.__dict__.setdefault("_touched_files", {}).clear()
         self.__dict__.setdefault("_inspection_calls", {}).clear()
@@ -1301,10 +1481,22 @@ class TerminalUI:
         self._ensure_transcript()
         directory = self._directory_at(event.position)
         artifact = self._artifact_at(event.position)
+        file = self._file_at(event.position)
+        if event.button == MouseButton.RIGHT:
+            self._selection_dragging = False
+            if event.event_type == MouseEventType.MOUSE_UP:
+                text = self.selected_text()
+                if text:
+                    self.app.create_background_task(self._selection_menu(text, file[0] if file else directory))
+                else:
+                    self.notify("Select text, then right-click for options.")
+            return None
         if event.event_type == MouseEventType.MOUSE_MOVE and artifact is not None:
             self.__dict__["_hovered_control"] = ("artifact", artifact)
         if event.event_type == MouseEventType.MOUSE_MOVE and directory is not None:
             self.__dict__["_hovered_control"] = ("directory", directory)
+        if event.event_type == MouseEventType.MOUSE_MOVE and file is not None:
+            self.__dict__["_hovered_control"] = ("file", file)
         selecting_button = event.button in {MouseButton.LEFT, MouseButton.UNKNOWN}
         if event.event_type == MouseEventType.MOUSE_DOWN:
             self._selection_dragging = selecting_button
@@ -1323,6 +1515,10 @@ class TerminalUI:
             if event.button in {MouseButton.RIGHT, MouseButton.MIDDLE}:
                 self._selection_start = self._selection_end = None
             else:
+                if file is not None and self._selection_start == event.position:
+                    self._selection_start = self._selection_end = None
+                    self.app.create_background_task(self._inspect_file(str(file[0]), line=file[1]))
+                    return None
                 if artifact is not None and self._selection_start == event.position:
                     self._selection_start = self._selection_end = None
                     self.app.create_background_task(self.open_artifact(artifact))
@@ -1332,20 +1528,44 @@ class TerminalUI:
                     self.app.create_background_task(self._explore_directory(directory))
                     return None
                 self._selection_end = event.position
-                text = self.selected_text()
-                if text:
-                    self._copy_text(text)
         else:
             return NotImplemented
         self.app.invalidate()
         return None
+
+    async def _selection_menu(self, text: str, path: Path | None = None) -> None:
+        """Capture the selection before opening the shared action selector."""
+        if self._menu_future is not None:
+            return
+        options = [("copy", "Copy Text"), ("prompt", "Use Selection in Prompt")]
+        paths = {}
+        if path is not None:
+            paths["absolute"] = str(path)
+            options.append(("absolute", "Copy Absolute Path"))
+            root = self.__dict__.get("_project_directory")
+            if root is not None and path.is_relative_to(root):
+                paths["relative"] = str(path.relative_to(root))
+                options.append(("relative", "Copy Relative Path"))
+        action = await self.choose("Selected Text", options)
+        if action == "copy":
+            self._copy_text(text)
+            self.notify("Text copied.")
+        elif action == "prompt":
+            buffer = self.input.buffer
+            separator = "\n" if buffer.text and not buffer.text.endswith("\n") else ""
+            buffer.cursor_position = len(buffer.text)
+            buffer.insert_text(separator + text)
+        elif action in paths:
+            self._copy_text(paths[action])
+            self.notify("Path copied.")
 
     def selected_text(self) -> str:
         if self._flow is None or self._selection_start is None or self._selection_end is None:
             return ""
         start, end = sorted([self._selection_start, self._selection_end], key=lambda p: (p.y, p.x))
         pieces = []
-        for index in range(max(0, start.y), min(end.y + 1, len(self._flow.rows))):
+        count = len(self._flow.rows) + len(self._flow.content_rows())
+        for index in range(max(0, start.y), min(end.y + 1, count)):
             row = self._flow.copy_row(index)
             pieces.append(row.selected(start.x if index == start.y else 0, end.x if index == end.y else None))
         return "".join(pieces)
@@ -1447,6 +1667,7 @@ class TerminalUI:
                 flow.append(self._raw_output[index], first=index in self._block_starts,
                             continuation_indents=self._continuation_indents.get(index),
                             extra_style=(f" class:directory-{index}" if index in self.__dict__.get("_directory_links", {}) else "") +
+                                        (f" class:file-{index}" if index in self.__dict__.get("_file_links", {}) else "") +
                                         (f" class:artifact-{index}" if index in self.__dict__.get("_artifact_links", {}) else ""))
             if index in self._queued_notices:
                 self._notice_rows[index] = (start, len(flow.rows))
@@ -1479,6 +1700,11 @@ class TerminalUI:
             result: StyleAndTextTuples = []
             for style, text, *_ in fragments:
                 for token in style.split():
+                    if token.startswith("class:file-"):
+                        file = self.__dict__.get("_file_links", {}).get(int(token.removeprefix("class:file-")))
+                        style += " class:clickable"
+                        if self.__dict__.get("_hovered_control") == ("file", file):
+                            style += " class:hover"
                     if token.startswith("class:artifact-"):
                         identifier = self.__dict__.get("_artifact_links", {}).get(int(token.removeprefix("class:artifact-")))
                         style += " class:clickable"
@@ -1501,6 +1727,9 @@ class TerminalUI:
         return await self._lines.get()
 
     def _end_input(self) -> None:
+        options = self.__dict__.get("_options_panel")
+        if options is not None:
+            options.cancel()
         self._finish_menu(None)
         self._eof = True
         self._lines.put_nowait(None)
@@ -1540,6 +1769,12 @@ class TerminalUI:
             self._close_transcript()
 
     def _close_transcript(self) -> None:
+        panel = self.__dict__.get("_editor_panel")
+        if panel is not None:
+            panel.dispose()
+        coordinator = self.__dict__.get("_user_edits")
+        if coordinator is not None:
+            coordinator.close()
         self._new_viewer_request()
         viewer = self.__dict__.get("_viewer_window")
         if viewer is not None and isinstance(viewer.content, TextViewControl):

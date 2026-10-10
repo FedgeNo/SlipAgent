@@ -635,7 +635,7 @@ available controls. Folder-launch failures also remain in the transcript.
 
 Click **Inspect [Ctrl+O]** or press **Ctrl+O** to show or hide the inspection
 panel on the right side of the feed. It occupies one quarter of the terminal
-width, with **Touched Files** above **Calls**. Click a file to read it, or a call
+width, with **Touched Files** above **Calls**. Click a file to edit it, or a call
 to inspect its decoded arguments and result as labelled fields with literal text
 and line breaks. The mouse wheel scrolls the section under
 the pointer. Terminals narrower than 60 columns temporarily hide the panel.
@@ -650,8 +650,36 @@ lines use bounded display segments; source line links still target logical lines
 An open file that changes, is replaced, or disappears on disk keeps its snapshot
 and offers **Reload [Ctrl+R]**. Reload failure leaves the snapshot available.
 Notifications and your input draft remain visible. Diffs use distinct
-colors for headers, hunks, additions, and deletions; short edit diffs also appear
+colors for headers, hunks, additions, and deletions, with old/new line numbers;
+short edit diffs also appear
 in the feed. No editing or saving is enabled in these viewers.
+
+File links open the built-in editor at the linked line. An active agent finishes
+its current tool batch first; managed background commands are stopped, and further
+agent work waits until the editor closes. **Ctrl+S** saves; **Esc** or **exit editor**
+closes, asking whether to save, discard, or keep editing when there are unsaved
+changes. Clicking text places the cursor there; clicking right of a line places
+it at that line's end, and clicking below the content places it at the file's end.
+Editor action controls replace the prompt area while editing; the same prompt
+buffer, text, cursor, and scrolling return when the editor closes.
+Files are backed by private snapshots, with only
+one bounded page in the editing buffer; **Ctrl+Page Up/Down** moves between pages.
+Untouched content and line endings are preserved. External disk changes offer
+Reload and require an explicit choice before overwriting. Git supplies the saved
+user-edit diff, which accompanies the next model input separately from user
+messages and tool results and survives session resume. Git must be available to
+save through the editor so the change can be reported accurately.
+
+Click **Options** or press **F4** for editor wrapping, tab width, and folder-opener
+settings. Folder-opener configuration uses the footer input area. These settings
+share the existing private preferences file across projects.
+A configured folder opener works without a desktop session: enter an executable
+and arguments, optionally with a separate `{path}` argument. The directory is
+passed literally, without a shell; when no placeholder is given, it is appended.
+External editors are not offered.
+
+When the feed is scrolled up, **Scroll to Bottom** appears in the center of the
+row above the prompt. Click it to resume following the latest output.
 
 With session persistence, inspection records live beside the session journal in
 its `-artifacts` directory. Microsecond timestamp filenames contain JSON with
@@ -666,7 +694,11 @@ offsets. Without session persistence, inspection records are temporary.
 
 When a native file explorer is available, the CWD readout is an underlined link
 and tool calls with an existing directory `path` show a link to that directory.
-Click a directory link to open it; drag across output to copy text as usual.
+Click a directory link to open it. Drag to select feed text, then right-click
+to choose **Copy Text** or **Use Selection in Prompt**. The latter appends the
+selection after a newline without submitting or replacing your draft. Right-click
+a selected directory reference for **Copy Absolute Path** and, inside the project,
+**Copy Relative Path**. Right-clicking without a selection shows a short tip.
 The CWD link opens the project directory. Linux requires a desktop session and
 `xdg-open` or `gio`; macOS uses `open`, and Windows uses its default folder
 handler. Without an available opener, paths remain plain text. A failed launch

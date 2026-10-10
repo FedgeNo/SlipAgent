@@ -196,6 +196,9 @@ class WrappedTranscript:
             self._markdown = None
 
     def copy_row(self, index: int) -> DisplayRow:
+        if index >= len(self.rows):
+            fragments = self.content_rows()[index - len(self.rows)]
+            return DisplayRow(fragments, "".join(item[1] for item in fragments))
         fragments = self.get_row(index)
         record = self._copy_index.get(index)
         if record is not None:

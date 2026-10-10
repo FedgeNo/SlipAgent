@@ -522,6 +522,8 @@ class Renderer:
                     path = "."
                 if isinstance(path, str):
                     self.terminal.write_directory_reference(path)
+                    offset = event.tool_call.arguments.get("offset", 1)
+                    self.terminal.write_file_reference(path, line=offset if isinstance(offset, int) and offset > 0 else 1)
 
         elif event.kind == "tool_output":
             if self.terminal is not None:
@@ -556,6 +558,15 @@ class Renderer:
                 body = result.text().strip()
                 for line in body.splitlines():
                     self.emit(self.style.dim(f"    {line}"), block=self._model_block)
+            if self.terminal is not None and event.tool_call is not None and not result.is_error:
+                if event.tool_call.name in {"write_file", "edit_file", "copy_path", "move_path"}:
+                    for key in ("path", "destination"):
+                        target = event.tool_call.arguments.get(key)
+                        if isinstance(target, str):
+                            self.terminal.write_file_reference(target)
+                if event.tool_call.name == "grep":
+                    for match in re.finditer(r"^(.+?):(\d+):", result.text(), re.MULTILINE):
+                        self.terminal.write_file_reference(match[1], line=int(match[2]))
 
         elif event.kind == "artifact" and event.result is not None:
             reference = event.result.content
@@ -887,6 +898,14 @@ async def run_repl(session: Session) -> int:
             project_directory=session.workspace.root,
         )
         renderer.terminal = terminal
+        from .useredits import UserEdits
+        user_edits = UserEdits(session, terminal)
+        registry_edits = session.registry.services.get("user_edits")
+        if registry_edits is not None:
+            registry_edits.close()
+        session.registry.services["user_edits"] = user_edits
+        terminal.__dict__["_user_edits"] = user_edits
+        session.agent.on_boundary = user_edits.checkpoint
         terminal.__dict__["_artifact_store"] = session.registry.services.get("artifact_store")
         terminal.configure_markdown(theme=renderer.markdown_theme, source=renderer.output_markdown)
         terminal.set_interrupt_handler(lambda: _request_interrupt(session))
@@ -1506,6 +1525,10 @@ class _RendererStream(io.TextIOBase):
 
 
 async def _handle_command(session: Session, line: str) -> bool:
+    terminal = session.renderer.terminal
+    if terminal is not None and terminal.__dict__.get("_editor_active"):
+        terminal.notify("Close the editor before running commands.")
+        return False
     frame = session.reloader
     if frame is not None:
         await frame.checkpoint()

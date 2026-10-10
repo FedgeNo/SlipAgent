@@ -257,6 +257,7 @@ class Agent:
         self.registry.context_notes.pop("resume", None)
         self.registry.context_notes.pop("background_commands", None)
         self.registry.context_notes.pop("request_diagnostics", None)
+        self.registry.context_notes.pop("user_edits", None)
         journal = self.registry.services.get("session_journal")
         if journal is not None and new_session:
             journal.begin(self)
@@ -419,8 +420,9 @@ class Agent:
                 load_prompt('mcp-guidance.md', servers=render_data(servers)),
                 40, owner="mcp", dynamic=False,
             )
-        if self.registry.context_notes:
-            sections.add("state", "Current Harness State", load_prompt('harness-state.md', state=render_data(self.registry.context_notes)), 50)
+        state_notes = {key: value for key, value in self.registry.context_notes.items() if key != "user_edits"}
+        if state_notes:
+            sections.add("state", "Current Harness State", load_prompt('harness-state.md', state=render_data(state_notes)), 50)
         sections.add("repair", "Response Correction", repair.strip(), 60)
         extra_instructions = sections.render()
         budget = copy.copy(self._budget()) if preview else self._budget()
@@ -435,6 +437,7 @@ class Agent:
             query = next((m.content or "" for m in reversed(self.messages) if m.role == "user"), "")
             repository_map = await self.registry.services["repository_map"].snapshot(query, min(128_000, int(length * budget_fraction * .03 * 3)))
         view_options: dict[str, Any] = dict(
+            user_edits=list(self.registry.context_notes.get("user_edits", {}).values()),
             user_corrections="\n\n".join(part.strip() for part in (
                 self.registry.context_notes.get("progress", ""), repair,
             ) if part.strip()),

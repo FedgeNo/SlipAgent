@@ -31,7 +31,10 @@ def open_folder(directory: Path, opener: tuple[str, ...]) -> bool:
         if not opener:
             getattr(os, "startfile")(str(directory))
             return True
-        process = subprocess.Popen([*opener, str(directory)], stdin=subprocess.DEVNULL,
+        arguments = [str(directory) if part == "{path}" else part for part in opener]
+        if "{path}" not in opener:
+            arguments.append(str(directory))
+        process = subprocess.Popen(arguments, stdin=subprocess.DEVNULL,
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                    start_new_session=os.name != "nt")
         try:

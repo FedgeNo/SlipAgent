@@ -832,14 +832,33 @@ to the model along with the active generation number.
   Closing the terminal releases both temporary files. These files serve display,
   not conversation persistence or model context. Password entry owns a separate
   history-free buffer/queue, not just a masking processor.
-  `TerminalUI.choose(title, options)` temporarily replaces the six-row footer
-  with a heading, four option rows, and a bottom key legend. A focused menu
+  `TerminalUI.choose(title, options)` temporarily replaces the seven-row footer
+  with a heading, five option rows, and a bottom key legend. A focused menu
   control owns navigation; the input buffer, history, queue, and transcript stay
   intact. It returns the selected value or `None` on Escape, Ctrl-D, or
   terminal closure. Cancellation restores input focus, and refresh preserves an
   open menu's selection. `/menu` dispatches complete command strings through the
   normal handlers, retaining busy-state checks and background execution for
   read-only network commands during a step.
+  Feed dragging retains a selection; right-click uses the same selector for
+  copying text, appending it to the draft, and copying recognized reference
+  paths. Arbitrary selected prose does not become a path. File links retain
+  source-line targets through wrapping and reflow. Diff gutters index old/new
+  coordinates on disk, independently of viewport traversal order.
+  `editor.py` owns file snapshots, bounded pages, changed-page files, and atomic
+  publication with disk-signature checks. `editorui.py` owns the editable buffer,
+  navigation, save/reload choices, and unsaved-change handling. `useredits.py`
+  owns the session gate: the existing agent boundary finishes the complete tool
+  batch, drains managed background jobs, and waits while editing is active.
+  The reload frame is busy until the editor closes. Cancellation drains an
+  in-progress save before releasing its resources. Read-only viewers bypass
+  this gate. Saved user diffs enter the raw `user_edits` input field and journal
+  state, with their originating step labels; they are not fabricated user
+  messages or tool calls. An editing session replaces its own cumulative diff
+  on each save, while separate editing sessions retain separate observations.
+  `options.py` owns the selector and isolated folder-command field;
+  `uipreferences.py` preserves unrelated entries in the existing preferences
+  file. Folder commands receive literal argument lists without a shell.
 
 ## Extending the Contracts
 

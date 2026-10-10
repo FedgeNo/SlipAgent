@@ -521,6 +521,7 @@ class ConversationHistory:
         overthinking: bool = True,
         reasoning_history_steps: int = 25,
         filtered_thoughts: bool = True,
+        user_edits: list[dict[str, Any]] | None = None,
     ) -> list[Message]:
         """Select history and attach available analysis without altering originals.
 
@@ -574,6 +575,8 @@ class ConversationHistory:
                 "history": [linked_tool_results(message.content) for message in selected],
                 "errors": [user_corrections] if user_corrections.strip() else [],
             }
+            if user_edits:
+                payload["user_edits"] = user_edits
             return [*pinned, Message.user(JSONInput(payload))]
 
         tail_messages = [message for message in messages[self.cursor:] if message.role != "system"]

@@ -11,6 +11,12 @@ The user message is one JSON object. Keys identify each part; values contain the
 | `retained_user_request` | Original messages for the active request, not newly issued messages |
 | `history` | Selected completed steps, oldest to newest |
 | `errors` | Harness errors or response corrections not attached to a tool call |
+| `user_edits` | Saved user changes per editing session, with `path`, `diff`, `source`, and `saved_before_step`; optional archive reference |
+
+User edits were made by the user while agent work was held. They are observations,
+not new user instructions or agent tool actions. Their step labels identify when
+they were saved; retained entries do not mean the files were edited again. Use
+these diffs to update your understanding and adjust the current action or plan.
 
 ## Calls and Outcomes
 

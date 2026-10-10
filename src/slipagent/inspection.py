@@ -82,6 +82,20 @@ class IndexedText(Sequence[str]):
     def __len__(self) -> int:
         return self._count
 
+    def continues_line(self, index: int) -> bool:
+        """Whether a display segment continues into the next segment."""
+        self._index.seek(index * _OFFSET.size)
+        offset, length = _OFFSET.unpack(self._index.read(_OFFSET.size))
+        self.text.seek(offset)
+        return bool(length and not self.text.read(length).endswith("\n") and index + 1 < len(self))
+
+    def segment(self, index: int) -> str:
+        """Read one bounded segment, preserving its original line ending."""
+        self._index.seek(index * _OFFSET.size)
+        offset, length = _OFFSET.unpack(self._index.read(_OFFSET.size))
+        self.text.seek(offset)
+        return self.text.read(length)
+
     @overload
     def __getitem__(self, index: int) -> str: ...
     @overload

@@ -29,6 +29,267 @@ async def wait_until(predicate) -> None:
             await asyncio.sleep(.02)
 
 
+async def test_scroll_bottom_link_is_centered_and_returns_feed_to_tail(display):
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        ui.input.text = "keep this draft"
+        ui.write("\n".join(f"Output {line}" for line in range(80)))
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: "Output 79" in "\n".join(snapshot()[:16]))
+            assert "Scroll to Bottom" not in snapshot()[17]
+            ui.transcript.scroll(-20)
+            ui.app.invalidate()
+            await wait_until(lambda: not ui.transcript._following)
+            ui.app.invalidate()
+            await wait_until(lambda: "Scroll to Bottom" in snapshot()[17])
+            assert snapshot()[17].index("Scroll to Bottom") == 42
+            pipe.send_text("\x1b[<0;50;18M\x1b[<0;50;18m")
+            await wait_until(lambda: ui.transcript._following)
+            await wait_until(lambda: "Scroll to Bottom" not in snapshot()[17])
+            assert "Output 79" in "\n".join(snapshot()[:16])
+            assert ui.input.text == "keep this draft"
+        finally:
+            ui.close()
+            await task
+
+
+async def test_cancelled_save_finishes_publication_and_records_diff_before_cleanup(display, tmp_path, monkeypatch):
+    import threading
+    from unittest.mock import Mock
+    from slipagent.editor import FileEditor
+    path = tmp_path / "file.txt"
+    path.write_text("original\n")
+    started, release = threading.Event(), threading.Event()
+    original_save = FileEditor.save
+    def slow_save(file, **kwargs):
+        started.set()
+        assert release.wait(3)
+        original_save(file, **kwargs)
+    monkeypatch.setattr(FileEditor, "save", slow_save)
+    sink, _, output, _, _ = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        ui.__dict__["_user_edits"] = SimpleNamespace(record=Mock(), close=Mock())
+        save = None
+        try:
+            await ui._open_editor_now(path)
+            ui._editor_input.text = "user\n"
+            save = asyncio.create_task(ui._editor_panel.save())
+            assert await asyncio.to_thread(started.wait, 2)
+            save.cancel()
+            await asyncio.sleep(.02)
+            assert not save.done()
+            release.set()
+            result = await asyncio.gather(save, return_exceptions=True)
+            assert isinstance(result[0], asyncio.CancelledError)
+            assert path.read_text() == "user\n"
+            ui.__dict__["_user_edits"].record.assert_called_once()
+        finally:
+            release.set()
+            if save is not None:
+                await asyncio.gather(save, return_exceptions=True)
+            ui._close_transcript()
+
+
+async def test_options_field_isolated_from_prompt_queue_and_draft(display, monkeypatch):
+    from slipagent import options
+    from unittest.mock import Mock
+    monkeypatch.setattr(options, "configured_folder_opener", lambda command: ("/test/opener",) if command else None)
+    saved = Mock()
+    monkeypatch.setattr(options, "save_ui_preference", saved)
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        ui.input.text = "keep this draft"
+        ui.write("Feed stays in place.")
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: "Options" in snapshot()[17])
+            pipe.send_text("\x1bOS")  # F4.
+            await wait_until(lambda: ui._menu_title == "Inspection Options")
+            ui._finish_menu("folder_opener")
+            await wait_until(lambda: ui._options_field_active)
+            await wait_until(lambda: snapshot()[17].startswith("Folder Opener"))
+            assert snapshot()[0].startswith("Feed stays in place.")
+            assert "Folder Opener" not in "\n".join(snapshot()[:17])
+            pipe.send_text("opener --flag {path}\r")
+            await wait_until(lambda: saved.called)
+            saved.assert_called_once_with("folder_opener", "opener --flag {path}")
+            await wait_until(lambda: ui._menu_future is not None)
+            ui._finish_menu("done")
+            await wait_until(lambda: not ui._options_panel.active)
+            assert ui.input.text == "keep this draft"
+            assert ui._lines.empty()
+            assert ui._folder_opener == ("/test/opener",)
+        finally:
+            ui.close()
+            await task
+
+
+async def test_file_line_link_opens_at_target_and_selection_offers_path(display, tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+    from prompt_toolkit.data_structures import Point
+    from prompt_toolkit.mouse_events import MouseEvent, MouseEventType, MouseButton
+    path = tmp_path / "file.txt"
+    path.write_text("one\ntwo\nthree\n")
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
+        request = AsyncMock()
+        ui.__dict__["_user_edits"] = SimpleNamespace(request=request, close=lambda: None)
+        task = asyncio.create_task(ui.run())
+        try:
+            ui.write_file_reference("file.txt", line=3)
+            await wait_until(lambda: "file.txt:3" in snapshot()[0])
+            pipe.send_text("\x1b[<0;7;1M\x1b[<0;7;1m")
+            await wait_until(lambda: request.await_count == 1)
+            request.assert_awaited_once_with(path, 3)
+            ui._selection_start = Point(x=4, y=0)
+            ui._selection_end = Point(x=12, y=0)
+            menu = AsyncMock()
+            monkeypatch.setattr(ui, "_selection_menu", menu)
+            ui._select_transcript(MouseEvent(Point(x=6, y=0), MouseEventType.MOUSE_UP, MouseButton.RIGHT, frozenset()))
+            await wait_until(lambda: menu.await_count == 1)
+            assert menu.call_args.args[1] == path
+        finally:
+            ui.close()
+            await task
+
+
+async def test_editor_mouse_places_cursor_on_text_and_at_line_end_in_blank_space(display, tmp_path):
+    path = tmp_path / "file.txt"
+    path.write_text("first line\nsecond line")
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: ui.app.is_running)
+            await ui._open_editor_now(path)
+            await wait_until(lambda: snapshot()[1].startswith("first line"))
+            pipe.send_text("\x1b[<0;4;2M\x1b[<0;4;2m")
+            await wait_until(lambda: ui._editor_input.buffer.cursor_position == 3)
+            pipe.send_text("\x1b[<0;40;2M\x1b[<0;40;2m")
+            await wait_until(lambda: ui._editor_input.buffer.cursor_position == len("first line"))
+            pipe.send_text("\x1b[<0;40;10M\x1b[<0;40;10m")
+            await wait_until(lambda: ui._editor_input.buffer.cursor_position == len(path.read_text()))
+        finally:
+            ui.close()
+            await task
+
+
+async def test_editor_saves_and_requires_choice_before_discarding(display, tmp_path):
+    from unittest.mock import Mock
+    path = tmp_path / "file.txt"
+    path.write_text("original\n")
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
+        ui.__dict__["_user_edits"] = SimpleNamespace(record=Mock(), close=Mock())
+        ui.input.text = "prompt draft"
+        ui.input.buffer.cursor_position = 3
+        prompt_buffer = ui.input.buffer
+        prompt_document = prompt_buffer.document
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: ui.app.is_running)
+            await ui._open_editor_now(path)
+            await wait_until(lambda: "exit editor" in snapshot()[17])
+            assert "Editor Actions" in snapshot()[18]
+            assert "prompt draft" not in "\n".join(snapshot()[18:23])
+            pipe.send_text("user ")
+            await wait_until(lambda: ui._editor_input.text.startswith("user original"))
+            pipe.send_text("\x13")
+            await wait_until(lambda: path.read_text().startswith("user original"))
+            await wait_until(lambda: not ui._editor_panel.busy)
+            assert ui.__dict__["_user_edits"].record.call_count == 1
+            assert "+user original" in ui.__dict__["_user_edits"].record.call_args.args[1]
+            pipe.send_text("unsaved ")
+            await wait_until(lambda: "unsaved" in ui._editor_input.text)
+            pipe.send_text("\x1b")
+            await wait_until(lambda: ui._menu_title == "Unsaved File Edits")
+            assert ui._editor_active
+            pipe.send_text("\x1b")
+            await wait_until(lambda: ui._menu_future is None)
+            assert ui._editor_active
+            close = asyncio.create_task(ui._close_editor())
+            await wait_until(lambda: ui._menu_future is not None)
+            ui._finish_menu("discard")
+            await close
+            assert not ui._editor_active
+            assert path.read_text() == "user original\n"
+            assert ui.input.text == "prompt draft"
+            assert ui.input.buffer is prompt_buffer
+            assert ui.input.buffer.document == prompt_document
+            ui.__dict__["_user_edits"].close.assert_called_once()
+        finally:
+            ui.close()
+            await task
+
+
+@pytest.mark.parametrize("action", ["copy", "prompt", "absolute", "relative", None])
+async def test_selection_actions_preserve_draft_and_use_reference_paths(display, tmp_path, monkeypatch, action):
+    from unittest.mock import AsyncMock, Mock
+    sink, _, output, _, _ = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
+        ui.input.text = "existing draft"
+        choose = AsyncMock(return_value=action)
+        copy = Mock()
+        monkeypatch.setattr(ui, "choose", choose)
+        monkeypatch.setattr(ui, "_copy_text", copy)
+        try:
+            await ui._selection_menu("selected\ntext", tmp_path / "some folder")
+            assert len(choose.call_args.args[1]) == 4
+            if action == "prompt":
+                assert ui.input.text == "existing draft\nselected\ntext"
+                copy.assert_not_called()
+            else:
+                assert ui.input.text == "existing draft"
+                if action is None:
+                    copy.assert_not_called()
+                else:
+                    expected = {"copy": "selected\ntext", "absolute": str(tmp_path / "some folder"), "relative": "some folder"}
+                    copy.assert_called_once_with(expected[action])
+            choose.reset_mock()
+            await ui._selection_menu("ordinary prose")
+            assert len(choose.call_args.args[1]) == 2
+        finally:
+            ui._close_transcript()
+
+
+async def test_right_click_keeps_selection_and_no_selection_shows_notice(display, monkeypatch):
+    from unittest.mock import AsyncMock
+    from prompt_toolkit.data_structures import Point
+    from prompt_toolkit.mouse_events import MouseEvent, MouseEventType, MouseButton
+    sink, _, output, _, _ = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        menu = AsyncMock()
+        monkeypatch.setattr(ui, "_selection_menu", menu)
+        task = asyncio.create_task(ui.run())
+        try:
+            ui.write("select this text")
+            await wait_until(lambda: ui.app.is_running)
+            ui._transcript_content(100)
+            for kind, x in [(MouseEventType.MOUSE_DOWN, 0), (MouseEventType.MOUSE_UP, 6)]:
+                ui._select_transcript(MouseEvent(Point(x=x, y=0), kind, MouseButton.LEFT, frozenset()))
+            selected = ui.selected_text()
+            for kind in (MouseEventType.MOUSE_DOWN, MouseEventType.MOUSE_UP):
+                ui._select_transcript(MouseEvent(Point(x=3, y=0), kind, MouseButton.RIGHT, frozenset()))
+            await wait_until(lambda: menu.await_count == 1)
+            assert ui.selected_text() == selected
+            menu.assert_awaited_once_with(selected, None)
+            ui._selection_start = ui._selection_end = None
+            ui._select_transcript(MouseEvent(Point(x=3, y=0), MouseEventType.MOUSE_UP, MouseButton.RIGHT, frozenset()))
+            assert "Select text" in str(ui._notification_text())
+        finally:
+            ui.close()
+            await task
+
+
 async def test_read_only_viewer_scrolls_targets_lines_keeps_work_running_and_esc_only_closes(display):
     from unittest.mock import Mock
     sink, _, output, _, snapshot = display
@@ -85,8 +346,10 @@ async def test_artifact_link_opens_colored_diff_without_desktop_and_preserves_no
             await wait_until(lambda: "Read Only" in snapshot()[0])
             assert snapshot()[1].startswith("edit_file 'demo.txt'")
             assert snapshot()[2].strip() == ""
-            assert screen.buffer[6][0].fg == "ff6666"
-            assert screen.buffer[7][0].fg == "66dd88"
+            assert "1        │ -old" in snapshot()[6]
+            assert "1 │ +new" in snapshot()[7]
+            assert screen.buffer[6][16].fg == "ff6666"
+            assert screen.buffer[7][16].fg == "66dd88"
             assert snapshot()[23].rstrip().endswith("Saved diff.")
             pipe.send_text("\x1b")
             await wait_until(lambda: "View Diff" in snapshot()[0])
@@ -792,7 +1055,7 @@ async def test_project_directory_link_requires_opener_and_disables_after_failure
 
 
 @pytest.mark.parametrize("available", [True, False])
-async def test_tool_directory_links_wrap_hover_click_and_preserve_drag_copy(display, tmp_path, monkeypatch, available):
+async def test_tool_directory_links_wrap_hover_click_and_preserve_selection(display, tmp_path, monkeypatch, available):
     from unittest.mock import Mock
     from prompt_toolkit.data_structures import Point
     from prompt_toolkit.mouse_events import MouseEvent, MouseEventType, MouseButton
@@ -830,7 +1093,8 @@ async def test_tool_directory_links_wrap_hover_click_and_preserve_drag_copy(disp
                 launch.assert_called_once_with(directory, ("test-opener",))
                 ui._select_transcript(event(MouseEventType.MOUSE_DOWN))
                 ui._select_transcript(event(MouseEventType.MOUSE_UP, Point(x=x + 5, y=y)))
-                copy.assert_called_once()
+                copy.assert_not_called()
+                assert ui.selected_text()
                 assert launch.call_count == 1
             ui.clear_transcript()
             assert not ui.__dict__["_directory_links"]

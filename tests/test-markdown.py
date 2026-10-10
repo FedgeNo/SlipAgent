@@ -110,7 +110,7 @@ async def test_redirected_answer_plain_by_default_or_markdown_on_request(monkeyp
 
 
 @pytest.mark.parametrize("release_button", [MouseButton.LEFT, MouseButton.UNKNOWN])
-def test_mouse_release_stops_selection_and_copies_once(monkeypatch, release_button):
+def test_mouse_release_stops_dragging_and_retains_selection_without_copying(monkeypatch, release_button):
     with create_pipe_input() as terminal_input:
         ui = TerminalUI(lambda width: "", io.StringIO(), input=terminal_input, output=DummyOutput())
         copied = []
@@ -123,16 +123,16 @@ def test_mouse_release_stops_selection_and_copies_once(monkeypatch, release_butt
             mouse(MouseEventType.MOUSE_DOWN, MouseButton.LEFT, 1)
             mouse(MouseEventType.MOUSE_MOVE, MouseButton.LEFT, 3)
             mouse(MouseEventType.MOUSE_UP, release_button, 4)
-            assert copied == ["bcd"]
+            assert copied == []
             mouse(MouseEventType.MOUSE_MOVE, MouseButton.NONE, 7)
             mouse(MouseEventType.MOUSE_MOVE, MouseButton.LEFT, 7)
             mouse(MouseEventType.MOUSE_UP, release_button, 7)
-            assert copied == ["bcd"]
+            assert copied == []
             assert ui.selected_text() == "bcd"
             mouse(MouseEventType.MOUSE_DOWN, MouseButton.RIGHT, 6)
-            assert ui.selected_text() == ""
+            assert ui.selected_text() == "bcd"
             mouse(MouseEventType.MOUSE_MOVE, MouseButton.LEFT, 7)
-            assert ui.selected_text() == ""
+            assert ui.selected_text() == "bcd"
         finally:
             ui._close_transcript()
 

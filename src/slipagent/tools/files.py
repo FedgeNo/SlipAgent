@@ -55,7 +55,7 @@ def _atomic_write_bytes(workspace: Workspace, target: Path, encoded: bytes) -> N
     resolved by Workspace. New files use the process umask; replacements keep mode.
     """
     workspace.resolve(target)
-    # Outside targets in danger mode use their filesystem root as the anchor;
+    # Permitted external targets use their filesystem root as the anchor;
     # retain descriptor-based traversal and atomic replacement in both modes.
     anchor = workspace.root
     if not workspace.contains(target):

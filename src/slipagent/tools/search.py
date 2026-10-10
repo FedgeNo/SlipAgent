@@ -226,7 +226,7 @@ class GlobTool(Tool):
         if not base.exists():
             return ToolResult.error(f"Path not found: {self.workspace.relative(base)}")
 
-        # External searches in danger mode match relative to the requested
+        # Permitted external searches match relative to the requested
         # directory, while their displayed results remain absolute and reusable.
         match_root = self.workspace.root
         if not self.workspace.contains(base):

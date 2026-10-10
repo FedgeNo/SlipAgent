@@ -1,8 +1,8 @@
 """Path confinement for built-in file, navigation, search, and Git tools.
 
 These tools funnel project paths through `Workspace.resolve`, which
-resolves symlinks and, by default, rejects anything outside the project root. That
-rejects ordinary attempts to reach outside the project. This is not an OS
+resolves symlinks and allows the project root and configured system temp directory.
+Other paths require danger mode. This is not an OS
 sandbox: shell/MCP subprocesses have process permissions, and session log
 storage is owned separately by the harness. Danger mode lifts path confinement
 without changing the root used for relative paths or the process's permissions.
@@ -11,6 +11,7 @@ without changing the root used for relative paths or the process's permissions.
 from __future__ import annotations
 
 import os
+import tempfile
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -67,8 +68,8 @@ class Workspace:
         """Resolve a model-supplied path, enforcing the current access mode.
 
         Relative paths are anchored to the root. Absolute paths are allowed but
-        confined unless danger mode is enabled. Symlinks are followed before
-        the containment check so a link cannot bypass confinement.
+        confined to the project or system temp directory unless danger mode is
+        enabled. Symlinks are followed before the access check.
         """
         text = str(raw)
         if not text.strip():
@@ -79,12 +80,22 @@ class Workspace:
             candidate = self.root / candidate
 
         resolved = candidate.resolve()
-        if not self.access.danger and not self.contains(resolved):
+        if not self.allows(resolved):
             raise WorkspaceError(
                 f"path is outside the workspace: {text!r} "
                 f"(workspace root is {self.root})"
             )
         return resolved
+
+    @property
+    def temporary_directory(self) -> Path:
+        """The system-configured temporary directory, resolved through symlinks."""
+        return Path(tempfile.gettempdir()).resolve()
+
+    def allows(self, path: Path) -> bool:
+        """Whether a resolved path is accessible under the current policy."""
+        return (self.access.danger or self.contains(path)
+                or path.is_relative_to(self.temporary_directory))
 
     def contains(self, path: Path) -> bool:
         """True when `path` is the root itself or lives beneath it."""
@@ -107,7 +118,7 @@ class Workspace:
         Uses `os.walk` with in-place pruning so a large `.git` or `node_modules`
         is never descended into, rather than filtering an already-complete walk.
 
-        With confinement enabled, symlinks outside the root are skipped: `os.walk` does not
+        With confinement enabled, symlinks outside allowed directories are skipped: `os.walk` does not
         descend into symlinked directories, but it does list symlinked *files* in
         `filenames`, and reading one would hand out content from beyond the
         sandbox even though `resolve` refuses the same path when asked directly.
@@ -122,7 +133,7 @@ class Workspace:
             current = Path(dirpath)
             for filename in filenames:
                 candidate = current / filename
-                if not self.access.danger and candidate.is_symlink() and not self.contains(candidate.resolve()):
+                if candidate.is_symlink() and not self.allows(candidate.resolve()):
                     continue
                 yield candidate
 
@@ -130,7 +141,7 @@ class Workspace:
         """Yield `(path, is_dir)` for every entry beneath `start`, pruned.
 
         As in `iter_files`, confinement skips entries whose symlink target lands
-        outside the root. Danger mode includes them.
+        outside the project and system temp directory. Danger mode includes them.
         """
         base = self.resolve(start) if start is not None else self.root
         if not base.is_dir():
@@ -142,11 +153,11 @@ class Workspace:
             current = Path(dirpath)
             for name in dirnames:
                 entry = current / name
-                if not self.access.danger and entry.is_symlink() and not self.contains(entry.resolve()):
+                if entry.is_symlink() and not self.allows(entry.resolve()):
                     continue
                 yield entry, True
             for name in filenames:
                 entry = current / name
-                if not self.access.danger and entry.is_symlink() and not self.contains(entry.resolve()):
+                if entry.is_symlink() and not self.allows(entry.resolve()):
                     continue
                 yield entry, False

@@ -4,7 +4,7 @@
 
 Find files and directories by name pattern.
 
-Patterns are matched against the workspace-relative path (or relative to the searched directory for external paths in danger mode), so '*.py', 'src/**/*.ts', and '**/test_*.py' all work.
+Patterns are matched against the workspace-relative path (or relative to the searched directory for permitted external paths), so '*.py', 'src/**/*.ts', and '**/test_*.py' all work.
 
 ## Directory Results
 

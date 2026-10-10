@@ -1317,8 +1317,8 @@ pipe writes. Unsupported operations and missing executables return tool errors.
 
 Each query supplies current file contents and reports workspace file changes
 since the prior query; generated/dependency trees follow the normal search
-exclusions. Results outside the workspace are counted and omitted unless danger
-mode permits them. Server
+exclusions. Results outside the workspace and configured system temp directory
+are counted and omitted unless danger mode permits them. Server
 processes have the same OS permissions as shell/MCP processes. Navigation does
 not apply edits requested by a server. Ordinary search/read tools remain useful
 when the language server cannot resolve a symbol.
@@ -1376,8 +1376,12 @@ appear exactly once, unless `replace_all` is set. LF targets also match CRLF or
 CR line endings. A mismatch returns an error; matching alone does not prove
 the model read the file or that its replacement is correct.
 
-**Filesystem tool paths are confined to the workspace by default.** Paths resolve through a symlink-aware check that
-rejects anything landing outside the workspace root, so `../../.ssh/config`
+**Filesystem tool paths allow the workspace and system temporary directory by default.**
+The system temp path is selected by Python's `tempfile.gettempdir()` from the
+system configuration and supplied in the model prompt. Relative paths remain
+anchored to the project; use absolute paths for temporary files.
+Paths resolve through a symlink-aware check that
+rejects anything landing outside these directories, so `../../.ssh/config`
 is rejected by file, navigation, and search tools unless `/danger` or `--danger`
 is active. `run_command` and MCP servers
 run with the harness process's permissions and can access paths outside the

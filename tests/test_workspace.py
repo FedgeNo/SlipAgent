@@ -3,10 +3,56 @@
 from __future__ import annotations
 
 from pathlib import Path
+import tempfile
 
 import pytest
 
 from slipagent.workspace import Workspace, WorkspaceError
+
+
+def test_system_temp_access_preserves_project_identity(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    workspace = Workspace(project)
+    temporary = Path(tempfile.gettempdir()).resolve()
+    target = temporary / "scratch.txt"
+    assert workspace.temporary_directory == temporary
+    assert workspace.resolve(target) == target
+    assert not workspace.contains(target)
+    assert workspace.relative(target) == str(target)
+    assert workspace.resolve("scratch.txt") == project / "scratch.txt"
+    with pytest.raises(WorkspaceError):
+        workspace.resolve(tmp_path / "unrelated.txt")
+
+
+def test_system_temp_symlinks_cannot_escape(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    workspace = Workspace(project)
+    temporary = workspace.temporary_directory
+    outside = tmp_path / "outside.txt"
+    outside.write_text("private")
+    (temporary / "escape").symlink_to(outside)
+    (temporary / "ok.txt").write_text("scratch")
+    with pytest.raises(WorkspaceError):
+        workspace.resolve(temporary / "escape")
+    assert list(workspace.iter_files(temporary)) == [temporary / "ok.txt"]
+    assert list(workspace.iter_entries(temporary)) == [(temporary / "ok.txt", False)]
+
+
+@pytest.mark.asyncio
+async def test_native_tools_can_write_and_read_system_temp(tmp_path: Path) -> None:
+    from slipagent.tools.files import ReadFileTool, WriteFileTool
+
+    project = tmp_path / "project"
+    project.mkdir()
+    workspace = Workspace(project)
+    target = workspace.temporary_directory / "scratch.txt"
+    written = await WriteFileTool(workspace).run(path=str(target), content="scratch\n")
+    assert not written.is_error
+    read = await ReadFileTool(workspace).run(path=str(target))
+    assert not read.is_error
+    assert "scratch" in read.content
 
 
 def test_resolves_relative_against_root(workspace: Workspace) -> None:

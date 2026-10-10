@@ -558,8 +558,9 @@ servers of changed, created, and deleted files, excluding generated/dependency
 trees through the normal workspace traversal. The current file is always opened
 explicitly even if excluded from recursive traversal. Configuration requests are
 answered from explicit settings. Server-originated workspace edits are refused.
-Locations and symlinks follow `Workspace.resolve`: confinement counts and omits
-outside results, while danger mode permits them. Hover and location pages are bounded. Errors retire the failed client
+Locations and symlinks follow `Workspace.resolve`: confinement permits the project
+and configured system temp directory, while danger mode permits other paths.
+Hover and location pages are bounded. Errors retire the failed client
 so later explicit calls can start cleanly.
 
 ## Edit Recovery, Checks and Loop Detection
@@ -762,7 +763,9 @@ to the model along with the active generation number.
   subprocesses with the harness's operating-system permissions.
   The frozen workspace retains its root and owns a mutable `WorkspaceAccess`
   object shared by all tools and session services. `/danger` and `--danger` lift
-  only the path boundary; `contains` still answers geometric containment and
+  only the path boundary. The configured `tempfile.gettempdir()` is accessible
+  in either mode and its resolved path is supplied in every request.
+  `contains` still answers geometric containment and
   external display paths remain absolute. Changes queue during work and apply
   after the active response and tool batch finish. Reset, resume,
   and compatible component reloads preserve this process setting; journals do
@@ -771,7 +774,7 @@ to the model along with the active generation number.
   External atomic writes retain descriptor-based traversal from the target's
   filesystem root. Git ancestor discovery stops at the filesystem root in danger
   mode. External instruction scopes include the target's ancestors and are
-  omitted from snapshots when confinement is restored. Installing changes to
+  omitted from snapshots when inaccessible under the current policy. Installing changes to
   `workspace.py` requires a process restart, as with other stable contracts.
 - **Search:** directory listing includes dotfiles and environments. Recursive
   search prunes generated/dependency directories; explicit paths can target them.

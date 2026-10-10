@@ -384,7 +384,8 @@ class Agent:
             if workspace.access.danger:
                 access = (load_prompt('workspace-access-on.md'))
             sections.add("access", "Workspace Access",
-                         load_prompt('workspace-access.md', access=access.strip(), workspace=workspace.root),
+                         load_prompt('workspace-access.md', access=access.strip(), workspace=workspace.root,
+                                     temporary_directory=workspace.temporary_directory),
                          15, owner="workspace")
         instructions = self.registry.services.get("project_instructions")
         if instructions is not None:

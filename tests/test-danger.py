@@ -99,6 +99,8 @@ async def test_external_instructions_and_access_mode_reach_each_request(tmp_path
         view = await agent._context_view(registry.specs(), 1)
         text = "\n".join(content_text(message.content) for message in view)
         assert "Danger Mode OFF" in text and "Danger Mode ON" not in text
+        assert str(workspace.temporary_directory) in text
+        assert "scratch files" in text
         assert "External rule: preserve CRLF." not in text
         with pytest.raises(WorkspaceError, match="outside the workspace"):
             workspace.resolve(target)

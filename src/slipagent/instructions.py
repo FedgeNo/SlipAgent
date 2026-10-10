@@ -102,9 +102,8 @@ class ProjectInstructions:
     def snapshot(self) -> dict[str, str]:
         result = {".": load_project_instructions(self.workspace)}
         for scope in sorted(self.scopes - {"."}):
-            # Retain visited external scopes for a later re-enable, but neither
-            # read nor present them while confinement is restored.
-            if Path(scope).is_absolute() and not self.workspace.access.danger:
+            # Retain inaccessible scopes for a later access-mode change.
+            if Path(scope).is_absolute() and not self.workspace.allows(Path(scope).resolve()):
                 continue
             directory = self.workspace.resolve(scope)
             if directory.exists():

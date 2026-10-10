@@ -623,6 +623,11 @@ your draft and prompt history. Scrolling back pauses automatic scrolling until y
 return to the bottom. The CWD is the workspace where tools run; long paths
 and model names shorten to fit narrow terminals.
 
+Short notices appear right-aligned beside the status readout on the bottom row and remain
+visible while browsing selectors or the context view. A notice stays until it
+is replaced or cleared. When no notice is active, this area rotates tips for
+available controls. Folder-launch failures also remain in the transcript.
+
 When a native file explorer is available, the CWD readout is an underlined link
 and tool calls with an existing directory `path` show a link to that directory.
 Click a directory link to open it; drag across output to copy text as usual.

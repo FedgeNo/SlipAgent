@@ -1411,37 +1411,37 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             assert "Follow-ups queue" in startup
             assert "Ctrl-D quits" in startup
             os.write(master, b"/danger\r")
-            wait_for(lambda: screen.display[23].rstrip().endswith(" | Danger Mode"))
+            wait_for(lambda: " | Danger Mode" in screen.display[23])
             start = screen.display[23].index("Danger Mode")
             assert all(screen.buffer[23][column].fg == "ff6666" for column in range(start, start + len("Danger Mode")))
             os.write(master, b"/danger off\r")
             wait_for(lambda: "Danger Mode" not in screen.display[23])
             os.write(master, b"/menu\r")
-            wait_for(lambda: "Enter or click = select" in screen.display[23])
-            assert screen.display[18].strip() == "Commands"
+            wait_for(lambda: "Enter/click select" in screen.display[23])
+            assert screen.display[19].strip() == "Commands"
             os.write(master, b"\x1b")
-            wait_for(lambda: "Ready" in screen.display[18])
+            wait_for(lambda: "Ready" in screen.display[19])
             assert not stub.requests
             os.write(master, b"/menu\r")
-            wait_for(lambda: "Enter or click = select" in screen.display[23])
+            wait_for(lambda: "Enter/click select" in screen.display[23])
             from slipagent.cli import MENU_OPTIONS
             tools_index = next(index for index, (command, _) in enumerate(MENU_OPTIONS) if command == "/tools")
             os.write(master, b"\x1b[B" * tools_index + b"\r")
-            wait_for(lambda: "Ready" in screen.display[18] and "/tools" in screen.display[19])
+            wait_for(lambda: "Ready" in screen.display[19] and "/tools" in screen.display[20])
             assert "read_file" not in "\n".join(screen.display[:17])
             os.write(master, b"\r")
-            wait_for(lambda: "Ready" in screen.display[18] and "read_file" in "\n".join(screen.display[:17]))
+            wait_for(lambda: "Ready" in screen.display[19] and "read_file" in "\n".join(screen.display[:17]))
             assert not stub.requests
             os.write(master, b"go\r")
             wait_for(started.is_set)
             os.write(master, b"/rename Work in progress\r")
             wait_for(lambda: screen.title.endswith("Work in progress | SlipAgent"))
             os.write(master, b"/stop\r")
-            wait_for(lambda: "Stopping After This Step" in screen.display[18])
+            wait_for(lambda: "Stopping After This Step" in screen.display[19])
             os.write(master, b"queued followup\r")
             wait_for(lambda: "queued followup" in "\n".join(screen.display[:17]))
             release.set()
-            wait_for(lambda: "Stopped after the current step" in "\n".join(screen.display[:17]) and "Ready" in screen.display[18])
+            wait_for(lambda: "Stopped after the current step" in "\n".join(screen.display[:17]) and "Ready" in screen.display[19])
             assert (project_dir / "finished.txt").read_text() == "completed"
             assert len(stub.requests) == 1
             os.write(master, b"continue\r")
@@ -1457,13 +1457,13 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             wait_for(lambda: screen.title == f"{project_dir} | SlipAgent")
             wait_for(lambda: "conversation cleared" in "\n".join(screen.display[:17]))
             os.write(master, b"/resume\r")
-            wait_for(lambda: screen.display[18].strip() == "Resume Session")
+            wait_for(lambda: screen.display[19].strip() == "Resume Session")
             os.write(master, b"\x1b")
-            wait_for(lambda: "Ready" in screen.display[18])
+            wait_for(lambda: "Ready" in screen.display[19])
             assert screen.title == f"{project_dir} | SlipAgent"
             assert "conversation cleared" in "\n".join(screen.display[:17])
             os.write(master, b"/resume\r")
-            wait_for(lambda: screen.display[18].strip() == "Resume Session")
+            wait_for(lambda: screen.display[19].strip() == "Resume Session")
             os.write(master, b"\x1b[B\r")
             wait_for(lambda: screen.title == "Work in progress | SlipAgent")
             wait_for(lambda: "restored " in "\n".join(screen.display[:17]))

@@ -21,7 +21,7 @@ from prompt_toolkit.input import Input
 from prompt_toolkit.history import DummyHistory
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.keys import Keys
-from prompt_toolkit.layout import Dimension, DynamicContainer, Float, FloatContainer, HSplit, Layout, Window
+from prompt_toolkit.layout import Dimension, DynamicContainer, Float, FloatContainer, HSplit, Layout, VSplit, Window, WindowAlign
 from prompt_toolkit.layout.controls import FormattedTextControl, UIContent, UIControl
 from prompt_toolkit.layout.mouse_handlers import MouseHandlers
 from prompt_toolkit.layout.processors import Processor, Transformation, TransformationInput
@@ -38,7 +38,7 @@ from .markdown import THEMES, MarkdownRenderer, code_blocks
 from .clipboard import clipboard_sequence, copy_to_clipboard
 from .explorer import folder_opener, open_folder
 
-FOOTER_ROWS = 6
+FOOTER_ROWS = 5
 PULSE_FRAMES = ("▌", "▛", "▀", "▜", "▐", "▟", "▄", "▙")
 MIN_REDRAW_INTERVAL = 1 / 30
 
@@ -211,6 +211,7 @@ class TerminalUI:
         self._ensure_context()
         self._ensure_prompt()
         self._ensure_menu()
+        self._menu_window.height = Dimension.exact(FOOTER_ROWS - 2)
         # Attach during layout rebuilds so existing sessions gain input wrapping.
         processors = self.input.control.input_processors or []
         if not any(isinstance(processor, WordWrapInput) for processor in processors):
@@ -220,15 +221,12 @@ class TerminalUI:
         footer = HSplit([
             Window(FormattedTextControl(lambda: self._activity()), height=1),
             self.input,
-            Window(height=1),
-            Window(FormattedTextControl(lambda: self._status_fragments()),
-                   height=1, style="class:status"),
+            self._bottom_row(menu=False),
         ], height=FOOTER_ROWS)
         menu_footer = HSplit([
             Window(FormattedTextControl(lambda: self._menu_title), height=1, style="class:menu-title"),
             self._menu_window,
-            Window(FormattedTextControl(lambda: self._menu_hint()),
-                   height=1, style="class:status"),
+            self._bottom_row(menu=True),
         ], height=FOOTER_ROWS)
         context = HSplit([
             Window(FormattedTextControl("Context — latest model request | Ctrl+\\: close"), height=1, style="class:status"),
@@ -259,6 +257,50 @@ class TerminalUI:
             get_cursor_position=lambda: Point(x=0, y=self._menu_index),
         ), height=FOOTER_ROWS - 2, wrap_lines=True)
 
+    def _notice_width(self) -> int:
+        columns = self.output.get_size().columns
+        return max(1, min(44, columns // 2, columns - 28))
+
+    def _readout_width(self) -> int:
+        return max(1, self.output.get_size().columns - self._notice_width() - 1)
+
+    def _bottom_row(self, *, menu: bool) -> VSplit:
+        return VSplit([
+            Window(FormattedTextControl(lambda: self._menu_hint() if menu else self._status_fragments()),
+                   height=1, style="class:status"),
+            Window(width=1, height=1),
+            self._notification_window(),
+        ], height=1)
+
+    def _notification_window(self) -> Window:
+        return Window(FormattedTextControl(self._notification_text), height=1,
+                      width=lambda: Dimension.exact(self._notice_width()),
+                      align=WindowAlign.RIGHT, style="class:status", wrap_lines=False)
+
+    def notify(self, text: str) -> None:
+        """Show a notice until replaced or explicitly cleared with an empty string."""
+        self.__dict__["_notification"] = " ".join(text.split())
+        self.app.invalidate()
+
+    def _notification_text(self) -> str:
+        text = self.__dict__.get("_notification", "")
+        if not text:
+            tips = ["Drag across output to copy text."]
+            if not self.working and self._input_label == "> " and self._menu_future is None:
+                tips.append("Click Commands to browse commands.")
+            if self.__dict__.get("_folder_opener") is not None:
+                tips.append("Click directory links to open folders.")
+            text = tips[int(time.monotonic() // 15) % len(tips)]
+        columns = self._notice_width()
+        if display_width(text) <= columns:
+            return str(text)
+        result = ""
+        for cluster in iter_graphemes(text):
+            if display_width(result + cluster) > columns - 1:
+                break
+            result += cluster
+        return result + "…"
+
     def _menu_fragments(self) -> StyleAndTextTuples:
         fragments: StyleAndTextTuples = []
         for index, (_, label) in enumerate(self._menu_options):
@@ -283,11 +325,13 @@ class TerminalUI:
         """Keep access indicators visible even while the menu replaces readouts."""
         callback = getattr(self, "_status_suffix", None)
         suffix = callback() if callback is not None else ""
-        remaining = max(0, self.output.get_size().columns - display_width(
+        remaining = max(0, self._readout_width() - display_width(
             fragment_list_to_text(to_formatted_text(ANSI(suffix)))))
         hint = "↑/↓ or wheel = move | Enter or click = select | Esc = back"
         if len(hint) > remaining:
             hint = "↑↓/wheel move | Enter/click select | Esc"
+        if len(hint) > remaining:
+            hint = "↑↓/wheel Enter/click Esc"
         if len(hint) > remaining:
             hint = hint[:remaining - 1] + "…" if remaining else ""
         return ANSI(hint + suffix)
@@ -347,7 +391,7 @@ class TerminalUI:
         return None
 
     def _status_fragments(self) -> StyleAndTextTuples:
-        fragments = to_formatted_text(ANSI(self._status(self.output.get_size().columns)))
+        fragments = to_formatted_text(ANSI(self._status(self._readout_width())))
         if self.__dict__.get("_folder_opener") is None:
             return fragments
         text = fragment_list_to_text(fragments)
@@ -387,6 +431,7 @@ class TerminalUI:
             return
         if not await asyncio.to_thread(open_folder, directory, opener):
             self._folder_opener = None
+            self.notify("Could not open folder.")
             self.write(f"Could not open {directory} in the native file explorer.")
             self.app.invalidate()
 

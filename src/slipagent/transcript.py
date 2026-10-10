@@ -304,6 +304,7 @@ class WrappedTranscript:
     def append(
         self, text: str, *, first: bool,
         continuation_indents: dict[int, int] | None = None,
+        extra_style: str = "",
     ) -> None:
         """Append text; indent overrides use zero-based source lines in this chunk."""
         self.finish_markdown()
@@ -321,6 +322,7 @@ class WrappedTranscript:
         interval = max(64, self.columns * 4)
         received = 0
         for style, value in self._ansi.feed(text):
+            style += extra_style
             for char in value:
                 if char == "\n":
                     self._settle(final=True)

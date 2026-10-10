@@ -623,6 +623,14 @@ your draft and prompt history. Scrolling back pauses automatic scrolling until y
 return to the bottom. The CWD is the workspace where tools run; long paths
 and model names shorten to fit narrow terminals.
 
+When a native file explorer is available, the CWD readout is an underlined link
+and tool calls with an existing directory `path` show a link to that directory.
+Click a directory link to open it; drag across output to copy text as usual.
+The CWD link opens the project directory. Linux requires a desktop session and
+`xdg-open` or `gio`; macOS uses `open`, and Windows uses its default folder
+handler. Without an available opener, paths remain plain text. A failed launch
+reports the failure and disables directory links for that session.
+
 The nearest preceding green line starting with `>` pins to the top as you scroll.
 Scrolling up into an older task shows its prompt line; scrolling down restores
 the newer one. Submitting another task or queued follow-up keeps the preceding

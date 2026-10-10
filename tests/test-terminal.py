@@ -423,6 +423,85 @@ async def test_ready_commands_link_preserves_draft_and_inserts_command(display):
             await task
 
 
+@pytest.mark.parametrize("available", [True, False])
+async def test_project_directory_link_requires_opener_and_disables_after_failure(display, tmp_path, monkeypatch, available):
+    from slipagent import terminal
+    from unittest.mock import Mock
+    sink, _, output, screen, snapshot = display
+    monkeypatch.setattr(terminal, "folder_opener", lambda: ("test-opener",) if available else None)
+    launch = Mock(return_value=False)
+    monkeypatch.setattr(terminal, "open_folder", launch)
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "project  │  model: test  │  free: 42", sink,
+                        input=pipe, output=output, project_directory=tmp_path)
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: "project" in snapshot()[23])
+            assert screen.buffer[23][0].underscore is available
+            assert not screen.buffer[23][11].underscore
+            if available:
+                pipe.send_text("\x1b[<35;2;24M")
+                await wait_until(lambda: snapshot() and screen.buffer[23][0].reverse)
+            pipe.send_text("\x1b[<0;2;24M\x1b[<0;2;24m")
+            if available:
+                await wait_until(lambda: "Could not open" in "\n".join(snapshot()))
+                launch.assert_called_once_with(tmp_path, ("test-opener",))
+                assert not screen.buffer[23][0].underscore
+            else:
+                await asyncio.sleep(.05)
+                launch.assert_not_called()
+            assert ui._lines.empty()
+        finally:
+            ui.close()
+            await task
+
+
+@pytest.mark.parametrize("available", [True, False])
+async def test_tool_directory_links_wrap_hover_click_and_preserve_drag_copy(display, tmp_path, monkeypatch, available):
+    from unittest.mock import Mock
+    from prompt_toolkit.data_structures import Point
+    from prompt_toolkit.mouse_events import MouseEvent, MouseEventType, MouseButton
+    from slipagent import terminal
+    sink, _, output, _, _ = display
+    directory = tmp_path / "directory with spaces"
+    directory.mkdir()
+    monkeypatch.setattr(terminal, "folder_opener", lambda: ("test-opener",) if available else None)
+    launch = Mock(return_value=True)
+    monkeypatch.setattr(terminal, "open_folder", launch)
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
+        renderer = Renderer(Style(False), sink, False)
+        renderer.terminal = ui
+        renderer.handle(AgentEvent(kind="tool_start", tool_call=ToolCall(id="directory", name="list_dir", arguments={"path": directory.name})))
+        for width in (30, 100):
+            content = ui._transcript_content(width)
+            links = [(y, sum(len(t) for _, t, *_ in content.get_line(y)[:i]))
+                     for y in range(content.line_count)
+                     for i, (style, _, *_) in enumerate(content.get_line(y)) if "class:clickable" in style]
+            assert bool(links) is available
+        if available:
+            y, x = links[0]
+            point = Point(x=x, y=y)
+            def event(kind, position=point):
+                return MouseEvent(position, kind, MouseButton.LEFT, frozenset())
+            ui._select_transcript(event(MouseEventType.MOUSE_MOVE))
+            assert any("class:hover" in style for style, _, *_ in ui._transcript_content(100).get_line(y))
+            copy = Mock()
+            monkeypatch.setattr(ui, "_copy_text", copy)
+            with set_app(ui.app):
+                ui._select_transcript(event(MouseEventType.MOUSE_DOWN))
+                ui._select_transcript(event(MouseEventType.MOUSE_UP))
+                await asyncio.sleep(.05)
+                launch.assert_called_once_with(directory, ("test-opener",))
+                ui._select_transcript(event(MouseEventType.MOUSE_DOWN))
+                ui._select_transcript(event(MouseEventType.MOUSE_UP, Point(x=x + 5, y=y)))
+                copy.assert_called_once()
+                assert launch.call_count == 1
+            ui.clear_transcript()
+            assert not ui.__dict__["_directory_links"]
+        ui._close_transcript()
+
+
 async def test_danger_status_suffix_is_red_last_and_survives_resize(display, tmp_path):
     from types import SimpleNamespace
     from slipagent.workspace import Workspace

@@ -8,6 +8,7 @@ import re
 import time
 from collections.abc import Callable
 from typing import TextIO
+from pathlib import Path
 
 from prompt_toolkit import Application
 from prompt_toolkit.buffer import Buffer
@@ -35,6 +36,7 @@ from .transcript import TranscriptFile, WrappedTranscript
 from .palette import MUTED_COLOR, USER_PROMPT_STYLE
 from .markdown import THEMES, MarkdownRenderer, code_blocks
 from .clipboard import clipboard_sequence, copy_to_clipboard
+from .explorer import folder_opener, open_folder
 
 FOOTER_ROWS = 6
 PULSE_FRAMES = ("▌", "▛", "▀", "▜", "▐", "▟", "▄", "▙")
@@ -165,10 +167,13 @@ class TerminalUI:
         self, status: Callable[[int], str], stream: TextIO, *, color: bool = True,
         input: Input | None = None, output: Output | None = None,
         status_suffix: Callable[[], str] | None = None,
+        project_directory: Path | None = None,
     ) -> None:
         self.output = output if output is not None else create_output(stdout=stream)
         self._status = status
         self._status_suffix = status_suffix
+        self._project_directory = project_directory
+        self._folder_opener = folder_opener() if project_directory is not None else None
         self._lines: asyncio.Queue[str | None] = asyncio.Queue()
         self._raw_output = TranscriptFile()
         self._block_starts: set[int] = set()
@@ -216,7 +221,7 @@ class TerminalUI:
             Window(FormattedTextControl(lambda: self._activity()), height=1),
             self.input,
             Window(height=1),
-            Window(FormattedTextControl(lambda: ANSI(self._status(self.output.get_size().columns))),
+            Window(FormattedTextControl(lambda: self._status_fragments()),
                    height=1, style="class:status"),
         ], height=FOOTER_ROWS)
         menu_footer = HSplit([
@@ -339,6 +344,85 @@ class TerminalUI:
             self.__dict__["_hovered_control"] = "commands"
         elif event.event_type == MouseEventType.MOUSE_UP and event.button == MouseButton.LEFT:
             self.app.create_background_task(self._choose_command())
+        return None
+
+    def _status_fragments(self) -> StyleAndTextTuples:
+        fragments = to_formatted_text(ANSI(self._status(self.output.get_size().columns)))
+        if self.__dict__.get("_folder_opener") is None:
+            return fragments
+        text = fragment_list_to_text(fragments)
+        cwd, separator, _ = text.partition("  │  ")
+        if not separator or cwd.startswith("model:"):
+            return fragments
+        remaining = len(cwd)
+        result: StyleAndTextTuples = []
+        for fragment in fragments:
+            style, part = fragment[:2]
+            length = min(remaining, len(part))
+            if length:
+                link_style = style + " class:clickable"
+                if self.__dict__.get("_hovered_control") == "folder":
+                    link_style += " class:hover"
+                result.append((link_style, part[:length], self._folder_mouse))
+                remaining -= length
+            if length < len(part):
+                result.append((style, part[length:]))
+        return result
+
+    def _folder_mouse(self, event: MouseEvent) -> object:
+        if event.event_type == MouseEventType.MOUSE_MOVE:
+            self.__dict__["_hovered_control"] = "folder"
+        elif event.event_type == MouseEventType.MOUSE_UP and event.button == MouseButton.LEFT:
+            self.app.create_background_task(self._explore_project())
+        return None
+
+    async def _explore_project(self) -> None:
+        directory = self.__dict__.get("_project_directory")
+        if directory is not None:
+            await self._explore_directory(directory)
+
+    async def _explore_directory(self, directory: Path) -> None:
+        opener = self.__dict__.get("_folder_opener")
+        if opener is None:
+            return
+        if not await asyncio.to_thread(open_folder, directory, opener):
+            self._folder_opener = None
+            self.write(f"Could not open {directory} in the native file explorer.")
+            self.app.invalidate()
+
+    def write_directory_reference(self, value: str) -> None:
+        root = self.__dict__.get("_project_directory")
+        if root is None or self.__dict__.get("_folder_opener") is None:
+            return
+        try:
+            directory = (root / value).resolve()
+            exists = directory.is_dir()
+        except OSError:
+            return
+        if not exists:
+            return
+        self._ensure_transcript()
+        links = self.__dict__.setdefault("_directory_links", {})
+        links[len(self._raw_output)] = directory
+        label = re.sub(r"[\x00-\x1f\x7f]", lambda match: f"\\x{ord(match[0]):02x}", str(directory))
+        self.write(f"    {label}\n")
+
+    def _directory_at(self, point: Point) -> Path | None:
+        if self._flow is None or self.__dict__.get("_folder_opener") is None:
+            return None
+        rows = self._flow.content_rows()
+        row = self._flow.get_row(point.y) if 0 <= point.y < len(self._flow.rows) else (
+            rows[point.y - len(self._flow.rows)] if 0 <= point.y - len(self._flow.rows) < len(rows) else []
+        )
+        column = 0
+        for style, text, *_ in row:
+            end = column + display_width(text)
+            if column <= point.x < end:
+                for token in style.split():
+                    if token.startswith("class:directory-"):
+                        directory = self.__dict__.get("_directory_links", {}).get(int(token.removeprefix("class:directory-")))
+                        return directory if isinstance(directory, Path) else None
+            column = end
         return None
 
     def _ensure_prompt(self) -> None:
@@ -658,6 +742,7 @@ class TerminalUI:
         self._close_transcript()
         self._raw_output = archive
         self._block_starts.clear()
+        self.__dict__.setdefault("_directory_links", {}).clear()
         self._continuation_indents.clear()
         self._markdown_chunks.clear()
         self._markdown_finals.clear()
@@ -758,6 +843,9 @@ class TerminalUI:
 
     def _select_transcript(self, event: MouseEvent) -> object:
         self._ensure_transcript()
+        directory = self._directory_at(event.position)
+        if event.event_type == MouseEventType.MOUSE_MOVE and directory is not None:
+            self.__dict__["_hovered_control"] = ("directory", directory)
         selecting_button = event.button in {MouseButton.LEFT, MouseButton.UNKNOWN}
         if event.event_type == MouseEventType.MOUSE_DOWN:
             self._selection_dragging = selecting_button
@@ -776,6 +864,10 @@ class TerminalUI:
             if event.button in {MouseButton.RIGHT, MouseButton.MIDDLE}:
                 self._selection_start = self._selection_end = None
             else:
+                if directory is not None and self._selection_start == event.position:
+                    self._selection_start = self._selection_end = None
+                    self.app.create_background_task(self._explore_directory(directory))
+                    return None
                 self._selection_end = event.position
                 text = self.selected_text()
                 if text:
@@ -890,7 +982,8 @@ class TerminalUI:
                                      final=index in self._markdown_finals)
             else:
                 flow.append(self._raw_output[index], first=index in self._block_starts,
-                            continuation_indents=self._continuation_indents.get(index))
+                            continuation_indents=self._continuation_indents.get(index),
+                            extra_style=f" class:directory-{index}" if index in self.__dict__.get("_directory_links", {}) else "")
             if index in self._queued_notices:
                 self._notice_rows[index] = (start, len(flow.rows))
         self._wrapped_count = len(self._raw_output)
@@ -914,9 +1007,23 @@ class TerminalUI:
                                 highlighted.append((style + " reverse" if selected else style, cluster))
                                 column += max(0, display_width(cluster))
                         return highlighted
-                return fragments
+                return decorate_links(fragments)
             offset = index - complete
-            return preview[offset] if offset < len(preview) else []
+            return decorate_links(preview[offset]) if offset < len(preview) else []
+
+        def decorate_links(fragments: StyleAndTextTuples) -> StyleAndTextTuples:
+            if self.__dict__.get("_folder_opener") is None:
+                return fragments
+            result: StyleAndTextTuples = []
+            for style, text, *_ in fragments:
+                for token in style.split():
+                    if token.startswith("class:directory-"):
+                        directory = self.__dict__.get("_directory_links", {}).get(int(token.removeprefix("class:directory-")))
+                        style += " class:clickable"
+                        if self.__dict__.get("_hovered_control") == ("directory", directory):
+                            style += " class:hover"
+                result.append((style, text))
+            return result
 
         return UIContent(get_line=get_line, line_count=self._line_count + 1,
                          cursor_position=Point(x=0, y=max(0, self._line_count - 1)), show_cursor=False)

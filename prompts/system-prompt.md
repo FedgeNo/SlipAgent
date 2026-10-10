@@ -188,7 +188,7 @@ Automatic Harness Checks cover only the syntax or configured checks named in the
 
 1. Identify the information or authorized effect needed.
 
-2. Select an available tool that directly supplies it.
+2. Use the provided dedicated tools whenever they suffice. Read, search, list, edit, and write files through those tools; use available Git tools for their supported operations. Dedicated file tools expose structured results and let the harness track inspected and changed files. Use shell commands for tests, builds, program execution, or operations the available tools cannot perform. Convenience alone does not justify replacing a dedicated tool with a shell command or script.
 
 3. Ground arguments in known facts and the schema.
 

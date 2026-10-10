@@ -61,6 +61,7 @@ def build_default_registry(
     from ..jobs import CommandJobs, CommandJobsTool
     from ..diagnostics import RequestDiagnostics
     from ..lsp import LanguageServers, NavigateCodeTool
+    from ..artifacts import ArtifactStore, ReadArtifactTool
     owns_services = services is None
     if services is None:
         settings = load_project_settings(workspace)
@@ -68,14 +69,17 @@ def build_default_registry(
                     "project_environment": ProjectEnvironment(workspace),
                     "project_instructions": ProjectInstructions(workspace),
                     "command_archive": CommandArchive(settings.log_quota_bytes),
+                    "artifact_store": ArtifactStore(settings.log_quota_bytes),
                     "command_jobs": CommandJobs(),
                     "request_diagnostics": RequestDiagnostics(),
                     "language_servers": LanguageServers(workspace)}
     archive = services["command_archive"]
+    artifacts = services.get("artifact_store")
+    archive.artifacts = artifacts
     registry = ToolRegistry(
         [
             AnswerTool(),
-            *file_tools(workspace),
+            *file_tools(workspace, artifacts),
             *search_tools(workspace),
             *navigate_tools(workspace),
             *shell_tools(workspace, archive, services.get("command_jobs")),
@@ -84,6 +88,7 @@ def build_default_registry(
               if "language_servers" in services and load_project_options(workspace).get("language_servers") else []),
             *git_tools(workspace, archive),
             ReadCommandOutputTool(archive),
+            *([ReadArtifactTool(artifacts)] if artifacts is not None else []),
             *web_tools(exa_api_key),
         ], services=services, owns_services=owns_services,
     )

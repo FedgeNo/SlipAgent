@@ -117,8 +117,12 @@ class HistoryStep:
 
     def context_messages(self, *, compressed: bool = False) -> list[Message]:
         if compressed:
-            return [record_message({"record_type": "history_step", "representation": "compressed",
-                                    "step_id": self.id, "compressed_summary": self.compressed_text()})]
+            record: dict[str, Any] = {"record_type": "history_step", "representation": "compressed",
+                      "step_id": self.id, "compressed_summary": self.compressed_text()}
+            references = step_record(self.messages).get("artifacts")
+            if references:
+                record["artifacts"] = references
+            return [record_message(record)]
         record = step_record(self.messages, retained_prompt=self.request, step_id=self.id)
         if record["agent_response"] is not None:
             record["agent_response"] = _visible_response(record["agent_response"])
@@ -142,7 +146,8 @@ class HistoryStep:
         if not prompts and self.request:
             prompts = [self.request]
         observations = [message for message in self.messages if message.role != "user"]
-        results = step_record(self.messages)["tool_results"]
+        original = step_record(self.messages)
+        results = original["tool_results"]
 
         def clipped(text: str, length: int) -> dict[str, Any]:
             if len(text) <= length:
@@ -168,6 +173,7 @@ class HistoryStep:
             )
             return [record_message({"record_type": "history_step", "representation": "excerpt",
                                     "step_id": self.id, "user_prompt": prompts, "messages": entries,
+                                    **({"artifacts": original["artifacts"]} if original.get("artifacts") else {}),
                                     "omitted_messages": len(observations) - count, "recall_instructions": note})]
 
         count = len(observations)

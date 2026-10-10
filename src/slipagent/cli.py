@@ -45,7 +45,7 @@ from .providers import PROVIDERS, active_providers, create_client, provider_clas
 from .model_catalog import coding_models
 from .tools.base import ToolRegistry, ToolResult
 from .tools import build_default_registry
-from .types import KeyInfo, Message, ModelInfo
+from .types import KeyInfo, Message, ModelInfo, ToolCall
 from .workspace import Workspace, WorkspaceError
 from .terminal import TerminalUI
 from .palette import ERROR_COLOR, MUTED_COLOR, THOUGHT_COLOR, USER_BACKGROUND_COLOR, USER_COLOR, USER_TEXT_COLOR, foreground_code
@@ -84,6 +84,7 @@ Commands
   /help [command]      show all help, or help for one command (with or without /)
   /config-show         show active interpreter, model, and workspace settings
   /menu                browse commands and insert a selection into the input
+  /view [record] [line]  inspect saved output or a diff in a read-only viewer
   /theme <name>        dark, light, monochrome, or ironbow Markdown palette
   /markdown [source|rendered]  toggle Markdown source view (F2)
   /copy [auto|text|markdown|code [number]]  copy the latest reply (F3)
@@ -359,10 +360,13 @@ class Renderer:
         self._active_block = None
         self._model_block = object()
         self._last_output_blank = True
+        restored_step = 0
+        restored_calls: dict[str, ToolCall] = {}
         for index, message in enumerate(messages):
             if message.role == "user":
                 self.user_prompt(message.content or "", queued=index in (queued_messages or {}))
             elif message.role == "assistant":
+                restored_step += 1
                 self._model_block = object()
                 if message.reasoning:
                     self._stream_text("reasoning_delta", message.reasoning)
@@ -370,13 +374,17 @@ class Renderer:
                 if message.content:
                     self.handle(AgentEvent(kind="assistant_text", text=message.content))
                 for call in message.tool_calls or []:
-                    self.handle(AgentEvent(kind="tool_start", tool_call=call))
+                    restored_calls[call.id] = call
+                    self.handle(AgentEvent(kind="tool_start", tool_call=call, step=restored_step))
             elif message.role == "tool":
                 result = ToolResult.ok(message.content or "")
                 saved = result.content
                 if (isinstance(saved, dict) and saved.get("status") in ("success", "error")
                         and "content" in saved):
                     result = ToolResult(saved["content"], saved["status"] == "error")
+                restored_call = restored_calls.get(message.tool_call_id or "")
+                if self.terminal is not None and restored_call is not None:
+                    self.terminal.finish_call(restored_call, restored_step, result.content, result.is_error)
                 if isinstance(saved, dict) and saved.get("tool") == "answer" and not result.is_error:
                     self.handle(AgentEvent(kind="assistant_text", text=result.content["text"]))
                     continue
@@ -386,6 +394,9 @@ class Renderer:
                         self.emit(self.style.red(f"  ✗ {body}"), block=self._model_block)
                     else:
                         self.emit(self.style.dim(body), block=self._model_block)
+                if isinstance(saved, dict):
+                    for reference in saved.get("artifacts", []):
+                        self.handle(AgentEvent(kind="artifact", result=ToolResult.ok(reference)))
             if index % 100 == 99:
                 await asyncio.sleep(0)
         for text in pending:
@@ -491,6 +502,8 @@ class Renderer:
 
         elif event.kind == "tool_start" and event.tool_call is not None:
             self._tool_streamed = False
+            if self.terminal is not None:
+                self.terminal.track_call(event.tool_call, event.step)
             if event.tool_call.name == "answer":
                 return
             self.emit(self.style.magenta(f"  ⚙ {event.tool_call.brief()}"), block=self._model_block)
@@ -513,17 +526,39 @@ class Renderer:
             result = event.result
             if result is None:
                 return
+            if self.terminal is not None and event.tool_call is not None:
+                self.terminal.finish_call(event.tool_call, event.step, result.content, result.is_error)
             if result.is_error:
                 # Errors are the most useful signal; always surface them.
                 self.emit(self.style.red(f"  ✗ {result.text()}"), block=self._model_block)
             elif event.tool_call is not None and event.tool_call.name == "answer":
                 self.handle(AgentEvent(kind="assistant_text", step=event.step, text=result.content["text"]))
+            elif self.terminal is not None and event.tool_call is not None and event.tool_call.name in {"write_file", "edit_file"} and self.terminal.has_diff(event.tool_call.id):
+                self.emit(self.style.dim("    " + result.text().splitlines()[0]), block=self._model_block)
             elif getattr(self, "_tool_streamed", False):
                 self.emit(self.style.dim("  ✓ Command completed."), block=self._model_block)
             elif self.verbose and result.text().strip():
                 body = result.text().strip()
                 for line in body.splitlines():
                     self.emit(self.style.dim(f"    {line}"), block=self._model_block)
+
+        elif event.kind == "artifact" and event.result is not None:
+            reference = event.result.content
+            if self.terminal is not None:
+                store = self.terminal.__dict__.get("_artifact_store")
+                if reference["kind"] == "diff" and reference["bytes"] <= 16_000 and store is not None:
+                    try:
+                        record = store.read(reference["record_id"])
+                    except (OSError, ValueError, UnicodeError):
+                        record = None
+                        self.terminal.notify("Could not read saved diff.")
+                    if record is not None and len(record["output"].splitlines()) <= 40:
+                        for line in record["output"].splitlines():
+                            color = self.style.cyan if line.startswith(("--- ", "+++ ", "@@")) else self.style.green if line.startswith("+") else self.style.red if line.startswith("-") else self.style.dim
+                            self.emit(color(_literal_tool_output(line)), block=self._model_block)
+                self.terminal.write_artifact_reference(reference)
+            else:
+                self.emit(self.style.dim(f"  Saved {reference['kind']} record {reference['record_id']}."), block=self._model_block)
 
         elif event.kind == "warning":
             if event.text == STOP_NOTICE and getattr(self, '_queued_settings_pause', False):
@@ -837,6 +872,7 @@ async def run_repl(session: Session) -> int:
             project_directory=session.workspace.root,
         )
         renderer.terminal = terminal
+        terminal.__dict__["_artifact_store"] = session.registry.services.get("artifact_store")
         terminal.configure_markdown(theme=renderer.markdown_theme, source=renderer.output_markdown)
         terminal.set_interrupt_handler(lambda: _request_interrupt(session))
         terminal_task = asyncio.create_task(terminal.run())
@@ -1484,6 +1520,36 @@ async def _execute_command(session: Session, line: str) -> bool:
     argument = parts[1].strip() if len(parts) > 1 else ""
     style = session.renderer.style
     out = _RendererStream(session.renderer)
+
+    if command == "view":
+        terminal = session.renderer.terminal
+        store = session.registry.services.get("artifact_store")
+        if terminal is None or store is None:
+            print(style.red("  /view requires an interactive terminal with inspection records."), file=out)
+            return False
+        try:
+            values = argument.split()
+            if len(values) > 2:
+                raise ValueError("usage: /view [record] [line]")
+            if values:
+                identifier = int(values[0])
+                line_number = int(values[1]) if len(values) == 2 else 1
+                if line_number < 1:
+                    raise ValueError("Line must be positive.")
+            else:
+                choices = [(str(record["record_id"]), f"{record['record_id']} — {record['kind']} — {record['command']}")
+                           for record in store.records.values()]
+                if not choices:
+                    terminal.notify("No inspection records yet.")
+                    return False
+                selected = await terminal.choose("Inspection Records", choices)
+                if selected is None:
+                    return False
+                identifier, line_number = int(selected), 1
+            await terminal.open_artifact(identifier, line=line_number)
+        except ValueError as exc:
+            terminal.notify(str(exc))
+        return False
 
     if command == "menu":
         terminal = session.renderer.terminal

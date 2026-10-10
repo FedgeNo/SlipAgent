@@ -4,7 +4,7 @@
 
 Run a shell command in the workspace root and return its output.
 
-Use it to run tests, linters, type checkers, and builds, and to inspect files that dedicated tools cannot read.
+Use it to run tests, linters, type checkers, builds, and operations the available dedicated tools cannot perform. **Use dedicated tools when they suffice**, including file reads, searches, listings, edits, writes, and supported Git operations. Shell file access may not appear in the harness's touched-files panel. When a shell operation must modify files, identify its intended targets in your reply and report observed changes from its results; do not claim unverified effects.
 
 ## Environment and Access
 

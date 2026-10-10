@@ -161,6 +161,7 @@ class SessionJournal:
                      parent=parent, created=datetime.now(timezone.utc).isoformat(), title=title)
         self._title = title
         agent.session_id = self.session_id
+        self._artifact_directory(agent, parent=parent)
         self._checkpoint_directory(agent, parent=parent)
         diagnostics = agent.registry.services.get("request_diagnostics")
         if diagnostics is not None:
@@ -171,6 +172,12 @@ class SessionJournal:
             _private_directory(directory)
             archive.use_directory(directory, self.log)
         self.record(agent)
+
+    def _artifact_directory(self, agent: Agent, *, parent: str | None = None) -> None:
+        store = agent.registry.services.get("artifact_store")
+        if store is not None:
+            store.use_directory(self.directory / (self.session_id + "-artifacts"),
+                                source=self.directory / (parent + "-artifacts") if parent else None)
 
     def _checkpoint_directory(self, agent: Agent, *, parent: str | None = None) -> None:
         checkpoints = agent._checkpoints()
@@ -234,6 +241,10 @@ class SessionJournal:
     def log(self, log: CommandLog) -> None:
         self._append("log", metadata={**log.metadata(), "command": log.command})
 
+    def replace_message(self, index: int, message: Message) -> None:
+        """Persist late observations without replaying or rewriting their turn."""
+        self._append("replace", index=index, message=self._message(message))
+
     def listing(self) -> list[dict[str, str]]:
         result = []
         try:
@@ -253,7 +264,7 @@ class SessionJournal:
         if self.path is None:
             raise SessionError("No current saved session to delete.")
         try:
-            for suffix in ("-logs", "-requests", "-checkpoints"):
+            for suffix in ("-logs", "-requests", "-checkpoints", "-artifacts"):
                 directory = self.directory / (self.session_id + suffix)
                 if directory.exists():
                     shutil.rmtree(directory)
@@ -448,6 +459,7 @@ class SessionJournal:
             self.failed = False
             self._title = data["title"]
             agent.session_id = self.session_id
+            self._artifact_directory(agent)
             self._checkpoint_directory(agent)
             diagnostics = agent.registry.services.get("request_diagnostics")
             if diagnostics is not None:
@@ -465,6 +477,8 @@ class SessionJournal:
                     raise SessionError("Invalid archived command ID")
                 log = CommandLog(archive, metadata["command"], metadata["step_id"], metadata["call_id"])
                 log.id = log_id
+                if metadata.get("artifacts"):
+                    log.artifact_record = metadata["artifacts"][0]
                 log.returncode, log.timed_out = metadata["returncode"], metadata["timed_out"]
                 log.finished = True
                 for name in ("stdout", "stderr"):

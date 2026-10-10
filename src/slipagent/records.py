@@ -37,6 +37,8 @@ def linked_tool_results(record: dict[str, Any]) -> dict[str, Any]:
             calls.append(call)
         key = {"success": "result", "error": "error"}.get(result["status"], "unclassified_result")
         call[key] = result["content"]
+        if result.get("artifacts"):
+            call["artifacts"] = result["artifacts"]
     projected["tool_calls"] = calls
     return projected
 
@@ -59,11 +61,14 @@ def step_record(messages: list[Message], *, current: bool = False,
         saved = message.content
         # Unwrap only the harness's exact observation envelope. Arbitrary JSON
         # returned by a tool stays its content, even when it contains these keys.
-        if (isinstance(saved, dict) and saved.keys() == {"tool", "call_id", "status", "content"}
+        if (isinstance(saved, dict) and {"tool", "call_id", "status", "content"} <= saved.keys()
+                and saved.keys() <= {"tool", "call_id", "status", "content", "artifacts"}
                 and saved["call_id"] == message.tool_call_id
                 and saved["tool"] == result["tool_name"]
                 and saved["status"] in ("success", "error")):
             result.update(status=saved["status"], content=saved["content"])
+            if saved.get("artifacts"):
+                result["artifacts"] = saved["artifacts"]
         results.append(result)
     record: dict[str, Any] = {
         "record_type": "current_step" if current else "history_step",
@@ -78,4 +83,7 @@ def step_record(messages: list[Message], *, current: bool = False,
         record["is_tool_result_response"] = not prompts
     if step_id is not None:
         record["step_id"] = step_id
+    references = [reference for result in results for reference in result.get("artifacts", [])]
+    if references:
+        record["artifacts"] = references
     return record

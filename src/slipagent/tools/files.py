@@ -13,11 +13,15 @@ import stat
 import tempfile
 import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..artifacts import ArtifactStore
 
 from ..workspace import Workspace, WorkspaceError
 from .base import Tool, ToolResult
 from .blocking import run_blocking
-from .editing import apply_edits, edit_diff
+from .editing import MAX_DIFF_CHARS, apply_edits, edit_diff
 
 # Bound local read memory; request assembly enforces the model's context budget.
 MAX_READ_BYTES = 32_000_000
@@ -226,8 +230,9 @@ class WriteFileTool(Tool):
         "required": ["path", "content"],
     }
 
-    def __init__(self, workspace: Workspace) -> None:
+    def __init__(self, workspace: Workspace, artifacts: ArtifactStore | None = None) -> None:
         self.workspace = workspace
+        self.artifacts = artifacts
 
     async def run(self, path: str, content: str) -> ToolResult:
         return await run_blocking(self._write, path, content)
@@ -244,16 +249,29 @@ class WriteFileTool(Tool):
             )
 
         existed = target.exists()
+        before: str | None = ""
+        if existed and self.__dict__.get("artifacts") is not None:
+            try:
+                with target.open(encoding="utf-8", newline="") as source:
+                    before = source.read()
+            except (OSError, UnicodeError):
+                before = None
         try:
             _atomic_write(self.workspace, target, content)
         except (OSError, UnicodeError) as exc:
             return ToolResult.error(f"Could not write file: {exc}")
 
         verb = "Updated" if existed else "Created"
+        artifact_notice = ""
+        if self.__dict__.get("artifacts") is not None and before is not None:
+            artifact_notice = _save_diff(self.artifacts, f"write_file {path!r}",
+                                         edit_diff(self.workspace.relative(target), before, content, limit=None))
+        elif self.__dict__.get("artifacts") is not None and before is None:
+            artifact_notice = "\nPrevious contents were not readable as UTF-8; no diff record was created."
         line_count = len(content.splitlines())
         return ToolResult.ok(
             f"{verb} {self.workspace.relative(target)} "
-            f"({len(content.encode('utf-8'))} bytes, {line_count} line(s))."
+            f"({len(content.encode('utf-8'))} bytes, {line_count} line(s))." + artifact_notice
         )
 
 
@@ -293,8 +311,9 @@ class EditFileTool(Tool):
         "required": ["path"],
     }
 
-    def __init__(self, workspace: Workspace) -> None:
+    def __init__(self, workspace: Workspace, artifacts: ArtifactStore | None = None) -> None:
         self.workspace = workspace
+        self.artifacts = artifacts
 
     async def run(
         self,
@@ -352,10 +371,15 @@ class EditFileTool(Tool):
             return ToolResult.error(f"Could not write file: {exc}")
 
         location = f" at line {first_line}" if first_line else ""
+        diff = edit_diff(self.workspace.relative(target), text, updated,
+                         limit=None if self.__dict__.get("artifacts") is not None else MAX_DIFF_CHARS)
+        artifact_notice = _save_diff(self.__dict__.get("artifacts"), f"edit_file {path!r}", diff)
+        if len(diff) > MAX_DIFF_CHARS:
+            diff = edit_diff(self.workspace.relative(target), text, updated)
         return ToolResult.ok(
             f"Replaced {replaced} occurrence(s) in "
             f"{self.workspace.relative(target)}{location}.\n"
-            + edit_diff(self.workspace.relative(target), text, updated)
+            + diff + artifact_notice
         )
 
 
@@ -364,5 +388,14 @@ def _line_of(text: str, needle: str) -> int | None:
     return None if index < 0 else text.count("\n", 0, index) + 1
 
 
-def file_tools(workspace: Workspace) -> list[Tool]:
-    return [ReadFileTool(workspace), WriteFileTool(workspace), EditFileTool(workspace)]
+def _save_diff(store: ArtifactStore | None, command: str, diff: str) -> str:
+    if store is not None and diff:
+        try:
+            store.save(command, diff, kind="diff")
+        except (OSError, ValueError) as exc:
+            return f"\nDiff record could not be saved: {exc}"
+    return ""
+
+
+def file_tools(workspace: Workspace, artifacts: ArtifactStore | None = None) -> list[Tool]:
+    return [ReadFileTool(workspace), WriteFileTool(workspace, artifacts), EditFileTool(workspace, artifacts)]

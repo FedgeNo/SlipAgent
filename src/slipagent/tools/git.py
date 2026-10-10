@@ -170,6 +170,8 @@ class GitTool(Tool):
             command.extend(["-c", setting])
         command.extend(args)
         log = self.archive.start(shlex.join(["git", *args])) if self.archive is not None else None
+        if log is not None and self.name == "git_diff":
+            log.artifact_kind = "diff"
         try:
             process = await asyncio.create_subprocess_exec(
                 *command, cwd=repository.root, env=env,

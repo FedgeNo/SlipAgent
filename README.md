@@ -557,6 +557,7 @@ In the REPL:
 | --- | --- |
 | `/help [command]` | Show all help or one command's help; `/help init` and `/help /init` are equivalent |
 | `/menu` | Browse all commands and their arguments; selecting one inserts it into the input |
+| `/view [record] [line]` | Choose a saved output/diff record or open its numeric ID at an optional line |
 | `/danger` or `/danger on` | Disable workspace path confinement; queues while working |
 | `/danger off` | Restore workspace path confinement; queues while working |
 | `/danger status` | Show the current access mode |
@@ -628,6 +629,31 @@ visible while browsing selectors or the context view. A notice stays until it
 is replaced or cleared. When no notice is active, this area rotates tips for
 available controls. Folder-launch failures also remain in the transcript.
 
+Click **Inspect [Ctrl+O]** or press **Ctrl+O** to show or hide the inspection
+panel on the right side of the feed. It occupies one quarter of the terminal
+width, with **Touched Files** above **Calls**. Click a file to read it, or a call
+to inspect its arguments and result. The mouse wheel scrolls the section under
+the pointer. Terminals narrower than 60 columns temporarily hide the panel.
+
+Saved command output and edit diffs have clickable **View Output** or **View
+Diff** references. `/view` lists records; `/view NUMBER [LINE]` opens one at a
+specific line. These viewers are read-only: arrows, Page Up/Down, Home/End, and
+the mouse wheel navigate; **Esc** closes the viewer without interrupting agent
+work. Notifications and your input draft remain visible. Diffs use distinct
+colors for headers, hunks, additions, and deletions; short edit diffs also appear
+in the feed. No editing or saving is enabled in these viewers.
+
+With session persistence, inspection records live beside the session journal in
+its `-artifacts` directory. Microsecond timestamp filenames contain JSON with
+`command`, `output`, `error`, `call_id`, `step_id`, and `kind`. Command stdout and
+stderr stay separate; stderr is not itself proof of failure. The viewer shows
+the command, one blank line, then output. Numeric references accompany full and
+compressed history, survive resume/fork, and can be retrieved with
+`read_artifact` without granting arbitrary access outside the workspace.
+Inspection storage has the configured command-log quota independently of the
+existing raw command archive. Saving a record does not alter raw-log byte
+offsets. Without session persistence, inspection records are temporary.
+
 When a native file explorer is available, the CWD readout is an underlined link
 and tool calls with an existing directory `path` show a link to that directory.
 Click a directory link to open it; drag across output to copy text as usual.
@@ -672,7 +698,7 @@ count is fetched from OpenRouter at startup and refreshed every 15 minutes,
 including while idle or working.
 
 The underlined **Commands** link beside **Ready**, or `/menu`, replaces the
-six-row input footer with a heading, a scrolling list of all commands with their
+five-row input footer with a heading, a scrolling list of all commands with their
 help syntax and descriptions, and `↑/↓ or wheel = move | Enter or click = select | Esc = back` on
 the bottom line, with shorter wording on narrow terminals.
 Use the mouse wheel or arrow keys to move, and click an item or press Enter to
@@ -1180,6 +1206,7 @@ The model gets these built-in tools:
 | `run_command` | Run a shell command and capture output; `background=true` returns a managed job ID. |
 | `command_jobs` | List, inspect, wait for, or stop managed background commands. |
 | `read_command_output` | Page retained stdout/stderr or read its tail by log ID; list logs by step/call ID. |
+| `read_artifact` | Retrieve a complete saved inspection record by numeric `record_id`; omit it to list records. |
 | `git_status` | Show the branch and short repository status. |
 | `git_diff` | Show unstaged changes, or staged changes with `staged=true`; optionally select literal `paths`. |
 | `git_log` | Show recent commit hashes and subjects (`limit=10`, maximum 100,000). |

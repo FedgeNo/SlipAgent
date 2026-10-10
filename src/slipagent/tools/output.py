@@ -44,6 +44,7 @@ class CommandLog:
         self.returncode: int | None = None
         self.timed_out = False
         self.finished = False
+        self.artifact_kind = "command_output"
 
     def write(self, name: str, text: str) -> None:
         stream = self.streams[name]
@@ -93,12 +94,27 @@ class CommandLog:
                         stream.error = f"{stream.error} Output durability could not be verified: {exc}".strip()
                 stream.file.close()
                 stream.file = None
+        store = getattr(self.archive, "artifacts", None)
+        if store is not None and not hasattr(self, "artifact_record"):
+            try:
+                output = self.streams["stdout"]
+                error = self.streams["stderr"]
+                self.artifact_record = store.save(self.command,
+                    output.path.read_text(encoding="utf-8") if output.path else "",
+                    error=(error.path.read_text(encoding="utf-8") if error.path else "") +
+                          ("\n" + "\n".join(stream.error for stream in self.streams.values() if stream.error)
+                           if any(stream.error for stream in self.streams.values()) else ""),
+                    kind=getattr(self, "artifact_kind", "command_output"), step_id=self.step_id, call_id=self.call_id)
+            except (OSError, UnicodeError, ValueError) as exc:
+                self.artifact_error = str(exc)
         callback = getattr(self.archive, "on_log", None)
         if callback is not None:
             callback(self)
 
     def metadata(self) -> dict[str, Any]:
-        return {"log_id": self.id, "step_id": self.step_id, "call_id": self.call_id,
+        return {**({"artifacts": [self.artifact_record]} if hasattr(self, "artifact_record") else {}),
+                **({"artifact_error": self.artifact_error} if hasattr(self, "artifact_error") else {}),
+                "log_id": self.id, "step_id": self.step_id, "call_id": self.call_id,
                 "command": self.command,
                 "command_characters": len(self.command), "returncode": self.returncode,
                 "timed_out": self.timed_out, "finished": self.finished,
@@ -124,6 +140,7 @@ class CommandArchive:
         self.quota_bytes = quota_bytes
         self.used_bytes = 0
         self.logs: dict[str, CommandLog] = {}
+        self.artifacts: Any = None
         self._parent = directory
         self._temporary: tempfile.TemporaryDirectory[str] | None = None
 

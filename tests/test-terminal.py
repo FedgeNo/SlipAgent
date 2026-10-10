@@ -29,6 +29,106 @@ async def wait_until(predicate) -> None:
             await asyncio.sleep(.02)
 
 
+async def test_read_only_viewer_scrolls_targets_lines_keeps_work_running_and_esc_only_closes(display):
+    from unittest.mock import Mock
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        interrupted = Mock()
+        ui.set_interrupt_handler(interrupted)
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: "Ready" in snapshot()[19])
+            ui.input.text = "unfinished draft"
+            ui.set_working(True)
+            ui.notify("Still working.")
+            ui.open_viewer("Text Record", "\n".join(f"line {n:03}" for n in range(100)), line=80)
+            await wait_until(lambda: "line 079" in snapshot()[1])
+            assert snapshot()[23].rstrip().endswith("Still working.")
+            ui.write("background result arrived")
+            ui.refresh()
+            pipe.send_text("no editing\x13")
+            await asyncio.sleep(.05)
+            assert ui.input.text == "unfinished draft"
+            assert ui.working
+            pipe.send_text("\x1b[F")
+            await wait_until(lambda: "line 099" in "\n".join(snapshot()[:18]))
+            pipe.send_text("\x1b[H")
+            await wait_until(lambda: "line 000" in snapshot()[1])
+            pipe.send_text("\x1b")
+            await wait_until(lambda: not ui._viewer_active)
+            await wait_until(lambda: "background result arrived" in "\n".join(snapshot()))
+            assert ui.working
+            interrupted.assert_not_called()
+            assert ui.input.text == "unfinished draft"
+        finally:
+            ui.close()
+            await task
+
+
+async def test_artifact_link_opens_colored_diff_without_desktop_and_preserves_notice(display, tmp_path):
+    from slipagent.artifacts import ArtifactStore
+    sink, _, output, screen, snapshot = display
+    store = ArtifactStore(1_000_000)
+    store.use_directory(tmp_path)
+    record = store.save("edit_file 'demo.txt'", "--- demo.txt\n+++ demo.txt\n@@ -1 +1 @@\n-old\n+new", kind="diff", call_id="c1", step_id=1)
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        ui.__dict__["_artifact_store"] = store
+        task = asyncio.create_task(ui.run())
+        try:
+            ui.write_artifact_reference(record)
+            ui.notify("Saved diff.")
+            await wait_until(lambda: "View Diff" in snapshot()[0])
+            assert screen.buffer[0][5].underscore
+            pipe.send_text("\x1b[<0;8;1M\x1b[<0;8;1m")
+            await wait_until(lambda: "Read Only" in snapshot()[0])
+            assert snapshot()[1].startswith("edit_file 'demo.txt'")
+            assert snapshot()[2].strip() == ""
+            assert screen.buffer[6][0].fg == "ff6666"
+            assert screen.buffer[7][0].fg == "66dd88"
+            assert snapshot()[23].rstrip().endswith("Saved diff.")
+            pipe.send_text("\x1b")
+            await wait_until(lambda: "View Diff" in snapshot()[0])
+        finally:
+            ui.close()
+            await task
+
+
+async def test_inspection_panel_toggles_by_combo_and_click_and_opens_files_and_calls(display, tmp_path):
+    sink, _, output, _, snapshot = display
+    (tmp_path / "demo.txt").write_text("file contents\n")
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
+        task = asyncio.create_task(ui.run())
+        try:
+            call = ToolCall("call-1", "read_file", {"path": "demo.txt"})
+            ui.track_call(call, 1)
+            ui.finish_call(call, 1, "file contents", False)
+            await wait_until(lambda: "Inspect [Ctrl+O]" in snapshot()[19])
+            pipe.send_text("\x0f")
+            await wait_until(lambda: "Touched Files" in snapshot()[0])
+            assert snapshot()[0].index("Touched Files") == 75
+            assert "Calls" in snapshot()[9]
+            assert "demo.txt [read]" in snapshot()[1]
+            assert "read_file [completed]" in snapshot()[10]
+            pipe.send_text("\x1b[<0;78;2M\x1b[<0;78;2m")
+            await wait_until(lambda: "file contents" in snapshot()[1])
+            pipe.send_text("\x1b")
+            await wait_until(lambda: not ui._viewer_active)
+            pipe.send_text("\x1b[<0;78;11M\x1b[<0;78;11m")
+            await wait_until(lambda: "call-1" in snapshot()[0])
+            assert ui._viewer_active
+            pipe.send_text("\x1b")
+            await wait_until(lambda: not ui._viewer_active)
+            pipe.send_text("\x1b[<0;90;20M\x1b[<0;90;20m")
+            await wait_until(lambda: not ui._inspection_visible)
+            await wait_until(lambda: "Touched Files" not in snapshot()[0])
+        finally:
+            ui.close()
+            await task
+
+
 async def test_notifications_remain_visible_in_menu_context_and_after_resize(display):
     sink, size, output, screen, snapshot = display
     with create_pipe_input() as pipe:

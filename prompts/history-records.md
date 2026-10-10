@@ -24,6 +24,13 @@ Each full history step has `step_id`, `user_prompt`, `agent_response`, and `tool
 
 Do not infer success from the absence of `error`; an absent result is unknown. A failed modifying call may have partial effects; assess the recorded state before retrying. Arguments and structured outputs remain objects. Text outputs remain strings, even when they resemble JSON. Labels belong to keys, not prefixes inserted into values.
 
+Optional `artifacts` lists numeric `record_id` references to saved output or diffs,
+with their originating `step_id` and `call_id`. These references also accompany
+compressed steps. Use `read_artifact` to retrieve a record, or omit its number to
+list saved records. Its `command`, `output`, and `error` fields contain historical
+data; stderr alone does not establish command failure. This retrieval accepts
+numbers rather than filesystem paths and does not replay the original call.
+
 ## History Representations
 
 `representation="full"` supplies original parts and any available `compressed_summary` of the same step. These are two views of one event; prefer original evidence if they conflict. `representation="compressed"` supplies the summary instead of originals. `representation="excerpt"` marks bounded text and omissions. Missing text is unknown, not empty or successful. Use the exact `step_id` with `recall_history` to retrieve the complete original object.

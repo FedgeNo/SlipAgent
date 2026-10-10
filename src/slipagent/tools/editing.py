@@ -92,13 +92,15 @@ def apply_edits(text: str, edits: Sequence[tuple[str, str, bool]]) -> tuple[str,
     return updated, len(planned), text.count("\n", 0, planned[0][0]) + 1
 
 
-def edit_diff(path: str, before: str, after: str) -> str:
+def edit_diff(path: str, before: str, after: str, *, limit: int | None = MAX_DIFF_CHARS) -> str:
     """Bound model/UI feedback; full file contents stay available to read_file."""
     lines = difflib.unified_diff(before.splitlines(), after.splitlines(), fromfile=path, tofile=path, lineterm="")
+    if limit is None:
+        return "\n".join(lines)
     chunks = []
     size = 0
     for line in lines:
-        remaining = MAX_DIFF_CHARS - size
+        remaining = limit - size
         if len(line) + 1 > remaining:
             chunks.append(line[:max(0, remaining)] + "\n… Diff truncated; read the file for remaining changes.")
             break

@@ -59,6 +59,7 @@ EventKind = Literal[
     "tool_start",
     "tool_output",
     "tool_end",
+    "artifact",
     "step_end",
     "warning",
     "notice",
@@ -243,6 +244,9 @@ class Agent:
         archive = self.registry.services.get("command_archive")
         if archive is not None:
             archive.clear()
+        artifacts = self.registry.services.get("artifact_store")
+        if artifacts is not None:
+            artifacts.clear()
         self._summary_progress.clear()
         self._loop_guard().reset()
         checkpoints = self.registry.services.get("file_checkpoints")
@@ -285,6 +289,27 @@ class Agent:
             }
             for job in completed:
                 self._emit(AgentEvent(kind="notice", text=f"Background command {job['job_id']} {job['state']} (exit {job['returncode']})."))
+                for reference in job.get("artifacts", []):
+                    self._attach_artifact(reference)
+                    self._emit(AgentEvent(kind="artifact", result=ToolResult.ok(reference)))
+
+    def _attach_artifact(self, reference: dict[str, Any]) -> None:
+        step_id = reference.get("step_id")
+        if type(step_id) is not int or not 1 <= step_id <= len(self.history.steps):
+            return
+        for message in self.history.steps[step_id - 1].messages:
+            if message.role != "tool" or message.tool_call_id != reference["call_id"] or not isinstance(message.content, dict):
+                continue
+            references = message.content.setdefault("artifacts", [])
+            if any(saved["record_id"] == reference["record_id"] for saved in references):
+                return
+            references.append(reference)
+            journal = self.registry.services.get("session_journal")
+            if journal is not None:
+                for index, original in enumerate(self.messages):
+                    if original is message:
+                        journal.replace_message(index, message)
+                        break
 
     def extend(self, messages: Sequence[Message]) -> None:
         """Append pre-built messages (used for resuming saved conversations)."""
@@ -827,12 +852,20 @@ class Agent:
             return result
 
         def commit_call(tool_call: ToolCall, result: ToolResult) -> None:
-            self.messages.append(_tool_message(tool_call, result))
+            artifacts = self.registry.services.get("artifact_store")
+            references = artifacts.references(len(self.history.steps) + 1, tool_call.id) if artifacts is not None else []
+            observation = _tool_message(tool_call, result)
+            if references:
+                observation.content["artifacts"] = references
+            self.messages.append(observation)
             self._persist()
             batch_results.append((tool_call, result))
             self._emit(
                 AgentEvent(kind="tool_end", step=step, tool_call=tool_call, result=result)
             )
+            for reference in references:
+                self._emit(AgentEvent(kind="artifact", step=step, tool_call=tool_call,
+                                      result=ToolResult.ok(reference)))
 
         checkpoints = self._checkpoints()
         if checkpoints is not None:
@@ -854,7 +887,10 @@ class Agent:
             content = (result.content + "\n\nHarness Checks After This Complete Tool Batch:\n" + diagnostics
                        if isinstance(result.content, str) else {"result": result.content, "harness_checks": diagnostics})
             checked = ToolResult(content, result.is_error)
+            artifacts = self.messages[-1].content.get("artifacts", [])
             self.messages[-1] = _tool_message(call, checked)
+            if artifacts:
+                self.messages[-1].content["artifacts"] = artifacts
             batch_results[-1] = call, checked
             visible_diagnostics = "\n".join(line for line in diagnostics.splitlines()
                                             if "SKIPPED — no selected project Python." not in line)

@@ -9,6 +9,7 @@ import time
 from collections.abc import Callable
 from typing import TextIO
 from pathlib import Path
+from typing import Any
 
 from prompt_toolkit import Application
 from prompt_toolkit.buffer import Buffer
@@ -21,7 +22,7 @@ from prompt_toolkit.input import Input
 from prompt_toolkit.history import DummyHistory
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.keys import Keys
-from prompt_toolkit.layout import Dimension, DynamicContainer, Float, FloatContainer, HSplit, Layout, VSplit, Window, WindowAlign
+from prompt_toolkit.layout import ConditionalContainer, Dimension, DynamicContainer, Float, FloatContainer, HSplit, Layout, VSplit, Window, WindowAlign
 from prompt_toolkit.layout.controls import FormattedTextControl, UIContent, UIControl
 from prompt_toolkit.layout.mouse_handlers import MouseHandlers
 from prompt_toolkit.layout.processors import Processor, Transformation, TransformationInput
@@ -37,6 +38,8 @@ from .palette import MUTED_COLOR, USER_PROMPT_STYLE
 from .markdown import THEMES, MarkdownRenderer, code_blocks
 from .clipboard import clipboard_sequence, copy_to_clipboard
 from .explorer import folder_opener, open_folder
+from .viewers import TextViewControl, DiffViewControl
+from .types import ToolCall
 
 FOOTER_ROWS = 5
 PULSE_FRAMES = ("▌", "▛", "▀", "▜", "▐", "▟", "▄", "▙")
@@ -211,6 +214,8 @@ class TerminalUI:
         self._ensure_context()
         self._ensure_prompt()
         self._ensure_menu()
+        self._ensure_viewer()
+        self._ensure_inspection()
         self._menu_window.height = Dimension.exact(FOOTER_ROWS - 2)
         # Attach during layout rebuilds so existing sessions gain input wrapping.
         processors = self.input.control.input_processors or []
@@ -219,7 +224,8 @@ class TerminalUI:
         if self._input_label == "you › ":
             self._input_label = "> "
         footer = HSplit([
-            Window(FormattedTextControl(lambda: self._activity()), height=1),
+            VSplit([Window(FormattedTextControl(lambda: self._activity()), height=1),
+                    Window(FormattedTextControl(self._inspect_link), height=1, width=18, align=WindowAlign.RIGHT)]),
             self.input,
             self._bottom_row(menu=False),
         ], height=FOOTER_ROWS)
@@ -239,10 +245,183 @@ class TerminalUI:
             content=Window(TranscriptControl(self._pinned_prompt_content)),
         )])
         return Layout(HSplit([
-            DynamicContainer(lambda: context if self.context_visible else transcript),
+            VSplit([DynamicContainer(lambda: self._viewer_container if self._viewer_active else
+                                     context if self.context_visible else transcript),
+                    ConditionalContainer(self._inspection_panel, Condition(lambda: self._inspection_visible and self.output.get_size().columns >= 60))]),
             Window(height=1),
             DynamicContainer(lambda: menu_footer if self._menu_future is not None else footer),
-        ]), focused_element=self._menu_window if self._menu_future is not None else self.input)
+        ]), focused_element=self._menu_window if self._menu_future is not None else
+            self._viewer_window if self._viewer_active else self.input)
+
+    def _ensure_inspection(self) -> None:
+        if "_inspection_visible" in self.__dict__:
+            return
+        self._inspection_visible = False
+        self._touched_files: dict[str, str] = {}
+        self._inspection_calls: dict[tuple[int, str], dict[str, Any]] = {}
+        self._files_window = TranscriptWindow(FormattedTextControl(lambda: self._inspection_entries(files=True)))
+        self._calls_window = TranscriptWindow(FormattedTextControl(lambda: self._inspection_entries(files=False)))
+        self._files_window._following = self._calls_window._following = False
+        self._inspection_panel = HSplit([
+            HSplit([Window(FormattedTextControl("Touched Files"), height=1, style="class:menu-title"),
+                    self._files_window]),
+            HSplit([Window(FormattedTextControl("Calls"), height=1, style="class:menu-title"),
+                    self._calls_window]),
+        ], width=lambda: Dimension.exact(max(1, self.output.get_size().columns // 4)))
+
+    def toggle_inspection(self) -> None:
+        self._ensure_inspection()
+        self._inspection_visible = not self._inspection_visible
+        if self._inspection_visible and self.output.get_size().columns < 60:
+            self.notify("Widen terminal to show Inspect.")
+        self.app.invalidate()
+
+    def _inspect_link(self) -> StyleAndTextTuples:
+        def click(event: MouseEvent) -> object:
+            if event.event_type == MouseEventType.MOUSE_MOVE:
+                self.__dict__["_hovered_control"] = "inspect"
+            elif event.event_type == MouseEventType.MOUSE_UP and event.button == MouseButton.LEFT:
+                self.toggle_inspection()
+            return None
+        style = "class:clickable" + (" class:hover" if self.__dict__.get("_hovered_control") == "inspect" else "")
+        return [(style, "Inspect [Ctrl+O]", click)]
+
+    def track_call(self, call: ToolCall, step: int) -> None:
+        self._ensure_inspection()
+        self._inspection_calls[(step, call.id)] = {"step_id": step, "call_id": call.id,
+                                                 "tool": call.name, "arguments": call.arguments, "status": "running"}
+        path = call.arguments.get("path")
+        if isinstance(path, str) and call.name in {"read_file", "write_file", "edit_file"}:
+            self._touched_files.setdefault(path, "requested")
+        self.app.invalidate()
+
+    def finish_call(self, call: ToolCall, step: int, result: Any, error: bool) -> None:
+        self._ensure_inspection()
+        saved = self._inspection_calls.get((step, call.id))
+        if saved is not None:
+            saved.update(status="error" if error else "completed", result=result)
+            path = call.arguments.get("path")
+            if not error and isinstance(path, str) and path in self._touched_files:
+                self._touched_files[path] = "modified" if call.name != "read_file" else self._touched_files.get(path, "read")
+                if self._touched_files[path] == "requested":
+                    self._touched_files[path] = "read"
+            store = self.__dict__.get("_artifact_store")
+            if store is not None:
+                saved["artifacts"] = [record for record in store.records.values() if record["call_id"] == call.id]
+        self.app.invalidate()
+
+    def has_diff(self, call_id: str) -> bool:
+        store = self.__dict__.get("_artifact_store")
+        return store is not None and any(record["kind"] == "diff" and record["call_id"] == call_id for record in store.records.values())
+
+    def _inspection_entries(self, *, files: bool) -> StyleAndTextTuples:
+        fragments: StyleAndTextTuples = []
+        entries: list[tuple[Any, Any]] = list(reversed(list(self._touched_files.items()))) if files else list(reversed(list(self._inspection_calls.items())))
+        if not entries:
+            return [("class:status", "None yet")]
+        for key, value in entries:
+            def click(event: MouseEvent, key: Any = key) -> object:
+                if event.event_type == MouseEventType.MOUSE_MOVE:
+                    self.__dict__["_hovered_control"] = ("inspection", files, key)
+                elif event.event_type == MouseEventType.MOUSE_UP and event.button == MouseButton.LEFT:
+                    if files:
+                        self.app.create_background_task(self._inspect_file(str(key)))
+                    else:
+                        call = self._inspection_calls[key]
+                        self.open_viewer(f"{call['tool']} — {call['call_id']}", json.dumps(call, ensure_ascii=False, indent=2))
+                return None
+            label = f"{key} [{value}]" if files else f"{value['tool']} [{value['status']}]"
+            style = "class:clickable" + (" class:hover" if self.__dict__.get("_hovered_control") == ("inspection", files, key) else "")
+            fragments.append((style, label, click))
+            fragments.append(("", "\n"))
+        return fragments
+
+    async def _inspect_file(self, path: str, *, line: int = 1) -> None:
+        root = self.__dict__.get("_project_directory")
+        if root is None:
+            return
+        try:
+            text = await asyncio.to_thread((root / path).read_text, encoding="utf-8")
+        except (OSError, UnicodeError, ValueError) as exc:
+            self.notify("Could not open text file.")
+            self.write(f"{path}: {exc}")
+            return
+        self.open_viewer(path, text, line=line)
+
+    def _ensure_viewer(self) -> None:
+        if "_viewer_active" in self.__dict__:
+            return
+        self._viewer_active = False
+        self._viewer_title = ""
+        self._viewer_window = TranscriptWindow(TextViewControl(""))
+        self._viewer_window._following = False
+        self._viewer_container = HSplit([
+            Window(FormattedTextControl(lambda: self._viewer_title + " — Read Only | ↑↓ / Wheel / PgUp / PgDn | Esc: Close"),
+                   height=1, style="class:status"),
+            self._viewer_window,
+        ])
+
+    def open_viewer(self, title: str, text: str, *, diff: bool = False, line: int = 1) -> None:
+        self._ensure_viewer()
+        self._viewer_title = " ".join(title.split())
+        self._viewer_window.content = DiffViewControl(text) if diff else TextViewControl(text)
+        self._viewer_window.vertical_scroll = max(0, line - 1)
+        self._viewer_window.vertical_scroll_2 = self._viewer_window._pending_scroll = 0
+        self._viewer_window._following = False
+        self._viewer_active = True
+        self.app.layout.focus(self._viewer_window)
+        self.app.invalidate()
+
+    def close_viewer(self) -> None:
+        self._viewer_active = False
+        self.app.layout.focus(self._menu_window if self._menu_future is not None else self.input)
+        self.app.invalidate()
+
+    async def open_artifact(self, record_id: int, *, line: int = 1) -> None:
+        store = self.__dict__.get("_artifact_store")
+        if store is None:
+            self.notify("Inspection records unavailable.")
+            return
+        try:
+            record = await asyncio.to_thread(store.read, record_id)
+        except (OSError, ValueError, UnicodeError) as exc:
+            self.notify("Could not open inspection record.")
+            self.write(f"Inspection record {record_id}: {exc}")
+            return
+        text = record["command"] + "\n\n" + record["output"]
+        if record["error"]:
+            text += "\n\n--- stderr / retention errors ---\n" + record["error"]
+        self.open_viewer(f"Record {record_id}", text, diff=record["kind"] == "diff", line=line)
+
+    def write_artifact_reference(self, record: dict[str, object]) -> None:
+        identifier = record["record_id"]
+        self._ensure_transcript()
+        self.__dict__.setdefault("_artifact_links", {})[len(self._raw_output)] = identifier
+        for call in self.__dict__.get("_inspection_calls", {}).values():
+            if call["call_id"] == record.get("call_id") and call["step_id"] == record.get("step_id"):
+                references = call.setdefault("artifacts", [])
+                if not any(saved["record_id"] == identifier for saved in references):
+                    references.append(record)
+        label = "Diff" if record["kind"] == "diff" else "Output"
+        self.write(f"    View {label} — Record {identifier}\n")
+
+    def _artifact_at(self, point: Point) -> int | None:
+        if self._flow is None:
+            return None
+        rows = self._flow.content_rows()
+        row = self._flow.get_row(point.y) if 0 <= point.y < len(self._flow.rows) else (
+            rows[point.y - len(self._flow.rows)] if 0 <= point.y - len(self._flow.rows) < len(rows) else []
+        )
+        column = 0
+        for style, text, *_ in row:
+            end = column + display_width(text)
+            if column <= point.x < end:
+                for token in style.split():
+                    if token.startswith("class:artifact-"):
+                        identifier = self.__dict__.get("_artifact_links", {}).get(int(token.removeprefix("class:artifact-")))
+                        return identifier if isinstance(identifier, int) else None
+            column = end
+        return None
 
     def _ensure_menu(self) -> None:
         """Add menu state to live instances without replacing the input buffer."""
@@ -479,7 +658,11 @@ class TerminalUI:
 
     def _pinned_prompt_height(self, columns: int | None = None) -> int:
         size = self.output.get_size()
-        self._transcript_content(size.columns if columns is None else columns)
+        if columns is None:
+            columns = size.columns
+            if self.__dict__.get("_inspection_visible") and columns >= 60:
+                columns -= columns // 4
+        self._transcript_content(columns)
         assert self._flow is not None
         self._pinned_prompt = self._flow.prompt_at(self.transcript.vertical_scroll)
         if self._pinned_prompt is None:
@@ -573,19 +756,45 @@ class TerminalUI:
         if self._menu_future is not None:
             self._move_menu(rows)
             return
-        window = self.context_window if self.context_visible else self.transcript
+        window = self._viewer_window if self.__dict__.get("_viewer_active") else self.context_window if self.context_visible else self.transcript
         window.scroll(rows)
         self.app.invalidate()
 
     def _bindings(self) -> KeyBindings:
         bindings = KeyBindings()
         in_menu = Condition(lambda: self._menu_future is not None)
+        in_viewer = Condition(lambda: self.__dict__.get("_viewer_active", False)) & ~in_menu
 
-        @bindings.add("f2", filter=~in_menu)
+        @bindings.add("c-o")
+        def inspect_panel(event: KeyPressEvent) -> None:
+            self.toggle_inspection()
+
+        @bindings.add("escape", filter=in_viewer, eager=True)
+        def close_view(event: KeyPressEvent) -> None:
+            self.close_viewer()
+
+        @bindings.add("up", filter=in_viewer)
+        @bindings.add("down", filter=in_viewer)
+        @bindings.add("pageup", filter=in_viewer)
+        @bindings.add("pagedown", filter=in_viewer)
+        def scroll_view(event: KeyPressEvent) -> None:
+            key = event.key_sequence[-1].key
+            rows = max(1, self.output.get_size().rows - FOOTER_ROWS - 2) if key in {"pageup", "pagedown"} else 1
+            self._scroll_output(-rows if key in {"up", "pageup"} else rows)
+
+        @bindings.add("home", filter=in_viewer)
+        @bindings.add("end", filter=in_viewer)
+        def edge_view(event: KeyPressEvent) -> None:
+            self._viewer_window._following = event.key_sequence[-1].key == Keys.End
+            self._viewer_window.vertical_scroll = self._viewer_window.vertical_scroll_2 = 0
+            self._viewer_window._pending_scroll = 0
+            self.app.invalidate()
+
+        @bindings.add("f2", filter=~in_menu & ~in_viewer)
         def toggle_markdown(event: KeyPressEvent) -> None:
             self.configure_markdown(source=not self.__dict__.get("_markdown_source", False))
 
-        @bindings.add("f3", filter=~in_menu)
+        @bindings.add("f3", filter=~in_menu & ~in_viewer)
         def copy_response(event: KeyPressEvent) -> None:
             if self.last_markdown():
                 self.copy_response()
@@ -604,7 +813,7 @@ class TerminalUI:
         def cancel_menu(event: KeyPressEvent) -> None:
             self._finish_menu(None)
 
-        @bindings.add("escape", filter=~in_menu, eager=True)
+        @bindings.add("escape", filter=~in_menu & ~in_viewer, eager=True)
         def stop_now(event: KeyPressEvent) -> None:
             callback = getattr(self, "_interrupt_callback", None)
             if callback is not None:
@@ -614,12 +823,12 @@ class TerminalUI:
         def ignore_menu_text(event: KeyPressEvent) -> None:
             pass
 
-        @bindings.add("c-\\", filter=~in_menu)
+        @bindings.add("c-\\", filter=~in_menu & ~in_viewer)
         def toggle_context(event: KeyPressEvent) -> None:
             self.context_visible = not self.context_visible
             self.app.invalidate()
 
-        in_context = Condition(lambda: self.context_visible) & ~in_menu
+        in_context = Condition(lambda: self.context_visible) & ~in_menu & ~in_viewer
 
         @bindings.add("up", filter=in_context)
         @bindings.add("down", filter=in_context)
@@ -651,7 +860,7 @@ class TerminalUI:
         def scroll_down(event: KeyPressEvent) -> None:
             self._scroll_output(3)
 
-        @bindings.add("c-d", filter=~in_menu)
+        @bindings.add("c-d", filter=~in_menu & ~in_viewer)
         def eof(event: KeyPressEvent) -> None:
             if not event.current_buffer.text:
                 self._end_input()
@@ -670,6 +879,8 @@ class TerminalUI:
             "context-system": "#ffff00", "retry": "ansired",
             "menu-title": "bold", "menu-selected": "reverse bold",
             "clickable": "underline", "hover": "reverse",
+            "diff-added": "#66dd88", "diff-removed": "#ff6666",
+            "diff-header": "bold #ffdd66", "diff-hunk": "#66ccff",
         })
 
     def refresh(self) -> None:
@@ -700,6 +911,13 @@ class TerminalUI:
             if event.event_type == MouseEventType.MOUSE_DOWN:
                 self._selection_dragging = False
             if event.event_type in (MouseEventType.SCROLL_UP, MouseEventType.SCROLL_DOWN):
+                size = self.output.get_size()
+                if self.__dict__.get("_inspection_visible") and size.columns >= 60 and event.position.x >= size.columns - size.columns // 4 and event.position.y < size.rows - FOOTER_ROWS - 1 and self._menu_future is None:
+                    height = size.rows - FOOTER_ROWS - 1
+                    window = self._files_window if event.position.y < height // 2 else self._calls_window
+                    window.scroll(-3 if event.event_type == MouseEventType.SCROLL_UP else 3)
+                    app.invalidate()
+                    return None
                 self._scroll_output(-3 if event.event_type == MouseEventType.SCROLL_UP else 3)
                 app.invalidate()
                 return None
@@ -788,6 +1006,11 @@ class TerminalUI:
         self._raw_output = archive
         self._block_starts.clear()
         self.__dict__.setdefault("_directory_links", {}).clear()
+        self.__dict__.setdefault("_artifact_links", {}).clear()
+        self.__dict__.setdefault("_touched_files", {}).clear()
+        self.__dict__.setdefault("_inspection_calls", {}).clear()
+        if self.__dict__.get("_viewer_active"):
+            self.close_viewer()
         self._continuation_indents.clear()
         self._markdown_chunks.clear()
         self._markdown_finals.clear()
@@ -889,6 +1112,9 @@ class TerminalUI:
     def _select_transcript(self, event: MouseEvent) -> object:
         self._ensure_transcript()
         directory = self._directory_at(event.position)
+        artifact = self._artifact_at(event.position)
+        if event.event_type == MouseEventType.MOUSE_MOVE and artifact is not None:
+            self.__dict__["_hovered_control"] = ("artifact", artifact)
         if event.event_type == MouseEventType.MOUSE_MOVE and directory is not None:
             self.__dict__["_hovered_control"] = ("directory", directory)
         selecting_button = event.button in {MouseButton.LEFT, MouseButton.UNKNOWN}
@@ -909,6 +1135,10 @@ class TerminalUI:
             if event.button in {MouseButton.RIGHT, MouseButton.MIDDLE}:
                 self._selection_start = self._selection_end = None
             else:
+                if artifact is not None and self._selection_start == event.position:
+                    self._selection_start = self._selection_end = None
+                    self.app.create_background_task(self.open_artifact(artifact))
+                    return None
                 if directory is not None and self._selection_start == event.position:
                     self._selection_start = self._selection_end = None
                     self.app.create_background_task(self._explore_directory(directory))
@@ -1028,7 +1258,8 @@ class TerminalUI:
             else:
                 flow.append(self._raw_output[index], first=index in self._block_starts,
                             continuation_indents=self._continuation_indents.get(index),
-                            extra_style=f" class:directory-{index}" if index in self.__dict__.get("_directory_links", {}) else "")
+                            extra_style=(f" class:directory-{index}" if index in self.__dict__.get("_directory_links", {}) else "") +
+                                        (f" class:artifact-{index}" if index in self.__dict__.get("_artifact_links", {}) else ""))
             if index in self._queued_notices:
                 self._notice_rows[index] = (start, len(flow.rows))
         self._wrapped_count = len(self._raw_output)
@@ -1057,12 +1288,15 @@ class TerminalUI:
             return decorate_links(preview[offset]) if offset < len(preview) else []
 
         def decorate_links(fragments: StyleAndTextTuples) -> StyleAndTextTuples:
-            if self.__dict__.get("_folder_opener") is None:
-                return fragments
             result: StyleAndTextTuples = []
             for style, text, *_ in fragments:
                 for token in style.split():
-                    if token.startswith("class:directory-"):
+                    if token.startswith("class:artifact-"):
+                        identifier = self.__dict__.get("_artifact_links", {}).get(int(token.removeprefix("class:artifact-")))
+                        style += " class:clickable"
+                        if self.__dict__.get("_hovered_control") == ("artifact", identifier):
+                            style += " class:hover"
+                    if token.startswith("class:directory-") and self.__dict__.get("_folder_opener") is not None:
                         directory = self.__dict__.get("_directory_links", {}).get(int(token.removeprefix("class:directory-")))
                         style += " class:clickable"
                         if self.__dict__.get("_hovered_control") == ("directory", directory):

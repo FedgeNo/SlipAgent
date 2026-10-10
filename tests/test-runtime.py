@@ -702,7 +702,7 @@ def test_new_tool_modules_reload_and_close_with_their_own_helpers(run_copy):
                 close(self)
         """))
         edit('tools/__init__.py', 'from .base import Tool,', 'from .extra import ExtraTool\\nfrom .base import Tool,')
-        edit('tools/__init__.py', '*file_tools(workspace),', 'ExtraTool(),\\n            *file_tools(workspace),')
+        edit('tools/__init__.py', '*file_tools(workspace, artifacts),', 'ExtraTool(),\\n            *file_tools(workspace, artifacts),')
         await frame.checkpoint()
         assert frame.generation == 1, sink.getvalue()
         old_extra = registry.get('extra')

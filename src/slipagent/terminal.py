@@ -319,6 +319,26 @@ class TerminalUI:
         self._ensure_inspection()
         self._inspection_calls[(step, call.id)] = {"step_id": step, "call_id": call.id,
                                                  "tool": call.name, "arguments": call.arguments, "status": "running"}
+        if call.name == "run_command":
+            from .shellpaths import shell_file_references
+
+            command = call.arguments.get("command")
+            root = self.__dict__.get("_project_directory")
+            if isinstance(command, str) and root is not None:
+                tracking = shell_file_references(command, root)
+                self._inspection_calls[(step, call.id)]["shell_tracking"] = tracking
+                for reference in tracking["references"]:
+                    shell_target = Path(reference["path"])
+                    display = str(shell_target)
+                    if shell_target.is_relative_to(root):
+                        display = shell_target.relative_to(root).as_posix()
+                    previous = self._touched_files.get(display, "")
+                    if not previous or previous.startswith("shell "):
+                        modes = set(reference["access"].split("/"))
+                        if previous:
+                            modes.update(previous.removeprefix("shell ").removesuffix(" (inferred)").split("/"))
+                        access = "/".join(mode for mode in ("read", "write", "delete") if mode in modes)
+                        self._touched_files[display] = f"shell {access} (inferred)"
         path = call.arguments.get("path")
         if isinstance(path, str) and call.name in {"read_file", "write_file", "edit_file"}:
             self._touched_files.setdefault(path, "requested")
@@ -339,6 +359,8 @@ class TerminalUI:
                     self._touched_files[change["path"]] = change["action"]
             path = call.arguments.get("path")
             if not error and isinstance(path, str) and path in self._touched_files:
+                if call.name == "read_file" and self._touched_files[path].startswith("shell "):
+                    self._touched_files[path] = "read"
                 self._touched_files[path] = "modified" if call.name != "read_file" else self._touched_files.get(path, "read")
                 if self._touched_files[path] == "requested":
                     self._touched_files[path] = "read"
@@ -1055,6 +1077,19 @@ class TerminalUI:
             if self._menu_future is not None and event.event_type not in (MouseEventType.MOUSE_UP, MouseEventType.MOUSE_MOVE):
                 return None  # Keep focus on the menu until selection/cancellation.
             try:
+                screen = app.renderer._last_screen
+                if screen is not None:
+                    for hit_window in (self._menu_window, self._files_window, self._calls_window):
+                        position = screen.visible_windows_to_write_positions.get(hit_window)
+                        if position is None or not (position.xpos <= event.position.x < position.xpos + position.width
+                                                   and position.ypos <= event.position.y < position.ypos + position.height):
+                            continue
+                        info = hit_window.render_info
+                        row = event.position.y - position.ypos
+                        source = info.visible_line_to_row_col.get(row) if info is not None else None
+                        # Window otherwise clamps blank rows onto the last item.
+                        if source is None or info is None or not fragment_list_to_text(info.ui_content.get_line(source[0])):
+                            return None
                 return original.mouse_handlers[event.position.y][event.position.x](event)
             finally:
                 # Releases outside the transcript must also end its drag.
@@ -1087,7 +1122,8 @@ class TerminalUI:
                 style = "class:clickable"
                 if self.__dict__.get("_hovered_control") == "commands":
                     style += " class:hover"
-                fragments.extend([("", "  "), (style, "Commands", self._commands_mouse)])
+                # Window maps clicks past text onto its last character.
+                fragments.extend([("", "  "), (style, "Commands", self._commands_mouse), ("", " ")])
             return fragments
         frame = self.__dict__.get("_activity_frame", PULSE_FRAMES[int(time.monotonic() * 4) % len(PULSE_FRAMES)])
         label = "Stopping After This Step" if self.stopping else "Working (esc to interrupt)"

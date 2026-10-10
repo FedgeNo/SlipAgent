@@ -1387,6 +1387,16 @@ is active. `run_command` and MCP servers
 run with the harness process's permissions and can access paths outside the
 workspace. The workspace check is not an operating-system sandbox.
 
+## Shell File Tracking
+
+The inspection panel tracks literal shell file references as **inferred** reads,
+writes, or deletions. It recognizes common file and search commands, output
+options, wrappers, redirections, and literal working-directory changes.
+The call viewer includes the analysis and any incomplete-tracking reasons.
+Variables, globs, substitutions, unsupported options, scripts, and arbitrary
+programs can hide additional effects. These references are neither an execution
+trace nor confirmation that a file changed. Tracking does not restrict shell access.
+
 ## Development
 
 ```bash

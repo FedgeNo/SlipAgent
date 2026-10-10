@@ -223,6 +223,28 @@ async def test_sidebar_wheel_scrolls_each_pane_and_uses_menu_colors(display):
             await task
 
 
+def test_inspection_panel_tracks_shell_references_without_claiming_changes(display, tmp_path):
+    sink, _, output, _, _ = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        ui.__dict__["_project_directory"] = tmp_path
+        call = ToolCall("shell-1", "run_command", {"command": 'rg -e "not a path" source > output; mystery hidden'})
+        ui.track_call(call, 1)
+        assert ui._touched_files == {"output": "shell write (inferred)", "source": "shell read (inferred)"}
+        tracking = ui._inspection_calls[(1, "shell-1")]["shell_tracking"]
+        assert tracking["incomplete"] and tracking["limitations"]
+        ui.finish_call(call, 1, "exit code: 1", True)
+        assert ui._touched_files["output"] == "shell write (inferred)"
+        read = ToolCall("read-1", "read_file", {"path": "source"})
+        ui.track_call(read, 2)
+        ui.finish_call(read, 2, "contents", False)
+        assert ui._touched_files["source"] == "read"
+        ui.track_call(ToolCall("shell-2", "run_command", {"command": "cat source"}), 3)
+        assert ui._touched_files["source"] == "read"
+        ui.track_call(ToolCall("shell-3", "run_command", {"command": "cat output > output"}), 4)
+        assert ui._touched_files["output"] == "shell read/write (inferred)"
+
+
 def test_inspection_panel_records_partial_path_operations(display):
     sink, _, output, _, _ = display
     with create_pipe_input() as pipe:
@@ -640,6 +662,12 @@ async def test_ready_commands_link_preserves_draft_and_inserts_command(display):
         try:
             await wait_until(lambda: "Ready  Commands" in snapshot()[17])
             assert screen.buffer[17][7].underscore
+            pipe.send_text("\x1b[<35;60;18M")
+            await asyncio.sleep(0.1)
+            assert ui.__dict__.get("_hovered_control") != "commands"
+            pipe.send_text("\x1b[<0;60;18M\x1b[<0;60;18m")
+            await asyncio.sleep(0.1)
+            assert ui._menu_future is None
             pipe.send_text("unfinished draft")
             await wait_until(lambda: "unfinished draft" in snapshot()[18])
             pipe.send_text("\x1b[<35;8;18M")
@@ -665,6 +693,29 @@ async def test_ready_commands_link_preserves_draft_and_inserts_command(display):
             await wait_until(lambda: "Ready  Commands" in snapshot()[17])
         finally:
             ui.close()
+            await task
+
+
+async def test_menu_blank_rows_do_not_hover_or_select_the_last_item(display):
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        task = asyncio.create_task(ui.run())
+        choice = asyncio.create_task(ui.choose("Menu", [("one", "One"), ("two", "Two")]))
+        try:
+            await wait_until(lambda: "› One" in snapshot()[18])
+            pipe.send_text("\x1b[<35;70;23M")
+            await asyncio.sleep(0.1)
+            assert ui.__dict__.get("_hovered_control") is None
+            pipe.send_text("\x1b[<0;70;23M\x1b[<0;70;23m")
+            await asyncio.sleep(0.1)
+            assert not choice.done()
+            # A real menu row remains clickable across the available width.
+            pipe.send_text("\x1b[<0;70;20M\x1b[<0;70;20m")
+            assert await asyncio.wait_for(choice, 3) == "two"
+        finally:
+            ui.close()
+            await choice
             await task
 
 

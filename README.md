@@ -508,6 +508,9 @@ A queued rewind leaves the agent idle until the user submits another prompt.
 Use `/rewind list` to inspect available checkpoints without changing files.
 
 Checkpoints cover built-in `write_file` and `edit_file` calls made by the agent.
+Copy, move, delete, and directory creation are tracked in the inspection panel
+but are not undone by `/rewind`. These tools use exact paths, reject symlinks,
+and report completed changes even when an operation fails partway through.
 Their private, deduplicated backups live beside the session journal in its
 `<session-id>-checkpoints` directory. They survive resume and copy into forks;
 forks share the project files, so rewind also affects those shared files.
@@ -1199,6 +1202,10 @@ The model gets these built-in tools:
 | `answer` | Display `text`; end the run when called without other tools, or continue after a mixed tool batch. Also accepts `<tool_call><answer>text</answer></tool_call>`. |
 | `read_file` | Read a whole UTF-8 file up to 32 MB with numbered lines; optional offset/limit ranges, without a line cap. Model context limits still apply. |
 | `write_file` | Create or overwrite a file, making parent directories. |
+| `copy_path` | Copy a file or directory tree to a new exact destination, including binary files. |
+| `move_path` | Move or rename a file or directory tree on the same filesystem. |
+| `delete_path` | Delete a file or empty directory; nonempty directories require `recursive=true`. |
+| `create_directory` | Create a directory, optionally including missing parents. |
 | `edit_file` | Replace one exact string or an `edits` array against one original file. All matches must validate before an atomic write; returns a bounded diff and helpful match diagnostics. |
 | `grep` | Regex search across file contents, with an optional glob filter and a 120-second timeout. |
 | `glob` | Find files and directories by name pattern. |

@@ -10,6 +10,7 @@ from ..environment import ProjectEnvironment, load_project_settings, load_projec
 from .base import Tool, ToolRegistry, ToolResult, validate_arguments
 from .answer import AnswerTool
 from .files import EditFileTool, ReadFileTool, WriteFileTool, file_tools
+from .paths import path_tools
 from .git import GitAddTool, GitCommitTool, GitDiffTool, GitLogTool, GitStatusTool, git_tools
 from .navigate import ListDirTool, navigate_tools
 from .search import GlobTool, GrepTool, search_tools
@@ -80,6 +81,7 @@ def build_default_registry(
         [
             AnswerTool(),
             *file_tools(workspace, artifacts),
+            *path_tools(workspace),
             *search_tools(workspace),
             *navigate_tools(workspace),
             *shell_tools(workspace, archive, services.get("command_jobs")),

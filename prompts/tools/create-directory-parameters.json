@@ -1,0 +1,4 @@
+{
+    "properties/path": "Exact new directory path, subject to Workspace Access.",
+    "properties/parents": "Create missing parent directories too. Defaults to false."
+}

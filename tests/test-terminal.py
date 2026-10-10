@@ -129,6 +129,19 @@ async def test_inspection_panel_toggles_by_combo_and_click_and_opens_files_and_c
             await task
 
 
+def test_inspection_panel_records_partial_path_operations(display):
+    sink, _, output, _, _ = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        call = ToolCall("copy-1", "copy_path", {"source": "original", "destination": "copy"})
+        ui.track_call(call, 1)
+        ui.finish_call(call, 1, {"changes": [{"path": "copy/child", "action": "created", "kind": "file"}],
+                                 "error": "disk full"}, True)
+        assert ui._touched_files["copy/child"] == "created"
+        assert ui._inspection_calls[(1, "copy-1")]["status"] == "error"
+        assert ui._touched_files["original"] == "requested"
+
+
 async def test_notifications_remain_visible_in_menu_context_and_after_resize(display):
     sink, size, output, screen, snapshot = display
     with create_pipe_input() as pipe:

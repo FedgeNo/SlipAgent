@@ -293,6 +293,11 @@ class TerminalUI:
         path = call.arguments.get("path")
         if isinstance(path, str) and call.name in {"read_file", "write_file", "edit_file"}:
             self._touched_files.setdefault(path, "requested")
+        if call.name in {"copy_path", "move_path", "delete_path", "create_directory"}:
+            for key in ("path", "source", "destination"):
+                target = call.arguments.get(key)
+                if isinstance(target, str):
+                    self._touched_files.setdefault(target, "requested")
         self.app.invalidate()
 
     def finish_call(self, call: ToolCall, step: int, result: Any, error: bool) -> None:
@@ -300,6 +305,9 @@ class TerminalUI:
         saved = self._inspection_calls.get((step, call.id))
         if saved is not None:
             saved.update(status="error" if error else "completed", result=result)
+            if call.name in {"copy_path", "move_path", "delete_path", "create_directory"} and isinstance(result, dict):
+                for change in result.get("changes", []):
+                    self._touched_files[change["path"]] = change["action"]
             path = call.arguments.get("path")
             if not error and isinstance(path, str) and path in self._touched_files:
                 self._touched_files[path] = "modified" if call.name != "read_file" else self._touched_files.get(path, "read")

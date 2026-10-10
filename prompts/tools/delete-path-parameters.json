@@ -1,0 +1,4 @@
+{
+    "properties/path": "Exact file or directory path, subject to Workspace Access.",
+    "properties/recursive": "Allow deletion of a nonempty directory and all its contents. Defaults to false."
+}

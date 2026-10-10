@@ -1,0 +1,4 @@
+{
+    "properties/source": "Exact source file or directory path, subject to Workspace Access.",
+    "properties/destination": "Exact new destination path, not a containing directory. Must not exist."
+}

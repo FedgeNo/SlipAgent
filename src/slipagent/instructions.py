@@ -128,17 +128,19 @@ class ProjectInstructions:
             return None  # The ordinary argument validator reports syntax errors.
         if not isinstance(arguments, dict):
             return None
-        value = arguments.get(parameter) or "."
-        if not isinstance(value, str):
-            return None
-        target = self.workspace.resolve(value)
-        directory = target if target.is_dir() else target.parent
         relevant = {"."}
-        while directory != self.workspace.root:
-            relevant.add(self.workspace.relative(directory))
-            if directory == directory.parent:
-                break
-            directory = directory.parent
+        targets = (tool.instruction_targets(arguments) if hasattr(tool, "instruction_targets")
+                   else [arguments.get(parameter) or "."])
+        for value in targets:
+            if not isinstance(value, str):
+                continue
+            target = self.workspace.resolve(value)
+            directory = target if target.is_dir() else target.parent
+            while directory != self.workspace.root:
+                relevant.add(self.workspace.relative(directory))
+                if directory == directory.parent:
+                    break
+                directory = directory.parent
         self.scopes.update(relevant)
         if tool.mutates_workspace:
             current = self.snapshot()

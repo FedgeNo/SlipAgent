@@ -696,6 +696,45 @@ async def test_ready_commands_link_preserves_draft_and_inserts_command(display):
             await task
 
 
+@pytest.mark.parametrize("working", [False, True])
+@pytest.mark.parametrize("columns", [40, 100])
+async def test_viewer_exit_link_replaces_commands_and_closes_only_on_its_words(display, working, columns):
+    sink, size, output, screen, snapshot = display
+    size[0] = Size(rows=24, columns=columns)
+    screen.resize(lines=24, columns=columns)
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: "Commands" in snapshot()[17])
+            ui.input.text = "saved draft"
+            ui.set_working(working)
+            ui.open_viewer("Contents", "sample text", diff=working)
+            await wait_until(lambda: "ESC to exit viewer" in snapshot()[17])
+            row = snapshot()[17]
+            assert "Commands" not in row
+            assert "esc to interrupt" not in row
+            start = row.index("exit viewer")
+            assert screen.buffer[17][start].underscore
+            assert not screen.buffer[17][start - 2].underscore
+            blank = 21 if columns == 40 else 70
+            pipe.send_text(f"\x1b[<35;{blank};18M\x1b[<0;{blank};18M\x1b[<0;{blank};18m")
+            await asyncio.sleep(0.1)
+            assert ui._viewer_active
+            assert ui.__dict__.get("_hovered_control") != "exit-viewer"
+            pipe.send_text(f"\x1b[<35;{start + 1};18M")
+            await wait_until(lambda: snapshot() and screen.buffer[17][start].reverse)
+            pipe.send_text(f"\x1b[<0;{start + 1};18M\x1b[<0;{start + 1};18m")
+            await wait_until(lambda: not ui._viewer_active)
+            assert ui.working == working
+            assert ui.input.text == "saved draft"
+            ui.set_working(False)
+            await wait_until(lambda: "Ready  Commands" in snapshot()[17])
+        finally:
+            ui.close()
+            await task
+
+
 async def test_menu_blank_rows_do_not_hover_or_select_the_last_item(display):
     sink, _, output, _, snapshot = display
     with create_pipe_input() as pipe:

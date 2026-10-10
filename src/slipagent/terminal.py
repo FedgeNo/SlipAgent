@@ -1110,6 +1110,21 @@ class TerminalUI:
         return False
 
     def _activity(self) -> StyleAndTextTuples:
+        fragments = self._activity_status()
+        if self._viewer_active:
+            def close(event: MouseEvent) -> object:
+                if event.event_type == MouseEventType.MOUSE_MOVE:
+                    self.__dict__["_hovered_control"] = "exit-viewer"
+                elif event.event_type == MouseEventType.MOUSE_UP and event.button == MouseButton.LEFT:
+                    self.close_viewer()
+                return None
+            style = "class:clickable" + (" class:hover" if self.__dict__.get("_hovered_control") == "exit-viewer" else "")
+            if display_width(fragment_list_to_text(fragments)) + len("  ESC to exit viewer ") > self.output.get_size().columns - 18:
+                fragments = []
+            fragments.extend([("", "  ESC to " if fragments else "ESC to "), (style, "exit viewer", close), ("", " ")])
+        return fragments
+
+    def _activity_status(self) -> StyleAndTextTuples:
         retry_status = self.__dict__.get("_retry_status", "")
         if retry_status and not self.stopping:
             return [("class:retry", retry_status)]
@@ -1118,7 +1133,7 @@ class TerminalUI:
             return [("class:idle", command_status)]
         if not self.working:
             fragments: StyleAndTextTuples = [("class:idle", "Ready")]
-            if self._input_label == "> ":
+            if self._input_label == "> " and not self._viewer_active:
                 style = "class:clickable"
                 if self.__dict__.get("_hovered_control") == "commands":
                     style += " class:hover"
@@ -1126,7 +1141,7 @@ class TerminalUI:
                 fragments.extend([("", "  "), (style, "Commands", self._commands_mouse), ("", " ")])
             return fragments
         frame = self.__dict__.get("_activity_frame", PULSE_FRAMES[int(time.monotonic() * 4) % len(PULSE_FRAMES)])
-        label = "Stopping After This Step" if self.stopping else "Working (esc to interrupt)"
+        label = "Stopping After This Step" if self.stopping else "Working" if self._viewer_active else "Working (esc to interrupt)"
         return [("class:pulse", f"{frame} {label}")]
 
     def set_retry_status(self, text: str) -> None:

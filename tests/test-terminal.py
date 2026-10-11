@@ -290,6 +290,36 @@ async def test_right_click_keeps_selection_and_no_selection_shows_notice(display
             await task
 
 
+async def test_pending_editor_status_keeps_spinner_and_read_only_calls_open_immediately(display, tmp_path):
+    from slipagent.useredits import UserEdits
+    from slipagent.terminal import PULSE_FRAMES
+    from slipagent.tools.base import ToolRegistry
+    from unittest.mock import AsyncMock
+    sink, _, output, _, _ = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
+        session = SimpleNamespace(agent=SimpleNamespace(running=True), registry=ToolRegistry(), reloader=None)
+        edits = UserEdits(session, ui)
+        ui.__dict__["_user_edits"] = edits
+        opened = AsyncMock()
+        ui._open_editor_now = opened
+        try:
+            ui.set_working(True)
+            await ui._inspect_call({"tool": "list_dir", "call_id": "listing", "result": "entries"})
+            assert ui._viewer_active and ui.working
+            assert edits.pending is None and edits.released.is_set()
+            ui.close_viewer()
+            await edits.request(tmp_path / "file.txt")
+            opened.assert_not_awaited()
+            for frame in PULSE_FRAMES:
+                ui._activity_frame = frame
+                assert ui._activity_status() == [("class:pulse", f"{frame} Opening editor after this turn")]
+            edits.close()
+            assert "Working" in ui._activity_status()[0][1]
+        finally:
+            ui._close_transcript()
+
+
 async def test_read_only_viewer_scrolls_targets_lines_keeps_work_running_and_esc_only_closes(display):
     from unittest.mock import Mock
     sink, _, output, _, snapshot = display

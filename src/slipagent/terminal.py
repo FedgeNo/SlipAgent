@@ -1324,6 +1324,10 @@ class TerminalUI:
     def _activity_status(self) -> StyleAndTextTuples:
         if self._editor_active:
             return [("class:idle", "Agent Held")]
+        edits = self.__dict__.get("_user_edits")
+        if edits is not None and getattr(edits, "pending", None) is not None:
+            frame = self.__dict__.get("_activity_frame", PULSE_FRAMES[int(time.monotonic() * 4) % len(PULSE_FRAMES)])
+            return [("class:pulse", f"{frame} Opening editor after this turn")]
         retry_status = self.__dict__.get("_retry_status", "")
         if retry_status and not self.stopping:
             return [("class:retry", retry_status)]

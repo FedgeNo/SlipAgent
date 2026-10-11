@@ -711,7 +711,7 @@ class TerminalUI:
         if not text:
             tips = ["Select and right-click for text options."]
             if self._editor_active:
-                tips = ["Ctrl+S saves; Esc closes the editor.", "Ctrl+PgUp/PgDn changes file pages."]
+                tips = ["Ctrl+S saves; Esc closes the editor.", "PgUp/PgDn changes file pages."]
             elif self._viewer_active:
                 tips = ["Scroll to inspect; Esc closes the viewer."]
             if not self.working and self._input_label == "> " and self._menu_future is None:
@@ -1083,10 +1083,10 @@ class TerminalUI:
         def reload_editor(event: KeyPressEvent) -> None:
             self.app.create_background_task(self._reload_editor())
 
-        @bindings.add("c-pageup", filter=in_editor)
-        @bindings.add("c-pagedown", filter=in_editor)
+        @bindings.add("pageup", filter=in_editor)
+        @bindings.add("pagedown", filter=in_editor)
         def page_editor(event: KeyPressEvent) -> None:
-            self._change_editor_page(-1 if event.key_sequence[-1].key == Keys.ControlPageUp else 1)
+            self._change_editor_page(-1 if event.key_sequence[-1].key == Keys.PageUp else 1)
 
         @bindings.add("c-o")
         def inspect_panel(event: KeyPressEvent) -> None:

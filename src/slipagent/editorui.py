@@ -36,8 +36,8 @@ class EditorPanel:
         groups = [
             [("Save File [Ctrl+S]", lambda: self.terminal.app.create_background_task(self.save())),
              ("Reload File [Ctrl+R]", lambda: self.terminal.app.create_background_task(self.reload()))],
-            [("Previous Page [Ctrl+PgUp]", lambda: self.change_page(-1)),
-             ("Next Page [Ctrl+PgDn]", lambda: self.change_page(1))],
+            [("Previous Page [PgUp]", lambda: self.change_page(-1)),
+             ("Next Page [PgDn]", lambda: self.change_page(1))],
             [("Undo [Ctrl+Z]", self.input.buffer.undo), ("Redo [Ctrl+Y]", self.input.buffer.redo)],
             [("Editor Options [F4]", lambda: self.terminal.app.create_background_task(self.terminal._options_panel.show()))],
         ]
@@ -62,7 +62,7 @@ class EditorPanel:
         if self.file is None:
             return []
         changed = signature(self.file.path) != self.file.loaded
-        text = f"{self.file.path.name} — Editor | Page {self.page + 1}/{self.file.page_count} | Ctrl+S: Save | Ctrl+PgUp/PgDn: Pages"
+        text = f"{self.file.path.name} — Editor | Page {self.page + 1}/{self.file.page_count} | Ctrl+S: Save | PgUp/PgDn: Pages"
         if changed:
             text = "File changed on disk. " + text
         def reload(event: MouseEvent) -> object:

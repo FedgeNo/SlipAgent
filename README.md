@@ -667,7 +667,7 @@ it at that line's end, and clicking below the content places it at the file's en
 Editor action controls replace the prompt area while editing; the same prompt
 buffer, text, cursor, and scrolling return when the editor closes.
 Files are backed by private snapshots, with only
-one bounded page in the editing buffer; **Ctrl+Page Up/Down** moves between pages.
+one bounded page in the editing buffer; **Page Up/Down** moves between pages.
 Untouched content and line endings are preserved. External disk changes offer
 Reload and require an explicit choice before overwriting. Editor reload retains
 the cursor's logical line, clamping to the last line if the file became shorter.

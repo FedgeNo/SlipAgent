@@ -207,6 +207,30 @@ async def test_editor_reload_preserves_logical_cursor_line(display, tmp_path, lo
             ui._close_transcript()
 
 
+async def test_editor_standard_page_keys_navigate_and_retain_edits(display, tmp_path):
+    path = tmp_path / "file.txt"
+    path.write_text("".join(f"line-{n}\n" for n in range(100)))
+    sink, _, output, _, _ = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
+        ui.input.text = "keep draft"
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: ui.app.is_running)
+            await ui._open_editor_now(path)
+            ui._editor_input.buffer.insert_text("user edit\n")
+            pipe.send_text("\x1b[6~")
+            await wait_until(lambda: ui._editor_panel.page == 1)
+            assert ui._editor_input.text.startswith("line-32\n")
+            pipe.send_text("\x1b[5~")
+            await wait_until(lambda: ui._editor_panel.page == 0)
+            assert ui._editor_input.text.startswith("user edit\nline-0\n")
+            assert ui.input.text == "keep draft"
+        finally:
+            ui.close()
+            await task
+
+
 async def test_editor_saves_and_requires_choice_before_discarding(display, tmp_path):
     from unittest.mock import Mock
     path = tmp_path / "file.txt"

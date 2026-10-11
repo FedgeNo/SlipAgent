@@ -244,7 +244,20 @@ class _PublicTransport(httpx.AsyncHTTPTransport):
         return await super().handle_async_request(pinned)
 
 
-class FetchPageTool(Tool):
+class PublicHttpTool(Tool):
+    """Shared verified, DNS-pinned HTTP transport and client lifetime."""
+
+    def __init__(self) -> None:
+        self._client = httpx.AsyncClient(
+            timeout=DEFAULT_TIMEOUT, trust_env=False,
+            transport=_PublicTransport(limits=httpx.Limits(max_keepalive_connections=0)),
+        )
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+
+class FetchPageTool(PublicHttpTool):
     parameter_prompts = 'tools/fetch-page-parameters.json'
     name = "fetch_page"
     description_prompt = 'tools/fetch-page.md'
@@ -261,15 +274,6 @@ class FetchPageTool(Tool):
         },
         "required": ["url"],
     }
-
-    def __init__(self) -> None:
-        self._client = httpx.AsyncClient(
-            timeout=DEFAULT_TIMEOUT, trust_env=False,
-            transport=_PublicTransport(limits=httpx.Limits(max_keepalive_connections=0)),
-        )
-
-    async def aclose(self) -> None:
-        await self._client.aclose()
 
     async def run(self, url: str, max_chars: int = MAX_PAGE_CHARS) -> ToolResult:
         candidate = url.strip()

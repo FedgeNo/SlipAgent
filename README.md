@@ -1315,6 +1315,7 @@ The complete built-in tool set is:
 | `git_commit` | Commit already staged changes with a nonempty `message`. |
 | `web_search` | Search the web via Exa. Returns titles, URLs, and provider-supplied page text. |
 | `fetch_page` | Fetch a URL and return readable text (scripts stripped). |
+| `http_fetch` | Send HTTP requests with methods, headers, query parameters, and text or JSON bodies; return status, headers, and raw body. |
 | `recall_history` | Search history or retrieve a complete original step or selected fields, without character limits or paging. |
 | `update_plan` (planning enabled) | Save an objective and 1–8 stages, with at most one in progress; the latest successful plan is supplied with its last-updated step. |
 | `navigate_code` (configured projects only) | Definitions, references, implementations, and hover via a local language server. |
@@ -1442,6 +1443,12 @@ MCP server stderr is connection diagnostics and does not use this command archiv
 `fetch_page` needs no API key and accepts only public HTTP(S) destinations,
 including every redirect. `web_search` needs `EXA_API_KEY`; without one it
 returns a clear setup error rather than failing silently.
+
+`http_fetch` uses the same public HTTP(S) destination checks, preserves raw
+response text, and returns binary data as `body_base64` when it cannot be decoded.
+It returns redirects without following them and preserves error response bodies.
+Downloads are limited to 32 MB; the request timeout defaults to 120 seconds
+(maximum 600). It uses the existing HTTP client and does not require cURL.
 
 Git tools accept an optional workspace-relative `repo` directory (default `.`)
 and `timeout` in seconds (default 120, maximum 600). Git must be installed.

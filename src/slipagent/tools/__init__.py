@@ -19,6 +19,7 @@ from .web import FetchPageTool, WebSearchTool, web_tools
 from .output import CommandArchive, ReadCommandOutputTool
 from .python import CreatePythonEnvironmentTool
 from .discovery import LoadToolsTool
+from .http import HttpFetchTool
 
 __all__ = [
     "AnswerTool",
@@ -34,6 +35,7 @@ __all__ = [
     "GrepTool",
     "ListDirTool",
     "LoadToolsTool",
+    "HttpFetchTool",
     "ReadFileTool",
     "RunCommandTool",
     "Tool",
@@ -98,6 +100,7 @@ def build_default_registry(
             ReadCommandOutputTool(archive),
             *([ReadArtifactTool(artifacts)] if artifacts is not None else []),
             *web_tools(exa_api_key),
+            HttpFetchTool(),
         ], services=services, owns_services=owns_services,
     )
     registry.builtin_names = frozenset(registry.names)

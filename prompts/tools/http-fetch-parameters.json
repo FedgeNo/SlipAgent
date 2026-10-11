@@ -1,0 +1,9 @@
+{
+    "properties/url": "Absolute public HTTP(S) URL without embedded credentials.",
+    "properties/method": "HTTP method; defaults to GET.",
+    "properties/headers": "Request headers, including authentication or content type when needed.",
+    "properties/params": "Query parameters appended to the URL.",
+    "properties/body": "Literal UTF-8 request body; mutually exclusive with json_body.",
+    "properties/json_body": "Structured JSON request body, serialized once by the HTTP client.",
+    "properties/timeout": "Request timeout in seconds, default 120; range 1–600."
+}

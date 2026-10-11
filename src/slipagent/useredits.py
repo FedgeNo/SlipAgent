@@ -34,9 +34,7 @@ class UserEdits(WorkCoordinator):
                 self.opening = False
         self.pending = path, line
         self.hold()
-        if self.session.agent.running and not switching:
-            self.terminal.notify("Editor queued until this turn finishes.")
-        else:
+        if not self.session.agent.running or switching:
             await self.boundary()
 
     async def boundary(self) -> None:

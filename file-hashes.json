@@ -199,7 +199,7 @@
   "src/slipagent/types.py": "16583f77a2ff6f33299dc7726f7171f17c40e767e61356f70b781a35f656c70d",
   "src/slipagent/uipreferences.py": "5c6df87909aeb1f495a75c94370525cc00aab8f48856dc6056c486479fd18783",
   "src/slipagent/uiwindows.py": "af95fe08997335c8b00e2d41962a7930a280d6c8a63444fd7dabd32bc25880f2",
-  "src/slipagent/useredits.py": "d46fdc2ef585771476fe3c0c414e9ef1b81cc7b76b568f526c8ef2acf6478a43",
+  "src/slipagent/useredits.py": "2c35c6100542215ebf43b8c7cf762166bc44eea4fc3e35e8de8ba76c847912ad",
   "src/slipagent/viewerpanels.py": "1171806f58b8a524b4673139ffcb5149e80a582b225c95fd9a640a1de01c2534",
   "src/slipagent/viewers.py": "70f05f6e0d8c89b251a5b65164c85e8af30de067533cd90bd20a95758f717d95",
   "src/slipagent/work.py": "591b86633889230a60ddac55522ae3b321422def540cd36a30ec77e07cf2229f",

@@ -671,6 +671,8 @@ there are unsaved changes. Clicking text places the cursor there; clicking right
 it at that line's end, and clicking below the content places it at the file's end.
 Editor action controls replace the prompt area while editing; the same prompt
 buffer, text, cursor, and scrolling return when the editor closes.
+The editor's top line shows the full file path, truncating its middle when needed.
+Help, reload controls, and external-change warnings appear in the bottom area.
 Clicking another touched file opens it immediately when the current file is
 saved, or offers the same unsaved-change menu first. The agent stays held
 throughout the switch.

@@ -371,6 +371,38 @@ async def test_file_line_link_opens_at_target_and_selection_offers_path(display,
             await task
 
 
+@pytest.mark.parametrize("sidebar", [False, True])
+def test_editor_header_shows_path_and_keeps_help_and_disk_warning_in_footer(display, tmp_path, sidebar):
+    from slipagent.editor import FileEditor
+    from wcwidth import width as display_width
+
+    path = tmp_path / ("目录é" * 10 + ".txt")
+    path.write_text("original")
+    sink, size, output, _, _ = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        ui._editor_panel.file = FileEditor(path)
+        try:
+            size[0] = Size(rows=24, columns=display_width(str(path)) + 1)
+            assert ui._editor_panel.header() == [("", str(path))]
+            ui._inspection_visible = sidebar
+            size[0] = Size(rows=24, columns=80)
+            header = "".join(part[1] for part in ui._editor_panel.header())
+            left, right = header.split("…")
+            assert str(path).startswith(left) and str(path).endswith(right)
+            assert right.endswith(".txt")
+            assert display_width(header) <= (60 if sidebar else 80)
+            path.write_text("external change")
+            assert ui._editor_panel.header() == [("", header)]
+            actions = "".join(part[1] for part in ui._editor_panel.actions())
+            assert "File changed on disk." in actions
+            for label in ("Ctrl+S", "Ctrl+R", "PgUp", "PgDn", "F4"):
+                assert label in actions
+                assert label not in header
+        finally:
+            ui.close()
+
+
 async def test_editor_mouse_places_cursor_on_text_and_at_line_end_in_blank_space(display, tmp_path):
     path = tmp_path / "file.txt"
     path.write_text("first line\nsecond line")

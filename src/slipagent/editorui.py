@@ -14,6 +14,7 @@ from prompt_toolkit.layout import HSplit, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.mouse_events import MouseEvent, MouseEventType, MouseButton
 from prompt_toolkit.widgets import TextArea
+from wcwidth import iter_graphemes, width as display_width
 
 from .editor import FileEditor, PAGE_SEGMENTS, signature
 from .editorcontrol import EditorControl, EditorWindow
@@ -51,7 +52,9 @@ class EditorPanel:
                 self.container.children[1] = self.input.window
 
     def actions(self) -> StyleAndTextTuples:
-        result: StyleAndTextTuples = [("class:menu-title", "Editor Actions\n")]
+        changed = self.file is not None and signature(self.file.path) != self.file.loaded
+        title = "Editor Actions — File changed on disk." if changed else "Editor Actions"
+        result: StyleAndTextTuples = [("class:menu-title", title + "\n")]
         groups = [
             [("Save File [Ctrl+S]", lambda: self.terminal.app.create_background_task(self.save())),
              ("Reload File [Ctrl+R]", lambda: self.terminal.app.create_background_task(self.reload()))],
@@ -80,20 +83,26 @@ class EditorPanel:
     def header(self) -> StyleAndTextTuples:
         if self.file is None:
             return []
-        changed = signature(self.file.path) != self.file.loaded
-        text = f"{self.file.path.name} — Editor | Ctrl+S: Save | PgUp/PgDn: Scroll"
-        if changed:
-            text = "File changed on disk. " + text
-        def reload(event: MouseEvent) -> object:
-            if event.event_type == MouseEventType.MOUSE_MOVE:
-                self.terminal.__dict__["_hovered_control"] = "reload-editor"
-            elif event.event_type == MouseEventType.MOUSE_UP and event.button == MouseButton.LEFT:
-                self.terminal.app.create_background_task(self.reload())
-            return None
-        style = "class:clickable"
-        if self.terminal.__dict__.get("_hovered_control") == "reload-editor":
-            style += " class:hover"
-        return [("class:retry" if changed else "", text + " | "), (style, "Reload [Ctrl+R]", reload), ("", " ")]
+        columns = self.terminal.output.get_size().columns
+        if self.terminal.__dict__.get("_inspection_visible") and columns >= 60:
+            columns -= columns // 4
+        text = str(self.file.path)
+        if display_width(text) > columns:
+            clusters = list(iter_graphemes(text))
+            left = ""
+            right = ""
+            left_space = max(0, (columns - 1) // 2)
+            right_space = max(0, columns - 1 - left_space)
+            for cluster in clusters:
+                if display_width(left + cluster) > left_space:
+                    break
+                left += cluster
+            for cluster in reversed(clusters):
+                if display_width(cluster + right) > right_space:
+                    break
+                right = cluster + right
+            text = left + "…" + right if columns > 0 else ""
+        return [("", text)]
 
     async def open(self, path: Path, line: int) -> None:
         if self.file is not None:

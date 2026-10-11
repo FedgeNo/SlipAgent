@@ -922,8 +922,8 @@ to the model along with the active generation number.
   The application coalesces redraws at a maximum of 30 per second. Resize replays
   original chunks to rebuild the width-specific row file; ordinary appends
   process only new chunks. Explicit continuation indents are indexed by chunk
-  and source line, and replayed on resize. The startup tool list uses this to
-  align wrapped rows beneath its first item without changing ordinary output.
+  and source line, and replayed on resize. The startup tool and command lists use
+  this to align wrapped rows beneath their first item without changing ordinary output.
   During append/reflow, `WrappedTranscript` indexes source lines whose first
   character is `>` with a recognized historical green foreground or the current
   white-on-green prompt style. Binary search selects

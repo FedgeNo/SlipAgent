@@ -210,12 +210,12 @@ class Renderer:
         before, _, after = BANNER.partition("{tools}")
         before = before.format(model=model, workspace=workspace, mcp=mcp)
         after = after.format(model=model, workspace=workspace, mcp=mcp)
-        # Keep both lists unbroken so resize can reflow them at full width.
+        # Keep both lists unbroken so resize can reflow them beneath their first item.
         banner = before + ", ".join(tools) + after
         self.emit(
             banner,
-            continuation_indents={index: 0 for index, line in enumerate(banner.splitlines())
-                                  if line.startswith(("  Tools:", "  Commands:"))},
+            continuation_indents={index: prefix.end() for index, line in enumerate(banner.splitlines())
+                                  if (prefix := re.match(r"  (?:Tools|Commands): +", line)) is not None},
         )
 
     def _finish_stream(self) -> None:

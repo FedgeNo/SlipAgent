@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__version__ = "0.2.8"
+__version__ = "0.2.9"
 
 from .agent import Agent, AgentEvent, build_system_prompt
 from .api import APIClient, APIError

@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from slipagent.agent import Agent
+from slipagent.mcp import MCPManager
 from slipagent.openrouter import OpenRouterClient
 from slipagent.tools import build_default_registry
 from slipagent.tools.base import ToolRegistry
@@ -14,6 +15,7 @@ from slipagent.tools.discovery import CORE_TOOLS, LoadToolsTool, tool_catalog
 from slipagent.types import Message, ToolCall
 from slipagent.workspace import Workspace
 from test_agent import RecordingTool
+from test_mcp import stub_spec
 
 Router = import_module("test-native-tools").Router
 
@@ -73,6 +75,45 @@ async def test_loading_changes_prompt_and_api_definitions_on_the_next_turn(nativ
         assert isinstance(result["definitions"][0], dict)
         assert result["definitions"][0]["function"]["parameters"]["properties"]["value"]["type"] == "string"
     finally:
+        await tools.aclose()
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("mode", ["legacy", "modern"])
+@pytest.mark.parametrize("allowlist", [None, (), ("server__echo",)])
+async def test_mcp_guidance_precedes_loading_and_respects_tool_allowlist(tmp_path, native, mode, allowlist):
+    router = Router({"test/model": ["tools"] if native else ["response_format"]},
+                    [reply("Done.", [], native) for _ in range(3)])
+    services = {}
+    tools = ToolRegistry([LoadToolsTool(services)], services=services)
+    manager = MCPManager(tmp_path, registry=tools)
+    try:
+        state = await manager.connect("server", stub_spec(name="server", mode=mode))
+        assert state.status == "connected", state.detail
+        async with OpenRouterClient("dummy", transport=httpx.MockTransport(router.handle)) as client:
+            agent = Agent(client, tools, "test/model", exposed_tools=allowlist)
+            assert await agent.run("Inspect the available tools.") == "Done."
+            await agent.wait_for_compaction()
+            agent.reset()
+            assert await agent.run("Inspect the available tools again.") == "Done."
+            await agent.wait_for_compaction()
+            await manager.disconnect("server")
+            if allowlist is not None:
+                agent.exposed_tools = ()
+            assert await agent.run("Inspect the disconnected server.") == "Done."
+            await agent.wait_for_compaction()
+
+        for request in router.requests[:2]:
+            system = request["messages"][0]["content"]
+            assert ("Use echo before boom." in system) == (allowlist != ())
+            assert ("| `server__echo` |" in system) == (allowlist != ())
+            assert ("| `server__boom` |" in system) == (allowlist is None)
+            if native:
+                names = {tool["function"]["name"] for tool in request["tools"]}
+                assert not names.intersection({"server__echo", "server__boom"})
+        assert "Use echo before boom." not in router.requests[2]["messages"][0]["content"]
+    finally:
+        await manager.aclose()
         await tools.aclose()
 
 

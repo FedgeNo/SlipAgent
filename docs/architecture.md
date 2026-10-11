@@ -882,6 +882,9 @@ to the model along with the active generation number.
   waits. Tools receive structural schema checks and registry validation; servers
   remain responsible for their full JSON Schema semantics. Structured content,
   server guidance, and tool errors must survive adaptation into model context.
+  Server guidance is included for both loaded tools and deferred tools in the
+  current catalog, which already applies the explicit tool allowlist. Guidance
+  therefore precedes tool loading and disappears when a server disconnects.
 - **Web:** validate every resolved destination and redirect, and pin the chosen
   public address while preserving Host/TLS identity. HTML extraction preserves
   code whitespace and link destinations. Fetching does not execute JavaScript.

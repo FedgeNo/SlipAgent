@@ -113,9 +113,12 @@ class ContextBuilder:
                              "| `" + entry["name"].replace("|", "\\|").replace("`", "\\`") + "` | "
                              + entry["purpose"].replace("|", "\\|") + " |" for entry in catalog.deferred())),
                          11, owner="tools", dynamic=False)
-        visible_names = {spec.name for spec in specs}
+        available_names = {spec.name for spec in specs}
+        if catalog is not None:
+            # Server guidance must precede tool loading; the catalog retains the allowlist.
+            available_names.update(catalog.available)
         servers = {tool.client.spec.name: tool.client.instructions for tool in self.registry.tools
-                   if isinstance(tool, MCPTool) and tool.name in visible_names
+                   if isinstance(tool, MCPTool) and tool.name in available_names
                    and tool.client.connected and tool.client.instructions}
         if servers:
             sections.add("mcp", "Connected MCP Server Guidance",

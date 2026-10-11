@@ -1545,8 +1545,8 @@ blocking the session.
 
 Only the stdio transport and MCP tools are supported; resources and prompts
 are not surfaced. Existing MCP connections survive component reloads.
-Connected server instructions enter model context with their server scope;
-structured results and error flags are retained. A server starts in the selected
+Connected server instructions enter model context with their server scope from the first request, even while their tool definitions are deferred. Servers excluded by an explicit tool allowlist do not contribute guidance.
+Structured results and error flags are retained. A server starts in the selected
 workspace unless `cwd` is configured; relative values resolve against that workspace.
 MCP processes inherit the harness environment plus configured `env` overrides.
 Project Python selection does not rewrite their command or PATH; use an explicit

@@ -10,6 +10,7 @@ from __future__ import annotations
 from slipagent.types import content_text
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -42,7 +43,7 @@ def stub_spec(name: str = "stub", mode: str = "legacy") -> ServerSpec:
 
 def test_missing_config_is_not_an_error(tmp_path: Path) -> None:
     assert load_servers(tmp_path) == {}
-    assert config_path(tmp_path) == tmp_path / ".mcp.json"
+    assert config_path(tmp_path) == Path(os.environ["SLIPAGENT_STATE_DIR"]) / "mcp.json"
 
 
 def test_config_round_trips(tmp_path: Path) -> None:
@@ -55,22 +56,22 @@ def test_config_round_trips(tmp_path: Path) -> None:
 
 
 def test_save_preserves_unrelated_keys(tmp_path: Path) -> None:
-    (tmp_path / ".mcp.json").write_text(json.dumps({"other": 1}), encoding="utf-8")
+    config_path(tmp_path).write_text(json.dumps({"other": 1}), encoding="utf-8")
 
     save_servers(tmp_path, {"db": ServerSpec(name="db", command="npx")})
 
-    assert json.loads((tmp_path / ".mcp.json").read_text())["other"] == 1
+    assert json.loads(config_path(tmp_path).read_text())["other"] == 1
 
 
 def test_malformed_config_raises(tmp_path: Path) -> None:
-    (tmp_path / ".mcp.json").write_text("{not json", encoding="utf-8")
+    config_path(tmp_path).write_text("{not json", encoding="utf-8")
 
     with pytest.raises(MCPError):
         load_servers(tmp_path)
 
 
 def test_server_without_command_is_rejected(tmp_path: Path) -> None:
-    (tmp_path / ".mcp.json").write_text(
+    config_path(tmp_path).write_text(
         json.dumps({"mcpServers": {"broken": {}}}), encoding="utf-8"
     )
 
@@ -308,7 +309,7 @@ async def test_connect_all_reports_per_server_status(tmp_path: Path) -> None:
 
 
 def test_save_refuses_to_overwrite_malformed_config(tmp_path: Path) -> None:
-    target = tmp_path / ".mcp.json"
+    target = config_path(tmp_path)
     target.write_text("{broken")
     manager = MCPManager(tmp_path)
     with pytest.raises(MCPError):
@@ -421,3 +422,8 @@ for line in sys.stdin:
         assert client.era == "modern"
     finally:
         await client.disconnect()
+
+
+@pytest.fixture(autouse=True)
+def global_mcp_directory():
+    config_path().parent.mkdir(parents=True, exist_ok=True)

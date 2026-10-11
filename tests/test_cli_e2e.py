@@ -22,6 +22,7 @@ from typing import Any
 import pytest
 
 from test_agent import structured_message, context_body, summary_response, context_records, unpack_api_context
+from slipagent.mcp import config_path
 from slipagent.config import DEFAULT_MODEL
 from offline.sitecustomize import GUARD_DIRECTORY
 
@@ -575,21 +576,21 @@ def test_mcp_add_connects_and_registers_tools(project_dir: Path) -> None:
     assert "stub__boom" in proc.stderr
 
 
-def test_mcp_save_persists_to_dot_json(project_dir: Path) -> None:
+def test_mcp_save_persists_globally(project_dir: Path) -> None:
     proc = run_repl_commands(
         project_dir,
         [f"/mcp save db {sys.executable} {MCP_STUB} legacy"],
     )
 
     assert proc.returncode == 0, proc.stderr
-    config = json.loads((project_dir / ".mcp.json").read_text())
+    config = json.loads(config_path(project_dir).read_text())
     assert config["mcpServers"]["db"]["command"] == sys.executable
     assert MCP_STUB in config["mcpServers"]["db"]["args"]
 
 
 def test_saved_server_connects_automatically_on_the_next_run(project_dir: Path) -> None:
-    """A server in .mcp.json is connected when the REPL starts, with no command."""
-    (project_dir / ".mcp.json").write_text(
+    """A globally saved server is connected when the REPL starts, with no command."""
+    config_path(project_dir).write_text(
         json.dumps({"mcpServers": {"db": {"command": sys.executable, "args": [MCP_STUB, "legacy"]}}}),
         encoding="utf-8",
     )
@@ -602,7 +603,7 @@ def test_saved_server_connects_automatically_on_the_next_run(project_dir: Path) 
 
 
 def test_no_mcp_flag_skips_configured_servers(project_dir: Path) -> None:
-    (project_dir / ".mcp.json").write_text(
+    config_path(project_dir).write_text(
         json.dumps({"mcpServers": {"db": {"command": sys.executable, "args": [MCP_STUB, "legacy"]}}}),
         encoding="utf-8",
     )
@@ -615,7 +616,7 @@ def test_no_mcp_flag_skips_configured_servers(project_dir: Path) -> None:
 
 def test_broken_server_does_not_stop_the_session(project_dir: Path) -> None:
     """A server that cannot start is reported, but the REPL still works."""
-    (project_dir / ".mcp.json").write_text(
+    config_path(project_dir).write_text(
         json.dumps({"mcpServers": {"ghost": {"command": "/nonexistent/mcp-binary"}}}),
         encoding="utf-8",
     )
@@ -644,7 +645,7 @@ def test_mcp_bad_usage_explains_itself(project_dir: Path) -> None:
 
 def test_mcp_tool_is_callable_by_the_model(project_dir: Path) -> None:
     """The whole point: a remote tool is usable through a normal agent step."""
-    (project_dir / ".mcp.json").write_text(
+    config_path(project_dir).write_text(
         json.dumps({"mcpServers": {"stub": {"command": sys.executable, "args": [MCP_STUB, "legacy"]}}}),
         encoding="utf-8",
     )
@@ -1480,3 +1481,8 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
                 proc.wait()
             os.close(master)
             os.close(slave)
+
+
+@pytest.fixture(autouse=True)
+def global_mcp_directory():
+    config_path().parent.mkdir(parents=True, exist_ok=True)

@@ -42,7 +42,7 @@ Clone or download this repository, then run the installer from its root:
 python3 install.py
 ```
 
-On Windows, use `py -3 install.py`. No administrator privileges are needed. The installer copies the application source, creates a private virtual environment, installs SlipAgent in editable mode, and places its launcher on your user PATH. It uses `uv` if available, otherwise Python's `venv` and pip. Add `--dev` to include the project's testing and development dependencies.
+On Windows, use `py -3 install.py`. Installations are per-user and require no administrator privileges. The installer copies the application source, creates a private virtual environment, installs SlipAgent in editable mode, and places its launcher on your user PATH. It uses `uv` if available, otherwise Python's `venv` and pip. Add `--dev` to include the project's testing and development dependencies.
 
 The same script also updates an existing installation. Download the desired version and run `python3 install.py` from that download (Windows: `py -3 install.py`). It replaces installed application files and refreshes dependencies and the launcher; it does not download updates or run Git commands. Running inside the installed checkout only refreshes dependencies and the launcher. Unchanged installations update without warnings or confirmation. If application files have been modified, added, or deleted, the installer lists every affected path, warns that updating may lose local edits, and asks you to back up changes before confirming with `y` or `yes`. Enter, EOF, or Ctrl+C cancels. A missing or invalid baseline also requires confirmation and lists files to inspect. Changes from separate checkouts are not merged. First installations and `--dry-run` need no confirmation.
 
@@ -50,15 +50,15 @@ The installer compares SHA-256 hashes against `installed-file-hashes.json` in th
 
 | OS | Installation directory | PATH launcher |
 | --- | --- | --- |
-| Linux | `$XDG_DATA_HOME/slipagent`, default `~/.local/share/slipagent` | `~/.local/bin/slipagent` |
+| Linux | `~/.local/lib/slipagent` | `~/.local/bin/slipagent` |
 | macOS | `~/Library/Application Support/SlipAgent` | `~/.local/bin/slipagent` |
-| Windows | `%LOCALAPPDATA%\SlipAgent` | `%LOCALAPPDATA%\SlipAgent\bin\slipagent.exe` |
+| Windows | `%LOCALAPPDATA%\Programs\SlipAgent` | Installation directory + `\bin\slipagent.exe` |
 
-Linux and macOS use a symlink. Windows also uses a symlink when permitted, with an executable launcher fallback that does not require elevation. Missing PATH entries are added to bash, zsh, sh, ksh, or fish configuration on Linux/macOS, or to the Windows user PATH. Open a new terminal when PATH changes; other shells receive instructions to add the directory manually. Use `--dry-run` to inspect the destinations, or `--install-dir`, `--bin-dir`, and `--python` to override them.
+Linux and macOS use a symlink. Windows also uses a symlink when permitted, with an executable launcher fallback that does not require elevation. Persistent PATH entries are added to bash, zsh, sh, ksh, or fish configuration on Linux/macOS, or to the Windows user PATH. Open a new terminal when PATH changes; other shells receive instructions to add the directory manually. Use `--dry-run` to inspect the destinations, or `--install-dir`, `--bin-dir`, and `--python` to override them.
 
 The installer replaces recognized SlipAgent launchers and saves a backup; it refuses unrelated commands or nonempty unmanaged installation directories. The permanent working checkout lives at `source` inside the installation directory, with its own `.venv`. Initial copies include application files, uncommitted edits, and Git metadata, but exclude existing virtual environments, caches, and secrets. Updates from another checkout replace the application directories and supplied root files while preserving installed Git metadata, the virtual environment, and configuration. Removed application directory contents are removed during updates too. Existing Git history is retained, so new downloaded files appear as working-tree changes. A failed update can leave changed source files or dependencies; the installer does not roll these back. Older release directories are retained during migration. On Linux/macOS, `current` points to `source`; `installation.json` records the source, interpreter, and launcher on all platforms. Edit the permanent checkout for live changes and normal Git development.
 
-An existing checkout `.env` is copied to the private installation directory on the first install, with owner-only permissions on Linux/macOS. Subsequent installs preserve that configuration. The installer does not move or delete the original checkout or project sessions.
+An existing checkout `.env` is copied to the private user data directory on the first install, with owner-only file permissions on Linux/macOS. Subsequent installs preserve that configuration. Project `.env` files take precedence over the global user-data `.env`; old installation `.env` files remain a compatibility fallback. The installer does not move or delete the original checkout or project sessions.
 
 For development directly in this checkout instead of a managed installation, use the existing project environment or create one if none exists:
 
@@ -348,7 +348,7 @@ for the implementation workflow, state ownership, and failure behavior.
 
 ## Configure
 
-Successful `--model` and `/model` selections remember the provider and its model separately in `preferences.json` under `SLIPAGENT_STATE_DIR` (default `~/.SlipAgent`). Provider selection uses `--provider`, then `SLIPAGENT_PROVIDER`, the saved provider if its key is present, and finally the first provider with a key (OpenRouter takes precedence). Model selection uses CLI flags first, then the selected provider's exported model variable, its remembered model, `.env`, and its built-in default.
+Successful `--model` and `/model` selections remember the provider and its model separately in `preferences.json` under `SLIPAGENT_STATE_DIR` (default platform data directory; Linux: `$XDG_DATA_HOME/slipagent` or `~/.local/share/slipagent`). Provider selection uses `--provider`, then `SLIPAGENT_PROVIDER`, the saved provider if its key is present, and finally the first provider with a key (OpenRouter takes precedence). Model selection uses CLI flags first, then the selected provider's exported model variable, its remembered model, `.env`, and its built-in default.
 
 The selected provider requires its own API key. In addition to `.env`,
 you can supply it through the process environment:
@@ -374,7 +374,7 @@ export OPENROUTER_API_KEY="sk-or-..."
 | `OPENROUTER_TITLE` | `SlipAgent` | Override the app-attribution name. |
 | `OPENROUTER_USER_AGENT` | `SlipAgent/<version>` | Override the HTTP client identity at startup. |
 | `SLIPAGENT_WORKSPACE` | `.` | Default project directory. |
-| `SLIPAGENT_STATE_DIR` | Expanded user-home `.SlipAgent` directory | Root for saved sessions, titles, request diagnostics, and command logs. |
+| `SLIPAGENT_STATE_DIR` | Platform data directory | Shared root for sessions, records, preferences, and global MCP settings. |
 | `SLIPAGENT_NO_DOTENV` | — | Set to `1` to ignore `.env` entirely. |
 
 OpenRouter requests identify SlipAgent using its repository URL, app title, `X-OpenRouter-Categories: cli-agent`, and a versioned `User-Agent: SlipAgent/<version>`. Other providers receive the versioned user agent. The referer and title overrides above customize OpenRouter attribution.
@@ -384,7 +384,7 @@ then from the install directory. Real environment variables win over `.env`;
 explicit CLI overrides win over both. Harness-saved credentials use `0600`
 permissions. Set `SLIPAGENT_NO_DOTENV=1` in CI to use only the process
 environment and CLI configuration. Keep `.env` and credential-bearing MCP
-configuration private; both `.env` and `.mcp.json` are ignored by Git.
+configuration private; `.env` is ignored by Git and global MCP settings live outside the checkout.
 
 ### Project Python Environment and Log Storage
 
@@ -495,13 +495,20 @@ that the checked files parse. Shell/MCP edits are not automatically tracked.
 
 ### Saved Sessions
 
-Sessions are saved by default under the fully expanded user-home `.SlipAgent`
-directory. Each project gets a directory named `<md5>-<sha1>`, computed from
+Sessions, transcripts, command logs, artifacts, and preferences share the platform
+data directory with global MCP settings. On Linux this is `$XDG_DATA_HOME/slipagent`,
+defaulting to `~/.local/share/slipagent`; on macOS it is
+`~/Library/Application Support/SlipAgent/data`; on Windows it is
+`%LOCALAPPDATA%/SlipAgent`. Relative XDG paths are ignored. Each project gets a directory named `<md5>-<sha1>`, computed from
 the same expanded absolute workspace path. Symlink spelling and case are
 preserved; `project.json` retains the original path. `/sessions` prints the
 absolute storage path and saved IDs. `SLIPAGENT_STATE_DIR` overrides the storage
 root. Journals and logs may contain private project text; configuration API
 keys are not included in their metadata.
+
+Existing installations using `~/.SlipAgent` must move their saved data into the
+new data directory before restarting to retain their session list and preferences.
+Preserve existing destination files when merging; do not overwrite conflicts.
 
 Startup creates no conversation journal until the first task prompt is entered.
 Help, settings, session listing, and renaming before that prompt do not add an
@@ -620,7 +627,7 @@ In the REPL:
 | `/requests [attempt]` | List the latest 20 request attempts, or inspect one exact request and its outcome |
 | `/mcp` | Show MCP servers, their status, and the tools they contribute |
 | `/mcp add <name> <cmd> [args…]` | Connect a server over stdio for this session only |
-| `/mcp save <name> <cmd> [args…]` | Same, and persist it to `.mcp.json` |
+| `/mcp save <name> <cmd> [args…]` | Same, and persist it globally to `mcp.json` |
 | `/mcp remove <name>` | Disconnect a server and drop it from the config |
 | `/reset` | Start a fresh conversation/task/usage/log index; retain saved sessions and current guidance/model/settings |
 | `/init` | Create a project-notes scaffold in `AGENTS.md` if missing and load project guidance into this session |
@@ -641,7 +648,7 @@ Prompts, replies, saved thoughts, tool calls/results, and queued input remain
 available by scrolling up; restoring does not execute tools or call the model.
 Names are private metadata
 beside the saved journal in the project's hashed directory under the expanded
-user-home `.SlipAgent` directory (or `SLIPAGENT_STATE_DIR`), outside the checkout.
+platform data directory (or `SLIPAGENT_STATE_DIR`), outside the checkout.
 `/reset` starts a new conversation with the default title. With `--no-session`,
 renaming lasts only for the current conversation in the running process.
 
@@ -1221,7 +1228,7 @@ Useful flags:
 | `--api-key` | Override the API key for this process; an environment variable avoids putting it in shell history. |
 | `--base-url` | Override the API base URL, for example for a local test gateway. |
 | `--no-color` | Disable ANSI color output. |
-| `--no-mcp` | Skip MCP servers configured in `.mcp.json`. |
+| `--no-mcp` | Skip globally configured MCP servers. |
 | `--no-reload` | Disable automatic source reloads for this process. |
 | `--resume [id]` | Restore a saved project session; omitted ID means latest. |
 | `--no-session` | Disable durable conversation and command-log storage. |
@@ -1254,9 +1261,15 @@ validation boundary.
 
 ## MCP
 
+Saved connections live in `mcp.json` in the shared platform data directory
+(see Saved Sessions), or under `SLIPAGENT_STATE_DIR` when overridden. Project
+`.mcp.json` files are no longer loaded. To migrate an old configuration, copy
+its server entries into the global file, preserving any existing entries.
+Servers still start in the active workspace unless their `cwd` is configured.
+
 SlipAgent is an [MCP](https://modelcontextprotocol.io) client, so tools from
 external servers join the same registry as the built-ins. Add one for the
-session, or save it to `.mcp.json` so every later run picks it up:
+session, or save it globally to `mcp.json` so later runs in every project pick it up:
 
 ```text
 /mcp add my-server python /path/to/server.py
@@ -1277,7 +1290,7 @@ session, or save it to `.mcp.json` so every later run picks it up:
 
 Remote tools are namespaced `server__tool` so two servers can both expose
 `search` without colliding, and the model's argument validation is applied to the
-JSON Schema the server advertises. The REPL connects everything in `.mcp.json`
+JSON Schema the server advertises. The REPL connects every globally configured server
 on startup; a server that fails to start is reported and skipped rather than
 blocking the session.
 

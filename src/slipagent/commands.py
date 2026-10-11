@@ -720,7 +720,7 @@ class McpCommand(Command):
     help = (
         CommandHelp('/mcp', 'show MCP servers and their tools', '/mcp'),
         CommandHelp('/mcp add <name> <command> [args...]', ' connect an MCP server over stdio for this session', '/mcp add '),
-        CommandHelp('/mcp save <name> <command> [args...]', ' same, but also store it in .mcp.json for future runs', '/mcp save '),
+        CommandHelp('/mcp save <name> <command> [args...]', ' same, but also save it globally for future runs in every project', '/mcp save '),
         CommandHelp('/mcp remove <name>', 'disconnect a server and forget it', '/mcp remove '),
     )
 

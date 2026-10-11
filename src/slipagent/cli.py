@@ -1828,7 +1828,7 @@ def _describe_mcp(session: Session, style: Style, out: io.TextIOBase) -> None:
             file=out,
         )
     else:
-        print(style.dim("  no servers in .mcp.json; showing this session only"), file=out)
+        print(style.dim("  no globally saved servers; showing this session only"), file=out)
 
     for name in sorted(set(configured) | set(live)):
         state = live.get(name)
@@ -1900,7 +1900,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--danger", action="store_true",
                         help="Disable built-in workspace path confinement without a confirmation prompt.")
     parser.add_argument("--no-mcp", action="store_true",
-                        help="Do not connect to MCP servers from .mcp.json.")
+                        help="Do not connect to globally configured MCP servers.")
     parser.add_argument("--mcp", action="store_true",
                         help="Force connecting to MCP servers even in one-shot mode.")
     return parser

@@ -79,17 +79,30 @@ def install_paths(system: str, home: Path, environ: Mapping[str, str]) -> tuple[
         base = Path(environ.get("LOCALAPPDATA") or home / "AppData" / "Local")
         if not base.is_absolute():
             raise ValueError("LOCALAPPDATA must be an absolute path")
-        root = base / "SlipAgent"
+        root = base / "Programs" / "SlipAgent"
         return root, root / "bin"
     if system == "Darwin":
         return home / "Library" / "Application Support" / "SlipAgent", home / ".local" / "bin"
     if system == "Linux":
-        base = Path(environ.get("XDG_DATA_HOME") or home / ".local" / "share")
-        if not base.is_absolute():
-            raise ValueError("XDG_DATA_HOME must be an absolute path")
-        return base / "slipagent", home / ".local" / "bin"
+        return home / ".local" / "lib" / "slipagent", home / ".local" / "bin"
     raise ValueError(f"Unsupported operating system: {system}")
 
+
+def user_data_path(system: str, home: Path, environ: Mapping[str, str]) -> Path:
+    """Persistent user data stays separate from the application source."""
+    if environ.get("SLIPAGENT_STATE_DIR"):
+        return Path(environ["SLIPAGENT_STATE_DIR"]).expanduser().absolute()
+    if system == "Windows":
+        base = Path(environ.get("LOCALAPPDATA") or home / "AppData" / "Local")
+        if not base.is_absolute():
+            raise ValueError("LOCALAPPDATA must be an absolute path")
+        return base / "SlipAgent"
+    if system == "Linux":
+        base = Path(environ.get("XDG_DATA_HOME") or home / ".local" / "share")
+        if not base.is_absolute():
+            base = home / ".local" / "share"
+        return base / "slipagent"
+    return install_paths(system, home, environ)[0] / "data"
 
 def path_contains(directory: Path, value: str, *, windows: bool = False) -> bool:
     if windows:
@@ -108,12 +121,13 @@ def path_snippet(directory: Path, *, fish: bool = False) -> str:
 
 
 def update_posix_path(directory: Path, home: Path) -> None:
-    if path_contains(directory, os.environ.get("PATH", "")):
-        return
     shell = Path(os.environ.get("SHELL", "/bin/sh")).name
     fish = shell == "fish"
     if fish:
-        profiles = [home / ".config" / "fish" / "config.fish"]
+        config_home = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config")
+        if not config_home.is_absolute():
+            config_home = home / ".config"
+        profiles = [config_home / "fish" / "config.fish"]
     elif shell == "zsh":
         profiles = [home / ".zprofile", home / ".zshrc"]
     elif shell == "bash":
@@ -149,7 +163,7 @@ def update_windows_path(directory: Path) -> None:
             raise ValueError("The Windows user Path must be a string")
         if path_contains(directory, value, windows=True):
             return
-        winreg.SetValueEx(key, "Path", 0, kind, value.rstrip(";") + (";" if value else "") + str(directory))
+        winreg.SetValueEx(key, "Path", 0, kind, str(directory) + (";" + value if value else ""))
     notify = getattr(ctypes, "windll").user32.SendMessageTimeoutW
     notify.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPCWSTR,
                        wintypes.UINT, wintypes.UINT, ctypes.POINTER(ctypes.c_size_t)]
@@ -218,7 +232,7 @@ def copy_source(checkout: Path, destination: Path) -> None:
             shutil.copy2(checkout / name, destination / name)
 
 
-def install(checkout: Path, root: Path, bin_dir: Path, *, windows: bool, dev: bool, python: str) -> Path:
+def install(checkout: Path, root: Path, bin_dir: Path, *, windows: bool, dev: bool, python: str, data_dir: Path | None = None) -> Path:
     launcher = bin_dir / ("slipagent.exe" if windows else "slipagent")
     prepare_launcher(launcher, root, windows=windows)
     marker = root / ".slipagent-managed"
@@ -259,13 +273,14 @@ def install(checkout: Path, root: Path, bin_dir: Path, *, windows: bool, dev: bo
             pending_hashes.write_text(json.dumps(source_hashes(source), indent=2) + "\n", encoding="utf-8")
             os.replace(pending_hashes, root / "installed-file-hashes.json")
         # Preserve installed settings independently of source updates.
-        configuration = root / ".env"
+        configuration = (data_dir if data_dir is not None else root) / ".env"
         if (checkout / ".env").is_file() and not configuration.exists():
+            configuration.parent.mkdir(parents=True, exist_ok=True)
             with configuration.open("xb") as handle:
                 if not windows:
                     os.fchmod(handle.fileno(), 0o600)
                 handle.write((checkout / ".env").read_bytes())
-            print("Preserved configuration in the private installation directory.")
+            print("Preserved configuration in the private user data directory.")
         replace_launcher(entry, launcher, root, windows=windows)
         activated = True
         metadata = {"source": str(source), "python": str(executable), "launcher": str(launcher), "checkout": str(source)}
@@ -298,10 +313,11 @@ def main(argv: list[str] | None = None) -> int:
         system = platform.system()
         home = Path.home()
         default_root, default_bin = install_paths(system, home, os.environ)
+        data_dir = user_data_path(system, home, os.environ)
         root = (args.install_dir or default_root).expanduser().resolve()
         bin_dir = (args.bin_dir or (root / "bin" if system == "Windows" else default_bin)).expanduser().resolve()
         if args.dry_run:
-            print(f"Installation: {root}\nLauncher directory: {bin_dir}\nPython: {args.python}")
+            print(f"Installation: {root}\nLauncher directory: {bin_dir}\nUser data: {data_dir}\nPython: {args.python}")
             return 0
         changes, problem = update_changes(root)
         if changes or problem:
@@ -319,7 +335,7 @@ def main(argv: list[str] | None = None) -> int:
             if answer.strip().lower() not in {"y", "yes"}:
                 print("Installation/update cancelled; no changes made.")
                 return 0
-        launcher = install(Path(__file__).resolve().parent, root, bin_dir, windows=system == "Windows", dev=args.dev, python=args.python)
+        launcher = install(Path(__file__).resolve().parent, root, bin_dir, windows=system == "Windows", dev=args.dev, python=args.python, data_dir=data_dir)
         if system == "Windows":
             update_windows_path(bin_dir)
         else:

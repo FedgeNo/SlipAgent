@@ -11,6 +11,7 @@ import os
 import json
 import math
 import re
+import sys
 import tempfile
 from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass, field, replace
@@ -63,16 +64,33 @@ def dotenv_path(start: Path | None = None) -> Path:
     found = find_dotenv(start)
     if found is not None:
         return found
-    return Path(__file__).resolve().parents[2] / ".env"
+    return data_directory() / ".env"
 
 
 class ConfigError(Exception):
     """Raised when the harness cannot be configured from the environment."""
 
 
+def data_directory() -> Path:
+    """Shared persistent data root, separate from installed application files."""
+    override = os.environ.get("SLIPAGENT_STATE_DIR")
+    if override:
+        return Path(override).expanduser().absolute()
+    if sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+        if not base.is_absolute():
+            raise ConfigError("LOCALAPPDATA must be an absolute path")
+        return base / "SlipAgent"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "SlipAgent" / "data"
+    base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    if not base.is_absolute():
+        base = Path.home() / ".local" / "share"
+    return base / "slipagent"
+
+
 def _preferences_path() -> Path:
-    root = Path(os.environ.get("SLIPAGENT_STATE_DIR") or Path.home() / ".SlipAgent").expanduser()
-    return root / "preferences.json"
+    return data_directory() / "preferences.json"
 
 
 def _read_preferences() -> dict[str, object]:
@@ -117,10 +135,8 @@ def configured_provider(provider: str | None = None, *, environ: Mapping[str, st
 def load_dotenv(start: Path | None = None, environ: dict[str, str] | None = None) -> Path | None:
     """Load KEY=VALUE pairs from the nearest `.env` into `environ`.
 
-    Searches the directory chain above `start` first, then the directory chain
-    above this package, so a single `.env` next to the install keeps working
-    when you run the harness against any project directory. Existing variables
-    always win, which keeps this safe to call on every run.
+    Searches project ancestors, private user data, then package ancestors.
+    Existing environment variables always win.
 
     Returns the file that was loaded, or None if there was nothing to load.
     Set `SLIPAGENT_NO_DOTENV=1` to skip `.env` entirely (useful in CI and when
@@ -147,22 +163,20 @@ def _dotenv_disabled(env: Mapping[str, str]) -> bool:
 def find_dotenv(start: Path | None = None) -> Path | None:
     """Locate the `.env` that would be loaded, without applying it.
 
-    Searches the directory chain above `start` first, then the chain above this
-    package, so a single `.env` next to the install keeps working when the
-    harness runs against any project directory.
+    Searches project ancestors, then private user data, then package ancestors
+    for compatibility with existing installation settings.
     """
     here = Path(__file__).resolve().parent
     start_dir = (start or Path.cwd()).resolve()
 
     seen: set[Path] = set()
-    for chain_root in (start_dir, here):
-        for directory in (chain_root, *chain_root.parents):
-            if directory in seen:
-                continue
-            seen.add(directory)
-            candidate = directory / ".env"
-            if candidate.is_file():
-                return candidate
+    for directory in (start_dir, *start_dir.parents, data_directory(), here, *here.parents):
+        if directory in seen:
+            continue
+        seen.add(directory)
+        candidate = directory / ".env"
+        if candidate.is_file():
+            return candidate
     return None
 
 

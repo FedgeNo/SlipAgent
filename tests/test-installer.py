@@ -15,11 +15,11 @@ spec.loader.exec_module(installer)
 
 
 @pytest.mark.parametrize("system, environment, root, bin_dir", [
-    ("Linux", {}, "/users/alice/.local/share/slipagent", "/users/alice/.local/bin"),
-    ("Linux", {"XDG_DATA_HOME": "/data"}, "/data/slipagent", "/users/alice/.local/bin"),
+    ("Linux", {}, "/users/alice/.local/lib/slipagent", "/users/alice/.local/bin"),
+    ("Linux", {"XDG_DATA_HOME": "/data"}, "/users/alice/.local/lib/slipagent", "/users/alice/.local/bin"),
     ("Darwin", {}, "/users/alice/Library/Application Support/SlipAgent", "/users/alice/.local/bin"),
-    ("Windows", {"LOCALAPPDATA": "/local"}, "/local/SlipAgent", "/local/SlipAgent/bin"),
-    ("Windows", {}, "/users/alice/AppData/Local/SlipAgent", "/users/alice/AppData/Local/SlipAgent/bin"),
+    ("Windows", {"LOCALAPPDATA": "/local"}, "/local/Programs/SlipAgent", "/local/Programs/SlipAgent/bin"),
+    ("Windows", {}, "/users/alice/AppData/Local/Programs/SlipAgent", "/users/alice/AppData/Local/Programs/SlipAgent/bin"),
 ])
 def test_platform_destinations(system, environment, root, bin_dir):
     anchor = Path(Path.cwd().anchor)
@@ -28,8 +28,7 @@ def test_platform_destinations(system, environment, root, bin_dir):
     assert installer.install_paths(system, absolute("/users/alice"), environment) == (absolute(root), absolute(bin_dir))
 
 
-@pytest.mark.parametrize("system, environment", [("Linux", {"XDG_DATA_HOME": "relative"}),
-                                               ("Windows", {"LOCALAPPDATA": "relative"}), ("Plan9", {})])
+@pytest.mark.parametrize("system, environment", [("Windows", {"LOCALAPPDATA": "relative"}), ("Plan9", {})])
 def test_invalid_destination_configuration_is_reported(system, environment):
     with pytest.raises(ValueError):
         installer.install_paths(system, Path("/users/alice"), environment)
@@ -49,6 +48,49 @@ def test_shell_snippets_quote_the_directory_and_guard_against_duplicates():
     assert "'/users/a b/.local/bin'" in snippet
     fish = installer.path_snippet(directory, fish=True)
     assert "if not contains" in fish and "set -gx PATH" in fish
+
+
+@pytest.mark.parametrize("shell, profiles", [
+    ("bash", [".profile", ".bashrc"]),
+    ("zsh", [".zprofile", ".zshrc"]),
+    ("sh", [".profile"]),
+    ("fish", [".config/fish/config.fish"]),
+])
+def test_posix_path_is_persistent_and_idempotent_even_when_in_current_path(tmp_path, monkeypatch, shell, profiles):
+    directory = tmp_path / "bin"
+    monkeypatch.setenv("PATH", str(directory))
+    monkeypatch.setenv("SHELL", f"/bin/{shell}")
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    installer.update_posix_path(directory, tmp_path)
+    first = [(tmp_path / name).read_text() for name in profiles]
+    assert all("SlipAgent installer PATH" in text for text in first)
+    installer.update_posix_path(directory, tmp_path)
+    assert [(tmp_path / name).read_text() for name in profiles] == first
+
+
+def test_fish_path_uses_xdg_configuration_directory(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/fish")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "configuration"))
+    installer.update_posix_path(tmp_path / "bin", tmp_path)
+    assert (tmp_path / "configuration/fish/config.fish").is_file()
+
+
+@pytest.mark.parametrize("system, expected", [
+    ("Linux", ".local/share/slipagent"),
+    ("Darwin", "Library/Application Support/SlipAgent/data"),
+    ("Windows", "AppData/Local/SlipAgent"),
+])
+def test_user_data_is_separate_from_application(tmp_path, system, expected):
+    root, _ = installer.install_paths(system, tmp_path, {})
+    data = installer.user_data_path(system, tmp_path, {})
+    assert data == tmp_path / expected
+    assert data != root and not data.is_relative_to(root / "source")
+
+
+def test_xdg_changes_data_location_only(tmp_path):
+    environment = {"XDG_DATA_HOME": str(tmp_path / "data")}
+    assert installer.user_data_path("Linux", tmp_path, environment) == tmp_path / "data/slipagent"
+    assert installer.install_paths("Linux", tmp_path, environment)[0] == tmp_path / ".local/lib/slipagent"
 
 
 def test_fresh_download_replaces_application_directories_and_preserves_git(monkeypatch):
@@ -132,7 +174,7 @@ def test_windows_user_path_preserves_existing_entries_and_type(monkeypatch, exis
     if writes:
         args = registry.SetValueEx.call_args.args
         assert args[3] == kind
-        assert args[4] == (existing + ";" if existing else "") + r"C:\tools"
+        assert args[4] == r"C:\tools" + (";" + existing if existing else "")
         notify.assert_called_once()
 
 

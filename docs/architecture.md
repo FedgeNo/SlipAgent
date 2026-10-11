@@ -644,7 +644,7 @@ resets detection. This guard does not deduplicate calls. Explicit
 ## Durable Sessions and Recovery
 
 `SessionJournal` stores versioned JSONL under an expanded absolute state root:
-user-home `.SlipAgent` by default, or `SLIPAGENT_STATE_DIR`. Project directory
+shared platform data directory by default, or `SLIPAGENT_STATE_DIR`. Project directory
 names combine MD5 and SHA1 of the same expanded absolute lexical workspace path,
 without resolving symlink spelling or folding case. `project.json` and journal
 headers retain that path for identity checks. New directories/files are private.

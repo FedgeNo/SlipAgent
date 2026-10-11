@@ -30,7 +30,7 @@ from typing import Any
 
 from . import __version__
 from .tools.base import Tool, ToolRegistry, ToolResult, validate_schema_shape
-from .config import save_private_text
+from .config import data_directory, save_private_text
 from .lifecycle import finish_cleanup
 
 # Protocol versions this client knows how to speak, newest first.
@@ -50,7 +50,7 @@ META_SERVER_INFO = "io.modelcontextprotocol/serverInfo"
 
 CLIENT_INFO = {"name": "slipagent", "version": __version__}
 
-DEFAULT_CONFIG_NAME = ".mcp.json"
+DEFAULT_CONFIG_NAME = "mcp.json"
 DEFAULT_TIMEOUT = 30.0
 PROBE_TIMEOUT = 10.0
 # The spec forbids newlines inside a message, but a large tool result can still
@@ -131,12 +131,12 @@ class ServerSpec:
 
 
 def config_path(workspace: Path | str = ".") -> Path:
-    """Where a workspace keeps its MCP server list."""
-    return Path(workspace).expanduser() / DEFAULT_CONFIG_NAME
+    """Global MCP settings; workspace is retained for caller compatibility."""
+    return data_directory() / DEFAULT_CONFIG_NAME
 
 
 def load_servers(workspace: Path | str = ".") -> dict[str, ServerSpec]:
-    """Read `.mcp.json`. A missing file means no servers, not an error."""
+    """Read global MCP settings. A missing file means no servers."""
     path = config_path(workspace)
     if not path.is_file():
         return {}
@@ -156,7 +156,7 @@ def load_servers(workspace: Path | str = ".") -> dict[str, ServerSpec]:
 
 
 def save_servers(workspace: Path | str, servers: dict[str, ServerSpec]) -> Path:
-    """Write `.mcp.json`, preserving unrelated keys already in the file."""
+    """Write global MCP settings, preserving unrelated keys already present."""
     path = config_path(workspace)
     existing: dict[str, Any] = {}
     if path.is_file():
@@ -803,7 +803,7 @@ class MCPManager:
         return load_servers(self.workspace)
 
     def config_error(self) -> str | None:
-        """Return a message if `.mcp.json` is unreadable, else None."""
+        """Return a message if the global MCP settings are unreadable."""
         try:
             load_servers(self.workspace)
         except MCPError as exc:

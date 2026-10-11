@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from .context import ConversationHistory, CompletedStep
+from .config import data_directory
 from .api import APIError
 from .task import TaskMemory
 from .tools.output import CommandLog, OutputStream
@@ -70,7 +71,7 @@ class SessionJournal:
             self.project = os.getcwd() if expanded == "." else os.path.join(os.getcwd(), expanded)
         raw = os.fsencode(self.project)
         identity = hashlib.md5(raw, usedforsecurity=False).hexdigest() + "-" + hashlib.sha1(raw, usedforsecurity=False).hexdigest()
-        root = Path(os.path.abspath(os.path.expanduser(str(directory or os.environ.get("SLIPAGENT_STATE_DIR") or Path.home() / ".SlipAgent"))))
+        root = Path(os.path.abspath(os.path.expanduser(str(directory)))) if directory is not None else data_directory()
         self.directory = root / identity
         self.session_id = ""
         self.path: Path | None = None

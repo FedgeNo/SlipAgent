@@ -29,8 +29,8 @@ async def wait_until(predicate) -> None:
             await asyncio.sleep(.02)
 
 
-@pytest.mark.parametrize("sequence", ["\x1b[9;5u", "\x1b[27;5;9~", "\x1b[1;5I"])
-async def test_control_tab_cycles_panels_without_changing_draft(display, tmp_path, sequence):
+async def test_control_space_cycles_panels_without_changing_draft(display, tmp_path):
+    sequence = "\x00"
     sink, _, output, _, snapshot = display
     with create_pipe_input() as pipe:
         ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
@@ -2096,7 +2096,7 @@ def test_rotating_tips_do_not_flash_status(display, monkeypatch):
             original = ui._activity()
             clock[0] += 14.01
             rotated = ui._activity()
-            assert "Ctrl + Tab or mouse to get around" in ui._notification_text()
+            assert "Ctrl + Space or mouse to get around" in ui._notification_text()
             assert "".join(part[1] for part in rotated) != "".join(part[1] for part in original)
             assert all("status-flash" not in part[0] for part in rotated)
             ui.notify("Saved changes.")

@@ -19,7 +19,6 @@ from prompt_toolkit.filters import Condition, to_filter
 from prompt_toolkit.formatted_text import ANSI, StyleAndTextTuples, to_formatted_text
 from prompt_toolkit.formatted_text.utils import fragment_list_to_text
 from prompt_toolkit.input import Input
-from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
 from prompt_toolkit.history import DummyHistory
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.keys import Keys
@@ -790,7 +789,7 @@ class TerminalUI:
                 tips = ["Ctrl+S saves; Esc closes the editor.", "PgUp/PgDn scrolls with overlap."]
             elif self._viewer_active:
                 tips = ["Scroll to inspect; Esc closes the viewer."]
-            tips.insert(1, "Ctrl + Tab or mouse to get around")
+            tips.insert(1, "Ctrl + Space or mouse to get around")
             if not self.working and self._input_label == "> " and self._menu_future is None and not self._viewer_active and not self._editor_active:
                 tips.append("Click Commands to browse commands.")
             if self.__dict__.get("_folder_opener") is not None:
@@ -1141,11 +1140,7 @@ class TerminalUI:
         in_editor = Condition(lambda: self.__dict__.get("_editor_active", False) and self.app.layout.current_control is self._editor_input.control) & ~in_menu & ~in_setting
         in_viewer = Condition(lambda: self.__dict__.get("_viewer_active", False)) & ~in_menu & ~in_editor & ~in_setting & ~in_inspection
 
-        # Ctrl+Tab encodings used by terminals with modified-key reporting.
-        for sequence in ("\x1b[9;5u", "\x1b[27;5;9~", "\x1b[1;5I"):
-            ANSI_SEQUENCES[sequence] = Keys.ControlF24
-
-        @bindings.add(Keys.ControlF24, filter=~in_menu & ~in_setting)
+        @bindings.add("c-space", filter=~in_menu & ~in_setting)
         def cycle_panel(event: KeyPressEvent) -> None:
             self._cycle_panel()
 

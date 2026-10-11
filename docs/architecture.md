@@ -949,7 +949,9 @@ to the model along with the active generation number.
   with a heading, five option rows, and a bottom key legend. The feed and
   sidebar meet the footer without spacer rows. The footer background is dark blue, menus
   use dark purple, and the prompt uses dark green. Activity and notices share
-  the footer heading; updates flash three times before remaining steady.
+  the footer heading; `notify` starts three flashes only when the event notice
+  changes. Only the notice text flashes; activity indicators, links, headings,
+  redraws, resizing, repeated notices, and rotating tips do not restart flashing.
   The bottom readout has no separate notice area.
   Very short terminals reduce the input/list rows to retain feed
   output. The displayed **back** action cancels the selector like Escape.

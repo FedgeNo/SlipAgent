@@ -788,9 +788,11 @@ return to the bottom. The CWD is the workspace where tools run; long paths
 and model names shorten to fit narrow terminals.
 
 Short notices share the activity area beside **Ready** and remain visible while
-browsing selectors or the context view. Updates flash three times, then stay
-steady until replaced or cleared. When no notice is active, this area rotates
-tips for available controls. Folder-launch failures also remain in the transcript.
+browsing selectors or the context view. Changed event notices flash three times,
+then stay steady until replaced or cleared. Only the notice text flashes; activity
+indicators, the Commands link, and rotating tips remain steady. When no notice is
+active, this area rotates tips for available controls. Folder-launch failures also
+remain in the transcript.
 
 ### Inspection Sidebar
 

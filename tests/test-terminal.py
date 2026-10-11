@@ -2224,6 +2224,7 @@ def test_rotating_tips_do_not_flash_status(display, monkeypatch):
         ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
         try:
             ui._activity()
+            assert all("status-flash" not in part[0] for part in ui._activity())
             clock[0] += 1.0
             original = ui._activity()
             clock[0] += 14.01
@@ -2248,17 +2249,32 @@ def test_status_updates_flash_three_times_then_remain_steady(display, monkeypatc
             ui._activity()
             for start in [0.0, .3, .6]:
                 clock[0] = start + .01
-                assert any("status-flash" in fragment[0] for fragment in ui._activity())
+                assert [fragment[1] for fragment in ui._activity() if "status-flash" in fragment[0]] == ["Saved changes."]
                 clock[0] = start + .16
                 assert all("status-flash" not in fragment[0] for fragment in ui._activity())
             clock[0] = 1.2
             assert all("status-flash" not in fragment[0] for fragment in ui._activity())
             assert "Saved changes." in "".join(fragment[1] for fragment in ui._activity())
+            ui.notify("  Saved changes.\n")
+            assert all("status-flash" not in fragment[0] for fragment in ui._activity())
             ui.set_working(True)
-            assert any("status-flash" in fragment[0] for fragment in ui._activity())
+            assert all("status-flash" not in fragment[0] for fragment in ui._activity())
+            ui.set_working(True, stopping=True)
+            assert all("status-flash" not in fragment[0] for fragment in ui._activity())
+            ui.set_working(False)
+            assert all("status-flash" not in fragment[0] for fragment in ui._activity())
+            ui.set_command_status("Applying /model")
+            assert all("status-flash" not in fragment[0] for fragment in ui._activity())
+            ui.set_command_status("")
+            ui.set_retry_status("Retrying request")
+            assert all("status-flash" not in fragment[0] for fragment in ui._activity())
             clock[0] = 2.5
             assert all("status-flash" not in fragment[0] for fragment in ui._activity())
             clock[0] = 2.75
+            assert all("status-flash" not in fragment[0] for fragment in ui._activity())
+            ui.notify("New event.")
+            assert [fragment[1] for fragment in ui._activity() if "status-flash" in fragment[0]] == ["New event."]
+            ui.notify("")
             assert all("status-flash" not in fragment[0] for fragment in ui._activity())
         finally:
             ui.close()

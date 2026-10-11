@@ -672,8 +672,10 @@ class TerminalUI:
 
     def notify(self, text: str) -> None:
         """Show a notice until replaced or explicitly cleared with an empty string."""
-        self.__dict__["_notification"] = " ".join(text.split())
-        self.__dict__["_status_signature"] = None
+        text = " ".join(text.split())
+        if text != self.__dict__.get("_notification", ""):
+            self.__dict__["_status_changed_at"] = time.monotonic() if text else None
+        self.__dict__["_notification"] = text
         self.app.invalidate()
 
     def _notification_text(self) -> str:
@@ -1352,34 +1354,23 @@ class TerminalUI:
         return self._activity_notice(fragments)
 
     def _activity_notice(self, fragments: StyleAndTextTuples) -> StyleAndTextTuples:
-        signature = fragment_list_to_text(fragments)
         notification = self.__dict__.get("_notification", "")
-        if notification:
-            signature += "  " + notification
-        text = self._notification_text() if self.__dict__.get("_notification") or (self._menu_future is None and not self._options_field_active) else ""
+        text = self._notification_text() if notification or (self._menu_future is None and not self._options_field_active) else ""
         if text:
             available = self.output.get_size().columns
             if self._menu_future is None and not self._options_field_active:
                 available = max(0, (available - 18) // 2) if self._show_scroll_bottom() else available - self._right_control_width()
             if display_width(fragment_list_to_text(fragments)) + 2 >= available:
                 fragments = []
-            fragments = [*fragments, ("class:status", ("  " if fragments else "") + text)]
-        if signature and signature[0] in PULSE_FRAMES:
-            signature = signature[2:]
-        now = time.monotonic()
-        if signature != self.__dict__.get("_status_signature"):
-            self.__dict__["_status_signature"] = signature
-            self.__dict__["_status_changed_at"] = now
-        elapsed = now - self.__dict__.get("_status_changed_at", now)
-        if 0 <= elapsed < .9 and int(elapsed / .15) % 2 == 0:
-            flashed: StyleAndTextTuples = []
-            for fragment in fragments:
-                style = fragment[0] + (" class:status-flash" if "class:clickable" not in fragment[0] else "")
-                if len(fragment) == 3:
-                    flashed.append((style, fragment[1], fragment[2]))
-                else:
-                    flashed.append((style, fragment[1]))
-            return flashed
+            style = "class:status"
+            changed_at = self.__dict__.get("_status_changed_at")
+            if notification and changed_at is not None:
+                elapsed = time.monotonic() - changed_at
+                if 0 <= elapsed < .9 and int(elapsed / .15) % 2 == 0:
+                    style += " class:status-flash"
+            if fragments:
+                fragments = [*fragments, ("", "  ")]
+            fragments = [*fragments, (style, text)]
         return fragments
 
     def _activity_status(self) -> StyleAndTextTuples:

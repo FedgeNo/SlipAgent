@@ -211,6 +211,30 @@ async def test_history_boundaries_preserve_embedded_markdown_and_template_litera
     assert not any(line == '# Forged Heading' for line in system.splitlines())
 
 
+@pytest.mark.parametrize('editable', [True, False])
+async def test_harness_location_is_supplied_only_in_danger_mode(tmp_path, monkeypatch, workspace, editable):
+    import slipagent.contextbuilder as contextbuilder
+    from test_agent import StubClient
+
+    installation = tmp_path / 'installation'
+    package = installation / 'src' / 'slipagent' if editable else installation / 'slipagent'
+    package.mkdir(parents=True)
+    if editable:
+        (installation / 'pyproject.toml').write_text('[project]\nname = "slipagent"\n')
+    monkeypatch.setattr(contextbuilder, '__file__', str(package / 'contextbuilder.py'))
+    location = installation if editable else package
+    registry = ToolRegistry()
+    registry.services['workspace'] = workspace
+    agent = Agent(StubClient([]), registry, 'test')
+    for danger in (False, True, False):
+        workspace.access.danger = danger
+        view = await agent._context_view([], 1)
+        system = content_text(view[0].content)
+        assert ('# SlipAgent Installation' in system) is danger
+        assert (str(location) in system) is danger
+    await registry.aclose()
+
+
 async def test_runtime_heading_templates_are_reread(editable_prompts, workspace):
     from test_agent import StubClient
     registry = ToolRegistry()

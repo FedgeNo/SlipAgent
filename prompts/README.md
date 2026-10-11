@@ -42,6 +42,7 @@ The `z-ai/glm-5.3` profile uses `models/glm-5.3.md`, embedded calls, and XML com
 | `user-request.md`, `new-user-request.md`, `tool-result-response.md`, `continuation.md` | Current request, new input, automatic return after tools, and continuation without new input |
 | `overthinking-*.md` | Archived reasoning guidance |
 | `workspace-*.md`, `environment-*.md` | Access policy and Python environment guidance |
+| `harness-installation.md` | Running harness code location, supplied only in Danger Mode |
 | `tool-definitions.md`, `harness-state.md` | Headed runtime data blocks |
 | `project-instructions-*.md` | Project instruction scope and delivery |
 | `instruction-scope.md`, `instruction-file.md` | Dynamic scope and source labels |

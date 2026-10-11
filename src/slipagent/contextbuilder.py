@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
 from .budget import ContextBudget
@@ -63,6 +64,13 @@ class ContextBuilder:
             access = load_prompt('workspace-access-off.md')
             if workspace.access.danger:
                 access = (load_prompt('workspace-access-on.md'))
+                package = Path(__file__).resolve().parent
+                harness_location = package
+                if package.parent.name == "src" and (package.parent.parent / "pyproject.toml").is_file():
+                    harness_location = package.parent.parent
+                sections.add("installation", "SlipAgent Installation",
+                             load_prompt('harness-installation.md', harness_location=harness_location),
+                             16, owner="workspace")
             sections.add("access", "Workspace Access",
                          load_prompt('workspace-access.md', access=access.strip(), workspace=workspace.root,
                                      temporary_directory=workspace.temporary_directory),

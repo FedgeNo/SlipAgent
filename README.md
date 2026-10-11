@@ -7,10 +7,10 @@ SlipAgent gives a model tools to read, search, edit, test, and commit code in a
 project directory. It keeps asking the model what to do next until the task is
 finished, you stop it, or the step limit is reached.
 
-The harness is part of the workspace it can work on. Run it from an editable
-checkout and the agent can improve its own tools, prompts, commands, context
-handling, and terminal interface. A contributor can edit those same files in
-their editor. The running process loads compatible changes without losing the
+The installed harness is an editable checkout. Make it the project workspace,
+or enable Danger Mode for explicitly requested self-editing, and the agent can
+improve its own tools, prompts, commands, context handling, and terminal
+interface. A contributor can edit those same files in their editor. The running process loads compatible changes without losing the
 conversation or restarting the terminal.
 
 - **Free-model workflow:** browse zero-cost models, switch models during a
@@ -23,11 +23,20 @@ conversation or restarting the terminal.
   task state, usage, and command logs; interrupted tools are never replayed automatically.
 - **Coding tools:** file editing, search, shell commands, Git operations, and
   optional web search, with additional tools through MCP.
-- **A responsive terminal:** wrapping output, mouse-wheel scrollback, a fixed
-  prompt/status area, queued follow-ups, and `/stop` at step boundaries.
+- **Human inspection and editing:** clickable file and directory references, a
+  built-in editor, colored diffs, saved tool-call records, and a Touched/Calls
+  sidebar. Saved user edits return to the model as diffs.
+- **Mouse and keyboard navigation:** clickable menus, wheel scrolling, a
+  selection context menu, and panel focus cycling with Ctrl+Space.
+- **Focused tool definitions:** six core tools are fully described initially;
+  the model loads other definitions as needed from the available-tool catalog.
+- **A responsive terminal:** wrapping output, a fixed prompt/status area,
+  queued follow-ups, optional next-step links, and `/stop` at step boundaries.
 
 [Quick Start](#quick-start) · [Free Models](#using-free-models) ·
-[Architecture](#architecture) · [Live Development](#editing-the-running-harness) ·
+[Installation and Data](#installation-and-data-locations) ·
+[Terminal Guide](#terminal-layout-and-navigation) ·
+[Architecture](#architecture) · [Self-Editing](#editing-the-running-harness) ·
 [Usage](#use) · [Tools](#tools) · [Development](#development) ·
 [Contributor Guide](CONTRIBUTING.md) · [Internal Contracts](docs/architecture.md)
 
@@ -59,6 +68,31 @@ Linux and macOS use a symlink. Windows also uses a symlink when permitted, with 
 The installer replaces recognized SlipAgent launchers and saves a backup; it refuses unrelated commands or nonempty unmanaged installation directories. The permanent working checkout lives at `source` inside the installation directory, with its own `.venv`. Initial copies include application files, uncommitted edits, and Git metadata, but exclude existing virtual environments, caches, and secrets. Updates from another checkout replace the application directories and supplied root files while preserving installed Git metadata, the virtual environment, and configuration. Removed application directory contents are removed during updates too. Existing Git history is retained, so new downloaded files appear as working-tree changes. A failed update can leave changed source files or dependencies; the installer does not roll these back. Older release directories are retained during migration. On Linux/macOS, `current` points to `source`; `installation.json` records the source, interpreter, and launcher on all platforms. Edit the permanent checkout for live changes and normal Git development.
 
 An existing checkout `.env` is copied to the private user data directory on the first install, with owner-only file permissions on Linux/macOS. Subsequent installs preserve that configuration. Project `.env` files take precedence over the global user-data `.env`; old installation `.env` files remain a compatibility fallback. The installer does not move or delete the original checkout or project sessions.
+
+### Installation and Data Locations
+
+Application files and private user data have different owners and lifetimes:
+
+| Location | Contents |
+| --- | --- |
+| Installation directory + `source/` | Editable source, prompts, documentation, Git metadata when supplied, and the harness `.venv` |
+| Installation directory | Managed-install marker, installation metadata, launcher backups, installed hash baseline, and the POSIX `current` link |
+| Platform data directory | Saved sessions, command output, inspection artifacts, preferences, global `mcp.json`, and saved `.env` credentials |
+| Project workspace | Your application's files and optional `.slipagent/project.json` |
+
+| OS | Default Private Data Directory |
+| --- | --- |
+| Linux | `$XDG_DATA_HOME/slipagent`, or `~/.local/share/slipagent` |
+| macOS | `~/Library/Application Support/SlipAgent/data` |
+| Windows | `%LOCALAPPDATA%\SlipAgent` |
+
+`SLIPAGENT_STATE_DIR` overrides the data location. Changing it does not move
+existing data or relocate the program. On Linux, the default editable checkout
+is `~/.local/lib/slipagent/source`; the executable on PATH points into that
+checkout's virtual environment. Installing from a downloaded archive does not
+create Git history if the download has no `.git` directory.
+
+### Running From a Development Checkout
 
 For development directly in this checkout instead of a managed installation, use the existing project environment or create one if none exists:
 
@@ -249,8 +283,24 @@ src/slipagent/
     ├── shell.py      run_command
     ├── output.py     session log quota, storage, and read_command_output
     ├── git.py        confined status, diff, log, staging, commits
-    └── web.py        web_search, fetch_page
+    └── web.py        web_search, fetch_page, http_fetch
 ```
+
+The tree above shows the central modules. Smaller components now own the
+request pipeline and interactive inspection features:
+
+| Responsibility | Modules in `src/slipagent/` |
+| --- | --- |
+| Request assembly and recovery | `contextbuilder.py`, `requests.py`, `toolbatch.py`, `contextlegacy.py` |
+| Session state and owned resources | `sessionstate.py`, `resources.py`, `work.py`, `events.py` |
+| Slash-command behavior and help | `commands.py` |
+| Saved inspection records | `artifacts.py`, `inspection.py` |
+| File-backed editing and coordination | `editor.py`, `editorcontrol.py`, `editorui.py`, `useredits.py` |
+| Read-only text and diff viewers | `viewers.py`, `viewerpanels.py` |
+| Reusable lists, links, focus, and layout | `listpanels.py`, `links.py`, `focus.py`, `uiwindows.py` |
+| Inspection configuration and folder opening | `options.py`, `uipreferences.py`, `explorer.py` |
+| Inferred shell file references | `shellpaths.py` |
+| Deferred tool definitions | `tools/discovery.py` |
 
 The agent loop emits events and never prints. The CLI decides how to display
 them, which lets terminal behavior change without rewriting the model loop.
@@ -266,8 +316,18 @@ and exercise presentation with a simulated terminal.
 
 ## Editing the Running Harness
 
-From an editable checkout, start a session with the harness itself as the
-workspace:
+The managed installer creates an editable installation. Change the files in
+its permanent `source/` checkout, not a separate download, to affect that running
+installation. You can also use an independently installed editable checkout.
+
+For Linux's default installation, start with the harness as the workspace:
+
+```bash
+cd ~/.local/lib/slipagent/source
+slipagent --workspace .
+```
+
+Or, from another editable checkout:
 
 ```bash
 slipagent --workspace . --model nvidia/nemotron-3-ultra-550b-a55b:free
@@ -285,6 +345,45 @@ Live reload is enabled by default. Save a compatible change under
 idle. During work, the current model response and its complete tool batch finish
 before a new version is applied. One-shot runs also check between batches.
 Use `/reload` to force another attempt or `--no-reload` to disable reloading.
+
+### Self-Editing From Another Project
+
+Danger Mode adds a **SlipAgent Installation** section to each newly built model
+request, identifying the running checkout (or the package directory for a
+non-checkout installation). That section is absent when Danger Mode is off.
+The location comes from the loaded code, not the current project directory.
+
+Enable `/danger on`, then explicitly ask for the harness change you want.
+Relative tool paths still refer to the project workspace; the agent must use
+the supplied installation location for harness files. `/danger off` removes
+this section from subsequent requests and restores built-in path confinement.
+Previously delivered information remains in saved request diagnostics.
+Making the harness itself the workspace also permits editing it without Danger
+Mode, but does not add the Danger Mode installation section.
+
+### Keeping a Recovery Point
+
+Self-editing changes real installed files. Compatible changes can reload while
+stable contracts require a restart. Saving a file is not proof that the running
+process accepted it: inspect `/generations`, reload messages, or the context view.
+A rejected generation leaves the previous behavior running and the edited files
+on disk for correction.
+
+Before substantial edits, inspect `git status` and `git diff` in the installed
+checkout and commit the working state you want to recover. Git can recover
+committed tracked files; it does not preserve uncommitted changes or ignored
+credentials automatically. `/rewind` covers checkpointed built-in file edits,
+not arbitrary shell, MCP, or manual changes. Back up private configuration
+separately when changing it. Reinstalling from another checkout may replace
+self-edits; review the installer's changed-file report before confirming.
+
+### Prompt Changes
+
+`prompts/` contains Markdown instructions and JSON schema/profile resources.
+Prompt files are read when requests are built, so saved prompt changes affect
+newly assembled requests; they do not change an in-flight request or rewrite
+history. Model-specific sections are selected through `model-profiles.json`.
+Tool descriptions and schemas belong to their tool implementations.
 
 ### How a Reload Works
 
@@ -380,7 +479,8 @@ export OPENROUTER_API_KEY="sk-or-..."
 OpenRouter requests identify SlipAgent using its repository URL, app title, `X-OpenRouter-Categories: cli-agent`, and a versioned `User-Agent: SlipAgent/<version>`. Other providers receive the versioned user agent. The referer and title overrides above customize OpenRouter attribution.
 
 `.env` is loaded automatically, searched upward from the current directory and
-then from the install directory. Real environment variables win over `.env`;
+then from the platform data directory and installation ancestors. Real environment
+variables win over `.env`;
 explicit CLI overrides win over both. Harness-saved credentials use `0600`
 permissions. Set `SLIPAGENT_NO_DOTENV=1` in CI to use only the process
 environment and CLI configuration. Keep `.env` and credential-bearing MCP
@@ -595,6 +695,9 @@ In the REPL:
 | Command | Effect |
 | --- | --- |
 | `/help [command]` | Show all help or one command's help; `/help init` and `/help /init` are equivalent |
+| `/theme <name>` | Choose dark, light, monochrome, or ironbow colors |
+| `/markdown [source\|rendered]` | Toggle or select Markdown source/rendered view |
+| `/copy [text\|markdown\|code [number]]` | Copy the latest reply or a code block |
 | `/menu` | Browse all commands and their arguments; selecting one inserts it into the input |
 | `/view [record] [line]` | Choose a saved output/diff record or open its numeric ID at an optional line |
 | `/danger` or `/danger on` | Disable workspace path confinement; queues while working |
@@ -652,10 +755,27 @@ platform data directory (or `SLIPAGENT_STATE_DIR`), outside the checkout.
 `/reset` starts a new conversation with the default title. With `--no-session`,
 renaming lasts only for the current conversation in the running process.
 
+### Terminal Layout and Navigation
+
+Most inspection and menu actions have both mouse and keyboard paths. Type only
+when entering prompts, command arguments, configuration values, or file edits.
+
+| Action | Mouse | Keyboard |
+| --- | --- | --- |
+| Browse commands | Commands link, then click an item | `/menu`, arrows, Enter |
+| Show/hide inspection panel | Inspect link | Ctrl+O |
+| Focus prompt/editor/sidebar panels | Click the panel | Ctrl+Space, clockwise |
+| Open a touched item or saved call | Click its list entry | Focus its list, arrows, Enter |
+| Browse a selector | Wheel by one item; click to select | Up/Down, Enter; Esc to cancel |
+| Save or close an editor | Save File or Close Text Editor | Ctrl+S or Esc |
+| Open inspection options | Options link | F4 |
+| Inspect the actual model request | — | Ctrl+\ |
+| Return to newest feed output | Scroll to Bottom link | Scroll to the end |
+| Copy or reuse selected feed text | Select, right-click, choose an action | `/copy` for the latest reply |
+
 On an interactive terminal, seven fixed rows sit at the bottom of the screen:
 a pulsing activity indicator, five rows for wrapping input,
-and the readout `<cwd>  │  Model: <slug>  │  Free: <n>`. Two empty rows
-separate this area from the scrolling transcript. Output and redraws preserve
+and the readout `<cwd>  │  Model: <slug>  │  Free: <n>`. Background colors distinguish this area from the scrolling transcript. Output and redraws preserve
 partially typed input. The controls have a dark blue background, menus use
 dark purple, and the prompt retains its dark green background. Input and output wrap at word boundaries to the
 terminal width and reflow when you resize it. Wrapping preserves the submitted prompt's
@@ -670,6 +790,8 @@ browsing selectors or the context view. Updates flash three times, then stay
 steady until replaced or cleared. When no notice is active, this area rotates
 tips for available controls. Folder-launch failures also remain in the transcript.
 
+### Inspection Sidebar
+
 Click **Inspect [Ctrl+O]** or press **Ctrl+O** to show or hide the inspection
 panel on the right side of the feed. It occupies one quarter of the terminal
 width, with **Touched** above **Calls**. This list includes inspected
@@ -682,6 +804,8 @@ the pointer. **Ctrl+Space** opens the inspection panel and cycles clockwise thro
 Use **Up/Down** to select an entry and **Enter** to open it.
 Plain **Tab** retains its text-entry behavior. Terminals narrower than 60 columns
 temporarily hide the panel.
+
+### Read-Only Output and Diff Viewers
 
 Saved command output and edit diffs have clickable **View Output** or **View
 Diff** references. `/view` lists records; `/view NUMBER [LINE]` opens one at a
@@ -696,6 +820,8 @@ Notifications and your input draft remain visible. Diffs use distinct
 colors for headers, hunks, additions, and deletions, with old/new line numbers;
 short edit diffs also appear
 in the feed. No editing or saving is enabled in these viewers.
+
+### Built-In Text Editor
 
 File links open the built-in editor at the linked line. An active agent finishes
 its current tool batch first; managed background commands are stopped, and further
@@ -730,6 +856,8 @@ supplies the saved user-edit diff, which accompanies the next model input separa
 messages and tool results and survives session resume. Without Git, Python's
 `difflib` generates the diff; that fallback holds both files' lines in memory.
 
+### Inspection Options
+
 Click **Options** or press **F4** for editor wrapping, tab width, and folder-opener
 settings. Folder-opener configuration uses the footer input area. These settings
 share the existing private preferences file across projects.
@@ -740,6 +868,8 @@ External editors are not offered.
 
 When the feed is scrolled up, **Scroll to Bottom** appears in the center of the
 row above the prompt. Click it to resume following the latest output.
+
+### Durable Inspection Records
 
 With session persistence, inspection records live beside the session journal in
 its `-artifacts` directory. Microsecond timestamp filenames contain JSON with
@@ -752,6 +882,8 @@ Inspection storage has the configured command-log quota independently of the
 existing raw command archive. Saving a record does not alter raw-log byte
 offsets. Without session persistence, inspection records are temporary.
 
+### Directory Links and Selected Text
+
 When a native file explorer is available, the CWD readout is an underlined link
 and tool calls with an existing directory `path` show a link to that directory.
 Click a directory link to open it. Drag to select feed text, then right-click
@@ -760,14 +892,20 @@ display-only wrapping and retain actual line breaks. The latter appends the
 selection after a newline without submitting or replacing your draft. Right-click
 a selected directory reference for **Copy Absolute Path** and, inside the project,
 **Copy Relative Path**. Right-clicking without a selection shows a short tip.
-The model may offer up to three **Suggested Next Steps** after a finished reply.
-Each link displays its entire prompt. Clicking it while idle posts that exact
-prompt to the feed and starts a new run, leaving your input draft untouched.
-Suggestions are optional response data, not tools or sidebar call records.
+
 The CWD link opens the project directory. Linux requires a desktop session and
 `xdg-open` or `gio`; macOS uses `open`, and Windows uses its default folder
 handler. Without an available opener, paths remain plain text. A failed launch
 reports the failure and disables directory links for that session.
+
+### Suggested Next Steps
+
+The model may offer up to three **Suggested Next Steps** after a finished reply.
+Each link displays its entire prompt. Clicking it while idle posts that exact
+prompt to the feed and starts a new run, leaving your input draft untouched.
+Suggestions are optional response data, not tools or sidebar call records.
+
+### Feed Scrolling and Prompt Pinning
 
 The nearest preceding green line starting with `>` pins to the top as you scroll.
 Scrolling up into an older task shows its prompt line; scrolling down restores
@@ -783,6 +921,8 @@ cache instead of scanning all earlier output. Repaints are limited to 30 per
 second. All scrollback remains available, and resizing reflows the original
 text. These display files are removed when the terminal closes; they are not
 persistent project memory or saved conversation archives.
+
+### Project Instructions
 
 Before the first model request, SlipAgent reads `CLAUDE.md`, `AGENTS.md`,
 `AGENTS.override.md`, `.cursorrules`, `.clinerules`, `.windsurfrules`, and
@@ -804,6 +944,8 @@ The startup screen lists the available commands and basic usage. The free-call
 count is fetched from OpenRouter at startup and refreshed every 15 minutes,
 including while idle or working.
 
+### Command Menu
+
 The underlined **Commands** link beside **Ready**, or `/menu`, replaces the
 seven-row input footer with a heading, a five-row scrolling list of all commands with their
 help syntax and descriptions, and `↑/↓ or wheel = move | Enter or click = select | Esc = back` on
@@ -815,6 +957,8 @@ current draft in input history and inserts the command into the input without
 running it. Add any arguments and press Enter to submit it. The Commands link
 appears only while ready. Clickable controls are underlined and invert their
 colors on hover.
+
+### Queued Input and Stopping
 
 State-changing commands queue in order while the agent works. They apply after
 the current response and complete tool batch finish. Settings changes then resume
@@ -836,6 +980,8 @@ so keyboard input remains responsive during preparation. It applies the validate
 generation on the main loop at a safe boundary. Restart after installing this
 change to enable the threaded reload frame.
 
+### Danger Mode
+
 `/danger` enables access outside the workspace for built-in file, search,
 navigation, and Git tools. `/danger off` restores confinement; `/danger status`
 reports the mode. During work, changes queue until the current response and
@@ -850,6 +996,8 @@ The flag enables the same mode at startup without a confirmation prompt.
 The setting lasts for the current process, including `/reset`, `/resume`, and
 component reloads; saved sessions do not enable it in a future launch. A new
 process starts confined unless `--danger` is supplied.
+
+### Context View and Model Input
 
 Press **Ctrl+backslash (`Ctrl+\`)** to toggle the context view. It shows the
 latest outgoing working request, with every system, user, assistant, and tool
@@ -872,6 +1020,7 @@ contains one JSON object with these fields:
 | `retained_user_requests` | Full ordered array of user messages received before tool use began; supplied only after tools when no new user messages are present |
 | `history` | Selected completed steps, oldest to newest |
 | `errors` | Harness errors and response corrections not attached to a call |
+| `user_edits` (when present) | Saved user file edits, supplied separately with their diffs |
 
 Each full history record contains `user_prompt`, `agent_response`, and `tool_calls`.
 Each call retains its `call_id`, `tool_name`, and argument object, with its raw
@@ -915,17 +1064,20 @@ Each model reply starts with a blank line, including replies preceded only by
 tool output. Its following tool calls and results stay together until the next
 model reply; each command response is another unit.
 The model can explain its work alongside batched tool calls.
-Shell output streams while the command runs, with updates limited to ten per
-second. A bounded display buffer may abbreviate rapid output; the separate
-command archive retains the decoded streams within its quota. Terminal control
-characters in streamed command output are escaped. Successful streamed output
-is not printed a second time at command completion.
+The interactive feed shows command activity and saved-output links instead of
+printing stdout and stderr inline. Open the output viewer to inspect them;
+the model still receives command results. One-shot progress uses stderr, and
+command archives retain decoded output within their quota.
+
+### Repeated Actions Without Progress
 
 Three repetitions of an unchanged tool batch or cycle of up to six batches
 produce model-only recovery guidance with the exact calls. A fourth repetition
 stops the run with history intact. New user input resets detection. Intentional
 external polling can use `run_command` with `poll=true`; command-log reads and
 job-control calls are exempt.
+
+### Reasoning and Overthinking
 
 Readable reasoning supplied through a separate provider field streams under a
 gray `Thinking:` label. Each response's reasoning is concatenated into one
@@ -1080,13 +1232,17 @@ use plain output.
 ### Active-Task Memory
 
 The model retains nothing between API requests unless SlipAgent sends it again.
-The harness retains the current user prompt independently of compression and
-supplies it verbatim on every working request until new user input replaces it.
-`current_prompt_step` identifies the call that originally received that prompt,
-so the model can retrieve that call's uncompressed record with `recall_history`.
-An existing full copy in the selected context satisfies this requirement; the
-harness adds a copy only when needed and counts it against the endpoint budget.
-It does not classify new input as a separate idea or an amendment.
+New input arrives in one chronological `user_messages` array. Later messages
+supersede earlier conflicting instructions; queued messages are not relegated
+to a secondary field. With no new input after tool use, `user_messages` is empty
+and `retained_user_requests` carries the full original array for that tool-use
+sequence. A new set of messages leaves the retained array empty.
+
+The harness stores original source messages independently of compression.
+`current_prompt_step` identifies the step that received them, and the model can
+retrieve its originals with `recall_history`. Retained messages count toward the
+request budget. Tool-continuation guidance explains why control returned and
+asks the model to assess the results against those requests.
 
 Original user prompts and their source step IDs remain available independently of history compression. `/task` displays these sources and the current original prompt. `/task new` starts a new source boundary with the next prompt while preserving history; `/reset` clears prompt retention and history. Older session task-record snapshots are ignored during resume.
 
@@ -1112,7 +1268,7 @@ the representation comparison above uses the original before adding its summary.
 
 Each background compression attempt has a 20-minute timeout instead of the normal HTTP timeout. Retry waits and additional attempts can extend the job beyond 20 minutes. Final failure preserves original steps for `recall_history`. Working requests retain their configured timeout; reset and shutdown cancel pending summaries.
 
-Each working request identifies the user request as the overall goal for that run, possibly issued multiple steps ago, and includes its exact wording in request-only system guidance. Steps after tool batches explicitly explain that control returned automatically without a new user instruction: assess results against that goal and return an answer without tools when it is fulfilled. This guidance is assembled for the outgoing request only; it is not saved in conversation history or background summaries. Historical requests provide background rather than independently requesting more work.
+Each working request identifies the source step of the active requests in system guidance; their exact text belongs in the structured user-input object. Steps after tool batches explicitly explain that control returned automatically without a new user instruction: assess results against that goal and return an answer without tools when it is fulfilled. This guidance is assembled for the outgoing request only; it is not saved in conversation history or background summaries. Historical requests provide background rather than independently requesting more work.
 
 The default recent window is **50 model calls**, with a minimum target of **5**
 even if `--context-steps` is set lower. History uses the model's context allowance,
@@ -1250,9 +1406,9 @@ Choose `--theme dark|light|monochrome|ironbow`, or `/theme NAME` in the REPL.
 `/markdown [source|rendered]` toggles the view. `/copy` copies the latest reply,
 automatically choosing exact code when it contains one code block; source view
 copies Markdown. `/copy text`, `/copy markdown`, and `/copy code [number]`
-choose explicitly. F2 toggles the view, F3 copies, and dragging over text
-copies the selection without wrap decorations. Clipboard access uses an
-installed local utility or the terminal's OSC 52 support.
+choose explicitly. F2 toggles the view and F3 copies the latest reply. Dragging
+selects feed text; right-click the selection to copy it without wrap decorations.
+Clipboard access uses an installed local utility or the terminal's OSC 52 support.
 
 The renderer updates incoming Markdown chunks as they arrive. Structured model
 responses remain buffered until validated; rendering does not bypass that
@@ -1523,6 +1679,20 @@ The call viewer includes the analysis and any incomplete-tracking reasons.
 Variables, globs, substitutions, unsupported options, scripts, and arbitrary
 programs can hide additional effects. These references are neither an execution
 trace nor confirmation that a file changed. Tracking does not restrict shell access.
+
+## Troubleshooting
+
+| Symptom | Where to Check |
+| --- | --- |
+| `slipagent` is unavailable after installation | Open a new terminal; check the printed launcher directory and user PATH. Use the installer's `--dry-run` to inspect destinations. |
+| Edits to the harness have no effect | Confirm you edited the installed `source/` checkout. Inspect `/generations` and reload messages; stable-contract changes need a restart. |
+| Agent pauses when a file opens | Editable files hold agent work; save or discard edits and close the editor. Read-only output/diff viewers allow work to continue. |
+| Directory names are not clickable | Check desktop-session/opener availability or configure a folder opener through Options. |
+| A model or provider is absent | Check that provider's credentials and `/models` filters. Catalog errors and unsupported capability profiles are reported separately. |
+| The agent misreads a result or repeats an action | Inspect the outgoing context with Ctrl+\ and the exact attempt with `/requests`; use the saved call/output viewers to compare observations. |
+| Old sessions or MCP servers disappeared after a move | Check the active platform data directory and `SLIPAGENT_STATE_DIR`. Project `.mcp.json` is not loaded; global connections use the data directory's `mcp.json`. |
+| An interrupted tool may have changed a file | Inspect the file and saved results before retrying. Resume never replays uncertain tools automatically. |
+| Updating warns about local edits | Review every listed path and preserve the changes you want before confirming. A missing hash baseline is not proof of an unmodified installation. |
 
 ## Development
 

@@ -19,6 +19,7 @@ from prompt_toolkit.filters import Condition, to_filter
 from prompt_toolkit.formatted_text import ANSI, StyleAndTextTuples, to_formatted_text
 from prompt_toolkit.formatted_text.utils import fragment_list_to_text
 from prompt_toolkit.input import Input
+from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
 from prompt_toolkit.history import DummyHistory
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.keys import Keys
@@ -322,9 +323,58 @@ class TerminalUI:
     def toggle_inspection(self) -> None:
         self._ensure_inspection()
         self._inspection_visible = not self._inspection_visible
+        if not self._inspection_visible and self._inspection_focused():
+            self.app.layout.focus(self._primary_panel())
         if self._inspection_visible and self.output.get_size().columns < 60:
             self.notify("Widen terminal to show Inspect.")
         self.app.invalidate()
+
+    def _primary_panel(self) -> Any:
+        return self._editor_input if self._editor_active else self._viewer_window if self._viewer_active else self.input
+
+    def _inspection_focused(self) -> bool:
+        return self.app.layout.current_window in (self._files_window, self._calls_window)
+
+    def _cycle_panel(self) -> None:
+        panels = [self._primary_panel()]
+        if self._inspection_visible and self.output.get_size().columns >= 60:
+            panels.extend([self._files_window, self._calls_window])
+        for window in (self._files_window, self._calls_window):
+            if isinstance(window.content, FormattedTextControl):
+                window.content.focusable = to_filter(True)
+        current = self.app.layout.current_control
+        index = next((i for i, panel in enumerate(panels)
+                      if (panel.control if isinstance(panel, TextArea) else panel.content) is current), -1)
+        self.app.layout.focus(panels[(index + 1) % len(panels)])
+        self.app.invalidate()
+
+    def _inspection_keys(self, files: bool) -> list[Any]:
+        return list(reversed(self._touched_items if files else self._inspection_calls))
+
+    def _inspection_selection(self, files: bool) -> Any:
+        keys = self._inspection_keys(files)
+        selected = self.__dict__.get("_inspection_selection_keys", {}).get(files)
+        return selected if selected in keys else keys[0] if keys else None
+
+    def _move_inspection(self, amount: int) -> None:
+        files = self.app.layout.current_window is self._files_window
+        keys = self._inspection_keys(files)
+        if not keys:
+            return
+        index = max(0, min(len(keys) - 1, keys.index(self._inspection_selection(files)) + amount))
+        self.__dict__.setdefault("_inspection_selection_keys", {})[files] = keys[index]
+        window = self._files_window if files else self._calls_window
+        info = window.render_info
+        if info is not None and index not in info.displayed_lines:
+            window.vertical_scroll = index
+            window.vertical_scroll_2 = window._pending_scroll = 0
+        self.app.invalidate()
+
+    def _activate_inspection(self) -> None:
+        files = self.app.layout.current_window is self._files_window
+        key = self._inspection_selection(files)
+        if key is not None:
+            self.app.create_background_task(self._inspect_file(str(key)) if files else self._inspect_call(self._inspection_calls[key]))
 
     def _inspect_link(self) -> StyleAndTextTuples:
         def click(event: MouseEvent) -> object:
@@ -462,6 +512,9 @@ class TerminalUI:
                 return None
             label = f"{key} [{value}]" if files else f"{value['tool']} [{value['status']}]"
             style = "class:menu-item"
+            window = self._files_window if files else self._calls_window
+            if self.app.layout.current_window is window and key == self._inspection_selection(files):
+                style += " class:hover"
             if clickable:
                 style += " class:clickable" + (" class:hover" if self.__dict__.get("_hovered_control") == ("inspection", files, key) else "")
                 fragments.append((style, label, click))
@@ -1073,8 +1126,34 @@ class TerminalUI:
         bindings = KeyBindings()
         in_menu = Condition(lambda: self._menu_future is not None)
         in_setting = Condition(lambda: self.__dict__.get("_options_field_active", False))
-        in_editor = Condition(lambda: self.__dict__.get("_editor_active", False)) & ~in_menu & ~in_setting
-        in_viewer = Condition(lambda: self.__dict__.get("_viewer_active", False)) & ~in_menu & ~in_editor & ~in_setting
+        in_inspection = Condition(self._inspection_focused) & ~in_menu & ~in_setting
+        in_editor = Condition(lambda: self.__dict__.get("_editor_active", False)) & ~in_menu & ~in_setting & ~in_inspection
+        in_viewer = Condition(lambda: self.__dict__.get("_viewer_active", False)) & ~in_menu & ~in_editor & ~in_setting & ~in_inspection
+
+        # Ctrl+Tab encodings used by terminals with modified-key reporting.
+        for sequence in ("\x1b[9;5u", "\x1b[27;5;9~", "\x1b[1;5I"):
+            ANSI_SEQUENCES[sequence] = Keys.ControlF24
+
+        @bindings.add(Keys.ControlF24, filter=~in_menu & ~in_setting)
+        def cycle_panel(event: KeyPressEvent) -> None:
+            self._cycle_panel()
+
+        @bindings.add("up", filter=in_inspection)
+        @bindings.add("down", filter=in_inspection)
+        def move_inspection(event: KeyPressEvent) -> None:
+            self._move_inspection(-1 if event.key_sequence[-1].key == Keys.Up else 1)
+
+        @bindings.add("enter", filter=in_inspection)
+        def activate_inspection(event: KeyPressEvent) -> None:
+            self._activate_inspection()
+
+        @bindings.add("escape", filter=in_inspection, eager=True)
+        def leave_inspection(event: KeyPressEvent) -> None:
+            self.app.layout.focus(self._primary_panel())
+
+        @bindings.add(Keys.Any, filter=in_inspection)
+        def ignore_inspection_text(event: KeyPressEvent) -> None:
+            pass
 
         @bindings.add("f4", filter=~in_menu & ~in_setting)
         def options_screen(event: KeyPressEvent) -> None:
@@ -1184,7 +1263,7 @@ class TerminalUI:
         def cancel_menu(event: KeyPressEvent) -> None:
             self._finish_menu(None)
 
-        @bindings.add("escape", filter=~in_menu & ~in_viewer & ~in_editor & ~in_setting, eager=True)
+        @bindings.add("escape", filter=~in_menu & ~in_viewer & ~in_editor & ~in_setting & ~in_inspection, eager=True)
         def stop_now(event: KeyPressEvent) -> None:
             callback = getattr(self, "_interrupt_callback", None)
             if callback is not None:
@@ -1199,7 +1278,7 @@ class TerminalUI:
             self.context_visible = not self.context_visible
             self.app.invalidate()
 
-        in_context = Condition(lambda: self.context_visible) & ~in_menu & ~in_viewer & ~in_editor & ~in_setting
+        in_context = Condition(lambda: self.context_visible) & ~in_menu & ~in_viewer & ~in_editor & ~in_setting & ~in_inspection
 
         @bindings.add("up", filter=in_context)
         @bindings.add("down", filter=in_context)
@@ -1231,7 +1310,7 @@ class TerminalUI:
         def scroll_down(event: KeyPressEvent) -> None:
             self._scroll_output(3)
 
-        @bindings.add("c-d", filter=~in_menu & ~in_viewer & ~in_editor & ~in_setting)
+        @bindings.add("c-d", filter=~in_menu & ~in_viewer & ~in_editor & ~in_setting & ~in_inspection)
         def eof(event: KeyPressEvent) -> None:
             if not event.current_buffer.text:
                 self._end_input()
@@ -1263,7 +1342,12 @@ class TerminalUI:
         """Rebuild presentation while retaining input, transcript, and application."""
         # Build fallible presentation pieces before migrating old storage, so
         # a rejected reload can still run the previous generation's methods.
+        focused = self.app.layout.current_control
         layout = self._layout()
+        if self._inspection_visible and self.output.get_size().columns >= 60 and focused in (
+            self._files_window.content, self._calls_window.content,
+        ):
+            layout.focus(focused)
         bindings = self._bindings()
         style = self._style()
         self._ensure_transcript()

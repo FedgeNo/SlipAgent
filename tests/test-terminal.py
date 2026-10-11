@@ -29,6 +29,54 @@ async def wait_until(predicate) -> None:
             await asyncio.sleep(.02)
 
 
+@pytest.mark.parametrize("sequence", ["\x1b[9;5u", "\x1b[27;5;9~", "\x1b[1;5I"])
+async def test_control_tab_cycles_panels_without_changing_draft(display, tmp_path, sequence):
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
+        ui.input.text = "keep draft"
+        for number in range(30):
+            ui.track_call(ToolCall(str(number), "read_file", {"path": f"file-{number}"}), 1)
+        task = asyncio.create_task(ui.run())
+        try:
+            ui.toggle_inspection()
+            await wait_until(lambda: "Touched" in snapshot()[0])
+            pipe.send_text(sequence)
+            await wait_until(lambda: ui.app.layout.current_window is ui._files_window)
+            for _ in range(20):
+                pipe.send_text("\x1b[B")
+            await wait_until(lambda: ui._inspection_selection(True) == "file-9")
+            await wait_until(lambda: "file-9" in "\n".join(snapshot()[:8]))
+            pipe.send_text(sequence)
+            await wait_until(lambda: ui.app.layout.current_window is ui._calls_window)
+            pipe.send_text("\r")
+            await wait_until(lambda: ui._viewer_active)
+            assert ui.input.text == "keep draft"
+            ui.close_viewer()
+            path = tmp_path / "editor.txt"
+            path.write_text("text\n")
+            await ui._open_editor_now(path)
+            pipe.send_text("\t")
+            await wait_until(lambda: ui._editor_input.text.startswith("    "))
+            edited = ui._editor_input.text
+            pipe.send_text(sequence)
+            await wait_until(lambda: ui.app.layout.current_window is ui._files_window)
+            pipe.send_text("\x1b[B")
+            await wait_until(lambda: ui._inspection_selection(True) == "file-8")
+            assert ui._editor_input.text == edited
+            pipe.send_text(sequence)
+            await wait_until(lambda: ui.app.layout.current_window is ui._calls_window)
+            pipe.send_text(sequence)
+            await wait_until(lambda: ui.app.layout.current_control is ui._editor_input.control)
+            pipe.send_text(sequence)
+            await wait_until(lambda: ui._inspection_focused())
+            ui.toggle_inspection()
+            assert ui.app.layout.current_control is ui._editor_input.control
+        finally:
+            ui.close()
+            await task
+
+
 async def test_footer_background_separates_controls_from_feed(display):
     sink, _, output, screen, snapshot = display
     with create_pipe_input() as pipe:

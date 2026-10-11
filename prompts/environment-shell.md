@@ -4,4 +4,4 @@ PATH is inherited.
 
 Use the exact interpreter in the commands below.
 
-No environment is created automatically.
+Environment creation is explicit through `create_python_environment`; repeated calls reuse a selected interpreter.

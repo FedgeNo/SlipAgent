@@ -416,6 +416,18 @@ choice. Missing, malformed, or broken configured interpreters report an error;
 the harness does not silently substitute the global interpreter. Non-Python
 projects can operate without a selected Python environment.
 
+For Python work that needs an environment, the agent can call
+`create_python_environment`. It defaults to a workspace `.venv`, using
+SlipAgent's Python to create it, and validates and selects it for the session.
+The agent receives guidance to check project instructions, environment managers,
+and Python version requirements first. The tool installs no project dependencies.
+Repeated calls return the selected interpreter unchanged; existing complete
+environments are reused, and unrelated or incomplete directories are never
+overwritten. Failed or interrupted creation leaves partial files for inspection.
+Supply `path` for a nested project and `python` for another installed interpreter.
+Custom paths need an explicit project setting for selection after restart;
+the default root `.venv` is rediscovered automatically.
+
 Every model request receives the selection status, interpreter/bin paths, Python
 version, prefixes, pip/pytest/ensurepip availability, and commands suited to the
 selected environment. The install template uses that interpreter's pip when
@@ -1269,6 +1281,7 @@ The model gets these built-in tools:
 | `move_path` | Move or rename a file or directory tree on the same filesystem. |
 | `delete_path` | Delete a file or empty directory; nonempty directories require `recursive=true`. |
 | `create_directory` | Create a directory, optionally including missing parents. |
+| `create_python_environment` | Create and select a Python venv when none is selected; repeated calls reuse the selected interpreter and never recreate existing directories. |
 | `edit_file` | Replace one exact string or an `edits` array against one original file. All matches must validate before an atomic write; returns a bounded diff and helpful match diagnostics. |
 | `grep` | Regex search across file contents, with an optional glob filter and a 120-second timeout. |
 | `glob` | Find files and directories by name pattern. |

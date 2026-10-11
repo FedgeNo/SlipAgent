@@ -79,6 +79,8 @@ def load_project_settings(workspace: Workspace) -> ProjectSettings:
 class ProjectEnvironment:
     """Refresh discovery on each request; repeat probes only when inputs change."""
 
+    override_source = "--python"
+
     def __init__(self, workspace: Workspace) -> None:
         self.workspace = workspace
         self.python_override: str | None = None
@@ -106,7 +108,7 @@ class ProjectEnvironment:
 
         settings = load_project_settings(self.workspace)
         selected = self.python_override
-        source = "--python"
+        source = self.override_source
         if selected is None:
             selected = settings.python
             source = PROJECT_SETTINGS_PATH

@@ -1,0 +1,4 @@
+{
+    "properties/path": "Environment directory within Workspace Access. Defaults to .venv. Its parent must exist. Ignored when an interpreter is already selected.",
+    "properties/python": "Installed Python executable path or command name to create the environment. Defaults to SlipAgent's interpreter. Ignored when an interpreter is already selected."
+}

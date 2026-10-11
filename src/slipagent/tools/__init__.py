@@ -17,9 +17,11 @@ from .search import GlobTool, GrepTool, search_tools
 from .shell import RunCommandTool, shell_tools
 from .web import FetchPageTool, WebSearchTool, web_tools
 from .output import CommandArchive, ReadCommandOutputTool
+from .python import CreatePythonEnvironmentTool
 
 __all__ = [
     "AnswerTool",
+    "CreatePythonEnvironmentTool",
     "EditFileTool",
     "FetchPageTool",
     "GlobTool",
@@ -80,6 +82,7 @@ def build_default_registry(
     registry = ToolRegistry(
         [
             AnswerTool(),
+            CreatePythonEnvironmentTool(services["project_environment"]),
             *file_tools(workspace, artifacts),
             *path_tools(workspace),
             *search_tools(workspace),

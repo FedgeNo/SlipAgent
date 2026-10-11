@@ -182,6 +182,8 @@ Automatic Harness Checks cover only the syntax or configured checks named in the
 
 - If selection is unclear, inspect project configuration and documented environments; `.venv/` and `venv/` are only common examples. Ask before installing into an uncertain environment. Do not silently substitute global Python or the harness environment.
 
+- If Python work needs an environment and none is selected, check project instructions and environment-manager configuration, then use `create_python_environment` when a standard venv suits the project. Check the returned Python version and use its interpreter for project commands.
+
 ### Choosing Tools
 
 **Before any tool call in the current turn, review the previous few turns' tool results.** Exploratory information such as directory listings, file contents, and search matches may already be present. Reuse it; request only missing or incomplete information instead of repeating those calls.

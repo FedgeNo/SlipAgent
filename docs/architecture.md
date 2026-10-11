@@ -501,6 +501,16 @@ and pytest commands are null. No discovery probe installs anything. The log quot
 is a startup setting retained by the session service;
 reloading code does not reset its consumed bytes or change its configured quota.
 
+`CreatePythonEnvironmentTool` borrows the session's `ProjectEnvironment` owner
+and is exclusive. It returns an existing selection unchanged, refuses ambiguous
+discovery, and creates a missing target directory exclusively before running
+standard `venv` in a bounded subprocess. Existing target directories are only
+validated, never recreated or repaired. A successful virtual-environment probe
+precedes session selection, whose source is labelled `create_python_environment`.
+The tool does not install project dependencies or modify project settings;
+custom selection paths therefore need explicit configuration to survive restart.
+Failure and cancellation preserve partial files, and retries cannot overwrite them.
+
 ## Command Output Is Separate From the Context Preview
 
 Shell and Git capture drain stdout/stderr concurrently. Their bounded observations

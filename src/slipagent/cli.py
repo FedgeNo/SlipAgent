@@ -1055,8 +1055,8 @@ def _status_bar(session: Session, style: Style, *, columns: int | None = None) -
     """Bottom readout: workspace CWD, active model, and free calls left."""
     cwd = _cwd_readout(session.workspace)
     quota = session.free_calls
-    free = f"free: {'—' if quota is None else quota}"
-    model = f"model: {session.agent.model}"
+    free = f"Free: {'—' if quota is None else quota}"
+    model = f"Model: {session.agent.model}"
     if isinstance(getattr(session, "client", None), APIClient):
         model += f" ({session.client.provider})"
     if columns is None:

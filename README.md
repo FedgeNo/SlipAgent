@@ -618,7 +618,7 @@ renaming lasts only for the current conversation in the running process.
 
 On an interactive terminal, seven fixed rows sit at the bottom of the screen:
 a pulsing activity indicator, five rows for wrapping input,
-and the readout `<cwd>  │  model: <slug>  │  free: <n>`. Two empty rows
+and the readout `<cwd>  │  Model: <slug>  │  Free: <n>`. Two empty rows
 separate this area from the scrolling transcript. Output and redraws preserve
 partially typed input. The controls have a dark blue background, menus use
 dark purple, and the prompt retains its dark green background. Input and output wrap at word boundaries to the

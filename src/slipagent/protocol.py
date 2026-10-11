@@ -131,7 +131,7 @@ def _detect_response(text: str, tools: list[ToolSpec], *, xml_tool_calls: bool =
                                           normalize_calls(value.get("function_call")), tagged)
                     legacy_value = {key: item for key, item in value.items() if key != "function_call"}
                     legacy_value["tool_calls"] = [call.to_record() for call in calls]
-                    legacy = _parse_response(json.dumps(legacy_value), bool(value.get(COMPRESSED_FIELDS[0])), [])
+                    legacy = _legacy_response(legacy_value, bool(value.get(COMPRESSED_FIELDS[0])), [], [])
                     return AgentResponse(legacy.text, legacy.calls)
                 reply = value.get("response", "")
                 if xml_tool_calls and isinstance(reply, str):
@@ -505,6 +505,13 @@ def parse_response(text: str, has_previous_results: bool, *, native_calls: list[
 
 def _parse_response(text: str, has_previous_results: bool, native_calls: list[ToolCall]) -> ResponseRecord:
     value, tagged_calls = _response_object(text)
+    return _legacy_response(value, has_previous_results, native_calls, tagged_calls)
+
+
+def _legacy_response(
+    value: Any, has_previous_results: bool, native_calls: list[ToolCall], tagged_calls: list[ToolCall],
+) -> ResponseRecord:
+    """Adapt a decoded earlier response envelope without serializing it again."""
     expected = {"response", *COMPRESSED_FIELDS}
     if not isinstance(value, dict):
         raise ResponseFormatError("Response must be one JSON object.")

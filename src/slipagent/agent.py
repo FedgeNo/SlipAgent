@@ -8,77 +8,32 @@ Events leave presentation and lifecycle controls with the CLI.
 
 from __future__ import annotations
 
-from .data_text import render_data
-
 import uuid
 import asyncio
 import json
 import sys
-import copy
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import asdict, dataclass, field, replace
-from typing import Any, Literal
+from dataclasses import dataclass, field
+from typing import Any
 
+from .events import AgentEvent as AgentEvent, EventKind as EventKind, EventHandler as EventHandler
+from .requests import ContextStepLimit as ContextStepLimit, MAX_MEMORY_ATTEMPTS as MAX_MEMORY_ATTEMPTS
 from .api import APIClient
 from .config import DEFAULT_MAX_STEPS, DEFAULT_CONTEXT_STEPS
 from .context import (
     DEFAULT_CONTEXT_LENGTH,
     ContextError, ContextStopped, ConversationHistory,
     RecallHistoryTool, CompletedStep,
-    tool_history_as_text,
-    _visible_response,
 )
-from .protocol import ResponseFormatError, parse_agent_response, agent_response_format
 from .compaction import StepCompactor
-from .activity import command_output
-from .progress import LoopGuard, StreamLoopGuard, StreamLoopError
+from .progress import LoopGuard
 from .budget import ContextBudget
-from .repomap import RepositoryMap
-from .checks import check_edit_batch
-from .checkpoints import FileCheckpoints, current_checkpoint
-from .prompts import PromptSections, load_prompt, model_prompt_profile
-from .batching import run_batch
-from .api import APIError, APIContextError, APIResponseError, APITransportError, RETRYABLE_STATUS
-from .mcp import MCPTool
+from .checkpoints import FileCheckpoints
+from .prompts import load_prompt, model_prompt_profile
 from .capabilities import RequestProfile
-from .tools.base import ToolRegistry, ToolResult, current_invocation
+from .tools.base import ToolRegistry, ToolResult
 from .types import Message, ToolCall, ToolSpec, Usage
-
-EventKind = Literal[
-    "context",
-    "step_start",
-    "assistant_text",
-    "assistant_delta",
-    "reasoning_delta",
-    "stream_end",
-    "retry",
-    "retry_wait",
-    "user_message",
-    "user_message_sent",
-    "user_queue_reset",
-    "tool_start",
-    "tool_output",
-    "tool_end",
-    "artifact",
-    "step_end",
-    "warning",
-    "notice",
-    "error",
-]
-
-
-@dataclass(slots=True)
-class AgentEvent:
-    kind: EventKind
-    step: int = 0
-    text: str = ""
-    tool_call: ToolCall | None = None
-    result: ToolResult | None = None
-    usage: Usage | None = None
-
-
-EventHandler = Callable[[AgentEvent], None]
-
+from .toolbatch import tool_message as _tool_message
 
 def build_system_prompt(workspace: str, *, project_instructions: str = "") -> str:
     """Render the default system prompt for a given workspace root."""
@@ -99,13 +54,6 @@ STEP_LIMIT_NOTICE = (
 )
 
 STOP_NOTICE = "Stopped after the current step. Results are saved in this conversation; ask me to continue when ready."
-MAX_MEMORY_ATTEMPTS = 3
-
-
-class ContextStepLimit(Exception):
-    """The current run has exhausted its model-request budget."""
-
-
 @dataclass(slots=True)
 class Agent:
     """Stateful conversation driver."""
@@ -338,6 +286,9 @@ class Agent:
             self._context_lengths[self.model] = length
         return self._context_lengths[self.model]
 
+    def _account_usage(self, usage: Usage) -> None:
+        self.usage = self.usage + usage
+
     def _reserve_request(self) -> None:
         if self._requests >= self.max_steps:
             raise ContextStepLimit
@@ -365,108 +316,22 @@ class Agent:
                 raise ContextError(str(exc)) from exc
         if self.context_tokens is not None:
             length = min(length, self.context_tokens)
-        sections = PromptSections()
-        if self.planning:
-            saved_plan = next(((prior.id, message.content['content'])
-                         for prior in reversed(self.history.steps)
-                         for message in reversed(prior.messages)
-                         if message.role == 'tool' and isinstance(message.content, dict)
-                         and message.content.get('tool') == 'update_plan'
-                         and message.content.get('status') == 'success'), None)
-            plan_record = load_prompt('working-plan-empty.md')
-            if saved_plan is not None:
-                plan_record = load_prompt('working-plan-record.md', step_id=saved_plan[0],
-                                          plan=render_data(saved_plan[1]))
-            sections.add('plan', 'Working Plan', load_prompt('working-plan.md',
-                         plan_record=plan_record.strip()), 45)
         workspace = self.registry.resources.workspace
         if workspace is not None and self.registry.services.get("editable_prompts"):
             self.system_prompt = build_system_prompt(str(workspace.root))
             if self.messages and self.messages[0].role == "system":
                 self.messages[0] = Message.system(self.system_prompt)
-        if workspace is not None:
-            access = load_prompt('workspace-access-off.md')
-            if workspace.access.danger:
-                access = (load_prompt('workspace-access-on.md'))
-            sections.add("access", "Workspace Access",
-                         load_prompt('workspace-access.md', access=access.strip(), workspace=workspace.root,
-                                     temporary_directory=workspace.temporary_directory),
-                         15, owner="workspace")
-        instructions = self.registry.resources.instructions
-        if instructions is not None:
-            snapshot = instructions.snapshot()
-            sections.add("project", "Project Instructions (Current)", instructions.render(snapshot), 20, owner="instructions")
-            if not preview:
-                self.registry.services["instruction_snapshot"] = snapshot
-        environment = self.registry.resources.environment
-        if environment is not None:
-            sections.add("environment", "Project Python Environment", load_prompt('environment-snapshot.md', environment=render_data(await environment.snapshot())), 30, owner="environment")
-        native_tools = self._uses_native_tools(capabilities)
-        if not native_tools or capabilities is not None and capabilities.format == "json_schema":
-            sections.add("schema", "Response Schema",
-                load_prompt('response-json.md') + '\n\n'
-                + (load_prompt('response-native-json.md')
-                   if native_tools else load_prompt('response-embedded-json.md')),
-                0, owner="protocol", dynamic=False,
-            )
-        elif native_tools:
-            sections.add("schema", "Reply Format",
-                         load_prompt('response-native-text.md'),
-                         0, owner="protocol", dynamic=False)
-        for index, filename in enumerate(model_prompt_profile(self.model).get("sections", [])):
-            sections.add(f"model_{index}", filename, load_prompt(filename),
-                         5, owner="model", dynamic=False)
-        sections.add("tools", "Available Tool Definitions", load_prompt('tool-definitions.md', definitions=render_data([spec.to_api() for spec in specs])), 10, owner="tools", dynamic=False)
-        servers = {tool.client.spec.name: tool.client.instructions for tool in self.registry.tools
-                   if isinstance(tool, MCPTool) and tool.client.connected and tool.client.instructions}
-        if servers:
-            sections.add("mcp", "Connected MCP Server Guidance",
-                load_prompt('mcp-guidance.md', servers=render_data(servers)),
-                40, owner="mcp", dynamic=False,
-            )
-        state_notes = {key: value for key, value in self.registry.context_notes.items() if key != "user_edits"}
-        if state_notes:
-            sections.add("state", "Current Harness State", load_prompt('harness-state.md', state=render_data(state_notes)), 50)
-        sections.add("repair", "Response Correction", repair.strip(), 60)
-        extra_instructions = sections.render()
-        budget = copy.copy(self._budget()) if preview else self._budget()
-        token_scale = budget.select(self.model, capabilities)
-        if budget_fraction is None:
-            budget_fraction = budget.fraction
-        history = replace(self.history, steps=list(self.history.steps), task=copy.deepcopy(self.history.task)) if preview else self.history
-        repository_map = ""
-        if environment is not None:
-            if "repository_map" not in self.registry.services:
-                self.registry.services["repository_map"] = RepositoryMap(environment.workspace)
-            query = next((m.content or "" for m in reversed(self.messages) if m.role == "user"), "")
-            repository_map = await self.registry.services["repository_map"].snapshot(query, min(128_000, int(length * budget_fraction * .03 * 3)))
-        view_options: dict[str, Any] = dict(
-            user_edits=list(self.registry.context_notes.get("user_edits", {}).values()),
-            user_corrections="\n\n".join(part.strip() for part in (
-                self.registry.context_notes.get("progress", ""), repair,
-            ) if part.strip()),
-            keep_steps=self.context_steps,
-            overthinking=self.overthinking,
-            reasoning_history_steps=self.reasoning_history_steps,
-            filtered_thoughts=self.filtered_thoughts,
-            context_length=int(length * budget_fraction),
-            max_output=self.max_tokens or min(8192, max(256, length // 8)),
-            native_tools=native_tools,
-            text_tool_history=not native_tools,
-            schema=agent_response_format(native_tools=native_tools) if capabilities is not None and capabilities.format == "json_schema" else None,
-            token_scale=token_scale,
+        from .contextbuilder import ContextBuilder, ContextSettings
+
+        builder = ContextBuilder(
+            self.registry, self.history, self.messages, self._budget(),
+            ContextSettings(self.model, self.planning, self.context_steps, self.overthinking,
+                            self.reasoning_history_steps, self.filtered_thoughts, self.max_tokens),
         )
-        try:
-            supplement = "\n\n".join(part.strip() for part in (extra_instructions, repository_map) if part.strip())
-            context = await history.view(self.messages, specs, extra_instructions=supplement, **view_options)
-        except ContextError:
-            if not repository_map:
-                raise
-            # Orientation is optional; it must never displace the current task.
-            context = await history.view(self.messages, specs, extra_instructions=extra_instructions, **view_options)
-        if not native_tools:
-            context = tool_history_as_text(context)
-        return context
+        return await builder.build(
+            specs, length, self._uses_native_tools(capabilities), capabilities=capabilities,
+            preview=preview, repair=repair, budget_fraction=budget_fraction,
+        )
 
     def _uses_native_tools(self, capabilities: RequestProfile | None) -> bool:
         channel = model_prompt_profile(self.model).get("tool_channel")
@@ -624,184 +489,27 @@ class Agent:
 
         capabilities = await self.client.model_capabilities(self.model) if isinstance(self.client, APIClient) else None
         native_tools = self._uses_native_tools(capabilities)
-        extra_body: dict[str, Any] = {}
-        if capabilities is not None and capabilities.format == "json_schema":
-            extra_body["response_format"] = agent_response_format(native_tools=native_tools)
-        elif not native_tools:
-            extra_body["response_format"] = {"type": "json_object"}
-        step_usage = Usage()
-        attempts = 0
-        overflows = 0
-        transport_retries = 0
-        budget_fraction = self._budget().fraction
-        repair = ""
-        while True:
-            if self.pending:
-                context = await self._queued_context(specs, step, repair=repair, budget_fraction=budget_fraction)
-            self._reserve_request()
-            request_body: dict[str, Any] = {}
-            diagnostic_id: int | None = None
-            diagnostics = self.registry.resources.diagnostics
-            def finish_attempt(outcome: str, *, detail: str = "", response: str = "", usage: Usage | None = None) -> None:
-                if diagnostics is not None:
-                    diagnostics.finish(diagnostic_id, outcome, detail=detail, response=response,
-                                       usage=asdict(usage) if usage is not None else None)
-                    if diagnostics.error and self.registry.context_notes.get("request_diagnostics") != diagnostics.error:
-                        self.registry.context_notes["request_diagnostics"] = diagnostics.error
-                        self._emit(AgentEvent(kind="warning", text=f"Request diagnostics: {diagnostics.error}"))
-            def request_sent(request: dict[str, Any]) -> None:
-                nonlocal request_body, diagnostic_id
-                request_body = request
-                self._queued_messages_sent()
-                if diagnostics is not None:
-                    diagnostic_id = diagnostics.begin(request, step=run_step, step_id=step)
-                instructions = self.registry.resources.instructions
-                if instructions is not None:
-                    instructions.presented(self.registry.services.get("instruction_snapshot", {}))
-                self._emit(AgentEvent(kind="context", step=step, text=json.dumps(request, ensure_ascii=False)))
-            def delta(kind: str, chunk: str) -> None:
-                stream_guard.feed(kind, chunk)
-                if kind == "reasoning" and chunk:
-                    self._emit(AgentEvent(kind="reasoning_delta", step=step, text=chunk))
-            def response_received(body: dict[str, Any]) -> None:
-                if diagnostics is not None:
-                    diagnostics.response(diagnostic_id, body)
-            stream_guard = StreamLoopGuard()
-            options: dict[str, Any] = {
-                "on_delta": delta,
-                "on_request": request_sent,
-                "on_response": response_received,
-                "single_attempt": True,
-            } if isinstance(self.client, APIClient) else {}
-            try:
-                if not options:
-                    self._queued_messages_sent()
-                    instructions = self.registry.resources.instructions
-                    if instructions is not None:
-                        instructions.presented(self.registry.services.get("instruction_snapshot", {}))
-                completion = await self.client.chat(
-                    model=self.model,
-                    messages=context,
-                    tools=(specs or None) if native_tools else None,
-                    extra_body=extra_body,
-                    temperature=self.temperature,
-                    max_tokens=self.max_tokens,
-                    session_id=self.session_id,
-                    **options,
-                )
-                try:
-                    if not options:
-                        stream_guard.feed("reasoning", completion.message.reasoning or "")
-                        stream_guard.feed("content", completion.text)
-                    stream_guard.finish()
-                except StreamLoopError as exc:
-                    exc.usage = completion.usage
-                    exc.partial_response = json.dumps(completion.message.to_api(), ensure_ascii=False)
-                    raise
-            except StreamLoopError as exc:
-                self.usage = self.usage + exc.usage
-                finish_attempt("loop_stopped", detail=str(exc), response=exc.partial_response, usage=exc.usage)
-                self._emit(AgentEvent(kind="stream_end", step=step))
-                self._emit(AgentEvent(kind="warning", step=step, text=str(exc)))
+        from .requests import RequestDriver, RequestHooks, RequestSettings, RequestStopped
+
+        driver = RequestDriver(
+            self.client, self.registry, self._budget(),
+            RequestSettings(self.model, self.temperature, self.max_tokens, self.session_id),
+            RequestHooks(
+                context=lambda repair, fraction: self._queued_context(
+                    specs, step, repair=repair, budget_fraction=fraction),
+                reserve=self._reserve_request, exhausted=lambda: self._requests >= self.max_steps,
+                has_pending=lambda: bool(self.pending), delivered=self._queued_messages_sent,
+                account=self._account_usage, persist=self._persist, emit=self._emit,
+                stop_event=self._stop_event, stop_requested=lambda: self.stop_requested,
+                stop_notice=self._stop_notice,
+            ),
+        )
+        outcome = await driver.run(context, specs, step, run_step, capabilities, native_tools)
+        if isinstance(outcome, RequestStopped):
+            if outcome.loop_stopped:
                 self.stopped = True
-                return str(exc)
-            except APIContextError as exc:
-                finish_attempt("context_overflow", detail=str(exc))
-                self._emit(AgentEvent(kind="stream_end", step=step))
-                if self.stop_requested:
-                    return self._stop_notice(step)
-                if overflows >= 2:
-                    raise
-                overflows += 1
-                budget_fraction *= .65
-                smaller = await self._queued_context(specs, step, repair=repair, budget_fraction=budget_fraction)
-                if [m.to_api() for m in smaller] == [m.to_api() for m in context]:
-                    raise ContextError("The provider rejected the current input even without removable history. Originals are preserved; shorten the input or select a larger-context model.")
-                context = smaller
-                self._budget().fraction = budget_fraction
-                self._emit(AgentEvent(kind="retry", step=step, text=f"Provider context limit reached; retrying with less history ({overflows}/2). Originals are preserved."))
-                continue
-            except APIResponseError as exc:
-                self.usage = self.usage + exc.usage
-                step_usage = step_usage + exc.usage
-                finish_attempt("request_error", detail=str(exc), response=exc.partial_response or exc.body or "", usage=exc.usage)
-                self._emit(AgentEvent(kind="stream_end", step=step))
-                if self.stop_requested:
-                    return self._stop_notice(step)
-                transient = isinstance(exc, APITransportError) or exc.status_code in RETRYABLE_STATUS
-                if not transient:
-                    raise
-                if self._requests >= self.max_steps:
-                    raise ContextStepLimit from exc
-                def countdown(error: str, seconds: int) -> None:
-                    self._emit(AgentEvent(kind="retry_wait", step=seconds, text=error))
-                retry = await self.client.wait_retry(transport_retries, exc, stop=self._stop_event(), on_retry=countdown)
-                if self._stop_event().is_set():
-                    return self._stop_notice(step)
-                if not retry:
-                    raise
-                transport_retries += 1
-                continue
-            except BaseException as exc:
-                finish_attempt("cancelled" if isinstance(exc, asyncio.CancelledError) else "request_error", detail=str(exc))
-                self._emit(AgentEvent(kind="stream_end", step=step))
-                raise
-            attempts += 1
-            self._budget().observe(request_body, completion.usage.prompt_tokens)
-            self.usage = self.usage + completion.usage
-            self._persist()
-            step_usage = step_usage + completion.usage
-            try:
-                if completion.response_error:
-                    raise ResponseFormatError(completion.response_error, excerpt=completion.response_excerpt)
-                record = parse_agent_response(completion.text, completion.tool_calls, tools=specs,
-                                              xml_tool_calls=model_prompt_profile(self.model).get("xml_tool_calls", False))
-                record.text = _visible_response(record.text)
-                if not record.calls and not record.text.strip():
-                    raise ResponseFormatError(load_prompt("response-bookkeeping-error.md"))
-                if record.calls and completion.finish_reason == "length":
-                    raise ResponseFormatError(load_prompt("response-truncated-error.md"))
-                # Check decoded reply text too: a JSON response envelope is
-                # structured output, but the prose inside it can still loop.
-                response_guard = StreamLoopGuard()
-                response_guard.feed("content", record.text)
-                response_guard.finish()
-            except StreamLoopError as exc:
-                finish_attempt("loop_stopped", detail=str(exc),
-                               response=json.dumps(completion.message.to_api(), ensure_ascii=False), usage=completion.usage)
-                self._emit(AgentEvent(kind="stream_end", step=step))
-                self._emit(AgentEvent(kind="warning", step=step, text=str(exc)))
-                self.stopped = True
-                return str(exc)
-            except ResponseFormatError as exc:
-                finish_attempt("rejected", detail=str(exc), response=completion.response_excerpt or json.dumps(completion.message.to_api(), ensure_ascii=False), usage=completion.usage)
-                rejection = str(exc)
-                rejected_excerpt = exc.excerpt
-            else:
-                finish_attempt("accepted", response=json.dumps(completion.message.to_api(), ensure_ascii=False), usage=completion.usage)
-                break
-            self._emit(AgentEvent(kind="stream_end", step=step))
-            if self.stop_requested:
-                return self._stop_notice(step)
-            if self._requests >= self.max_steps:
-                raise ContextStepLimit
-            if attempts >= MAX_MEMORY_ATTEMPTS:
-                raise ContextError(f"The model returned invalid structured output in 3 consecutive responses: {rejection} No tools from these responses were executed; accepted history is preserved.")
-            self._emit(AgentEvent(kind="retry", step=step, text=(
-                f"Response rejected: {rejection} "
-                f"Retrying from the start (retry {attempts}/{MAX_MEMORY_ATTEMPTS - 1})."
-            )))
-            # Retry the complete round without adding unexecuted tool calls to history.
-            repair = load_prompt("response-repair.md", rejection=rejection,
-                                 tool_channel=load_prompt("repair-native-tools.md" if native_tools else "repair-json-tools.md"))
-            if rejected_excerpt:
-                repair += (
-                    load_prompt('rejected-output.md') + '\n\n'
-                    + rejected_excerpt
-                )
-            # Include diagnostics in the budget calculation, rather than append
-            # them to a request that might already fill the available context.
-            context = await self._queued_context(specs, step, repair=repair, budget_fraction=budget_fraction)
+            return outcome.text
+        completion, record, step_usage = outcome.completion, outcome.record, outcome.usage
 
         for history_step in self.history.steps:
             if isinstance(history_step, CompletedStep):
@@ -839,74 +547,15 @@ class Agent:
         self.messages.append(message)
         self._persist()
 
-        calls = message.tool_calls or []
-        batch_results: list[tuple[ToolCall, ToolResult]] = []
-        async def invoke_call(tool_call: ToolCall) -> ToolResult:
-            journal = self.registry.resources.journal
-            if journal is not None:
-                journal.tool_started(step, tool_call.id)
-            self._emit(AgentEvent(kind="tool_start", step=step, tool_call=tool_call))
-            invocation_token = current_invocation.set((step, tool_call.id))
-            output_token = command_output.set(
-                lambda chunk: self._emit(AgentEvent(kind="tool_output", step=step, text=chunk, tool_call=tool_call))
-            )
-            try:
-                if self.exposed_tools is not None and tool_call.name not in {spec.name for spec in specs}:
-                    result = ToolResult.error("This tool is not available in the current request.")
-                else:
-                    result = await self.registry.invoke(tool_call.name, tool_call.arguments)
-            except Exception as exc:
-                result = ToolResult.error(f"Tool dispatch failed: {type(exc).__name__}: {exc}. Effects may be partial; inspect before retrying.")
-            finally:
-                command_output.reset(output_token)
-                current_invocation.reset(invocation_token)
-            return result
+        from .toolbatch import ToolBatch
 
-        def commit_call(tool_call: ToolCall, result: ToolResult) -> None:
-            artifacts = self.registry.resources.artifacts
-            references = artifacts.references(step, tool_call.id) if artifacts is not None else []
-            observation = _tool_message(tool_call, result)
-            if references:
-                observation.content["artifacts"] = references
-            self.messages.append(observation)
-            self._persist()
-            batch_results.append((tool_call, result))
-            self._emit(
-                AgentEvent(kind="tool_end", step=step, tool_call=tool_call, result=result)
-            )
-            for reference in references:
-                self._emit(AgentEvent(kind="artifact", step=step, tool_call=tool_call,
-                                      result=ToolResult.ok(reference)))
-
-        checkpoints = self._checkpoints()
-        if checkpoints is not None:
-            checkpoints.begin(step)
-        checkpoint_token = current_checkpoint.set(checkpoints)
-        try:
-            await run_batch(calls, self.registry, invoke_call, commit_call)
-        except BaseException:
-            await self._archive_step(capabilities)
-            raise
-        finally:
-            current_checkpoint.reset(checkpoint_token)
-            if checkpoints is not None:
-                checkpoints.finish()
-
-        check_report = await check_edit_batch(self.registry, batch_results, step)
-        if check_report:
-            call, result = batch_results[-1]
-            content = (result.content + "\n\nHarness Checks After This Complete Tool Batch:\n" + check_report
-                       if isinstance(result.content, str) else {"result": result.content, "harness_checks": check_report})
-            checked = ToolResult(content, result.is_error)
-            artifacts = self.messages[-1].content.get("artifacts", [])
-            self.messages[-1] = _tool_message(call, checked)
-            if artifacts:
-                self.messages[-1].content["artifacts"] = artifacts
-            batch_results[-1] = call, checked
-            visible_diagnostics = "\n".join(line for line in check_report.splitlines()
-                                            if "SKIPPED — no selected project Python." not in line)
-            if any(word in visible_diagnostics for word in ("FAILED", "TIMED OUT", "SKIPPED", "unavailable")):
-                self._emit(AgentEvent(kind="warning", step=step, text=visible_diagnostics))
+        batch = ToolBatch(
+            self.registry, step, self.messages, emit=self._emit, persist=self._persist,
+            archive_interrupted=lambda: self._archive_step(capabilities),
+            checkpoints=self._checkpoints(),
+            allowed_tools={spec.name for spec in specs} if self.exposed_tools is not None else None,
+        )
+        batch_results = await batch.run(message.tool_calls or [])
         await self._archive_step(capabilities)
 
         # Anything typed mid-step joins here, after every tool result, so
@@ -932,11 +581,3 @@ class Agent:
         if self.stop_requested:
             return self._stop_notice(step)
         return None
-
-
-def _tool_message(call: ToolCall, result: ToolResult) -> Message:
-    """Keep execution status in the archived observation, not just the UI event."""
-    return Message.tool_result(call.id, {
-        "tool": call.name, "call_id": call.id,
-        "status": "error" if result.is_error else "success", "content": result.content,
-    })

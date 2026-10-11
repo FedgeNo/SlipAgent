@@ -67,6 +67,22 @@ Explicit history retrieval can still access the originals. The context inspector
 captures the final outgoing body after capability settings are applied, without
 the authentication headers.
 
+`Agent` coordinates the pipeline. `ContextBuilder` receives immutable
+`ContextSettings`, the conversation, token budget, and registry resources;
+previews copy history/task and budget state. `RequestDriver` owns attempt-local
+retry, overflow, repair, diagnostics, and acceptance state. Its typed hooks expose
+queued input, the shared request budget, usage accounting, and stop controls.
+`RequestAccepted` and `RequestStopped` distinguish outcomes without inserting
+rejected calls into history. `ToolBatch` owns invocation provenance, ordered
+observations, checkpoint scope, and post-batch checks. Its interruption callback
+archives paired results before checkpoint cleanup and exception propagation.
+Archival and compaction scheduling remain with the conversation coordinator.
+
+Shared event contracts live in `events.py`. Earlier inline-summary readers live
+in `contextlegacy.py`, with compatibility exports in `context.py`; decoded
+legacy response envelopes pass directly to the protocol adapter. These class
+relocations require restarting processes created before the transition.
+
 Context construction proceeds in this order:
 
 1. `ConversationHistory.sync` recognizes complete assistant/tool batches and

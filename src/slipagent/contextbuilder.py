@@ -88,6 +88,8 @@ class ContextBuilder:
         for index, filename in enumerate(model_prompt_profile(self.settings.model).get("sections", [])):
             sections.add(f"model_{index}", filename, load_prompt(filename),
                          5, owner="model", dynamic=False)
+        sections.add("suggestions", "Optional Suggested Next Steps", load_prompt('response-suggestions.md'),
+                     1, owner="protocol", dynamic=False)
         sections.add("tools", "Available Tool Definitions", load_prompt('tool-definitions.md', definitions=render_data([spec.to_api() for spec in specs])), 10, owner="tools", dynamic=False)
         servers = {tool.client.spec.name: tool.client.instructions for tool in self.registry.tools
                    if isinstance(tool, MCPTool) and tool.client.connected and tool.client.instructions}

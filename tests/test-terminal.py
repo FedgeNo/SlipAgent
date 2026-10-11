@@ -29,6 +29,48 @@ async def wait_until(predicate) -> None:
             await asyncio.sleep(.02)
 
 
+async def test_suggestion_links_submit_verbatim_and_preserve_draft(display):
+    from prompt_toolkit.data_structures import Point
+    from prompt_toolkit.document import Document
+    from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
+    from slipagent.terminal import SuggestedPrompt
+
+    sink, _, output, _, _ = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        try:
+            ui.input.buffer.set_document(Document("keep draft", 4))
+            draft = ui.input.buffer.document
+            prompt = " /inspect this file\nthen explain the result  "
+            ui.write_suggestion(prompt)
+            for width in (12, 25):
+                content = ui._transcript_content(width)
+                points = [Point(x=0, y=row) for row in range(content.line_count)
+                          if ui._suggestion_at(Point(x=0, y=row)) == prompt]
+                assert len(points) > 1
+                assert "class:clickable" in content.get_line(points[0].y)[0][0]
+                assert ui._suggestion_at(Point(x=width + 1, y=points[0].y)) is None
+            point = points[0]
+            for kind in (MouseEventType.MOUSE_DOWN, MouseEventType.MOUSE_UP):
+                ui._select_transcript(MouseEvent(point, kind, MouseButton.LEFT, frozenset()))
+            submitted = await asyncio.wait_for(ui.read_line(), 1)
+            assert isinstance(submitted, SuggestedPrompt)
+            assert submitted == prompt
+            assert ui.input.buffer.document == draft
+            assert ui.working
+            ui._submit_suggestion(prompt)
+            assert ui._lines.empty()
+            ui.set_working(False)
+            ui._editor_active = True
+            ui._submit_suggestion(prompt)
+            assert ui._lines.empty()
+            ui._editor_active = False
+            ui.clear_transcript()
+            assert not ui.__dict__["_suggestion_links"]
+        finally:
+            ui.close()
+
+
 def test_calls_with_reused_ids_keep_artifacts_in_their_own_step(display, tmp_path):
     from slipagent.artifacts import ArtifactStore
 

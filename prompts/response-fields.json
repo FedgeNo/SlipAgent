@@ -1,6 +1,7 @@
 {
     "response": "Useful Markdown text for the user. Aim for a brief reply in this response, including when requesting tools, to record progress and planned steps. An empty string is still allowed when requesting tools. Nonempty text is required when no tools are requested.\n\nReport important findings from supplied tool results, including the conclusions or decisions based on them.\n\nState the purpose of new tool calls requested in this response. Their results are unavailable; describe these calls as pending, not as findings.\n\nIf there are no previous results, explain your intended action and purpose. If there are no new calls, report your findings, answer, or the specific information needed to proceed. Do not invent findings or calls to fill the response.",
     "tool_calls": "Ordered tools to execute after validation; [] for a final answer.",
+    "suggestions": "Optional prompts that logically extend this turn's actions; clicks submit them exactly as supplied.",
     "call_id": "Nonempty identifier unique within this batch.",
     "tool_name": "Exact advertised tool name.",
     "arguments": "JSON-encoded object matching the tool's parameter schema. Use '{}' for no arguments.",

@@ -736,6 +736,10 @@ display-only wrapping and retain actual line breaks. The latter appends the
 selection after a newline without submitting or replacing your draft. Right-click
 a selected directory reference for **Copy Absolute Path** and, inside the project,
 **Copy Relative Path**. Right-clicking without a selection shows a short tip.
+The model may offer up to three **Suggested Next Steps** after a finished reply.
+Each link displays its entire prompt. Clicking it while idle posts that exact
+prompt to the feed and starts a new run, leaving your input draft untouched.
+Suggestions are optional response data, not tools or sidebar call records.
 The CWD link opens the project directory. Linux requires a desktop session and
 `xdg-open` or `gio`; macOS uses `open`, and Windows uses its default folder
 handler. Without an available opener, paths remain plain text. A failed launch

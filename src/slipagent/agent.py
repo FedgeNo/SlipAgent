@@ -537,6 +537,9 @@ class Agent:
         if not record.calls:
             self.messages.append(message)
             await self._archive_step(capabilities)
+            if not self.pending and not self.stop_requested:
+                for suggestion in getattr(record, "suggestions", []):
+                    self._emit(AgentEvent(kind="suggestion", step=step, text=suggestion))
             self._emit(AgentEvent(kind="step_end", step=step, usage=step_usage))
             if self.stop_requested:
                 self._stop_notice(step)
@@ -574,6 +577,9 @@ class Agent:
 
         self._emit(AgentEvent(kind="step_end", step=step, usage=step_usage))
         if only_answers:
+            if not self.pending and not self.stop_requested:
+                for suggestion in getattr(record, "suggestions", []):
+                    self._emit(AgentEvent(kind="suggestion", step=step, text=suggestion))
             return "\n\n".join(result.content["text"] for _, result in batch_results)
         if repeated:
             self.stopped = True

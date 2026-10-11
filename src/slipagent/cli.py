@@ -48,7 +48,7 @@ from .tools.base import ToolRegistry, ToolResult
 from .tools import build_default_registry
 from .types import KeyInfo, Message, ModelInfo, ToolCall
 from .workspace import Workspace, WorkspaceError
-from .terminal import TerminalUI
+from .terminal import TerminalUI, SuggestedPrompt
 from .palette import ERROR_COLOR, MUTED_COLOR, THOUGHT_COLOR, USER_BACKGROUND_COLOR, USER_COLOR, USER_TEXT_COLOR, foreground_code
 from .runtime import RuntimeFrame
 from .sessionstate import Session as Session
@@ -256,6 +256,7 @@ class Renderer:
     def user_prompt(self, text: str, *, queued: bool = False) -> None:
         """Separate each submitted prompt from the surrounding transcript."""
         self._finish_stream()
+        self.__dict__.pop("_suggestion_step", None)
         self._begin_block()
         block = self.style.user(f"> {text}")
         if queued and self.terminal is not None:
@@ -410,6 +411,14 @@ class Renderer:
                     self.__dict__.setdefault("output_markdown", False)
                     text = literal(event.text) if self.output_markdown else MarkdownRenderer(color=False).plain(event.text)
                     self.emit(text, block=self._model_block)
+
+        elif event.kind == "suggestion":
+            self._finish_stream()
+            if self.terminal is not None:
+                if self.__dict__.get("_suggestion_step") != event.step:
+                    self.emit("Suggested Next Steps", block=object())
+                    self.__dict__["_suggestion_step"] = event.step
+                self.terminal.write_suggestion(event.text)
 
         elif event.kind == "user_message":
             # Mid-step input the user typed while the agent was working. It is
@@ -728,12 +737,14 @@ async def run_repl(session: Session) -> int:
             if line is None:
                 break
             await _wait_for_interrupt(session)
-            line = line.strip()
+            suggested = isinstance(line, SuggestedPrompt)
+            if not suggested:
+                line = line.strip()
 
             if not line:
                 continue
 
-            if line.startswith("/"):
+            if not suggested and line.startswith("/"):
                 try:
                     if await _run_interactive_command(session, line):
                         break

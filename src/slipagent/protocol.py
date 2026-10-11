@@ -46,9 +46,10 @@ class ResponseRecord:
 class AgentResponse:
     """Reply and actions, independent of background compaction."""
 
-    def __init__(self, text: str, calls: list[ToolCall]) -> None:
+    def __init__(self, text: str, calls: list[ToolCall], suggestions: list[str] | None = None) -> None:
         self.text = text
         self.calls = calls
+        self.suggestions = suggestions or []
 
 
 def agent_response_format(*, native_tools: bool) -> dict[str, Any]:
@@ -58,6 +59,12 @@ def agent_response_format(*, native_tools: bool) -> dict[str, Any]:
     schema["properties"] = {key: value for key, value in schema["properties"].items()
                             if key in {"response", "tool_calls"}}
     schema["required"] = list(schema["properties"])
+    schema["properties"]["suggestions"] = {
+        "type": "array", "maxItems": 3, "items": {"type": "string", "minLength": 1},
+        "description": json.loads(load_prompt("response-fields.json"))["suggestions"],
+    }
+    # Strict schemas require every property; suggestions must remain omittable.
+    result["json_schema"]["strict"] = False
     return result
 
 
@@ -121,7 +128,11 @@ def _detect_response(text: str, tools: list[ToolSpec], *, xml_tool_calls: bool =
         value, tagged = _response_object(candidate, tools=tools, xml_tool_calls=xml_tool_calls)
         if isinstance(value, dict):
             if set(value) & {"response", "tool_calls", "function_call", *COMPRESSED_FIELDS}:
-                allowed = {"response", "tool_calls", "function_call", *COMPRESSED_FIELDS}
+                allowed = {"response", "tool_calls", "function_call", "suggestions", *COMPRESSED_FIELDS}
+                suggestions = value.get("suggestions", [])
+                if not isinstance(suggestions, list) or len(suggestions) > 3 or any(
+                        not isinstance(item, str) or not item.strip() for item in suggestions):
+                    raise ResponseFormatError("suggestions must be an array of up to three nonempty prompt strings.")
                 if all(field in value for field in COMPRESSED_FIELDS):
                     allowed.add("task")
                 if set(value) - allowed:
@@ -129,10 +140,10 @@ def _detect_response(text: str, tools: list[ToolSpec], *, xml_tool_calls: bool =
                 if any(field in value for field in COMPRESSED_FIELDS):
                     calls = combine_calls(normalize_calls(value.get("tool_calls")),
                                           normalize_calls(value.get("function_call")), tagged)
-                    legacy_value = {key: item for key, item in value.items() if key != "function_call"}
+                    legacy_value = {key: item for key, item in value.items() if key not in {"function_call", "suggestions"}}
                     legacy_value["tool_calls"] = [call.to_record() for call in calls]
                     legacy = _legacy_response(legacy_value, bool(value.get(COMPRESSED_FIELDS[0])), [], [])
-                    return AgentResponse(legacy.text, legacy.calls)
+                    return AgentResponse(legacy.text, legacy.calls, suggestions)
                 reply = value.get("response", "")
                 if xml_tool_calls and isinstance(reply, str):
                     embedded = _detect_response(reply, tools, xml_tool_calls=True)
@@ -140,7 +151,7 @@ def _detect_response(text: str, tools: list[ToolSpec], *, xml_tool_calls: bool =
                     tagged = combine_calls(tagged, embedded.calls)
                 calls = combine_calls(normalize_calls(value.get("tool_calls")),
                                       normalize_calls(value.get("function_call")), tagged)
-                return AgentResponse(reply, calls)
+                return AgentResponse(reply, calls, suggestions)
     # Markdown examples are not call carriers. Only top-level tags are parsed.
     if not fence:
         offset = 0

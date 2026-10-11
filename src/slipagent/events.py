@@ -11,6 +11,7 @@ EventKind = Literal[
     "context",
     "step_start",
     "assistant_text",
+    "suggestion",
     "assistant_delta",
     "reasoning_delta",
     "stream_end",

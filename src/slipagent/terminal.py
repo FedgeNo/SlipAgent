@@ -39,7 +39,7 @@ from .focus import FocusCoordinator, FocusTarget
 from .links import CallbackLink, TaskLink, LinkHover
 from .listpanels import TouchedPanel, CallsPanel, ChoicePanel, ListActions
 from .palette import FOOTER_BACKGROUND_COLOR, MENU_BACKGROUND_COLOR, MUTED_COLOR, USER_PROMPT_STYLE
-from .markdown import THEMES, MarkdownRenderer, code_blocks
+from .markdown import THEMES, MarkdownRenderer, code_blocks, literal
 from .clipboard import clipboard_sequence, copy_to_clipboard
 from .explorer import folder_opener, open_folder
 from .viewerpanels import ViewerDeck, TextViewerPanel, DiffViewerPanel, FileViewerPanel, file_signature
@@ -48,6 +48,10 @@ from .types import ToolCall
 
 FOOTER_ROWS = 7
 PULSE_FRAMES = ("▌", "▛", "▀", "▜", "▐", "▟", "▄", "▙")
+
+
+class SuggestedPrompt(str):
+    """A feed action submitted verbatim, without slash-command dispatch."""
 MIN_REDRAW_INTERVAL = 1 / 30
 
 
@@ -850,6 +854,37 @@ class TerminalUI:
         label = re.sub(r"[\x00-\x1f\x7f]", lambda match: f"\\x{ord(match[0]):02x}", value)
         self.write(f"    {label}:{line}\n")
 
+    def write_suggestion(self, prompt: str) -> None:
+        """Display the entire prompt without changing the user's draft."""
+        self._ensure_transcript()
+        self.__dict__.setdefault("_suggestion_links", {})[len(self._raw_output)] = prompt
+        self.write(literal(prompt) + "\n")
+
+    def _submit_suggestion(self, prompt: str) -> None:
+        if (self.working or self._viewer_active or self._editor_active
+                or self._menu_future is not None or self._input_label != "> " or self._eof):
+            return
+        # Reserve the run immediately so a double click cannot submit twice.
+        self.set_working(True)
+        self._lines.put_nowait(SuggestedPrompt(prompt))
+
+    def _suggestion_at(self, point: Point) -> str | None:
+        if self._flow is None:
+            return None
+        rows = self._flow.content_rows()
+        row = self._flow.get_row(point.y) if 0 <= point.y < len(self._flow.rows) else (
+            rows[point.y - len(self._flow.rows)] if 0 <= point.y - len(self._flow.rows) < len(rows) else [])
+        column = 0
+        for style, text, *_ in row:
+            end = column + display_width(text)
+            if column <= point.x < end:
+                for token in style.split():
+                    if token.startswith("class:suggestion-"):
+                        prompt = self.__dict__.get("_suggestion_links", {}).get(int(token.removeprefix("class:suggestion-")))
+                        return prompt if isinstance(prompt, str) else None
+            column = end
+        return None
+
     def _file_at(self, point: Point) -> tuple[Path, int] | None:
         if self._flow is None:
             return None
@@ -1417,6 +1452,7 @@ class TerminalUI:
         self.__dict__.setdefault("_directory_links", {}).clear()
         self.__dict__.setdefault("_file_links", {}).clear()
         self.__dict__.setdefault("_artifact_links", {}).clear()
+        self.__dict__.setdefault("_suggestion_links", {}).clear()
         self.__dict__.setdefault("_touched_items", {}).clear()
         self.__dict__.setdefault("_inspection_calls", {}).clear()
         if self._viewer.active:
@@ -1524,6 +1560,7 @@ class TerminalUI:
         directory = self._directory_at(event.position)
         artifact = self._artifact_at(event.position)
         file = self._file_at(event.position)
+        suggestion = self._suggestion_at(event.position)
         if event.button == MouseButton.RIGHT:
             self._selection_dragging = False
             if event.event_type == MouseEventType.MOUSE_UP:
@@ -1539,6 +1576,8 @@ class TerminalUI:
             self.__dict__["_hovered_control"] = ("directory", directory)
         if event.event_type == MouseEventType.MOUSE_MOVE and file is not None:
             self.__dict__["_hovered_control"] = ("file", file)
+        if event.event_type == MouseEventType.MOUSE_MOVE and suggestion is not None:
+            self.__dict__["_hovered_control"] = ("suggestion", suggestion)
         selecting_button = event.button in {MouseButton.LEFT, MouseButton.UNKNOWN}
         if event.event_type == MouseEventType.MOUSE_DOWN:
             self._selection_dragging = selecting_button
@@ -1557,6 +1596,10 @@ class TerminalUI:
             if event.button in {MouseButton.RIGHT, MouseButton.MIDDLE}:
                 self._selection_start = self._selection_end = None
             else:
+                if suggestion is not None and self._selection_start == event.position:
+                    self._selection_start = self._selection_end = None
+                    self._submit_suggestion(suggestion)
+                    return None
                 if file is not None and self._selection_start == event.position:
                     self._selection_start = self._selection_end = None
                     self.app.create_background_task(self._inspect_file(str(file[0]), line=file[1]))
@@ -1710,7 +1753,8 @@ class TerminalUI:
                             continuation_indents=self._continuation_indents.get(index),
                             extra_style=(f" class:directory-{index}" if index in self.__dict__.get("_directory_links", {}) else "") +
                                         (f" class:file-{index}" if index in self.__dict__.get("_file_links", {}) else "") +
-                                        (f" class:artifact-{index}" if index in self.__dict__.get("_artifact_links", {}) else ""))
+                                        (f" class:artifact-{index}" if index in self.__dict__.get("_artifact_links", {}) else "") +
+                                        (f" class:suggestion-{index}" if index in self.__dict__.get("_suggestion_links", {}) else ""))
             if index in self._queued_notices:
                 self._notice_rows[index] = (start, len(flow.rows))
         self._wrapped_count = len(self._raw_output)
@@ -1742,6 +1786,11 @@ class TerminalUI:
             result: StyleAndTextTuples = []
             for style, text, *_ in fragments:
                 for token in style.split():
+                    if token.startswith("class:suggestion-"):
+                        suggestion = self.__dict__.get("_suggestion_links", {}).get(int(token.removeprefix("class:suggestion-")))
+                        style += " class:clickable"
+                        if self.__dict__.get("_hovered_control") == ("suggestion", suggestion):
+                            style += " class:hover"
                     if token.startswith("class:file-"):
                         file = self.__dict__.get("_file_links", {}).get(int(token.removeprefix("class:file-")))
                         style += " class:clickable"

@@ -883,6 +883,11 @@ to the model along with the active generation number.
   start; literal feed selections preserve source line breaks rather than display
   wrapping. Clipboard commands can
   copy readable replies, Markdown source, or exact fenced code bodies.
+  Optional response JSON `suggestions` contains up to three verbatim prompts.
+  Final replies expose these as feed links; a click sends a distinct prompt input
+  through the REPL without editing the draft or dispatching slash commands.
+  Busy runs, open viewers/editors, and modal input prevent suggestion submission.
+  Suggestions have no tool/sidebar records and do not execute automatically.
   Structured model responses retain their validation boundary before display.
   `transcript.py` also stores original literal chunks and completed styled rows
   in separate private session files, indexed by byte offsets. Block boundaries

@@ -5,6 +5,35 @@ import pytest
 from slipagent.editor import FileEditor, EditConflict, signature
 
 
+@pytest.mark.parametrize("original,edited,expected", [
+    ("unchanged\n", "unchanged\n", ""),
+    ("old", "new", "-old\n\\ No newline at end of file\n+new\n\\ No newline at end of file\n"),
+    ("x" * 5000 + "\r\nold\r\n", "x" * 5000 + "\r\nnew\r\n", "-old\r\n+new\r\n"),
+])
+def test_editor_diff_and_save_without_git(tmp_path, monkeypatch, original, edited, expected):
+    from slipagent import editor as module
+    from unittest.mock import Mock
+    monkeypatch.setattr(module.shutil, "which", lambda name: None)
+    run = Mock(side_effect=AssertionError("No external diff process should run"))
+    monkeypatch.setattr(module.subprocess, "run", run)
+    path = tmp_path / "file.txt"
+    path.write_bytes(original.encode())
+    editor = FileEditor(path)
+    try:
+        editor.set_page(0, edited)
+        diff = editor.diff()
+        if expected:
+            assert f"--- {path}\n+++ {path}\n" in diff
+            assert expected in diff
+        else:
+            assert diff == ""
+        editor.save()
+        assert path.read_bytes() == edited.encode()
+        run.assert_not_called()
+    finally:
+        editor.close()
+
+
 def test_editing_pages_preserves_large_file_and_line_endings(tmp_path):
     path = tmp_path / "large.txt"
     text = "original\r\n" * 100_000

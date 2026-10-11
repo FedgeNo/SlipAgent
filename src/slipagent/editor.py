@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import difflib
 import shutil
 import stat
 import subprocess
@@ -121,10 +122,8 @@ class FileEditor:
             temporary.unlink(missing_ok=True)
 
     def diff(self) -> str:
-        """Use Git's native diff engine; capture its output on disk first."""
+        """Prefer Git's diff engine, with a standard-library fallback."""
         git = shutil.which("git")
-        if git is None:
-            raise ValueError("Git is required to record user-edit diffs")
         with tempfile.TemporaryDirectory(prefix="slipagent-user-edit-") as directory:
             before, after = Path(directory) / "before", Path(directory) / "after"
             with before.open("w", encoding="utf-8", newline="") as target:
@@ -133,6 +132,12 @@ class FileEditor:
             with after.open("w", encoding="utf-8", newline="") as target:
                 for chunk in self.chunks():
                     target.write(chunk)
+            if git is None:
+                # difflib compares complete logical lines and holds both inputs in memory.
+                with before.open(encoding="utf-8", newline="") as original, after.open(encoding="utf-8", newline="") as edited:
+                    lines = difflib.unified_diff(original.readlines(), edited.readlines(),
+                                                 fromfile=str(self.path), tofile=str(self.path))
+                return "".join(line if line.endswith("\n") else line + "\n\\ No newline at end of file\n" for line in lines)
             with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as output:
                 result = subprocess.run([git, "--no-pager", "diff", "--no-index", "--no-ext-diff", "--no-textconv", "--text", "--", str(before), str(after)],
                                         stdout=output, stderr=subprocess.PIPE, check=False)

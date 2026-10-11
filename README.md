@@ -669,10 +669,10 @@ buffer, text, cursor, and scrolling return when the editor closes.
 Files are backed by private snapshots, with only
 one bounded page in the editing buffer; **Ctrl+Page Up/Down** moves between pages.
 Untouched content and line endings are preserved. External disk changes offer
-Reload and require an explicit choice before overwriting. Git supplies the saved
-user-edit diff, which accompanies the next model input separately from user
-messages and tool results and survives session resume. Git must be available to
-save through the editor so the change can be reported accurately.
+Reload and require an explicit choice before overwriting. Git, when available,
+supplies the saved user-edit diff, which accompanies the next model input separately from user
+messages and tool results and survives session resume. Without Git, Python's
+`difflib` generates the diff; that fallback holds both files' lines in memory.
 
 Click **Options** or press **F4** for editor wrapping, tab width, and folder-opener
 settings. Folder-opener configuration uses the footer input area. These settings

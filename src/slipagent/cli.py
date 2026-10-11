@@ -209,11 +209,12 @@ class Renderer:
         before, _, after = BANNER.partition("{tools}")
         before = before.format(model=model, workspace=workspace, mcp=mcp)
         after = after.format(model=model, workspace=workspace, mcp=mcp)
-        # Keep the list unbroken in storage so resize can reflow it. The
-        # placeholder's rendered column defines the continuation alignment.
+        # Keep both lists unbroken so resize can reflow them at full width.
+        banner = before + ", ".join(tools) + after
         self.emit(
-            before + ", ".join(tools) + after,
-            continuation_indents={before.count("\n"): wcswidth(before.rsplit("\n", 1)[-1])},
+            banner,
+            continuation_indents={index: 0 for index, line in enumerate(banner.splitlines())
+                                  if line.startswith(("  Tools:", "  Commands:"))},
         )
 
     def _finish_stream(self) -> None:

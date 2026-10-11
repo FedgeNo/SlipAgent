@@ -2331,7 +2331,7 @@ def test_startup_and_help_list_all_commands_with_requested_spacing():
     assert "\n\nType a task and press Enter." in banner
 
 
-def test_startup_tool_list_keeps_hanging_indent_after_resize(display, tmp_path):
+def test_startup_lists_wrap_to_full_width_after_resize(display, tmp_path):
     from wcwidth import width
 
     sink, _, output, _, _ = display
@@ -2352,9 +2352,15 @@ def test_startup_tool_list_keeps_hanging_indent_after_resize(display, tmp_path):
                 tool_rows = rows[start:end]
                 assert len(tool_rows) > 1
                 assert all(width(row) <= columns for row in tool_rows)
-                if columns > 13:
-                    assert all(row.startswith(" " * 13) for row in tool_rows[1:])
+                assert all(not row.startswith(" ") for row in tool_rows[1:])
                 assert "".join(row.strip().replace(" ", "") for row in tool_rows) == "Tools:" + ",".join(tools)
+                start = next(i for i, row in enumerate(rows) if row.startswith("  Commands:"))
+                end = next(i for i in range(start + 1, len(rows)) if not rows[i].strip())
+                command_rows = rows[start:end]
+                assert all(width(row) <= columns for row in command_rows)
+                assert all(not row.startswith(" ") for row in command_rows[1:])
+                from slipagent.commands import banner_commands
+                assert "".join(command_rows).replace(" ", "") == "Commands:" + banner_commands().replace(" ", "")
                 ordinary = next(i for i, row in enumerate(rows) if row.startswith("  ordinary"))
                 assert all(row.startswith("  ") for row in rows[ordinary:] if row.strip())
         finally:

@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import io
 import sys
-import textwrap
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -901,5 +900,4 @@ def menu_options() -> list[tuple[str, str]]:
 
 
 def banner_commands() -> str:
-    text = "  ".join(command.banner for command in COMMANDS if command.banner)
-    return textwrap.fill(text, width=73, subsequent_indent="             ")
+    return "  ".join(command.banner for command in COMMANDS if command.banner)

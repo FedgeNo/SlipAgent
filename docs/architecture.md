@@ -710,6 +710,25 @@ directory, continues after its highest attempt number, and counts existing file
 sizes toward the quota. Even incomplete attempt files reserve their numbers.
 `--no-session` uses temporary storage.
 
+## Terminal Components and Invocation Identity
+
+`ListPanel` owns stable-key selection, clamping, selection visibility, rendering,
+and mouse activation. `TouchedPanel`, `CallsPanel`, and `ChoicePanel` supply their
+items, labels, and opening policy. `ListActions` supplies explicit host callbacks;
+the components do not depend on `TerminalUI`. Wrapped manual scrolling belongs
+to `uiwindows.TranscriptWindow`. Sidebar wheels scroll the viewport; bottom-menu
+wheels move selection. Those policies remain distinct.
+
+`AgentEvent.step` is the conversation step ID, matching archival, checkpoints,
+tool provenance, and artifact references. A new user request does not restart
+that identity. Run-local request budgets and diagnostic attempt numbers remain
+separate. A tool invocation is identified within its session by `(step_id,
+call_id)`; a call ID alone cannot identify saved output across turns.
+
+The list extraction moves the scrolling window class and persistent selection
+state. Processes started before that transition need a restart; compatible
+behavior reloads after it preserve the component owners and their selections.
+
 ## Reload Transactions
 
 `runtime.py` is the stable frame. Its `CORE_MODULES` set also pins package root,

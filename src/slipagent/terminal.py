@@ -34,6 +34,8 @@ from prompt_toolkit.widgets import TextArea
 from wcwidth import iter_graphemes, width as display_width, wrap
 
 from .transcript import TranscriptFile, WrappedTranscript
+from .uiwindows import TranscriptWindow
+from .listpanels import TouchedPanel, CallsPanel, ChoicePanel, ListActions
 from .palette import FOOTER_BACKGROUND_COLOR, MENU_BACKGROUND_COLOR, MUTED_COLOR, USER_PROMPT_STYLE
 from .markdown import THEMES, MarkdownRenderer, code_blocks
 from .clipboard import clipboard_sequence, copy_to_clipboard
@@ -98,63 +100,6 @@ class WordWrapInput(Processor):
             source_to_display=lambda position: source_positions[min(max(position, 0), len(source_positions) - 1)],
             display_to_source=lambda position: display_positions[min(max(position, 0), len(display_positions) - 1)],
         )
-
-
-class TranscriptWindow(Window):
-    """Scroll wrapped output by screen rows without moving input focus."""
-
-    def __init__(self, content: UIControl) -> None:
-        super().__init__(content, wrap_lines=True)
-        self._following = True
-        self._pending_scroll = 0
-
-    def scroll(self, rows: int) -> None:
-        self._pending_scroll += rows
-
-    def _scroll(self, ui_content: UIContent, width: int, height: int) -> None:
-        if width <= 0 or height <= 0:
-            return
-
-        def line_height(line: int) -> int:
-            return ui_content.get_height_for_line(line, width, self.get_line_prefix)
-
-        # The tail can start inside a wrapped line, including lines taller
-        # than the entire transcript viewport.
-        remaining = height
-        bottom = (0, 0)
-        for line in range(ui_content.line_count - 1, -1, -1):
-            size = line_height(line)
-            if size > remaining:
-                bottom = (line, size - remaining)
-                break
-            remaining -= size
-            if remaining == 0:
-                bottom = (line, 0)
-                break
-
-        line, offset = min(
-            bottom if self._following else (self.vertical_scroll, self.vertical_scroll_2), bottom,
-        )
-        offset = min(offset, line_height(line) - 1)
-        rows = self._pending_scroll
-        self._pending_scroll = 0
-        while rows < 0 and (line, offset) > (0, 0):
-            if offset:
-                offset -= 1
-            else:
-                line -= 1
-                offset = line_height(line) - 1
-            rows += 1
-        while rows > 0 and (line, offset) < bottom:
-            if offset + 1 < line_height(line):
-                offset += 1
-            else:
-                line += 1
-                offset = 0
-            rows -= 1
-        self.vertical_scroll, self.vertical_scroll_2 = min((line, offset), bottom)
-        self._following = (self.vertical_scroll, self.vertical_scroll_2) == bottom
-        self.horizontal_scroll = 0
 
 
 class InputWindow(TranscriptWindow):
@@ -308,9 +253,26 @@ class TerminalUI:
         self._inspection_visible = False
         self._touched_items: dict[str, str] = {}
         self._inspection_calls: dict[tuple[int, str], dict[str, Any]] = {}
-        self._files_window = TranscriptWindow(FormattedTextControl(lambda: self._inspection_entries(files=True)))
-        self._calls_window = TranscriptWindow(FormattedTextControl(lambda: self._inspection_entries(files=False)))
-        self._files_window._following = self._calls_window._following = False
+        self._touched_panel = TouchedPanel(
+            self._touched_items,
+            root=lambda: self.__dict__.get("_project_directory"),
+            can_open_folder=lambda: self.__dict__.get("_folder_opener") is not None,
+            actions=ListActions(activate=lambda key: self.app.create_background_task(self._inspect_file(key)),
+            invalidate=lambda: self.app.invalidate(),
+            focused=lambda: self.app.layout.current_window is self._files_window,
+            hover=lambda key: self.__dict__.get("_hovered_control") == ("inspection", True, key),
+            set_hover=lambda key: self.__dict__.__setitem__("_hovered_control", ("inspection", True, key))),
+        )
+        self._calls_panel = CallsPanel(
+            self._inspection_calls,
+            actions=ListActions(activate=lambda key: self.app.create_background_task(self._inspect_call(self._inspection_calls[key])),
+            invalidate=lambda: self.app.invalidate(),
+            focused=lambda: self.app.layout.current_window is self._calls_window,
+            hover=lambda key: self.__dict__.get("_hovered_control") == ("inspection", False, key),
+            set_hover=lambda key: self.__dict__.__setitem__("_hovered_control", ("inspection", False, key))),
+        )
+        self._files_window: TranscriptWindow = self._touched_panel.window
+        self._calls_window: TranscriptWindow = self._calls_panel.window
         self._inspection_panel = HSplit([
             HSplit([Window(FormattedTextControl("Touched"), height=1, style="class:menu-title"),
                     self._files_window]),
@@ -357,37 +319,22 @@ class TerminalUI:
         self.app.invalidate()
 
     def _inspection_keys(self, files: bool) -> list[Any]:
-        return list(reversed(self._touched_items if files else self._inspection_calls))
+        return self._touched_panel.keys() if files else self._calls_panel.keys()
 
     def _inspection_selection(self, files: bool) -> Any:
-        keys = self._inspection_keys(files)
-        selected = self.__dict__.get("_inspection_selection_keys", {}).get(files)
-        return selected if selected in keys else keys[0] if keys else None
+        return self._touched_panel.selection if files else self._calls_panel.selection
 
     def _move_inspection(self, amount: int) -> None:
-        files = self.app.layout.current_window is self._files_window
-        keys = self._inspection_keys(files)
-        if not keys:
-            return
-        index = max(0, min(len(keys) - 1, keys.index(self._inspection_selection(files)) + amount))
-        self.__dict__.setdefault("_inspection_selection_keys", {})[files] = keys[index]
-        window = self._files_window if files else self._calls_window
-        info = window.render_info
-        window._following = False
-        window._pending_scroll = 0
-        # Several key events can move the viewport before another frame renders.
-        if (info is None or info.vertical_scroll != window.vertical_scroll
-                or index not in info.displayed_lines
-                or (index == window.vertical_scroll and window.vertical_scroll_2)):
-            window.vertical_scroll = index
-            window.vertical_scroll_2 = 0
-        self.app.invalidate()
+        if self.app.layout.current_window is self._files_window:
+            self._touched_panel.move(amount)
+        else:
+            self._calls_panel.move(amount)
 
     def _activate_inspection(self) -> None:
-        files = self.app.layout.current_window is self._files_window
-        key = self._inspection_selection(files)
-        if key is not None:
-            self.app.create_background_task(self._inspect_file(str(key)) if files else self._inspect_call(self._inspection_calls[key]))
+        if self.app.layout.current_window is self._files_window:
+            self._touched_panel.open_selected()
+        else:
+            self._calls_panel.open_selected()
 
     def _inspect_link(self) -> StyleAndTextTuples:
         def click(event: MouseEvent) -> object:
@@ -502,39 +449,7 @@ class TerminalUI:
         return store is not None and any(record["kind"] == "diff" and record["call_id"] == call_id for record in store.records.values())
 
     def _inspection_entries(self, *, files: bool) -> StyleAndTextTuples:
-        fragments: StyleAndTextTuples = []
-        entries: list[tuple[Any, Any]] = list(reversed(list(self._touched_items.items()))) if files else list(reversed(list(self._inspection_calls.items())))
-        if not entries:
-            return [("class:status", "None yet")]
-        for key, value in entries:
-            root = self.__dict__.get("_project_directory")
-            try:
-                directory = files and root is not None and (root / str(key)).is_dir()
-            except OSError:
-                directory = False
-            clickable = not directory or self.__dict__.get("_folder_opener") is not None
-            def click(event: MouseEvent, key: Any = key) -> object:
-                if event.event_type == MouseEventType.MOUSE_MOVE:
-                    self.__dict__["_hovered_control"] = ("inspection", files, key)
-                elif event.event_type == MouseEventType.MOUSE_UP and event.button == MouseButton.LEFT:
-                    if files:
-                        self.app.create_background_task(self._inspect_file(str(key)))
-                    else:
-                        call = self._inspection_calls[key]
-                        self.app.create_background_task(self._inspect_call(call))
-                return None
-            label = f"{key} [{value}]" if files else f"{value['tool']} [{value['status']}]"
-            style = "class:menu-item"
-            window = self._files_window if files else self._calls_window
-            if self.app.layout.current_window is window and key == self._inspection_selection(files):
-                style += " class:hover"
-            if clickable:
-                style += " class:clickable" + (" class:hover" if self.__dict__.get("_hovered_control") == ("inspection", files, key) else "")
-                fragments.append((style, label, click))
-            else:
-                fragments.append((style, label))
-            fragments.append(("", "\n"))
-        return fragments
+        return self._touched_panel.fragments() if files else self._calls_panel.fragments()
 
     async def _inspect_file(self, path: str, *, line: int = 1) -> None:
         root = self.__dict__.get("_project_directory")
@@ -752,12 +667,31 @@ class TerminalUI:
             return
         self._menu_future: asyncio.Future[str | None] | None = None
         self._menu_title = ""
-        self._menu_options: list[tuple[str, str]] = []
-        self._menu_index = 0
-        self._menu_window = Window(FormattedTextControl(
-            lambda: self._menu_fragments(), focusable=True, show_cursor=False,
-            get_cursor_position=lambda: Point(x=0, y=self._menu_index),
-        ), height=FOOTER_ROWS - 4, wrap_lines=True)
+        self._choice_panel = ChoicePanel(
+            ListActions(activate=lambda index: self._finish_menu(self._menu_options[index][0]),
+            invalidate=lambda: self.app.invalidate(),
+            focused=lambda: self.app.layout.current_window is self._menu_window,
+            hover=lambda index: self.__dict__.get("_hovered_control") == ("menu", index),
+            set_hover=lambda index: self.__dict__.__setitem__("_hovered_control", ("menu", index))),
+        )
+        self._menu_window: TranscriptWindow = self._choice_panel.window
+        self._menu_window.height = Dimension.exact(5)
+
+    @property
+    def _menu_options(self) -> list[tuple[str, str]]:
+        return self._choice_panel.options
+
+    @_menu_options.setter
+    def _menu_options(self, options: list[tuple[str, str]]) -> None:
+        self._choice_panel.options = options
+
+    @property
+    def _menu_index(self) -> int:
+        return self._choice_panel.index
+
+    @_menu_index.setter
+    def _menu_index(self, index: int) -> None:
+        self._choice_panel.selected_key = index
 
     def _notice_width(self) -> int:
         columns = self.output.get_size().columns
@@ -815,24 +749,7 @@ class TerminalUI:
         return result + "…"
 
     def _menu_fragments(self) -> StyleAndTextTuples:
-        fragments: StyleAndTextTuples = []
-        for index, (_, label) in enumerate(self._menu_options):
-            if index:
-                fragments.append(("", "\n"))
-            selected = index == self._menu_index
-            def select(event: MouseEvent, index: int = index) -> object:
-                if event.event_type == MouseEventType.MOUSE_MOVE:
-                    self.__dict__["_hovered_control"] = ("menu", index)
-                if event.event_type == MouseEventType.MOUSE_UP and event.button == MouseButton.LEFT:
-                    self._menu_index = index
-                    self._finish_menu(self._menu_options[index][0])
-                return None
-            style = "class:clickable class:menu-item" + (" class:menu-selected" if selected else "")
-            if self.__dict__.get("_hovered_control") == ("menu", index):
-                style += " class:hover"
-            fragments.append((style,
-                              ("› " if selected else "  ") + label, select))
-        return fragments
+        return self._choice_panel.fragments()
 
     def _menu_hint(self) -> StyleAndTextTuples:
         """Keep access indicators visible even while the menu replaces readouts."""
@@ -886,8 +803,7 @@ class TerminalUI:
             self.app.invalidate()
 
     def _move_menu(self, rows: int) -> None:
-        self._menu_index = max(0, min(len(self._menu_options) - 1, self._menu_index + rows))
-        self.app.invalidate()
+        self._choice_panel.move(rows)
 
     def _finish_menu(self, value: str | None) -> None:
         if self._menu_future is not None and not self._menu_future.done():

@@ -79,6 +79,19 @@ class IndexedText(Sequence[str]):
         self.logical.seek(max(0, min(line - 1, self.logical_count - 1)) * _LINE.size)
         return int(_LINE.unpack(self.logical.read(_LINE.size))[0])
 
+    def line_number(self, index: int) -> int:
+        """Return the logical line containing a display segment using the disk index."""
+        low, high = 0, self.logical_count
+        while low < high:
+            middle = (low + high) // 2
+            self.logical.seek(middle * _LINE.size)
+            start = _LINE.unpack(self.logical.read(_LINE.size))[0]
+            if start <= index:
+                low = middle + 1
+            else:
+                high = middle
+        return max(1, low)
+
     def __len__(self) -> int:
         return self._count
 

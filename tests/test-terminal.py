@@ -180,6 +180,33 @@ async def test_editor_mouse_places_cursor_on_text_and_at_line_end_in_blank_space
             await task
 
 
+@pytest.mark.parametrize("long_line", [False, True])
+async def test_editor_reload_preserves_logical_cursor_line(display, tmp_path, long_line):
+    path = tmp_path / "file.txt"
+    prefix = "x" * (4096 * 40) + "\n" if long_line else "first\n"
+    text = prefix + "".join(f"line-{n}\n" for n in range(1, 101))
+    path.write_text(text)
+    sink, _, output, _, _ = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
+        try:
+            await ui._open_editor_now(path, line=35)
+            assert ui._editor_input.buffer.document.current_line == "line-34"
+            path.write_text(text.replace("line-", "fresh-"))
+            await ui._reload_editor()
+            assert ui._editor_input.buffer.document.current_line == "fresh-34"
+            file = ui._editor_panel.file
+            file.set_page(0, "inserted\n" + file.page_text(0))
+            assert await ui._editor_panel.save()
+            await ui._reload_editor()
+            assert ui._editor_input.buffer.document.current_line == "fresh-34"
+            path.write_text("first\nlast\n")
+            await ui._reload_editor()
+            assert ui._editor_input.buffer.document.current_line == "last"
+        finally:
+            ui._close_transcript()
+
+
 async def test_editor_saves_and_requires_choice_before_discarding(display, tmp_path):
     from unittest.mock import Mock
     path = tmp_path / "file.txt"

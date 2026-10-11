@@ -197,8 +197,12 @@ class EditorPanel:
                 self.terminal.app.layout.focus(self.input)
                 return
         old = self.file
+        line = old.original.line_number(self.page * PAGE_SEGMENTS) + self.input.buffer.document.cursor_position_row
+        for page in old.pages:
+            if page < self.page:
+                line += old.page_text(page).count("\n") - old.original_page_text(page).count("\n")
         self.file = None
-        await self.open(old.path, self.page * PAGE_SEGMENTS + 1)
+        await self.open(old.path, line)
         if getattr(self, "file") is None:
             self.file = old
             self.terminal.app.layout.focus(self.input)

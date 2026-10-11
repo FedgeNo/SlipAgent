@@ -669,7 +669,9 @@ buffer, text, cursor, and scrolling return when the editor closes.
 Files are backed by private snapshots, with only
 one bounded page in the editing buffer; **Ctrl+Page Up/Down** moves between pages.
 Untouched content and line endings are preserved. External disk changes offer
-Reload and require an explicit choice before overwriting. Git, when available,
+Reload and require an explicit choice before overwriting. Editor reload retains
+the cursor's logical line, clamping to the last line if the file became shorter.
+Git, when available,
 supplies the saved user-edit diff, which accompanies the next model input separately from user
 messages and tool results and survives session resume. Without Git, Python's
 `difflib` generates the diff; that fallback holds both files' lines in memory.

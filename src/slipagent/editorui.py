@@ -30,10 +30,14 @@ class EditorPanel:
         self.input = TextArea(multiline=True, wrap_lines=True,
                               read_only=Condition(lambda: self.busy))
         self.ensure_control()
-        self.container = HSplit([Window(FormattedTextControl(self.header), height=1, style="class:status"), self.input])
+        self.container = HSplit([Window(FormattedTextControl(self.header), height=1, style="class:status class:footer"), self.input])
         self.controls = Window(FormattedTextControl(self.actions), height=5)
 
     def ensure_control(self) -> None:
+        if hasattr(self, "container"):
+            header = self.container.children[0]
+            if isinstance(header, Window):
+                header.style = "class:status class:footer"
         if not isinstance(self.input.control, EditorControl):
             self.input.control = EditorControl(self, self.input.control)
             self.input.window.content = self.input.control

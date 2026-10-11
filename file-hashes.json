@@ -140,7 +140,7 @@
   "src/slipagent/diagnostics.py": "27d4553efb2b50ac963fd633946d97bf291e52d2f1ad624e3e0c22318a97643f",
   "src/slipagent/editor.py": "15157b3b06a05db5566c58501791a81bac8adfc596243d68270bd9d740591bcd",
   "src/slipagent/editorcontrol.py": "05016a2b992a0154a2818802bb96f367e4ce295e6ad6173b46a9a1ff7f642d03",
-  "src/slipagent/editorui.py": "e9f3395690192a157716ef4a43867b3c16d13f25dfe9cc42bfdcb27724cf7be6",
+  "src/slipagent/editorui.py": "050810788c1b147e103a9449b0aa06b0c17abcf4eca57cd0fdfb1e9cfe7c20ab",
   "src/slipagent/environment.py": "614748d84043adc2e6f265531e6c51fc28764c233b6e4e4b84ad9f5926d00786",
   "src/slipagent/explorer.py": "e96948755d610556d64b20c124de9105632d7d3ec68978306497dcf20b4a1c1b",
   "src/slipagent/inference.py": "d41e904ea8b9d3a7993672fed3604067cc4628e7e17611f3bc6aba095c562aaa",

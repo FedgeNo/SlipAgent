@@ -74,7 +74,7 @@ def current_input(messages):
             if marker:
                 metadata = read_data(body)
                 payload = request_input(messages)
-                prompts = ([payload['user_message']] if payload['user_message'] else []) + payload['additional_user_messages']
+                prompts = list(payload['user_messages'])
                 supplied = [text for record in payload['history'] for text in record.get('user_prompt', [])]
                 if not prompts and '\n'.join(payload['retained_user_request']) not in supplied and not all(text in supplied for text in payload['retained_user_request']):
                     prompts = list(payload['retained_user_request'])

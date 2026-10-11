@@ -416,8 +416,6 @@ class ConversationHistory:
                 if has_new_user_input else
                 load_prompt('tool-result-response.md' if continuing_tools else 'continuation.md')
             )
-            if sum(message.role == "user" for message in messages[self.cursor:]) > 1:
-                input_guidance += load_prompt('queued-user-messages.md')
             sections.append(
                 load_prompt('user-request.md', step_id=self.task.current_prompt_step, input_guidance=input_guidance)
             )
@@ -437,8 +435,7 @@ class ConversationHistory:
             user_text = [message.content for message in tail_messages if message.role == "user"]
             source_step = self.task.current_prompt_step
             payload = {
-                "user_message": user_text[0] if user_text else "",
-                "additional_user_messages": user_text[1:],
+                "user_messages": user_text,
                 "retained_user_request": self.task.sources[source_step] if source_step is not None and continuing_tools else [],
                 "history": [linked_tool_results(message.content) for message in selected],
                 "errors": [user_corrections] if user_corrections.strip() else [],

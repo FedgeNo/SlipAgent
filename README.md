@@ -868,8 +868,7 @@ contains one JSON object with these fields:
 
 | Field | Content |
 | --- | --- |
-| `user_message` | First new user message, or `""` without new input |
-| `additional_user_messages` | Remaining queued messages, in order |
+| `user_messages` | New messages in chronological order, or `[]` without new input; later messages supersede conflicting earlier instructions |
 | `retained_user_request` | Request made before tool use began; supplied only after tools when no new user messages are present |
 | `history` | Selected completed steps, oldest to newest |
 | `errors` | Harness errors and response corrections not attached to a call |

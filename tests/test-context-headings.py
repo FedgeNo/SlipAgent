@@ -20,8 +20,7 @@ async def test_full_context_has_one_object_per_turn_and_preserves_original_parts
     view = await history.view(originals, [], keep_steps=50, context_length=1_000_000, max_output=8192)
     assert [message.role for message in view] == ["system", "user"]
     payload = json.loads(view[1].to_api()['content'])
-    assert payload['user_message'] == 'Now explain it'
-    assert payload['additional_user_messages'] == ['Use ASCII']
+    assert payload['user_messages'] == ['Now explain it', 'Use ASCII']
     assert payload['history'][0]['tool_calls'][0]['unclassified_result'] == source
     system = content_text(view[0].content)
     assert source not in system and prompt not in system
@@ -73,7 +72,7 @@ async def test_excerpt_omissions_are_fields_instead_of_text_inserted_in_the_outp
     assert result["omitted_characters"] == len(source) - len(result["beginning"]) - len(result["ending"])
     assert current["is_tool_result_response"] is True
     assert view[-1].role == "user"
-    assert request_input(view)['user_message'] == ""
+    assert request_input(view)['user_messages'] == []
     system = content_text(view[0].content)
     assert 'LARGE RESULT' not in system
     assert 'unclassified_result_excerpt' in request_input(view)['history'][0]['tool_calls'][0]

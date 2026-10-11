@@ -61,7 +61,7 @@ async def test_agent_finishes_all_tools_before_opening_editor_and_waits_before_n
         edits.close()
         assert await run == "done"
         payload = decode_json_content(client.calls[-1]["messages"][-1].to_api()["content"])
-        assert payload["user_message"] == ""
+        assert payload["user_messages"] == []
         assert payload["user_edits"][0]["diff"] == "+user edit"
         assert {call["call_id"] for call in payload["history"][-1]["tool_calls"]} == {"one", "two"}
     finally:
@@ -86,7 +86,7 @@ async def test_saved_user_edit_survives_resume_and_is_distinct_from_user_message
     journal.restore(restored, data)
     await restored.run("Continue")
     payload = decode_json_content(client.calls[-1]["messages"][-1].to_api()["content"])
-    assert payload["user_message"] == "Continue"
+    assert payload["user_messages"] == ["Continue"]
     assert payload["user_edits"][0]["path"] == str(path)
     assert payload["user_edits"][0]["source"] == "user"
     assert "+user" in payload["user_edits"][0]["diff"]

@@ -156,9 +156,10 @@ Context construction proceeds in this order:
    not rewritten. This avoids teaching the reply format through artificial
    assistant-message prefixes, including when resuming an older session.
 4. Current-step metadata in the system prompt supplies `step_id` and
-   `is_tool_result_response`. One user-input JSON object contains `user_message`
-   (the first new message, or `""`), `additional_user_messages`,
-   `retained_user_request`, `history`, and `errors`. Tool errors belong to their
+   `is_tool_result_response`. One user-input JSON object contains `user_messages`
+   (new messages in chronological order, or `[]` without new input),
+   `retained_user_request`, `history`, and `errors`. Later user messages supersede
+   conflicting earlier instructions. Tool errors belong to their
    calls; `errors` holds harness corrections not attached to a call. Keys label
    content without inserting labels into its values. If the supplied results
    satisfy the user's request, return the result with no tool calls to finish;

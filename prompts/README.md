@@ -54,6 +54,7 @@ The `z-ai/glm-5.3` profile uses `models/glm-5.3.md`, embedded calls, and XML com
 | `tools/*.md` | Built-in tool descriptions |
 | `tools/*-parameters.json` | Tool argument descriptions, keyed by their location in the schema |
 | `response-fields.json` | Response-schema field descriptions |
+| `tool-discovery.md` | Compact deferred-tool catalog and loading guidance |
 
 ## Templates and Data Contracts
 

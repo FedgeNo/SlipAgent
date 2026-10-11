@@ -1,6 +1,7 @@
 """Read literal model-input records in wire-level tests, without unescaping text."""
 
 import re
+import json
 
 
 def read_data(text):
@@ -93,6 +94,16 @@ def request_input(messages):
         if role == 'user':
             return content.data if isinstance(content, JSONInput) else json.loads(content)
     raise AssertionError('JSON user input missing')
+
+
+def system_tool_definitions(system):
+    """Read grouped model-facing JSON definitions in native schema form."""
+    definitions = {}
+    for heading in ("Core Tools", "Additional Loaded Tools"):
+        source = system.split("## " + heading + "\n\n```json\n", 1)[1].split("\n```", 1)[0]
+        definitions.update(json.loads(source))
+    return [{"type": "function", "function": {"name": name, **definitions[name]}}
+            for name in sorted(definitions)]
 
 
 def history_records(payload):

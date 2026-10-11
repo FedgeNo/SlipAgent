@@ -799,7 +799,9 @@ def _parse_completion(raw: dict[str, Any]) -> Completion:
                                   normalize_calls(wire.get("function_call")), normalize_calls(blocks))
         except ResponseFormatError as exc:
             response_error = str(exc)
-            response_excerpt = json.dumps({"invalid_message_prefix": json.dumps(wire, ensure_ascii=True)[:1500]})
+            response_excerpt = json.dumps(
+                {"invalid_message_prefix": json.dumps(wire, ensure_ascii=True)[:1500]}, indent=2,
+            )
         message = Message.assistant(content or None, calls)
         details = wire.get("reasoning_details")
         if details is not None:

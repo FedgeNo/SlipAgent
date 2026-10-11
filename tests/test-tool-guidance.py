@@ -1,7 +1,7 @@
 """Tool contracts reach both request profiles without relying on the main prompt."""
 
 import json
-from data_text_reader import read_data
+from data_text_reader import system_tool_definitions
 
 import httpx
 import pytest
@@ -34,11 +34,18 @@ async def test_tool_guidance_reaches_actual_request_body(workspace, native):
         async with OpenRouterClient("dummy", transport=httpx.MockTransport(transport)) as client:
             agent = Agent(client, registry, "test", system_prompt=main)
             view = await agent._context_view(registry.specs(), 0, capabilities=profile)
-            await client.chat(model="test", messages=view, tools=registry.specs() if native else None,
+            await client.chat(model="test", messages=view, tools=agent._visible_specs(registry.specs()) if native else None,
                               request_profile=profile)
-        body = captured[0]
+            initial = system_tool_definitions(captured[0]["messages"][0]["content"])
+            assert "write_file" not in {item["function"]["name"] for item in initial}
+            loaded = await registry.invoke("load_tools", {"names": registry.names})
+            assert not loaded.is_error
+            view = await agent._context_view(registry.specs(), 1, capabilities=profile)
+            await client.chat(model="test", messages=view, tools=agent._visible_specs(registry.specs()) if native else None,
+                              request_profile=profile)
+        body = captured[1]
         system = body["messages"][0]["content"]
-        system_definitions = read_data(system.split("# Available Tool Definitions\n\n```text\n", 1)[1].split("\n```", 1)[0])
+        system_definitions = system_tool_definitions(system)
         assert all("# Available Tool Definitions" not in message["content"] for message in body["messages"] if message["role"] == "user")
         if native:
             definitions = body["tools"]

@@ -44,6 +44,8 @@ async def test_transport_separates_user_text_and_linked_tool_outcomes(new_messag
 
     def transport(request):
         body = json.loads(request.content)
+        assert body['messages'][-1]['content'].startswith('{\n  "user_message":')
+        assert '\n  "history": [\n    {' in body['messages'][-1]['content']
         received.append(json.loads(body['messages'][-1]['content']))
         return httpx.Response(200, json={'choices': [{'message': {'role': 'assistant', 'content': 'Done'}}]})
 
@@ -52,3 +54,12 @@ async def test_transport_separates_user_text_and_linked_tool_outcomes(new_messag
     assert received == [data]
     assert [message.to_record() for message in messages] == original
     assert history.steps[0].messages[2].content['content'] == success
+
+
+def test_native_argument_json_is_indented_and_keeps_text_literal():
+    arguments = {"path": "δ.json", "content": '{"raw":true}\n'}
+    call = ToolCall("write", "write_file", arguments)
+    encoded = call.to_api()["function"]["arguments"]
+    assert encoded.startswith('{\n  "path": "δ.json",\n  "content":')
+    assert json.loads(encoded) == arguments
+    assert call.arguments is arguments

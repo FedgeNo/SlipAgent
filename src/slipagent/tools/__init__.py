@@ -18,6 +18,7 @@ from .shell import RunCommandTool, shell_tools
 from .web import FetchPageTool, WebSearchTool, web_tools
 from .output import CommandArchive, ReadCommandOutputTool
 from .python import CreatePythonEnvironmentTool
+from .discovery import LoadToolsTool
 
 __all__ = [
     "AnswerTool",
@@ -32,6 +33,7 @@ __all__ = [
     "GitStatusTool",
     "GrepTool",
     "ListDirTool",
+    "LoadToolsTool",
     "ReadFileTool",
     "RunCommandTool",
     "Tool",
@@ -55,7 +57,7 @@ def build_default_registry(
 ) -> ToolRegistry:
     """Build workspace tools; Agent attaches history and optional planning tools.
 
-    Web tools are always registered so the model can see them; `web_search`
+    Tools remain registered, with uncommon definitions loaded on demand; `web_search`
     reports a setup error at call time if no EXA_API_KEY is present.
     Passing services borrows live session owners during reload. Only initial
     construction creates the environment selector and command archive.
@@ -82,6 +84,7 @@ def build_default_registry(
     registry = ToolRegistry(
         [
             AnswerTool(),
+            LoadToolsTool(services),
             CreatePythonEnvironmentTool(services["project_environment"]),
             *file_tools(workspace, artifacts),
             *path_tools(workspace),

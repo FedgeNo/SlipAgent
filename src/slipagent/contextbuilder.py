@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -15,6 +16,7 @@ from .prompts import PromptSections, load_prompt, model_prompt_profile
 from .protocol import agent_response_format
 from .repomap import RepositoryMap
 from .tools.base import ToolRegistry
+from .tools.discovery import CORE_TOOLS
 from .types import Message, ToolSpec
 
 
@@ -90,9 +92,23 @@ class ContextBuilder:
                          5, owner="model", dynamic=False)
         sections.add("suggestions", "Optional Suggested Next Steps", load_prompt('response-suggestions.md'),
                      1, owner="protocol", dynamic=False)
-        sections.add("tools", "Available Tool Definitions", load_prompt('tool-definitions.md', definitions=render_data([spec.to_api() for spec in specs])), 10, owner="tools", dynamic=False)
+        sections.add("tools", "Available Tool Definitions", load_prompt('tool-definitions.md',
+                     core_definitions=json.dumps({spec.name: {"description": spec.description, "parameters": spec.parameters}
+                                                  for spec in specs if spec.name in CORE_TOOLS}, ensure_ascii=False, indent=2),
+                     loaded_definitions=json.dumps({spec.name: {"description": spec.description, "parameters": spec.parameters}
+                                                    for spec in specs if spec.name not in CORE_TOOLS}, ensure_ascii=False, indent=2)),
+                     10, owner="tools", dynamic=False)
+        catalog = self.registry.services.get("tool_catalog")
+        if catalog is not None and catalog.deferred():
+            sections.add("tool_catalog", "Additional Tool Catalog",
+                         load_prompt('tool-discovery.md', catalog="\n".join(
+                             "| `" + entry["name"].replace("|", "\\|").replace("`", "\\`") + "` | "
+                             + entry["purpose"].replace("|", "\\|") + " |" for entry in catalog.deferred())),
+                         11, owner="tools", dynamic=False)
+        visible_names = {spec.name for spec in specs}
         servers = {tool.client.spec.name: tool.client.instructions for tool in self.registry.tools
-                   if isinstance(tool, MCPTool) and tool.client.connected and tool.client.instructions}
+                   if isinstance(tool, MCPTool) and tool.name in visible_names
+                   and tool.client.connected and tool.client.instructions}
         if servers:
             sections.add("mcp", "Connected MCP Server Guidance",
                 load_prompt('mcp-guidance.md', servers=render_data(servers)),

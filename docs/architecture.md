@@ -45,7 +45,7 @@ project guidance comes from this refreshed service rather than a stale suffix.
 Tool-call arguments, structured tool results, observation envelopes, input records,
 and frozen compaction inputs remain dictionaries or lists internally. External JSON
 text is decoded at entry. File contents and command output remain literal string
-fields. Working-model user input serializes one complete JSON object; system data
+fields. Working-model user input serializes one complete, indented JSON object; system data
 sections, compression inputs, and terminal output use labelled literal text.
 Journals and HTTP transport encode JSON only at their destination boundaries. The request callback carries a
 dictionary to diagnostics and token accounting. Complete history selections return
@@ -66,6 +66,19 @@ from working context. Compaction processes reasoning separately in either mode.
 Explicit history retrieval can still access the originals. The context inspector
 captures the final outgoing body after capability settings are applied, without
 the authentication headers.
+
+`tools/discovery.py` owns the session's compact tool catalog and retained loaded
+names. `Agent` applies the explicit allowlist before selecting core and loaded
+definitions. Both the system definitions and native API tool list use this
+selection. System definitions group core and additional loaded tools by name,
+with indented JSON schemas; the remaining eligible tools have short table entries without
+argument schemas. `load_tools` returns structured definitions and retains the
+selected names for subsequent requests. It does not execute tools or expand the
+allowlist. Existing valid calls remain executable even if their definitions were
+deferred; recorded calls also retain their definitions on subsequent requests.
+Reset clears discovery state, and saved load results/calls restore it on resume.
+Reload candidates borrow the same catalog through registry services. MCP server
+guidance enters requests when a tool from that server has a supplied definition.
 
 `Agent` coordinates the pipeline. `ContextBuilder` receives immutable
 `ContextSettings`, the conversation, token budget, and registry resources;

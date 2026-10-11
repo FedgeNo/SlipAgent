@@ -24,7 +24,7 @@ class JSONInput:
 
 def render_content(value: Any) -> str:
     if isinstance(value, JSONInput):
-        return json.dumps(value.data, ensure_ascii=False)
+        return json.dumps(value.data, ensure_ascii=False, indent=2)
     if isinstance(value, MessageSections):
         return "".join(render_content(part) for part in value.parts)
     if value is None:

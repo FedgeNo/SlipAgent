@@ -2,7 +2,7 @@
 
 from slipagent.types import content_text
 import json
-from data_text_reader import read_data
+from data_text_reader import read_data, system_tool_definitions
 import sys
 import shutil
 import re
@@ -64,7 +64,7 @@ async def test_working_and_summary_requests_have_markdown_structure(native):
     assert read_data(summaries[0]["messages"][1]["content"])["user_prompt"] == user
     definitions = requests[0].get("tools")
     if not native:
-        definitions = read_data(requests[0]["messages"][0]["content"].split("# Available Tool Definitions\n\n```text\n", 1)[1].split("\n```", 1)[0])
+        definitions = system_tool_definitions(requests[0]["messages"][0]["content"])
     for definition in definitions:
         assert_markdown_structure(definition["function"]["description"])
     await registry.aclose()

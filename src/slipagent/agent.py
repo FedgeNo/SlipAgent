@@ -184,6 +184,9 @@ class Agent:
         if diagnostics is not None:
             diagnostics.clear()
         self._compactor().reset()
+        catalog = self.registry.services.get("tool_catalog")
+        if catalog is not None:
+            catalog.loaded.clear()
         prefix = self.messages[:1] if self.messages and self.messages[0].role == "system" else []
         self.messages = list(prefix)
         self.usage = Usage()
@@ -303,7 +306,7 @@ class Agent:
         the active history. Runtime diagnostics and service metadata are explicit
         input because the model cannot see terminal notices or local state.
         """
-        specs = self._filter_specs(specs)
+        specs = self._visible_specs(specs)
         if capabilities is None and isinstance(self.client, APIClient):
             capabilities = await self.client.model_capabilities(self.model)
         length = await self._context_length() if capabilities is None else capabilities.context_length
@@ -461,6 +464,8 @@ class Agent:
         if self.exposed_tools is None:
             return specs
         allowed = set(self.exposed_tools) | {"recall_history"}
+        if "load_tools" in self.registry:
+            allowed.add("load_tools")
         if self.planning:
             allowed.add("update_plan")
         else:
@@ -469,6 +474,15 @@ class Agent:
         if missing:
             raise ValueError(f"Unavailable tools in allowlist: {', '.join(sorted(missing))}")
         return [spec for spec in specs if spec.name in allowed]
+
+    def _visible_specs(self, specs: list[ToolSpec]) -> list[ToolSpec]:
+        from .tools.discovery import tool_catalog
+        catalog = tool_catalog(self.registry)
+        filtered = self._filter_specs(specs)
+        if catalog is None:
+            return filtered
+        names = catalog.select(self._filter_specs(self.registry.specs()), self.messages)
+        return [spec for spec in filtered if spec.name in names]
 
     async def _step(self, step: int) -> str | None:
         """One response and its complete tool batch; behavior reloads between steps."""
@@ -487,6 +501,8 @@ class Agent:
         except ContextStopped:
             return self._stop_notice(step)
 
+        visible_specs = self._visible_specs(specs)
+
         capabilities = await self.client.model_capabilities(self.model) if isinstance(self.client, APIClient) else None
         native_tools = self._uses_native_tools(capabilities)
         from .requests import RequestDriver, RequestHooks, RequestSettings, RequestStopped
@@ -504,7 +520,7 @@ class Agent:
                 stop_notice=self._stop_notice,
             ),
         )
-        outcome = await driver.run(context, specs, step, run_step, capabilities, native_tools)
+        outcome = await driver.run(context, visible_specs, step, run_step, capabilities, native_tools)
         if isinstance(outcome, RequestStopped):
             if outcome.loop_stopped:
                 self.stopped = True

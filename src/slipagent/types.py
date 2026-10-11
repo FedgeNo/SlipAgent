@@ -54,7 +54,7 @@ class ToolCall:
             "type": "function",
             "function": {
                 "name": self.name,
-                "arguments": json.dumps(self.arguments, separators=(",", ":")),
+                "arguments": json.dumps(self.arguments, ensure_ascii=False, indent=2),
             },
         }
 

@@ -363,7 +363,7 @@ def _decode(text: str) -> Any:
         raise ResponseFormatError(
             f"Invalid JSON at line {exc.lineno}, column {exc.colno} (character {exc.pos}): {exc.msg}. "
             "Expected complete valid JSON.",
-            excerpt=json.dumps({"character_offset": start, "invalid_text": text[start:end]}),
+            excerpt=json.dumps({"character_offset": start, "invalid_text": text[start:end]}, indent=2),
         ) from exc
     except (ValueError, RecursionError) as exc:
         if isinstance(exc, ResponseFormatError):
@@ -510,7 +510,7 @@ def parse_response(text: str, has_previous_results: bool, *, native_calls: list[
         if not exc.excerpt:
             # A stateless retry needs evidence of the rejected output. This is
             # bounded diagnostic data, never an executable assistant message.
-            exc.excerpt = json.dumps({"invalid_text_prefix": text[:1500], "total_characters": len(text)})
+            exc.excerpt = json.dumps({"invalid_text_prefix": text[:1500], "total_characters": len(text)}, indent=2)
         raise
 
 

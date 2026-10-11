@@ -1275,10 +1275,23 @@ interpreter in the server's `command` when required.
 
 ## Tools
 
-The model gets these built-in tools:
+The model initially gets complete definitions for `read_file`, `list_dir`,
+`grep`, `edit_file`, `run_command`, and `load_tools`. Other tools appear in a
+compact names-and-purpose catalog. The model calls `load_tools` with selected
+names to obtain their full descriptions and argument schemas; those definitions
+join subsequent system prompts and API tool lists for the conversation.
+System definitions separate core and loaded tools, keyed by name in indented
+JSON. Harness-generated input JSON also uses indentation; file contents and
+command-output strings retain their original text.
+Repeated loads are safe. New conversations clear loaded definitions; resumed
+conversations restore tools loaded or called in their saved history. Explicit
+tool allowlists and current MCP availability still apply.
+
+The complete built-in tool set is:
 
 | Tool | Purpose |
 | --- | --- |
+| `load_tools` | Load full definitions for selected catalog names without executing them. |
 | `answer` | Display `text`; end the run when called without other tools, or continue after a mixed tool batch. Also accepts `<tool_call><answer>text</answer></tool_call>`. |
 | `read_file` | Read a whole UTF-8 file up to 32 MB with numbered lines; optional offset/limit ranges, without a line cap. Model context limits still apply. |
 | `write_file` | Create or overwrite a file, making parent directories. |

@@ -7,6 +7,7 @@ Two modes:
 
 from __future__ import annotations
 
+from .commands import BY_NAME, CommandContext, all_help, command_help, menu_options, banner_commands
 from .prompts import PromptError, load_prompt
 from .markdown import THEMES, MarkdownRenderer, literal
 
@@ -50,9 +51,7 @@ from .workspace import Workspace, WorkspaceError
 from .terminal import TerminalUI
 from .palette import ERROR_COLOR, MUTED_COLOR, THOUGHT_COLOR, USER_BACKGROUND_COLOR, USER_COLOR, USER_TEXT_COLOR, foreground_code
 from .runtime import RuntimeFrame
-from .task import TaskMemory
 from .sessions import SessionJournal, SessionError, session_title
-from .checkpoints import CheckpointError
 from wcwidth import iter_graphemes, strip_sequences, wcswidth
 from tabulate import tabulate
 
@@ -64,105 +63,20 @@ BANNER = """SlipAgent — coding agent with selectable API providers
 
   Tools:     {tools}
 
-{mcp}  Commands:  /help  /tools  /model [slug]  /models [filter]  /key [show|status|key]
-             /temperature [value]  /cost  /mcp [add|save|remove]
-             /task [new]  /rename <name>  /reset  /reload  /generations
-             /sessions  /resume [id|latest]  /fork  /delete  /rewind  /requests [attempt]
-             /menu  /danger [on|off|status]  /overthinking on|off  /planning [on|off]
-             /init  /stop  /exit  /quit
+{mcp}  Commands:  {commands}
 
 Type a task and press Enter. Follow-ups queue while the agent works.
 Settings changes also queue until the current response and tool batch finish.
 /stop stops after this step; Esc interrupts now. /exit, /quit, or Ctrl-D quits.
-Use /help for command details. Ctrl+\\ toggles the context view."""
+Use /help for command details. Ctrl+\\ toggles the context view.""".replace("{commands}", banner_commands())
 
 QUOTA_REFRESH_INTERVAL = 15 * 60
 
-HELP = """\
-Commands
+HELP = all_help()
 
-  /help [command]      show all help, or help for one command (with or without /)
-  /config-show         show active interpreter, model, and workspace settings
-  /menu                browse commands and insert a selection into the input
-  /view [record] [line]  inspect saved output or a diff in a read-only viewer
-  /theme <name>        dark, light, monochrome, or ironbow Markdown palette
-  /markdown [source|rendered]  toggle Markdown source view (F2)
-  /copy [auto|text|markdown|code [number]]  copy the latest reply (F3)
-  /danger [on]         disable workspace path confinement (queues while working)
-  /danger off          restore workspace path confinement (queues while working)
-  /danger status       show whether danger mode is active
-  /overthinking on|off  enable or disable recent archived thoughts, up to 25 steps (queues while working)
-  /planning [on|off]    enable planning (default); off disables it (queues while working)
-  /tools               list the available tools
-  /model               choose a model with Up/Down and Enter; Escape cancels
-  /model <selector>    switch model/provider; use provider::model when ambiguous
-  /models [filter]     search active provider catalogs (e.g. /models nemotron)
-  /provider <provider> switch to a free default: openrouter/nvidia Ultra, kilo Auto Free
-  /temperature         show the current temperature and model support
-  /temperature <value> set temperature from 0 to 2 when supported (model-specific default)
-  /key                 enter a different key for the current provider (hidden input)
-  /key show            show the current key, masked
-  /key status          same as /key show
-  /key <key>           use a specific key for the current provider
-  /cost                show token usage and cost for this session
-  /task                show retained user input and its source step IDs
-  /task new            start a new task with your next prompt; retain history and logs
-  /rename <name>       name this saved conversation and its terminal title
-  /sessions            list saved sessions for this project
-  /fork                copy the current saved session and continue in the copy (queues while working)
-  /delete              confirm deletion of the session, logs, diagnostics, and checkpoints; Esc cancels (queues while working)
-  /rewind              choose an edit checkpoint and confirm file restoration; Esc cancels
-  /rewind list         list available file checkpoints without restoring anything
-  /resume              choose a saved session with Up/Down and Enter (queues while working)
-  /resume <id|latest>   restore a saved conversation and scroll to its end (queues while working)
-  /requests [attempt]  list recent request attempts or inspect an exact saved request
-  /mcp                 show MCP servers and their tools
-  /mcp add <name> <command> [args...]
-                       connect an MCP server over stdio for this session
-  /mcp save <name> <command> [args...]
-                       same, but also store it in .mcp.json for future runs
-  /mcp remove <name>   disconnect a server and forget it
-  /reset               start a fresh conversation; saved sessions remain on disk
-  /reload              apply component edits (also watched automatically)
-  /generations         show current generation count
-  /init                create AGENTS.md if missing and load project guidance
-  /stop                finish this step and its tools, then stop
-  /exit                quit (also ctrl-d)
-  /quit                same as /exit
-
-Ctrl+\\ toggles the context view. Scroll it with the mouse wheel, arrows,
-Page Up/Down, or Home/End. System prompts appear in yellow.
-
-Ordinary text continues the active task. Use /task new before a separate task.
-Project Python selection is shown in context; --python PATH overrides discovery.
-Sessions, command logs, and request diagnostics are saved unless --no-session is used.
-Command logs default to a shared 1 GiB quota; request diagnostics have a 32 MiB quota.
-Background commands use command_jobs and read_command_output for control/output.
-/stop leaves those jobs running; /reset and exit stop them.
-Esc immediately interrupts agent work, active tools, and background jobs.
-Inside a chooser, Esc only closes the chooser. Completed results are preserved."""
 
 def command_menu_options() -> list[tuple[str, str]]:
-    """Use help's syntax and descriptions without inserting argument placeholders."""
-    options: list[tuple[str, str]] = []
-    for line in HELP.splitlines():
-        if not line.startswith("  /"):
-            if line.startswith(" ") and options and line.strip():
-                value, label = options[-1]
-                options[-1] = value, label + " " + line.strip()
-            continue
-        fields = re.split(r" {2,}", line.strip(), maxsplit=1)
-        syntax = fields[0]
-        description = fields[1] if len(fields) > 1 else ""
-        words = syntax.split()
-        prefix = []
-        for word in words:
-            if word.startswith(("[", "<")) or "|" in word:
-                break
-            prefix.append(word)
-        value = " ".join(prefix) + (" " if len(prefix) < len(words) else "")
-        options.append((value, syntax + (" — " + description if description else " —")))
-    return options
+    return menu_options()
 
 
 MENU_OPTIONS = command_menu_options()
@@ -1309,34 +1223,12 @@ async def _run_interactive_command(session: Session, line: str) -> bool:
 
 
 def _command_help(argument: str) -> str:
-    """Select command entries and their continuation lines from shared help."""
-    topic = argument.strip().removeprefix("/").lower()
-    if not argument.strip():
-        return HELP
-    lines: list[str] = []
-    selected = False
-    for line in HELP.splitlines():
-        match = re.match(r"^  /(\S+)", line)
-        if match:
-            selected = match[1] == topic
-        elif line and not line.startswith(" "):
-            selected = False
-        if selected:
-            lines.append(line)
-    if not lines:
-        return f"  No help found for {argument.strip()!r}. Use /help to list commands.\n"
-    return f"Help: /{topic}\n\n" + "\n".join(lines).rstrip() + "\n"
+    return command_help(argument)
 
 
 def _changes_session(command: str, argument: str) -> bool:
-    """Commands that cannot share a live model request or tool batch."""
-    return (command in {"reset", "init", "resume", "fork", "delete", "rewind", "model", "models", "provider"}
-            or command == "key" and argument.lower() not in {"show", "status"}
-            or command in {"mcp", "temperature"} and bool(argument)
-            or command == "task" and argument == "new"
-            or command == "danger" and argument.lower() in {"", "on", "off"}
-            or command == "overthinking" and argument.lower() in {"on", "off"}
-            or command == "planning" and argument.lower() in {"", "on", "off"})
+    definition = BY_NAME.get(command)
+    return definition.changes_session(argument) if definition is not None else False
 
 
 def _queue_command(session: Session, line: str, command: str) -> None:
@@ -1373,7 +1265,7 @@ async def _apply_deferred_commands(session: Session, *, exiting: bool = False) -
         parts = line[1:].split(None, 1)
         command = parts[0].lower()
         argument = parts[1].strip() if len(parts) > 1 else ""
-        if command in {"reset", "resume", "delete", "rewind"} or command == "task" and argument == "new":
+        if BY_NAME.get(command) is not None and BY_NAME[command].replaces_task(argument):
             resume = False
         try:
             if session.renderer.terminal is not None:
@@ -1392,12 +1284,13 @@ async def _apply_deferred_commands(session: Session, *, exiting: bool = False) -
 
 
 def _background_command(text: str) -> bool:
-    """Only read-only commands may outlive a step; controls remain immediate."""
+    if not text.startswith("/"):
+        return False
     parts = text.split(None, 1)
-    command = parts[0].lower() if parts else ""
+    name = parts[0].lower().removeprefix("/") if parts else ""
     argument = parts[1].strip().lower() if len(parts) > 1 else ""
-    return (command == "/key" and argument in {"show", "status"}
-            or command == "/temperature" and not argument)
+    command = BY_NAME.get(name)
+    return command.background(argument) if command is not None else False
 
 
 def _start_background_command(session: Session, text: str) -> None:
@@ -1552,345 +1445,20 @@ def _refresh_title(session: Session) -> None:
 
 
 async def _execute_command(session: Session, line: str) -> bool:
-    """Execute a slash command. Returns True when the REPL should exit."""
+    """Dispatch definitions while preserving batch boundaries and finalization."""
     parts = line[1:].split(None, 1)
-    command = parts[0].lower() if parts else ""
+    name = parts[0].lower() if parts else ""
     argument = parts[1].strip() if len(parts) > 1 else ""
-    style = session.renderer.style
-    out = _RendererStream(session.renderer)
-
-    if command == "view":
-        terminal = session.renderer.terminal
-        store = session.registry.services.get("artifact_store")
-        if terminal is None or store is None:
-            print(style.red("  /view requires an interactive terminal with inspection records."), file=out)
-            return False
-        try:
-            values = argument.split()
-            if len(values) > 2:
-                raise ValueError("usage: /view [record] [line]")
-            if values:
-                identifier = int(values[0])
-                line_number = int(values[1]) if len(values) == 2 else 1
-                if line_number < 1:
-                    raise ValueError("Line must be positive.")
-            else:
-                choices = [(str(record["record_id"]), f"{record['record_id']} — {record['kind']} — {record['command']}")
-                           for record in store.records.values()]
-                if not choices:
-                    terminal.notify("No inspection records yet.")
-                    return False
-                selected = await terminal.choose("Inspection Records", choices)
-                if selected is None:
-                    return False
-                identifier, line_number = int(selected), 1
-            await terminal.open_artifact(identifier, line=line_number)
-        except ValueError as exc:
-            terminal.notify(str(exc))
+    command = BY_NAME.get(name)
+    if command is not None and command.changes_session(argument) and (session.agent.running or session.extensions.get("deferred_commands")):
+        _queue_command(session, line, name)
         return False
-
-    if command == "menu":
-        terminal = session.renderer.terminal
-        if argument:
-            print(style.red("  usage: /menu"), file=out)
-        elif terminal is None:
-            print(style.red("  /menu requires an interactive terminal; use /help for commands."), file=out)
-        else:
-            selected = await terminal.choose("Commands", MENU_OPTIONS)
-            if selected is not None:
-                terminal.insert_command(selected)
-        return False
-
-    if _changes_session(command, argument) and (session.agent.running or session.extensions.get("deferred_commands")):
-        _queue_command(session, line, command)
-        return False
-
-    if command in ("exit", "quit"):
-        session.extensions["resume_after_commands"] = False
-        session.renderer._queued_settings_pause = False
-        session.agent.request_stop()
-        return True
-    if command == "stop":
-        session.extensions["resume_after_commands"] = False
-        session.renderer._queued_settings_pause = False
-        if session.agent.request_stop():
-            if session.renderer.terminal is not None:
-                session.renderer.terminal.set_working(True, stopping=True)
-            print(style.dim("  stopping after the current step and its tool results."), file=out)
-        else:
-            print(style.dim("  already idle."), file=out)
-    elif command == "help":
-        print(_command_help(argument), file=out, end="")
-    elif command in {"theme", "markdown", "copy"}:
-        terminal = session.renderer.terminal
-        if terminal is None:
-            print(style.red(f"  /{command} requires an interactive terminal."), file=out)
-        elif command == "theme":
-            if argument not in THEMES:
-                print("  usage: /theme " + "|".join(THEMES), file=out)
-            else:
-                session.renderer.markdown_theme = argument
-                terminal.configure_markdown(theme=argument)
-                print(f"  Theme: {argument}", file=out)
-        elif command == "markdown":
-            if argument not in {"", "source", "rendered"}:
-                print("  usage: /markdown [source|rendered]", file=out)
-            else:
-                source = argument == "source" if argument else not terminal._markdown_source
-                terminal.configure_markdown(source=source)
-                print("  Markdown source" if source else "  Rendered Markdown", file=out)
-        else:
-            copy_options = argument.split()
-            mode = copy_options[0] if copy_options else "auto"
-            try:
-                if mode not in {"auto", "text", "markdown", "code"} or len(copy_options) > 2:
-                    raise ValueError("usage: /copy [auto|text|markdown|code [number]]")
-                if len(copy_options) == 2 and mode != "code":
-                    raise ValueError("A block number is only valid with /copy code.")
-                terminal.copy_response(mode, int(copy_options[1]) if len(copy_options) == 2 else 1)
-            except ValueError as exc:
-                print(style.red(f"  {exc}"), file=out)
-            else:
-                print("  Copied to clipboard; terminals without a local clipboard utility must support OSC 52.", file=out)
-    elif command == "tools":
-        print("  " + "\n  ".join(session.registry.names), file=out)
-    elif command == "danger":
-        if argument.lower() not in {"", "on", "off", "status"}:
-            print(style.red("  usage: /danger [on|off|status]"), file=out)
-        else:
-            if argument.lower() != "status":
-                session.workspace.access.danger = argument.lower() != "off"
-            if session.workspace.access.danger:
-                print(style.red("  Danger mode ON: workspace path confinement is disabled."), file=out)
-            else:
-                print("  Danger mode OFF: workspace path confinement is enabled.", file=out)
-            if session.renderer.terminal is not None:
-                session.renderer.terminal.app.invalidate()
-    elif command == "planning":
-        if argument.lower() not in {"", "on", "off"}:
-            print(style.red("  usage: /planning [on|off]"), file=out)
-        else:
-            session.agent.set_planning(argument.lower() != "off")
-            print(f"  Planning {'ON' if session.agent.planning else 'OFF'}.", file=out)
-    elif command == "overthinking":
-        if argument.lower() not in {"on", "off"}:
-            print(style.red("  usage: /overthinking on|off"), file=out)
-        else:
-            session.agent.overthinking = argument.lower() == "on"
-            print(f"  Overthinking Mode {'ON' if session.agent.overthinking else 'OFF'}.", file=out)
-    elif command == "model":
-        await _model_command(session, argument, style, out)
-    elif command == "models":
-        await _models_command(session, argument, style, out)
-    elif command == "provider":
-        provider = argument.lower()
-        if provider not in PROVIDERS:
-            print(style.red("  usage: /provider " + "|".join(PROVIDERS)), file=out)
-        else:
-            await _model_command(session, f"{provider}::{provider_class(provider).default_model}",
-                                 style, out, require_free=True)
-    elif command == "temperature":
-        await _temperature_command(session, argument, style, out)
-    elif command == "key":
-        await _key_command(session, argument, style, out)
-    elif command == "cost":
-        usage = session.agent.usage
-        print(f"  {usage.summary()} across this session", file=out)
-    elif command == "rename":
-        if not argument:
-            print(style.red("  usage: /rename <name>"), file=out)
-        else:
-            try:
-                title = session_title(argument)
-                journal = session.registry.services.get("session_journal")
-                if journal is not None:
-                    await asyncio.to_thread(journal.rename, argument)
-                else:
-                    session.extensions["title"] = title
-                print(f"  title: {title}", file=out)
-            except SessionError as exc:
-                print(style.red(f"  {exc}"), file=out)
-    elif command == "requests":
-        diagnostics = session.registry.services.get("request_diagnostics")
-        if diagnostics is None:
-            print(style.red("  Request diagnostics are unavailable in this session."), file=out)
-        else:
-            try:
-                if argument:
-                    print(diagnostics.read(int(argument)), file=out)
-                else:
-                    for entry in diagnostics.listing():
-                        print(f"  {entry['attempt']}  step {entry['step']}  {entry['outcome']}  {entry['created']}", file=out)
-                    print(f"  storage: {diagnostics.directory}", file=out)
-            except (ValueError, OSError) as exc:
-                print(style.red(f"  Cannot read request diagnostics: {exc}"), file=out)
-    elif command in {"sessions", "resume"}:
-        journal = session.registry.services.get("session_journal")
-        if journal is None:
-            print(style.red("  session persistence is disabled; restart without --no-session to enable it."), file=out)
-        elif command == "sessions":
-            for entry in await asyncio.to_thread(journal.listing):
-                print(f"  {entry['id']}  {entry['created']}  {entry['title']}" + ("  (current)" if entry["current"] == "True" else ""), file=out)
-            print(f"  storage: {journal.directory}", file=out)
-        else:
-            try:
-                if not argument:
-                    terminal = session.renderer.terminal
-                    if terminal is None:
-                        print(style.red("  /resume requires an interactive terminal to choose a session; use /resume <id|latest>."), file=out)
-                        return False
-                    entries = await asyncio.to_thread(journal.listing)
-                    if not entries:
-                        print("  no saved sessions for this project.", file=out)
-                        return False
-                    options = [
-                        (entry["id"], f"{entry['title']}  {entry['created']}" +
-                         ("  (current)" if entry["current"] == "True" else ""))
-                        for entry in entries
-                    ]
-                    selected = await terminal.choose("Resume Session", options)
-                    if selected is None:
-                        return False
-                    argument = selected
-                await session.agent.wait_for_compaction()
-                data = await asyncio.to_thread(journal.load, argument)
-                jobs = session.registry.services.get("command_jobs")
-                if jobs is not None:
-                    await jobs.stop_all()
-                journal.restore(session.agent, data)
-                await session.renderer.restore_transcript(session.agent.messages, session.agent.pending,
-                                                          queued_messages=session.agent.queued_messages)
-                print(f"  restored {journal.session_id}; no tools were replayed. Type a task or continue when ready.", file=out)
-            except SessionError as exc:
-                print(style.red(f"  {exc}"), file=out)
-    elif command == "rewind":
-        checkpoints = session.agent._checkpoints()
-        terminal = session.renderer.terminal
-        if argument not in {"", "list"}:
-            print(style.red("  usage: /rewind [list]"), file=out)
-        elif checkpoints is None or not checkpoints.listing():
-            print("  no file-edit checkpoints in this session.", file=out)
-        elif argument == "list":
-            for batch in checkpoints.listing():
-                print(f"  {batch['id']}  step {batch['step_id']}  {batch['created']}", file=out)
-        elif terminal is None:
-            print(style.red("  /rewind requires an interactive terminal for selection and confirmation."), file=out)
-        else:
-            batches = checkpoints.listing()
-            selected = await terminal.choose("Rewind File Edits", [
-                (batch["id"], f"Before Step {batch['step_id']} — {batch['created']}") for batch in batches
-            ])
-            if selected is not None:
-                from .tools.blocking import run_blocking
-                try:
-                    preview = await run_blocking(checkpoints.preview, selected)
-                except OSError as exc:
-                    print(style.red(f"  {exc}"), file=out)
-                    return False
-                print(_literal_tool_output(preview), file=out)
-                confirm = await terminal.choose("Restore These Files?", [("restore", "Restore Files"), ("cancel", "Cancel")])
-                if confirm == "restore":
-                    try:
-                        jobs = session.registry.services.get("command_jobs")
-                        if jobs is not None:
-                            await jobs.stop_all()
-                        restored = await run_blocking(checkpoints.rewind, selected)
-                        notice = "Files restored by /rewind: " + ", ".join(restored)
-                        session.registry.context_notes["file_rewind"] = load_prompt('file-rewind.md', notice=notice)
-                        print("  " + notice, file=out)
-                    except (OSError, CheckpointError) as exc:
-                        print(style.red(f"  {exc}"), file=out)
-    elif command in {"fork", "delete"}:
-        journal = session.registry.services.get("session_journal")
-        if argument:
-            print(style.red(f"  usage: /{command}"), file=out)
-        elif journal is None:
-            print(style.red("  session persistence is disabled; restart without --no-session to enable it."), file=out)
-        elif journal.path is None:
-            print("  no current saved session; enter a task prompt first.", file=out)
-        else:
-            terminal = session.renderer.terminal
-            if command == "delete":
-                if terminal is None:
-                    print(style.red("  /delete requires an interactive terminal for confirmation."), file=out)
-                    return False
-                selected = await terminal.choose(
-                    f"Permanently Delete {journal.title}?",
-                    [("delete", "Delete Current Session and All Logs"), ("cancel", "Cancel")],
-                )
-                if selected != "delete":
-                    return False
-            try:
-                await session.agent.wait_for_compaction()
-                jobs = session.registry.services.get("command_jobs")
-                if jobs is not None:
-                    await jobs.stop_all()
-                session.agent._persist()
-                if command == "fork":
-                    parent = journal.session_id
-                    data = await asyncio.to_thread(journal.load, parent)
-                    journal.restore(session.agent, data, fork=True)
-                    print(f"  forked {parent} as {journal.session_id}; continuing in the new session.", file=out)
-                else:
-                    session.agent.reset(new_session=False)
-                    await asyncio.to_thread(journal.delete_current)
-                    session.extensions.pop("title", None)
-                    if terminal is not None:
-                        terminal.clear_transcript()
-                    session.renderer.show_banner(
-                        model=session.agent.model, workspace=session.workspace.root,
-                        tools=session.registry.names,
-                    )
-            except SessionError as exc:
-                print(style.red(f"  {exc}"), file=out)
-                return False
-    elif command == "task":
-        if argument == "new":
-            if session.agent.pending:
-                print(style.red("  queued input is still pending; resume or /reset before starting another task."), file=out)
-            else:
-                session.agent.history.task = TaskMemory(start_message=len(session.agent.messages))
-                print("  next prompt starts a new task; previous history and command logs remain available.", file=out)
-        elif argument:
-            print(style.red("  usage: /task [new]"), file=out)
-        else:
-            task = session.agent.history.task
-            print(f"  source steps: {', '.join(map(str, task.sources)) or '(none)'}", file=out)
-            step_id = task.current_prompt_step
-            for prompt in task.sources.get(step_id, []) if step_id is not None else []:
-                print(f"  {prompt}", file=out)
-    elif command == "mcp":
-        await _mcp_command(session, argument, style, out)
-    elif command == "reset":
-        jobs = session.registry.services.get("command_jobs")
-        if jobs is not None:
-            await jobs.stop_all()
-        session.agent.reset()
-        session.extensions.pop("title", None)
-        print(style.dim("  conversation cleared"), file=out)
-    elif command == "reload":
-        if session.reloader is None:
-            print(style.dim("  live reload is disabled; restart without --no-reload to enable it."), file=out)
-        else:
-            session.reloader.request()
-            if session.agent.running:
-                print(style.dim("  reload queued for the end of the current model/tool batch."), file=out)
-    elif command == "generations":
-        if session.reloader is None:
-            print(style.dim("  live reload is disabled; restart without --no-reload to enable it."), file=out)
-        else:
-            print(f"  current generation: {session.reloader.generation}", file=out)
-    elif command == "init":
-        await _init_command(session, style, out)
-    elif command == "config-show":
-        # Report live settings without exposing arbitrary dotenv credentials.
-        print(f"Active interpreter: {sys.executable}", file=out)
-        print(f"Model choice: {session.agent.model}", file=out)
-        print(f"Workspace: {session.workspace.root}", file=out)
-        print(f"Danger mode: {'on' if session.workspace.access.danger else 'off'}", file=out)
-        print(f"Overthinking mode: {'on' if session.agent.overthinking else 'off'}", file=out)
+    if command is None:
+        session.renderer.emit(session.renderer.style.red(f"  unknown command: /{name} (try /help)"))
     else:
-        print(style.red(f"  unknown command: /{command} (try /help)"), file=out)
+        result = await command.run(CommandContext(session, session.renderer.style, _RendererStream(session.renderer)), argument)
+        if result is not None:
+            return result
     _refresh_title(session)
     session.agent._persist()
     return False

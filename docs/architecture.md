@@ -712,6 +712,14 @@ sizes toward the quota. Even incomplete attempt files reserve their numbers.
 
 ## Terminal Components and Invocation Identity
 
+Slash-command definitions live in `commands.py`. Each `Command` descendant
+owns syntax, help, menu insertion text, aliases, execution, and argument-dependent
+scheduling policy. Shared presentation and saved-session bases supply common
+preconditions; descendants implement the specific operation. CLI entry points
+remain adapters for reload and callers. Help, startup command listings, and
+menus are generated from the definitions; descriptions are never parsed to
+decide behavior. Credential commands remain outside model history and journals.
+
 `ListPanel` owns stable-key selection, clamping, selection visibility, rendering,
 and mouse activation. `TouchedPanel`, `CallsPanel`, and `ChoicePanel` supply their
 items, labels, and opening policy. `ListActions` supplies explicit host callbacks;

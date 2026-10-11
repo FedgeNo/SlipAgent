@@ -271,12 +271,12 @@ class TerminalUI:
             self._bottom_row(menu=False),
         ], height=lambda: self._footer_rows() - 2, style="class:footer")
         menu_footer = HSplit([
-            Window(FormattedTextControl(lambda: self._menu_title), height=1, style="class:menu-title"),
+            Window(FormattedTextControl(lambda: self._activity_notice([("class:menu-title", self._menu_title)])), height=1),
             self._menu_window,
             self._bottom_row(menu=True),
         ], height=lambda: self._footer_rows() - 2, style="class:footer class:menu")
         setting_footer = HSplit([
-            Window(FormattedTextControl("Folder Opener"), height=1, style="class:menu-title"),
+            Window(FormattedTextControl(lambda: self._activity_notice([("class:menu-title", "Folder Opener")])), height=1),
             self._options_panel.field,
             self._bottom_row(menu=False),
         ], height=lambda: self._footer_rows() - 2, style="class:footer class:menu")
@@ -345,7 +345,8 @@ class TerminalUI:
                 ("", "  "), (option_style, "Options", options), ("", " ")]
 
     def _right_control_width(self) -> int:
-        return 30 if self.output.get_size().columns >= 80 else 18
+        columns = self.output.get_size().columns
+        return 30 if columns >= 80 else 18 if columns >= 30 else 0
 
     def _footer_rows(self) -> int:
         """Leave room for feed output when the terminal is very short."""
@@ -693,27 +694,31 @@ class TerminalUI:
 
     def _notice_width(self) -> int:
         columns = self.output.get_size().columns
-        return max(1, min(44, columns // 2, columns - 28))
+        if self._menu_future is not None or self._options_field_active:
+            prefix = self._menu_title if self._menu_future is not None else "Folder Opener"
+        else:
+            columns -= self._right_control_width()
+            if self._show_scroll_bottom():
+                columns = max(0, (self.output.get_size().columns - 18) // 2)
+            prefix = fragment_list_to_text(self._activity_status())
+            if self._editor_active or self._viewer_active:
+                prefix += "  ESC to exit editor " if self._editor_active else "  ESC to exit viewer "
+        remaining = columns - display_width(prefix) - 2
+        return max(1, remaining if remaining > 0 else columns)
 
     def _readout_width(self) -> int:
-        return max(1, self.output.get_size().columns - self._notice_width() - 1)
+        return max(1, self.output.get_size().columns)
 
     def _bottom_row(self, *, menu: bool) -> VSplit:
         return VSplit([
             Window(FormattedTextControl(lambda: self._menu_hint() if menu else ANSI("Enter: Save | Esc: Cancel") if self._options_field_active else self._status_fragments()),
                    height=1, style="class:status"),
-            Window(width=1, height=1),
-            self._notification_window(),
         ], height=1)
-
-    def _notification_window(self) -> Window:
-        return Window(FormattedTextControl(self._notification_text), height=1,
-                      width=lambda: Dimension.exact(self._notice_width()),
-                      align=WindowAlign.RIGHT, style="class:status", wrap_lines=False)
 
     def notify(self, text: str) -> None:
         """Show a notice until replaced or explicitly cleared with an empty string."""
         self.__dict__["_notification"] = " ".join(text.split())
+        self.__dict__["_status_signature"] = None
         self.app.invalidate()
 
     def _notification_text(self) -> str:
@@ -721,10 +726,10 @@ class TerminalUI:
         if not text:
             tips = ["Select and right-click for text options."]
             if self._editor_active:
-                tips = ["Ctrl+S saves; Esc closes the editor.", "PgUp/PgDn changes file pages."]
+                tips = ["Ctrl+S saves; Esc closes the editor.", "PgUp/PgDn scrolls with overlap."]
             elif self._viewer_active:
                 tips = ["Scroll to inspect; Esc closes the viewer."]
-            if not self.working and self._input_label == "> " and self._menu_future is None:
+            if not self.working and self._input_label == "> " and self._menu_future is None and not self._viewer_active and not self._editor_active:
                 tips.append("Click Commands to browse commands.")
             if self.__dict__.get("_folder_opener") is not None:
                 tips.append("Click directory links to open folders.")
@@ -1245,6 +1250,7 @@ class TerminalUI:
             "context-system": "#ffff00", "retry": "ansired",
             "footer": "bg:" + FOOTER_BACKGROUND_COLOR,
             "menu": "bg:" + MENU_BACKGROUND_COLOR,
+            "status-flash": "bold reverse",
             "menu-title": "bold", "menu-selected": "reverse bold",
             "clickable": "underline", "hover": "reverse",
             "diff-number": MUTED_COLOR,
@@ -1363,6 +1369,34 @@ class TerminalUI:
             if display_width(fragment_list_to_text(fragments)) + len("  ESC to exit viewer ") > self.output.get_size().columns - self._right_control_width():
                 fragments = []
             fragments.extend([("", "  ESC to " if fragments else "ESC to "), (style, "exit " + mode, close), ("", " ")])
+        return self._activity_notice(fragments)
+
+    def _activity_notice(self, fragments: StyleAndTextTuples) -> StyleAndTextTuples:
+        text = self._notification_text() if self.__dict__.get("_notification") or (self._menu_future is None and not self._options_field_active) else ""
+        if text:
+            available = self.output.get_size().columns
+            if self._menu_future is None and not self._options_field_active:
+                available = max(0, (available - 18) // 2) if self._show_scroll_bottom() else available - self._right_control_width()
+            if display_width(fragment_list_to_text(fragments)) + 2 >= available:
+                fragments = []
+            fragments = [*fragments, ("class:status", ("  " if fragments else "") + text)]
+        signature = fragment_list_to_text(fragments)
+        if signature and signature[0] in PULSE_FRAMES:
+            signature = signature[2:]
+        now = time.monotonic()
+        if signature != self.__dict__.get("_status_signature"):
+            self.__dict__["_status_signature"] = signature
+            self.__dict__["_status_changed_at"] = now
+        elapsed = now - self.__dict__.get("_status_changed_at", now)
+        if 0 <= elapsed < .9 and int(elapsed / .15) % 2 == 0:
+            flashed: StyleAndTextTuples = []
+            for fragment in fragments:
+                style = fragment[0] + (" class:status-flash" if "class:clickable" not in fragment[0] else "")
+                if len(fragment) == 3:
+                    flashed.append((style, fragment[1], fragment[2]))
+                else:
+                    flashed.append((style, fragment[1]))
+            return flashed
         return fragments
 
     def _activity_status(self) -> StyleAndTextTuples:
@@ -1427,7 +1461,7 @@ class TerminalUI:
         title = self.__dict__.get("_title")
         if title is None:
             return
-        displayed = f"{frame} {title}" if self.working else title
+        displayed = f"{frame} {title}" if self.working and not self._editor_active else title
         if displayed != self.__dict__.get("_displayed_title"):
             self.output.set_title(displayed)
             self.output.flush()

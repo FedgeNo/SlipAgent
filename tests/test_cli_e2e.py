@@ -1417,13 +1417,13 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             os.write(master, b"/danger off\r")
             wait_for(lambda: "Danger Mode" not in screen.display[23])
             os.write(master, b"/menu\r")
-            wait_for(lambda: "Enter/click select" in screen.display[23])
+            wait_for(lambda: "Enter or click = select" in screen.display[23])
             assert screen.display[17].strip() == "Commands"
             os.write(master, b"\x1b")
             wait_for(lambda: "Ready" in screen.display[17])
             assert not stub.requests
             os.write(master, b"/menu\r")
-            wait_for(lambda: "Enter/click select" in screen.display[23])
+            wait_for(lambda: "Enter or click = select" in screen.display[23])
             from slipagent.cli import MENU_OPTIONS
             tools_index = next(index for index, (command, _) in enumerate(MENU_OPTIONS) if command == "/tools")
             os.write(master, b"\x1b[B" * tools_index + b"\r")

@@ -629,10 +629,10 @@ your draft and prompt history. Scrolling back pauses automatic scrolling until y
 return to the bottom. The CWD is the workspace where tools run; long paths
 and model names shorten to fit narrow terminals.
 
-Short notices appear right-aligned beside the status readout on the bottom row and remain
-visible while browsing selectors or the context view. A notice stays until it
-is replaced or cleared. When no notice is active, this area rotates tips for
-available controls. Folder-launch failures also remain in the transcript.
+Short notices share the activity area beside **Ready** and remain visible while
+browsing selectors or the context view. Updates flash three times, then stay
+steady until replaced or cleared. When no notice is active, this area rotates
+tips for available controls. Folder-launch failures also remain in the transcript.
 
 Click **Inspect [Ctrl+O]** or press **Ctrl+O** to show or hide the inspection
 panel on the right side of the feed. It occupies one quarter of the terminal
@@ -673,10 +673,13 @@ throughout the switch.
 Files are backed by private snapshots, with only
 one bounded section in the editing buffer and neighboring sections in the view.
 Arrow keys and the mouse wheel cross section boundaries automatically; each
-wheel event moves the cursor three lines. **Page Up/Down** moves one line less
+wheel event moves the cursor three displayed lines; arrows move one.
+At a screen edge, the text scrolls while the cursor stays at that edge.
+**Page Up/Down** moves one line less
 than the editor height in either direction, retaining visible overlap.
 **Ctrl+Home/End** moves to the start/end of the document. The viewport follows
-the cursor, and section changes preserve edits.
+the cursor, and section changes preserve edits. The title spinner stops while
+the editor holds the agent.
 Untouched content and line endings are preserved. External disk changes offer
 Reload and require an explicit choice before overwriting. Editor reload retains
 the cursor's logical line, clamping to the last line if the file became shorter.

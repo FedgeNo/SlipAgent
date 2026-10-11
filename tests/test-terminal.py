@@ -37,7 +37,7 @@ async def test_footer_background_separates_controls_from_feed(display):
         ui.notify("Notice stays at bottom.")
         task = asyncio.create_task(ui.run())
         try:
-            await wait_until(lambda: "Notice stays at bottom." in snapshot()[23])
+            await wait_until(lambda: "Notice stays at bottom." in snapshot()[17])
             assert "Ready" in snapshot()[17]
             assert "input 0" in snapshot()[18]
             assert "input 4" in snapshot()[22]
@@ -659,6 +659,36 @@ async def test_editor_click_opens_visible_neighbor_section_at_clicked_position(d
             await task
 
 
+@pytest.mark.parametrize("step", [1, 3])
+@pytest.mark.parametrize("wrapped", [False, True])
+async def test_editor_vertical_navigation_keeps_cursor_at_edges(display, tmp_path, step, wrapped):
+    path = tmp_path / "scroll.txt"
+    lines = [f"line {n:03}" + ("x" * 250 if wrapped and n % 3 else "") for n in range(160)]
+    path.write_text("\n".join(lines))
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: ui.app.is_running)
+            await ui._open_editor_now(path)
+            panel = ui._editor_panel
+            await wait_until(lambda: "line 000" in snapshot()[1])
+            for direction in [1, -1]:
+                for index in range(1, 45):
+                    previous = (panel.page, panel.input.buffer.cursor_position)
+                    key = ("\x1b[B" if direction > 0 else "\x1b[A") if step == 1 else ("\x1b[<65;5;5M" if direction > 0 else "\x1b[<64;5;5M")
+                    pipe.send_text(key)
+                    await wait_until(lambda: (panel.page, panel.input.buffer.cursor_position) != previous)
+                    await asyncio.sleep(.035)
+                    if index * step >= 14:
+                        assert panel.input.window.render_info.cursor_position.y == (13 if direction > 0 else 0), (index, direction, panel.page, panel.input.window.vertical_scroll, snapshot()[:15])
+            assert panel.page == 0 and panel.input.buffer.cursor_position == 0
+        finally:
+            ui.close()
+            await task
+
+
 async def test_read_only_viewer_scrolls_targets_lines_keeps_work_running_and_esc_only_closes(display):
     from unittest.mock import Mock
     sink, _, output, _, snapshot = display
@@ -674,7 +704,7 @@ async def test_read_only_viewer_scrolls_targets_lines_keeps_work_running_and_esc
             ui.notify("Still working.")
             ui.open_viewer("Text Record", "\n".join(f"line {n:03}" for n in range(100)), line=80)
             await wait_until(lambda: "line 079" in snapshot()[1])
-            assert snapshot()[23].rstrip().endswith("Still working.")
+            assert "Still working." in snapshot()[17]
             ui.write("background result arrived")
             ui.refresh()
             pipe.send_text("no editing\x13")
@@ -719,7 +749,7 @@ async def test_artifact_link_opens_colored_diff_without_desktop_and_preserves_no
             assert "1 │ +new" in snapshot()[7]
             assert screen.buffer[6][16].fg == "ff6666"
             assert screen.buffer[7][16].fg == "66dd88"
-            assert snapshot()[23].rstrip().endswith("Saved diff.")
+            assert "Saved diff." in snapshot()[17]
             pipe.send_text("\x1b")
             await wait_until(lambda: "View Diff" in snapshot()[0])
         finally:
@@ -933,23 +963,24 @@ async def test_notifications_remain_visible_in_menu_context_and_after_resize(dis
         choice = None
         try:
             ui.notify("Saved changes.")
-            await wait_until(lambda: snapshot()[23].rstrip().endswith("Saved changes."))
-            assert snapshot()[23].index("Saved changes.") == 100 - len("Saved changes.")
+            await wait_until(lambda: "Saved changes." in snapshot()[17])
+            assert snapshot()[17].index("Saved changes.") > snapshot()[17].index("Ready")
+            assert "Saved changes." not in snapshot()[23]
             ui.write("feed contents\n" * 50)
             choice = asyncio.create_task(ui.choose("Commands", [("one", "One")]))
-            await wait_until(lambda: snapshot()[17].strip() == "Commands")
-            assert snapshot()[23].rstrip().endswith("Saved changes.")
+            await wait_until(lambda: snapshot()[17].startswith("Commands"))
+            assert "Saved changes." in snapshot()[17]
             pipe.send_text("\x1b")
             await choice
             ui.context_visible = True
             ui.app.invalidate()
             await wait_until(lambda: "Context" in snapshot()[0])
-            assert snapshot()[23].rstrip().endswith("Saved changes.")
+            assert "Saved changes." in snapshot()[17]
             size[0] = Size(rows=24, columns=12)
             screen.resize(lines=24, columns=12)
             output.get_size = lambda: size[0]
             ui.app._on_resize()
-            await wait_until(lambda: snapshot()[23].rstrip().endswith(ui._notification_text()))
+            await wait_until(lambda: ui._notification_text() in snapshot()[17])
             ui.notify("")
             assert ui._notification_text().endswith("…")
             assert "Saved" not in ui._notification_text()
@@ -1251,7 +1282,7 @@ async def test_menu_uses_footer_and_scrolls_selection_through_refresh_and_resize
             ]))
             await wait_until(lambda: snapshot()[17].strip() == "Commands")
             assert snapshot()[:15] == before
-            assert snapshot()[23].startswith("↑↓/wheel move | Enter/click select | Esc")
+            assert snapshot()[23].startswith("↑/↓ or wheel = move | Enter or click = select | Esc = back")
             assert "› Option 0" in snapshot()[18]
             assert "Option 4" in snapshot()[22]
             assert screen.buffer[19][0].fg == "999999"
@@ -1270,7 +1301,7 @@ async def test_menu_uses_footer_and_scrolls_selection_through_refresh_and_resize
             screen.resize(lines=24, columns=40)
             ui.app._on_resize()
             await wait_until(lambda: "› Option 3" in "\n".join(snapshot()[18:23]))
-            assert snapshot()[23].startswith("↑↓/wheel Enter/click Esc")
+            assert snapshot()[23].startswith("↑↓/wheel move | Enter/click select | Esc")
             pipe.send_text("\x1b[A" * 3)
             await wait_until(lambda: "› Option 0" in "\n".join(snapshot()[18:23]))
             pipe.send_text("\x1b[B" * 3)
@@ -1527,7 +1558,7 @@ async def test_danger_status_suffix_is_red_last_and_survives_resize(display, tmp
             choice = asyncio.create_task(ui.choose("Commands", [("one", "One")]))
             await wait_until(lambda: snapshot()[17].strip() == "Commands")
             assert " | Danger Mode" in snapshot()[23]
-            assert "Enter/click select" in snapshot()[23]
+            assert "Enter or click = select" in snapshot()[23]
             pipe.send_text("\x1b")
             assert await asyncio.wait_for(choice, 3) is None
             await wait_until(lambda: "Ready" in snapshot()[17])
@@ -1655,7 +1686,7 @@ async def test_footer_stays_fixed_while_transcript_scrolls_and_input_survives(di
             assert rows[15].strip() == ""
             assert "Working" in rows[17]
             assert "partially typed" in rows[18]
-            assert rows[23].rstrip().endswith(ui._notification_text())
+            assert ui._notification_text() in rows[17]
             assert "model: stub/model" in rows[23]
             assert "free: 42" in rows[23]
             assert "output 0" not in "\n".join(rows[:17])
@@ -1996,6 +2027,33 @@ async def test_working_indicator_pulses_and_becomes_idle(display) -> None:
             await task
 
 
+def test_status_updates_flash_three_times_then_remain_steady(display, monkeypatch):
+    sink, _, output, _, _ = display
+    clock = [0.0]
+    monkeypatch.setattr("slipagent.terminal.time.monotonic", lambda: clock[0])
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        try:
+            ui.notify("Saved changes.")
+            ui._activity()
+            for start in [0.0, .3, .6]:
+                clock[0] = start + .01
+                assert any("status-flash" in fragment[0] for fragment in ui._activity())
+                clock[0] = start + .16
+                assert all("status-flash" not in fragment[0] for fragment in ui._activity())
+            clock[0] = 1.2
+            assert all("status-flash" not in fragment[0] for fragment in ui._activity())
+            assert "Saved changes." in "".join(fragment[1] for fragment in ui._activity())
+            ui.set_working(True)
+            assert any("status-flash" in fragment[0] for fragment in ui._activity())
+            clock[0] = 2.5
+            assert all("status-flash" not in fragment[0] for fragment in ui._activity())
+            clock[0] = 2.75
+            assert all("status-flash" not in fragment[0] for fragment in ui._activity())
+        finally:
+            ui.close()
+
+
 def test_title_animation_matches_working_and_stops_when_ready(display, monkeypatch):
     sink, _, output, _, _ = display
     titles = []
@@ -2016,6 +2074,16 @@ def test_title_animation_matches_working_and_stops_when_ready(display, monkeypat
             assert ui._activity()[0][1].startswith(titles[-1][0])
             ui.set_title("Renamed | SlipAgent")
             assert titles[-1] == "▛ Renamed | SlipAgent"
+            ui._editor_active = True
+            ui.app.before_render.fire()
+            assert titles[-1] == "Renamed | SlipAgent"
+            held_count = len(titles)
+            clock[0] = .5
+            ui.app.before_render.fire()
+            assert len(titles) == held_count
+            ui._editor_active = False
+            ui.app.before_render.fire()
+            assert titles[-1].endswith(" Renamed | SlipAgent")
             ui.set_working(False)
             assert titles[-1] == "Renamed | SlipAgent"
             assert ui._activity()[0][1] == "Ready"
@@ -2052,7 +2120,7 @@ async def test_footer_resizes_and_wraps_input_above_notices_and_readout(display)
             assert rows[8].strip() == ""
             assert "Ready" in rows[9]
             assert "long input" in rows[10]
-            assert rows[15].rstrip().endswith(ui._notification_text())
+            assert ui._notification_text() in rows[9]
             assert "free: 42" in rows[15]
         finally:
             ui.close()
@@ -2428,7 +2496,7 @@ async def test_output_wraps_at_words_preserves_spacing_and_reflows_on_resize(dis
             ]
             assert snapshot()[5].rstrip() == "    one two three four five"
             assert ">" in snapshot()[18]
-            assert snapshot()[23].rstrip().endswith(ui._notification_text())
+            assert ui._notification_text() in snapshot()[17]
             assert "readout" in snapshot()[23]
         finally:
             ui.close()
@@ -2484,7 +2552,7 @@ async def test_streaming_chunks_wrap_reflow_and_keep_the_footer_and_draft(displa
             assert screen.buffer[row][2].fg == "ff6666"
             assert "draft" in rows[18]
             assert rows[15].strip() == ""
-            assert rows[23].rstrip().endswith(ui._notification_text())
+            assert ui._notification_text() in rows[17]
             assert "readout" in rows[23]
         finally:
             ui.close()

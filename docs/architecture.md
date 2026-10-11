@@ -836,7 +836,10 @@ to the model along with the active generation number.
   `TerminalUI.choose(title, options)` temporarily replaces the seven-row footer
   with a heading, five option rows, and a bottom key legend. Two blank rows
   separate the footer from the feed. The footer background is dark blue, menus
-  use dark purple, and the prompt uses dark green. Very short terminals reduce the input/list rows to retain feed
+  use dark purple, and the prompt uses dark green. Activity and notices share
+  the footer heading; updates flash three times before remaining steady.
+  The bottom readout has no separate notice area.
+  Very short terminals reduce the input/list rows to retain feed
   output. The displayed **back** action cancels the selector like Escape.
   A focused menu
   control owns navigation; the input buffer, history, queue, and transcript stay
@@ -853,7 +856,8 @@ to the model along with the active generation number.
   `editor.py` owns file snapshots, bounded pages, changed-page files, and atomic
   publication with disk-signature checks. `editorcontrol.py` renders neighboring
   sections around the editable buffer and translates mouse coordinates back to
-  their section. `editorui.py` owns the editable buffer,
+  their section. Its window scrolls by displayed rows, preserving the cursor's
+  screen edge across wrapped lines and section boundaries. `editorui.py` owns the editable buffer,
   navigation, save/reload choices, and unsaved-change handling. `useredits.py`
   owns the session gate: the existing agent boundary finishes the complete tool
   batch, drains managed background jobs, and waits while editing is active.

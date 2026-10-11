@@ -16,7 +16,7 @@ from prompt_toolkit.mouse_events import MouseEvent, MouseEventType, MouseButton
 from prompt_toolkit.widgets import TextArea
 
 from .editor import FileEditor, PAGE_SEGMENTS, signature
-from .editorcontrol import EditorControl
+from .editorcontrol import EditorControl, EditorWindow
 
 
 class EditorPanel:
@@ -37,6 +37,14 @@ class EditorPanel:
         if not isinstance(self.input.control, EditorControl):
             self.input.control = EditorControl(self, self.input.control)
             self.input.window.content = self.input.control
+        if not isinstance(self.input.window, EditorWindow):
+            previous = self.input.window
+            self.input.window = EditorWindow(self.input.control, style=previous.style,
+                                             wrap_lines=previous.wrap_lines, height=previous.height)
+            self.input.window.vertical_scroll = previous.vertical_scroll
+            self.input.window.vertical_scroll_2 = previous.vertical_scroll_2
+            if hasattr(self, "container"):
+                self.container.children[1] = self.input.window
 
     def actions(self) -> StyleAndTextTuples:
         result: StyleAndTextTuples = [("class:menu-title", "Editor Actions\n")]
@@ -153,34 +161,12 @@ class EditorPanel:
         return True
 
     def move_cursor(self, rows: int) -> None:
-        """Cross disk-backed page boundaries without losing local edits."""
+        """Move by displayed rows across disk-backed section boundaries."""
         if self.busy or self.file is None:
             return
-        buffer = self.input.buffer
-        column = buffer.preferred_column
-        if column is None:
-            column = buffer.document.cursor_position_col
-        direction = -1 if rows < 0 else 1
-        for _ in range(abs(rows)):
-            row = buffer.document.cursor_position_row
-            last = buffer.document.line_count - 1
-            # A page-ending newline belongs to the next page's first line.
-            if buffer.text.endswith("\n") and self.page < self.file.page_count - 1:
-                last -= 1
-            target = row + direction
-            if direction > 0 and target > last:
-                if not self.change_page(1):
-                    break
-                target = 0
-            elif target < 0:
-                if not self.change_page(-1):
-                    break
-                target = buffer.document.line_count - 1
-                if buffer.text.endswith("\n"):
-                    target -= 1
-                target = max(0, target)
-            buffer.cursor_position = buffer.document.translate_row_col_to_index(target, column)
-        buffer.preferred_column = column
+        control = self.input.control
+        if isinstance(control, EditorControl):
+            control.move_visual(rows)
         self.terminal.app.invalidate()
 
     def move_horizontal(self, direction: int) -> None:
@@ -206,7 +192,8 @@ class EditorPanel:
         height = info.window_height if info is not None else max(1, self.terminal.output.get_size().rows - self.terminal._footer_rows() - 1)
         rows = direction * max(1, height - 1)
         self.move_cursor(rows)
-        self.input.window.vertical_scroll = max(0, self.input.window.vertical_scroll + rows)
+        if isinstance(self.input.window, EditorWindow):
+            self.input.window.scroll_rows(rows)
 
     def move_to_end(self, *, end: bool) -> None:
         if self.busy or self.file is None:

@@ -60,6 +60,19 @@ def test_wrapped_code_copy_excludes_markers_and_padding_preserves_tabs():
     assert code_blocks(source) == ["\talpha = '界界界'\n"]
 
 
+@pytest.mark.parametrize("text, columns, expected", [
+    ("12345 next", 5, ["12345", "next"]),
+    ("12345 1234 next", 10, ["12345 1234", "next"]),
+    ("界界界 next", 6, ["界界界", "next"]),
+])
+def test_full_width_words_hide_wrap_spaces_but_copy_original_prose(text, columns, expected):
+    rows = MarkdownRenderer().rows([("", text)], columns)
+    assert visible(rows) == expected
+    assert "".join(row.selected(0) for row in rows) == text
+    assert rows[-1].selected(0) == "next"
+    assert rows[0].selected(0, columns) == expected[0]
+
+
 @pytest.mark.parametrize("chunk_size", [1, 7, 4096])
 def test_streamed_final_rows_match_complete_with_reference_links(chunk_size):
     source = '# Title\n\nA **bold** [reference][r].\n\n```python\nx = "界"\n```\n\n[r]: https://example.com\n'

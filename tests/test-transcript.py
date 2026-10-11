@@ -13,6 +13,32 @@ def lines(flow):
     return [flow.get_row(i) for i in range(len(flow.rows))] + tail
 
 
+@pytest.mark.parametrize("chunk_size", [1, 7, 4096])
+def test_plain_selection_copies_source_line_breaks_without_display_wrapping(chunk_size):
+    source = "one two three four five\n  an indented line with words\nlast line"
+    flow = WrappedTranscript(10)
+    try:
+        for start in range(0, len(source), chunk_size):
+            flow.append(source[start:start + chunk_size], first=start == 0)
+            flow.content_rows()
+        count = len(flow.rows) + len(flow.content_rows())
+        assert "".join(flow.copy_row(i).selected(0) for i in range(count)) == source
+    finally:
+        flow.close()
+
+
+def test_plain_partial_selection_excludes_hidden_separator():
+    flow = WrappedTranscript(7)
+    try:
+        flow.append("one two three", first=True)
+        flow.content_rows()
+        assert flow.copy_row(0).selected(0, 7) == "one two"
+        assert flow.copy_row(0).selected(0) == "one two "
+        assert flow.copy_row(1).selected(0, 5) == "three"
+    finally:
+        flow.close()
+
+
 def expected(text, columns):
     result = []
     for paragraph in text.split("\n"):

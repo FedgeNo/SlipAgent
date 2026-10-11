@@ -731,7 +731,8 @@ offsets. Without session persistence, inspection records are temporary.
 When a native file explorer is available, the CWD readout is an underlined link
 and tool calls with an existing directory `path` show a link to that directory.
 Click a directory link to open it. Drag to select feed text, then right-click
-to choose **Copy Text** or **Use Selection in Prompt**. The latter appends the
+to choose **Copy Text** or **Use Selection in Prompt**. Copied selections omit
+display-only wrapping and retain actual line breaks. The latter appends the
 selection after a newline without submitting or replacing your draft. Right-click
 a selected directory reference for **Copy Absolute Path** and, inside the project,
 **Copy Relative Path**. Right-clicking without a selection shows a short tip.

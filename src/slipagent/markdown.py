@@ -176,6 +176,10 @@ class MarkdownRenderer:
                     width = max(0, display_width(shown))
                     if cells + width > columns and original:
                         flush()
+                    if not code and cluster.isspace() and continued and not original and result:
+                        # Keep the separator in copied prose, off the display row.
+                        result[-1].copy_text += cluster
+                        continue
                     positions.extend([len(original)] * len(shown))
                     original += cluster
                     line.append((style, shown))

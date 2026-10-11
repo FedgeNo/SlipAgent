@@ -197,8 +197,9 @@ class WrappedTranscript:
 
     def copy_row(self, index: int) -> DisplayRow:
         if index >= len(self.rows):
-            fragments = self.content_rows()[index - len(self.rows)]
-            return DisplayRow(fragments, "".join(item[1] for item in fragments))
+            self.content_rows()
+            rows, starts = self._render()
+            return self._raw_copy_row(rows, starts, index - len(self.rows))
         fragments = self.get_row(index)
         record = self._copy_index.get(index)
         if record is not None:
@@ -208,6 +209,16 @@ class WrappedTranscript:
 
     def _save(self, row: StyleAndTextTuples) -> None:
         self.rows.append(json.dumps(row, ensure_ascii=False))
+
+    def _raw_copy_row(self, rows: list[StyleAndTextTuples], starts: list[int], index: int,
+                      *, newline: bool = False) -> DisplayRow:
+        stop = starts[index + 1] if index + 1 < len(starts) else len(self._pending)
+        original = "".join(item[1] for item in self._pending[starts[index]:stop])
+        visible = "".join(item[1] for item in rows[index])
+        indent = self._indent if self._continued or index else ""
+        prefix = len(indent) if indent and visible.startswith(indent) else 0
+        positions = [0] * prefix + list(range(len(visible) - prefix + 1))
+        return DisplayRow(rows[index], original + ("\n" if newline else ""), positions)
 
     def _starts_prompt(self) -> bool:
         if not self._pending or self._pending[0][1] != ">":
@@ -262,7 +273,7 @@ class WrappedTranscript:
             position = start + len(body)
         return rows, starts
 
-    def _settle(self, *, final: bool = False) -> None:
+    def _settle(self, *, final: bool = False, newline: bool = False) -> None:
         rows, starts = self._render()
         count = len(rows) if final else max(0, len(rows) - 2)
         if count and not final:
@@ -278,7 +289,10 @@ class WrappedTranscript:
             self._prompt_line = self._starts_prompt()
             if self._prompt_line:
                 self.prompt_rows.append((len(self.rows), len(self.rows)))
-        for row in rows[:count]:
+        for index, row in enumerate(rows[:count]):
+            copied = self._raw_copy_row(rows, starts, index, newline=newline and index == count - 1)
+            self._copy_index[len(self.rows)] = len(self._copy_rows)
+            self._copy_rows.append(json.dumps([copied.copy_text, copied.positions], ensure_ascii=False))
             self._save(row)
         if count and self._prompt_line:
             self.prompt_rows[-1] = (self.prompt_rows[-1][0], len(self.rows))
@@ -328,7 +342,7 @@ class WrappedTranscript:
             style += extra_style
             for char in value:
                 if char == "\n":
-                    self._settle(final=True)
+                    self._settle(final=True, newline=True)
                     line_number += 1
                     self._override_indent(indents.get(line_number))
                 elif char == "\t":

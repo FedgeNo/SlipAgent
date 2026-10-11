@@ -878,7 +878,10 @@ to the model along with the active generation number.
   the same originals. Incremental Markdown keeps a bounded mutable preview and
   reconciles the complete response at finalization, including reference links.
   A separate copy sidecar maps visible character boundaries to readable text,
-  excluding code wrap markers and background padding. Clipboard commands can
+  excluding code wrap markers, continuation indentation, and background padding.
+  Soft-wrap separators remain in copied text without appearing at the next row's
+  start; literal feed selections preserve source line breaks rather than display
+  wrapping. Clipboard commands can
   copy readable replies, Markdown source, or exact fenced code bodies.
   Structured model responses retain their validation boundary before display.
   `transcript.py` also stores original literal chunks and completed styled rows

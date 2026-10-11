@@ -2063,26 +2063,33 @@ async def test_pinned_line_requires_green_prompt_prefix_and_survives_reload(disp
 
 
 @pytest.mark.parametrize("failed", [False, True])
-async def test_command_streams_stay_in_viewer_for_live_and_restored_feed(display, failed):
+@pytest.mark.parametrize("tool", ["run_command", "git_status", "read_command_output", "command_jobs"])
+@pytest.mark.parametrize("body", [
+    "$ test-command\nexit code: 1\n--- stdout ---\nPRIVATE STDOUT\n--- stderr ---\nPRIVATE STDERR",
+    "PRIVATE output without stream headings",
+    {"stdout": "PRIVATE STDOUT", "stderr": "PRIVATE STDERR"},
+])
+async def test_command_streams_stay_in_viewer_for_live_and_restored_feed(display, failed, tool, body):
     sink, _, output, _, _ = display
     with create_pipe_input() as pipe:
         ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
         renderer = Renderer(Style(False), sink, True)
         renderer.terminal = ui
-        call = ToolCall("command", "run_command", {"command": "test-command"})
-        body = "$ test-command\nexit code: 1\n--- stdout ---\nPRIVATE STDOUT\n--- stderr ---\nPRIVATE STDERR"
+        call = ToolCall("command", tool, {"command": "test-command"})
         result = ToolResult(body, failed)
         renderer.handle(AgentEvent("tool_start", tool_call=call, step=1))
         renderer.handle(AgentEvent("tool_output", tool_call=call, text="PRIVATE LIVE OUTPUT"))
         renderer.handle(AgentEvent("tool_end", tool_call=call, result=result, step=1))
         recorded = "\n".join(ui._raw_output)
-        assert "exit code: 1" in recorded
+        assert ("Command failed" if failed else "Command completed") in recorded
+        assert "exit code:" not in recorded
         assert "PRIVATE" not in recorded
         assert ui._inspection_calls[(1, "command")]["result"] == body
         messages = [Message.assistant("", [call]), Message.tool_result("command", {"status": "error" if failed else "success", "content": body})]
         await renderer.restore_transcript(messages, [])
         recorded = "\n".join(ui._raw_output)
-        assert "exit code: 1" in recorded
+        assert ("Command failed" if failed else "Command completed") in recorded
+        assert "exit code:" not in recorded
         assert "PRIVATE" not in recorded
         assert messages[-1].content["content"] == body
 

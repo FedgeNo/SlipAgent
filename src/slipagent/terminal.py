@@ -494,7 +494,7 @@ class TerminalUI:
                     self._touched_items[path] = "read"
             store = self.__dict__.get("_artifact_store")
             if store is not None:
-                saved["artifacts"] = [record for record in store.records.values() if record["call_id"] == call.id]
+                saved["artifacts"] = store.references(step, call.id)
         self.app.invalidate()
 
     def has_diff(self, call_id: str) -> bool:

@@ -29,6 +29,28 @@ async def wait_until(predicate) -> None:
             await asyncio.sleep(.02)
 
 
+def test_calls_with_reused_ids_keep_artifacts_in_their_own_step(display, tmp_path):
+    from slipagent.artifacts import ArtifactStore
+
+    sink, _, output, _, _ = display
+    store = ArtifactStore(1_000_000)
+    store.use_directory(tmp_path / "artifacts")
+    first = store.save("first", "first output", kind="command_output", step_id=1, call_id="same")
+    second = store.save("second", "second output", kind="command_output", step_id=3, call_id="same")
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        ui.__dict__["_artifact_store"] = store
+        try:
+            for step in (1, 3):
+                invocation = ToolCall("same", "run_command", {"command": f"echo {step}"})
+                ui.track_call(invocation, step)
+                ui.finish_call(invocation, step, "done", False)
+            assert ui._inspection_calls[(1, "same")]["artifacts"] == [first]
+            assert ui._inspection_calls[(3, "same")]["artifacts"] == [second]
+        finally:
+            ui.close()
+
+
 async def test_control_space_cycles_panels_without_changing_draft(display, tmp_path):
     sequence = "\x00"
     sink, _, output, _, snapshot = display

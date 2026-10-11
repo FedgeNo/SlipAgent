@@ -603,6 +603,9 @@ class Agent:
 
     async def _step(self, step: int) -> str | None:
         """One response and its complete tool batch; behavior reloads between steps."""
+        run_step = step
+        # Run budgets restart; invocation identity follows the archived conversation.
+        step = len(self.history.steps) + 1
         self._notify_jobs()
         servers = self.registry.services.get("language_servers")
         if servers is not None:
@@ -647,7 +650,7 @@ class Agent:
                 request_body = request
                 self._queued_messages_sent()
                 if diagnostics is not None:
-                    diagnostic_id = diagnostics.begin(request, step=step, step_id=len(self.history.steps) + 1)
+                    diagnostic_id = diagnostics.begin(request, step=run_step, step_id=step)
                 instructions = self.registry.services.get("project_instructions")
                 if instructions is not None:
                     instructions.presented(self.registry.services.get("instruction_snapshot", {}))
@@ -837,9 +840,9 @@ class Agent:
         async def invoke_call(tool_call: ToolCall) -> ToolResult:
             journal = self.registry.services.get("session_journal")
             if journal is not None:
-                journal.tool_started(len(self.history.steps) + 1, tool_call.id)
+                journal.tool_started(step, tool_call.id)
             self._emit(AgentEvent(kind="tool_start", step=step, tool_call=tool_call))
-            invocation_token = current_invocation.set((len(self.history.steps) + 1, tool_call.id))
+            invocation_token = current_invocation.set((step, tool_call.id))
             output_token = command_output.set(
                 lambda chunk: self._emit(AgentEvent(kind="tool_output", step=step, text=chunk, tool_call=tool_call))
             )
@@ -857,7 +860,7 @@ class Agent:
 
         def commit_call(tool_call: ToolCall, result: ToolResult) -> None:
             artifacts = self.registry.services.get("artifact_store")
-            references = artifacts.references(len(self.history.steps) + 1, tool_call.id) if artifacts is not None else []
+            references = artifacts.references(step, tool_call.id) if artifacts is not None else []
             observation = _tool_message(tool_call, result)
             if references:
                 observation.content["artifacts"] = references
@@ -873,7 +876,7 @@ class Agent:
 
         checkpoints = self._checkpoints()
         if checkpoints is not None:
-            checkpoints.begin(len(self.history.steps) + 1)
+            checkpoints.begin(step)
         checkpoint_token = current_checkpoint.set(checkpoints)
         try:
             await run_batch(calls, self.registry, invoke_call, commit_call)
@@ -885,7 +888,7 @@ class Agent:
             if checkpoints is not None:
                 checkpoints.finish()
 
-        diagnostics = await check_edit_batch(self.registry, batch_results, len(self.history.steps) + 1)
+        diagnostics = await check_edit_batch(self.registry, batch_results, step)
         if diagnostics:
             call, result = batch_results[-1]
             content = (result.content + "\n\nHarness Checks After This Complete Tool Batch:\n" + diagnostics

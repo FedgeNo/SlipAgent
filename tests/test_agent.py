@@ -657,6 +657,33 @@ async def test_events_cover_the_full_cycle() -> None:
     assert kinds.count("step_end") == 2
 
 
+async def test_event_steps_remain_durable_across_runs_with_reused_call_ids() -> None:
+    from slipagent.tools.base import current_invocation
+
+    invocations = []
+    class ProvenanceTool(RecordingTool):
+        async def run(self, **kwargs: Any) -> ToolResult:
+            invocations.append(current_invocation.get())
+            return await super().run(**kwargs)
+
+    agent, _ = build_agent([
+        completion(tool_calls=[call(value="first")]), completion("First done"),
+        completion(tool_calls=[call(value="second")]), completion("Second done"),
+    ], tools=[ProvenanceTool()])
+    events: list[AgentEvent] = []
+    agent.on_event = events.append
+    try:
+        await agent.run("First request")
+        await agent.run("Second request")
+        assert [event.step for event in events if event.kind == "step_start"] == [1, 2, 3, 4]
+        assert [(event.step, event.tool_call.id) for event in events
+                if event.kind == "tool_start" and event.tool_call] == invocations == [(1, "call_record"), (3, "call_record")]
+        assert [event.step for event in events if event.kind == "tool_end"] == [1, 3]
+        assert agent._requests == 2
+    finally:
+        await agent.registry.aclose()
+
+
 async def test_length_finish_reason_emits_warning() -> None:
     agent, _ = build_agent([completion(text="cut off", finish_reason="length")])
     events: list[AgentEvent] = []

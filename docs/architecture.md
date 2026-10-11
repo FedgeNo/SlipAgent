@@ -906,8 +906,8 @@ to the model along with the active generation number.
   history-free buffer/queue, not just a masking processor.
   UI choices use the shared footer selector by default.
   `TerminalUI.choose(title, options)` temporarily replaces the seven-row footer
-  with a heading, five option rows, and a bottom key legend. Two blank rows
-  separate the footer from the feed. The footer background is dark blue, menus
+  with a heading, five option rows, and a bottom key legend. The feed and
+  sidebar meet the footer without spacer rows. The footer background is dark blue, menus
   use dark purple, and the prompt uses dark green. Activity and notices share
   the footer heading; updates flash three times before remaining steady.
   The bottom readout has no separate notice area.

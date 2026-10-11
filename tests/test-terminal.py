@@ -130,8 +130,8 @@ async def test_inspection_focus_reveals_selection_and_up_stays_at_first_item(dis
             pipe.send_text("\x1b[B" * 20 + "\x1b[A" * 40)
             await wait_until(lambda: ui._inspection_selection(False) == (1, "29"))
             await asyncio.sleep(.1)
-            assert "tool-29" in snapshot()[9]
-            assert screen.buffer[9][75].reverse
+            assert "tool-29" in snapshot()[10]
+            assert screen.buffer[10][75].reverse
         finally:
             ui.close()
             await task
@@ -142,6 +142,8 @@ async def test_footer_background_separates_controls_from_feed(display):
     with create_pipe_input() as pipe:
         ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
         ui.input.text = "\n".join(f"input {n}" for n in range(5))
+        ui.write("\n".join(f"output {n}" for n in range(30)))
+        ui.toggle_inspection()
         ui.notify("Notice stays at bottom.")
         task = asyncio.create_task(ui.run())
         try:
@@ -149,13 +151,14 @@ async def test_footer_background_separates_controls_from_feed(display):
             assert "Ready" in snapshot()[17]
             assert "input 0" in snapshot()[18]
             assert "input 4" in snapshot()[22]
-            assert not snapshot()[16].strip()
-            assert not snapshot()[15].strip()
+            assert ui.transcript.render_info.window_height == 17
+            assert "output 29" in "\n".join(snapshot()[:17])
             assert "readout" in snapshot()[23]
             assert screen.buffer[17][99].bg == "000040"
             assert screen.buffer[23][99].bg == "000040"
             assert screen.buffer[18][99].bg == "004000"
-            assert screen.buffer[16][99].bg == "default"
+            assert screen.buffer[16][0].bg == "default"
+            assert screen.buffer[16][99].bg == "400040"
         finally:
             ui.close()
             await task
@@ -272,7 +275,7 @@ async def test_scroll_bottom_link_is_centered_and_returns_feed_to_tail(display):
         ui.write("\n".join(f"Output {line}" for line in range(80)))
         task = asyncio.create_task(ui.run())
         try:
-            await wait_until(lambda: "Output 79" in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "Output 79" in "\n".join(snapshot()[:17]))
             assert "Scroll to Bottom" not in snapshot()[17]
             ui.transcript.scroll(-20)
             ui.app.invalidate()
@@ -283,7 +286,7 @@ async def test_scroll_bottom_link_is_centered_and_returns_feed_to_tail(display):
             pipe.send_text("\x1b[<0;50;18M\x1b[<0;50;18m")
             await wait_until(lambda: ui.transcript._following)
             await wait_until(lambda: "Scroll to Bottom" not in snapshot()[17])
-            assert "Output 79" in "\n".join(snapshot()[:15])
+            assert "Output 79" in "\n".join(snapshot()[:17])
             assert ui.input.text == "keep this draft"
         finally:
             ui.close()
@@ -348,7 +351,7 @@ async def test_options_field_isolated_from_prompt_queue_and_draft(display, monke
             await wait_until(lambda: ui._options_field_active)
             await wait_until(lambda: snapshot()[17].startswith("Folder Opener"))
             assert snapshot()[0].startswith("Feed stays in place.")
-            assert "Folder Opener" not in "\n".join(snapshot()[:15])
+            assert "Folder Opener" not in "\n".join(snapshot()[:17])
             pipe.send_text("opener --flag {path}\r")
             await wait_until(lambda: saved.called)
             saved.assert_called_once_with("folder_opener", "opener --flag {path}")
@@ -488,29 +491,29 @@ async def test_editor_standard_page_keys_overlap_and_retain_edits(display, tmp_p
             panel = ui._editor_panel
             buffer = panel.input.buffer
             buffer.insert_text("user edit\n")
-            await wait_until(lambda: "line-012" in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "line-012" in "\n".join(snapshot()[:17]))
             # Start with the cursor at the bottom of the viewport, as an editor
             # normally does after consecutive downward movement.
             panel.move_cursor(12)
             await wait_until(lambda: buffer.document.cursor_position_row == 13)
             await asyncio.sleep(.05)
-            before = snapshot()[1:15]
+            before = snapshot()[1:17]
             height = panel.input.window.render_info.window_height
             pipe.send_text("\x1b[6~")
             await wait_until(lambda: buffer.document.cursor_position_row == 13 + height - 1)
-            await wait_until(lambda: snapshot()[1:15] != before)
-            assert set(row.strip() for row in before) & set(row.strip() for row in snapshot()[1:15])
+            await wait_until(lambda: snapshot()[1:17] != before)
+            assert set(row.strip() for row in before) & set(row.strip() for row in snapshot()[1:17])
             # Cross a storage boundary and retain the same one-line overlap.
-            before = snapshot()[1:15]
+            before = snapshot()[1:17]
             pipe.send_text("\x1b[6~")
             await wait_until(lambda: panel.page == 1)
-            await wait_until(lambda: snapshot()[1:15] != before)
-            assert set(row.strip() for row in before) & set(row.strip() for row in snapshot()[1:15])
-            before = snapshot()[1:15]
+            await wait_until(lambda: snapshot()[1:17] != before)
+            assert set(row.strip() for row in before) & set(row.strip() for row in snapshot()[1:17])
+            before = snapshot()[1:17]
             pipe.send_text("\x1b[5~")
             await wait_until(lambda: panel.page == 0)
-            await wait_until(lambda: snapshot()[1:15] != before)
-            assert set(row.strip() for row in before) & set(row.strip() for row in snapshot()[1:15])
+            await wait_until(lambda: snapshot()[1:17] != before)
+            assert set(row.strip() for row in before) & set(row.strip() for row in snapshot()[1:17])
             assert buffer.text.startswith("user edit\nline-000\n")
             assert ui.input.text == "keep draft"
         finally:
@@ -552,8 +555,6 @@ async def test_editor_saves_and_requires_choice_before_discarding(display, tmp_p
             await wait_until(lambda: "Don't Save" in "\n".join(snapshot()[18:23]))
             assert "Save" in snapshot()[18]
             assert "Cancel" in snapshot()[20]
-            assert not snapshot()[16].strip()
-            assert not snapshot()[15].strip()
             pipe.send_text("\x1b")
             await wait_until(lambda: ui._menu_future is None)
             assert ui._editor_active
@@ -681,7 +682,7 @@ async def test_editor_wheel_moves_cursor_three_lines_and_viewport_follows(displa
             assert buffer.document.cursor_position_col == 4
             pipe.send_text("\x1b[<65;5;5M" * 5)
             await wait_until(lambda: buffer.document.cursor_position_row == 18)
-            await wait_until(lambda: "line 018" in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "line 018" in "\n".join(snapshot()[:17]))
             assert ui._editor_input.window.vertical_scroll > 0
             pipe.send_text("\x1b[<64;5;5M")
             await wait_until(lambda: buffer.document.cursor_position_row == 15)
@@ -711,13 +712,13 @@ async def test_editor_wheel_crosses_pages_and_retains_edits(display, tmp_path):
             buffer.insert_text("edited ")
             pipe.send_text("\x1b[<65;5;5M")
             await wait_until(lambda: panel.page == 1 and buffer.document.cursor_position_row == 1)
-            await wait_until(lambda: "line 033" in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "line 033" in "\n".join(snapshot()[:17]))
             pipe.send_text("\x1b[<64;5;5M")
             await wait_until(lambda: panel.page == 0 and buffer.document.cursor_position_row == 30)
             assert "edited line 030" in buffer.text
             pipe.send_text("\x1b[<65;5;5M" * 30)
             await wait_until(lambda: panel.page == 2 and buffer.document.cursor_position_row == 15)
-            await wait_until(lambda: "line 079" in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "line 079" in "\n".join(snapshot()[:17]))
             pipe.send_text("\x1b[<64;5;5M" * 30)
             await wait_until(lambda: panel.page == 0 and buffer.document.cursor_position_row == 0)
             await wait_until(lambda: "line 000" in snapshot()[1])
@@ -744,13 +745,13 @@ async def test_editor_arrows_cross_sections_and_document_endpoints(display, tmp_
             panel = ui._editor_panel
             buffer = panel.input.buffer
             buffer.cursor_position += 4
-            await wait_until(lambda: "line 031" in "\n".join(snapshot()[:15]))
-            before = snapshot()[1:15]
+            await wait_until(lambda: "line 031" in "\n".join(snapshot()[:17]))
+            before = snapshot()[1:17]
             pipe.send_text("\x1b[B")
             await wait_until(lambda: panel.page == 1 and buffer.document.cursor_position_row == 0)
             assert buffer.document.cursor_position_col == 4
-            await wait_until(lambda: "line 032" in "\n".join(snapshot()[:15]))
-            assert set(before) & set(snapshot()[1:15])
+            await wait_until(lambda: "line 032" in "\n".join(snapshot()[:17]))
+            assert set(before) & set(snapshot()[1:17])
             pipe.send_text("\x1b[A")
             await wait_until(lambda: panel.page == 0 and buffer.document.cursor_position_row == 31)
             assert buffer.document.cursor_position_col == 4
@@ -762,7 +763,7 @@ async def test_editor_arrows_cross_sections_and_document_endpoints(display, tmp_
             await wait_until(lambda: panel.page == 0 and buffer.cursor_position == len(buffer.text) - 1)
             pipe.send_text("\x1b[1;5F")
             await wait_until(lambda: panel.page == 2 and buffer.cursor_position == len(buffer.text))
-            await wait_until(lambda: "line 079" in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "line 079" in "\n".join(snapshot()[:17]))
             pipe.send_text("\x1b[1;5H")
             await wait_until(lambda: panel.page == 0 and buffer.cursor_position == 0)
             await wait_until(lambda: "line 000" in snapshot()[1])
@@ -786,8 +787,8 @@ async def test_editor_click_opens_visible_neighbor_section_at_clicked_position(d
             panel = ui._editor_panel
             panel.input.window.vertical_scroll = 25
             ui.app.invalidate()
-            await wait_until(lambda: "line 032" in "\n".join(snapshot()[:15]))
-            row = next(i for i, text in enumerate(snapshot()[:15]) if text.startswith("line 032"))
+            await wait_until(lambda: "line 032" in "\n".join(snapshot()[:17]))
+            row = next(i for i, text in enumerate(snapshot()[:17]) if text.startswith("line 032"))
             pipe.send_text(f"\x1b[<0;5;{row + 1}M\x1b[<0;5;{row + 1}m")
             await wait_until(lambda: panel.page == 1)
             await asyncio.sleep(.05)
@@ -821,8 +822,8 @@ async def test_editor_vertical_navigation_keeps_cursor_at_edges(display, tmp_pat
                     pipe.send_text(key)
                     await wait_until(lambda: (panel.page, panel.input.buffer.cursor_position) != previous)
                     await asyncio.sleep(.035)
-                    if index * step >= 14:
-                        assert panel.input.window.render_info.cursor_position.y == (13 if direction > 0 else 0), (index, direction, panel.page, panel.input.window.vertical_scroll, snapshot()[:15])
+                    if index * step >= 16:
+                        assert panel.input.window.render_info.cursor_position.y == (15 if direction > 0 else 0), (index, direction, panel.page, panel.input.window.vertical_scroll, snapshot()[:17])
             assert panel.page == 0 and panel.input.buffer.cursor_position == 0
         finally:
             ui.close()
@@ -852,7 +853,7 @@ async def test_read_only_viewer_scrolls_targets_lines_keeps_work_running_and_esc
             assert ui.input.text == "unfinished draft"
             assert ui.working
             pipe.send_text("\x1b[F")
-            await wait_until(lambda: "line 099" in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "line 099" in "\n".join(snapshot()[:17]))
             pipe.send_text("\x1b[H")
             await wait_until(lambda: "line 000" in snapshot()[1])
             pipe.send_text("\x1b")
@@ -911,14 +912,14 @@ async def test_inspection_panel_toggles_by_combo_and_click_and_opens_files_and_c
             pipe.send_text("\x0f")
             await wait_until(lambda: "Touched" in snapshot()[0])
             assert snapshot()[0].index("Touched") == 75
-            assert "Calls" in snapshot()[8]
+            assert "Calls" in snapshot()[9]
             assert "demo.txt [read]" in snapshot()[1]
-            assert "read_file [completed]" in snapshot()[9]
+            assert "read_file [completed]" in snapshot()[10]
             pipe.send_text("\x1b[<0;78;2M\x1b[<0;78;2m")
             await wait_until(lambda: "file contents" in snapshot()[1])
             pipe.send_text("\x1b")
             await wait_until(lambda: not ui._viewer_active)
-            pipe.send_text("\x1b[<0;78;10M\x1b[<0;78;10m")
+            pipe.send_text("\x1b[<0;78;11M\x1b[<0;78;11m")
             await wait_until(lambda: "call-1" in snapshot()[0])
             assert ui._viewer_active
             text = "\n".join(ui._viewer_window.content.lines)
@@ -1009,17 +1010,17 @@ async def test_sidebar_wheel_scrolls_each_pane_and_uses_menu_colors(display):
         try:
             ui.toggle_inspection()
             await wait_until(lambda: "file29" in snapshot()[1])
-            assert snapshot()[7][75:].strip() == ""
+            assert snapshot()[8][75:].strip() == ""
             assert screen.buffer[1][75].fg == "999999"
             assert screen.buffer[0][75].fg != "999999"
-            calls = [row[75:] for row in snapshot()[8:15]]
+            calls = [row[75:] for row in snapshot()[9:17]]
             pipe.send_text("\x1b[<65;80;2M" * 3)
             await wait_until(lambda: "file29" not in snapshot()[1])
-            assert [row[75:] for row in snapshot()[8:15]] == calls
-            files = [row[75:] for row in snapshot()[:7]]
-            pipe.send_text("\x1b[<65;80;10M" * 3)
-            await wait_until(lambda: [row[75:] for row in snapshot()[8:15]] != calls)
-            assert [row[75:] for row in snapshot()[:7]] == files
+            assert [row[75:] for row in snapshot()[9:17]] == calls
+            files = [row[75:] for row in snapshot()[:8]]
+            pipe.send_text("\x1b[<65;80;11M" * 3)
+            await wait_until(lambda: [row[75:] for row in snapshot()[9:17]] != calls)
+            assert [row[75:] for row in snapshot()[:8]] == files
         finally:
             ui.close()
             await task
@@ -1350,7 +1351,7 @@ async def test_long_reasoning_stream_keeps_input_and_stop_responsive(display):
         task = asyncio.create_task(ui.run())
         try:
             ui.write_chunk("Considering the next step. " * 4000, first=True)
-            await wait_until(lambda: "Considering" in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "Considering" in "\n".join(snapshot()[:17]))
             for word in ["Now ", "check ", "the ", "result."]:
                 ui.write_chunk("\x1b[2m" + word + "\x1b[0m")
                 pipe.send_text(word)
@@ -1415,13 +1416,13 @@ async def test_menu_uses_footer_and_scrolls_selection_through_refresh_and_resize
         try:
             ui.write("Transcript stays visible")
             await wait_until(lambda: "Ready" in snapshot()[17])
-            before = snapshot()[:15]
+            before = snapshot()[:17]
             choice = asyncio.create_task(ui.choose("Commands", [
                 (str(i), f"Option {i} — A saved conversation title with additional details")
                 for i in range(12)
             ]))
             await wait_until(lambda: snapshot()[17].strip() == "Commands")
-            assert snapshot()[:15] == before
+            assert snapshot()[:17] == before
             assert snapshot()[23].startswith("↑/↓ or wheel = move | Enter or click = select | Esc = back")
             assert "› Option 0" in snapshot()[18]
             assert "Option 4" in snapshot()[22]
@@ -1734,16 +1735,16 @@ async def test_menu_cancellation_preserves_input_history_scroll_and_running_turn
             cursor = ui.input.buffer.cursor_position
             ui.write("\n".join(f"line {i}" for i in range(70)))
             ui.set_working(True)
-            await wait_until(lambda: "line 69" in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "line 69" in "\n".join(snapshot()[:17]))
             ui._scroll_output(-10)
-            await wait_until(lambda: "line 69" not in "\n".join(snapshot()[:15]))
-            before = snapshot()[:15]
+            await wait_until(lambda: "line 69" not in "\n".join(snapshot()[:17]))
+            before = snapshot()[:17]
             choice = asyncio.create_task(ui.choose("Commands", [("one", "One"), ("two", "Two")]))
             await wait_until(lambda: "Commands" in snapshot()[17])
             pipe.send_text("ignored\x7f\x1b[A\x1c" + cancel_key)
             assert await asyncio.wait_for(choice, 3) is None
             await wait_until(lambda: "Working (esc to interrupt)" in snapshot()[17])
-            assert snapshot()[:15] == before
+            assert snapshot()[:17] == before
             assert ui.input.buffer.text == "draft in progress"
             assert ui.input.buffer.cursor_position == cursor
             assert ui.input.buffer.history.get_strings() == history
@@ -1821,9 +1822,8 @@ async def test_footer_stays_fixed_while_transcript_scrolls_and_input_survives(di
             for number in range(50):
                 ui.write(f"output {number}")
             ui.set_working(True)
-            await wait_until(lambda: "output 49" in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "output 49" in "\n".join(snapshot()[:17]))
             rows = snapshot()
-            assert rows[15].strip() == ""
             assert "Working" in rows[17]
             assert "partially typed" in rows[18]
             assert ui._notification_text() in rows[17]
@@ -1847,33 +1847,33 @@ async def test_latest_user_prompt_stays_pinned_until_next_prompt_reaches_top(dis
         try:
             ui.write("Startup information\n" * 4)
             renderer.user_prompt("Keep the original task visible")
-            await wait_until(lambda: "> Keep the original task visible" in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "> Keep the original task visible" in "\n".join(snapshot()[:17]))
             assert snapshot()[0].strip() == "Startup information"
             pipe.send_text("unfinished draft")
             await wait_until(lambda: "unfinished draft" in snapshot()[18])
             ui.write("\n".join(f"result {i}" for i in range(50)))
             await wait_until(lambda: snapshot()[0].rstrip() == "> Keep the original task visible")
-            assert "result 49" in "\n".join(snapshot()[1:15])
+            assert "result 49" in "\n".join(snapshot()[1:17])
             assert screen.buffer[0][0].fg == "ffffff"
             assert screen.buffer[0][0].bg == "004000"
             assert "unfinished draft" in snapshot()[18]
             assert "readout" in snapshot()[23]
 
-            before = snapshot()[1:15]
+            before = snapshot()[1:17]
             # Wheel events over the pinned prompt must still scroll history.
             pipe.send_text("\x1b[<64;1;1M" * 3)
-            await wait_until(lambda: snapshot()[1:15] != before)
+            await wait_until(lambda: snapshot()[1:17] != before)
             assert snapshot()[0].rstrip() == "> Keep the original task visible"
             pipe.send_text("\x1b[<65;1;1M" * 30)
-            await wait_until(lambda: "result 49" in "\n".join(snapshot()[1:15]))
+            await wait_until(lambda: "result 49" in "\n".join(snapshot()[1:17]))
 
             renderer.user_prompt("The next task", queued=True)
-            await wait_until(lambda: "> The next task" in "\n".join(snapshot()[1:15]))
+            await wait_until(lambda: "> The next task" in "\n".join(snapshot()[1:17]))
             assert snapshot()[0].rstrip() == "> Keep the original task visible"
-            assert "> The next task" in "\n".join(snapshot()[:15])
+            assert "> The next task" in "\n".join(snapshot()[:17])
             ui.write("\n".join(f"next result {i}" for i in range(50)))
             await wait_until(lambda: snapshot()[0].rstrip() == "> The next task")
-            assert "next result 49" in "\n".join(snapshot()[1:15])
+            assert "next result 49" in "\n".join(snapshot()[1:17])
             assert "queued" not in snapshot()[0]
             assert "unfinished draft" in snapshot()[18]
         finally:
@@ -1959,17 +1959,17 @@ async def test_pinned_prompt_truncates_resizes_and_survives_context_view_and_ref
             screen.resize(lines=24, columns=40)
             ui.app.invalidate()
             await wait_until(lambda: snapshot()[0].rstrip() == "> alpha beta gamma delta epsilon")
-            assert "output 49" in "\n".join(snapshot()[1:15])
+            assert "output 49" in "\n".join(snapshot()[1:17])
 
             ui.set_context(json.dumps({"messages": [{"role": "system", "content": "System context"}]}))
             pipe.send_text("\x1c")
-            await wait_until(lambda: "System context" in "\n".join(snapshot()[:15]))
-            assert "> alpha" not in "\n".join(snapshot()[:15])
+            await wait_until(lambda: "System context" in "\n".join(snapshot()[:17]))
+            assert "> alpha" not in "\n".join(snapshot()[:17])
             pipe.send_text("\x1c")
             await wait_until(lambda: snapshot()[0].rstrip() == "> alpha beta gamma delta epsilon")
             ui.refresh()
             ui.write("after refresh")
-            await wait_until(lambda: "after refresh" in "\n".join(snapshot()[2:15]))
+            await wait_until(lambda: "after refresh" in "\n".join(snapshot()[2:17]))
             assert snapshot()[0].rstrip() == "> alpha beta gamma delta epsilon"
         finally:
             ui.close()
@@ -1990,7 +1990,7 @@ async def test_oversized_pinned_prompt_keeps_output_and_footer_visible(display):
             await wait_until(lambda: snapshot()[0].startswith("> requirement 0 "))
             assert snapshot()[0].rstrip().endswith("…")
             assert snapshot()[1].startswith("output ")
-            assert "output 49" in "\n".join(snapshot()[1:15])
+            assert "output 49" in "\n".join(snapshot()[1:17])
             assert "readout" in snapshot()[23]
             # The complete prompt is still part of ordinary scrollback.
             content = ui.transcript.content.create_content(100, 17)
@@ -2055,7 +2055,7 @@ async def test_pinned_line_requires_green_prompt_prefix_and_survives_reload(disp
             del ui._pinned_prompt
             ui.refresh()
             ui.write("after refresh")
-            await wait_until(lambda: "after refresh" in "\n".join(snapshot()[1:15]))
+            await wait_until(lambda: "after refresh" in "\n".join(snapshot()[1:17]))
             assert snapshot()[0].rstrip() == "> Saved task"
         finally:
             ui.close()
@@ -2117,7 +2117,7 @@ async def test_restored_transcript_replaces_output_and_scrolls_to_end(display):
             ui.input.text = "unfinished draft"
             ui.context_visible = True
             await renderer.restore_transcript(messages, [])
-            await wait_until(lambda: "Saved final answer" in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "Saved final answer" in "\n".join(snapshot()[:17]))
             assert snapshot()[0].rstrip() == "> Saved next task"
             assert "unfinished draft" in snapshot()[18]
             assert "readout" in snapshot()[23]
@@ -2131,12 +2131,12 @@ async def test_restored_transcript_replaces_output_and_scrolls_to_end(display):
             assert "\x1b[38;2;255;102;102m" in recorded
             assert [message.to_api() for message in messages] == original
             ui._scroll_output(-1000)
-            await wait_until(lambda: "Saved first answer" in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "Saved first answer" in "\n".join(snapshot()[:17]))
             assert snapshot()[0].rstrip() == "> Saved first task"
             assert screen.buffer[0][0].fg == "ffffff"
             await renderer.restore_transcript(messages, ["Queued correction"])
-            await wait_until(lambda: "> Queued correction" in "\n".join(snapshot()[:15]))
-            assert "queued" in "\n".join(snapshot()[:15])
+            await wait_until(lambda: "> Queued correction" in "\n".join(snapshot()[:17]))
+            assert "queued" in "\n".join(snapshot()[:17])
         finally:
             ui.close()
             await task
@@ -2467,28 +2467,28 @@ async def test_context_scrolls_and_updates_without_changing_transcript(display):
         try:
             for number in range(50):
                 ui.write(f"transcript {number}")
-            await wait_until(lambda: "transcript 49" in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "transcript 49" in "\n".join(snapshot()[:17]))
             pipe.send_text("\x1b[<64;1;5M" * 3)
-            await wait_until(lambda: "transcript 49" not in "\n".join(snapshot()[:15]))
-            before = snapshot()[:15]
+            await wait_until(lambda: "transcript 49" not in "\n".join(snapshot()[:17]))
+            before = snapshot()[:17]
             ui.set_context(json.dumps({"messages": [{"role": "system", "content": "\n".join(f"instruction {n}" for n in range(100))}]}))
             pipe.send_text("\x1c")
-            await wait_until(lambda: "instruction 0" in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "instruction 0" in "\n".join(snapshot()[:17]))
             pipe.send_text("\x1b[<65;1;5M" * 3)
-            await wait_until(lambda: "instruction 0" not in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "instruction 0" not in "\n".join(snapshot()[:17]))
             pipe.send_text("\x1b[1~")
-            await wait_until(lambda: "instruction 0" in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "instruction 0" in "\n".join(snapshot()[:17]))
             pipe.send_text("\x1b[6~")
-            await wait_until(lambda: "instruction 0" not in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "instruction 0" not in "\n".join(snapshot()[:17]))
             pipe.send_text("\x1b[4~")
-            await wait_until(lambda: "instruction 99" in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "instruction 99" in "\n".join(snapshot()[:17]))
             ui.set_context(json.dumps({"messages": [{"role": "system", "content": "UPDATED REQUEST"}], "tools": [{"name": "example"}], "response_format": {"type": "json_object"}}))
-            await wait_until(lambda: "UPDATED REQUEST" in "\n".join(snapshot()[:15]))
-            assert "example" in "\n".join(snapshot()[:15])
+            await wait_until(lambda: "UPDATED REQUEST" in "\n".join(snapshot()[:17]))
+            assert "example" in "\n".join(snapshot()[:17])
             pipe.send_text("\x1b[4~")
-            await wait_until(lambda: "json_object" in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "json_object" in "\n".join(snapshot()[:17]))
             pipe.send_text("\x1c")
-            await wait_until(lambda: snapshot()[:15] == before)
+            await wait_until(lambda: snapshot()[:17] == before)
         finally:
             ui.close()
             await task
@@ -2559,21 +2559,21 @@ async def test_mouse_wheel_scrolls_transcript_without_changing_input(display, mo
             await wait_until(lambda: "draft" in snapshot()[18])
             for number in range(50):
                 ui.write(f"output {number}")
-            await wait_until(lambda: "output 49" in "\n".join(snapshot()[:15]))
-            before = snapshot()[:15]
+            await wait_until(lambda: "output 49" in "\n".join(snapshot()[:17]))
+            before = snapshot()[:17]
             footer = snapshot()[18:]
             pipe.send_text(f"\x1b[<64;1;{mouse_row}M" * 3)
-            await wait_until(lambda: snapshot()[:15] != before)
-            scrolled = snapshot()[:15]
+            await wait_until(lambda: snapshot()[:17] != before)
+            scrolled = snapshot()[:17]
             assert "output 49" not in "\n".join(scrolled)
             assert snapshot()[18:] == footer
             ui.write("new output")
             await asyncio.sleep(.2)
-            assert snapshot()[:15] == scrolled
+            assert snapshot()[:17] == scrolled
             pipe.send_text(f"\x1b[<65;1;{mouse_row}M" * 30)
-            await wait_until(lambda: "new output" in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "new output" in "\n".join(snapshot()[:17]))
             ui.write("following output")
-            await wait_until(lambda: "following output" in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "following output" in "\n".join(snapshot()[:17]))
             assert "draft" in snapshot()[18]
             assert ui.input.buffer.history.get_strings() == history
             pipe.send_text("\r")
@@ -2621,15 +2621,15 @@ async def test_wheel_events_without_coordinates_preserve_prompt_history(display)
             assert await ui.read_line() == "previous prompt"
             for number in range(50):
                 ui.write(f"output {number}")
-            await wait_until(lambda: "output 49" in "\n".join(snapshot()[:15]))
-            before = snapshot()[:15]
+            await wait_until(lambda: "output 49" in "\n".join(snapshot()[:17]))
+            before = snapshot()[:17]
             ui.app.key_processor.feed(KeyPress(Keys.ScrollUp))
             ui.app.key_processor.process_keys()
-            await wait_until(lambda: snapshot()[:15] != before)
+            await wait_until(lambda: snapshot()[:17] != before)
             assert ui.input.text == ""
             ui.app.key_processor.feed(KeyPress(Keys.ScrollDown))
             ui.app.key_processor.process_keys()
-            await wait_until(lambda: snapshot()[:15] == before)
+            await wait_until(lambda: snapshot()[:17] == before)
             assert ui.input.text == ""
         finally:
             ui.close()
@@ -2646,7 +2646,7 @@ async def test_output_wraps_at_words_preserves_spacing_and_reflows_on_resize(dis
         try:
             ui.write("\x1b[1malpha beta gamma delta epsilon\x1b[0m\n\nName    Count\nalpha   12\nbeta    3")
             ui.write("    one two three four five")
-            await wait_until(lambda: "Count" in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "Count" in "\n".join(snapshot()[:17]))
             assert [line.rstrip() for line in snapshot()[:6]] == [
                 "alpha beta gamma", "delta epsilon", "", "Name    Count", "alpha   12", "beta    3",
             ]
@@ -2715,12 +2715,11 @@ async def test_streaming_chunks_wrap_reflow_and_keep_the_footer_and_draft(displa
             renderer.handle(AgentEvent(kind="stream_end"))
             renderer.handle(AgentEvent(kind="retry", text="Response rejected. Retrying from the start."))
             renderer.handle(AgentEvent(kind="reasoning_delta", text="Starting again."))
-            await wait_until(lambda: "Thinking: Starting again." in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "Thinking: Starting again." in "\n".join(snapshot()[:17]))
             rows = snapshot()
             row = next(index for index, value in enumerate(rows) if "Response rejected" in value)
             assert screen.buffer[row][2].fg == "ff6666"
             assert "draft" in rows[18]
-            assert rows[15].strip() == ""
             assert ui._notification_text() in rows[17]
             assert "readout" in rows[23]
         finally:
@@ -2743,7 +2742,7 @@ async def test_requested_colors_apply_to_user_input_tool_calls_and_errors(displa
             renderer.handle(AgentEvent(kind="warning", text="request failed"))
             renderer.emit(renderer.style.dim("muted detail"))
             renderer.emit("white detail")
-            await wait_until(lambda: "request failed" in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "request failed" in "\n".join(snapshot()[:17]))
             pipe.send_text("draft")
             await wait_until(lambda: "draft" in snapshot()[18])
             for text, expected in [
@@ -2813,7 +2812,7 @@ async def test_output_unit_gaps_render_without_separating_model_text_and_tools(d
             renderer.handle(AgentEvent(kind="step_start", step=2))
             renderer.handle(AgentEvent(kind="assistant_text", step=2, text="Finished."))
             renderer.emit("next command response")
-            await wait_until(lambda: "next command response" in "\n".join(snapshot()[:15]))
+            await wait_until(lambda: "next command response" in "\n".join(snapshot()[:17]))
             assert [line.rstrip() for line in snapshot()[:11]] == [
                 "", "command response", "second line", "", "Checking files.",
                 "  ⚙ list_dir({})", "    result", "", "Finished.", "", "next command response",

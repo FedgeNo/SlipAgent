@@ -46,7 +46,7 @@ from .viewerpanels import ViewerDeck, TextViewerPanel, DiffViewerPanel, FileView
 from .inspection import IndexedText, field_snapshot, artifact_snapshot, build_snapshot
 from .types import ToolCall
 
-FOOTER_ROWS = 9
+FOOTER_ROWS = 7
 PULSE_FRAMES = ("▌", "▛", "▀", "▜", "▐", "▟", "▄", "▙")
 MIN_REDRAW_INTERVAL = 1 / 30
 
@@ -193,7 +193,7 @@ class TerminalUI:
         if not isinstance(self.input.window, InputWindow):
             self.input.window = InputWindow(self.input.control)
             self.input.window.style = "class:text-area class:user"
-        body_height = Dimension(min=1, preferred=FOOTER_ROWS - 4, max=FOOTER_ROWS - 4)
+        body_height = Dimension(min=1, preferred=FOOTER_ROWS - 2, max=FOOTER_ROWS - 2)
         self.input.window.height = body_height
         self._menu_window.height = body_height
         self._editor_panel.controls.height = body_height
@@ -217,17 +217,17 @@ class TerminalUI:
             DynamicContainer(lambda: scroll_row if self._show_scroll_bottom() else activity_row),
             DynamicContainer(lambda: self._editor_panel.controls if self._editor_active and not self._focus.prompt_active else self.input),
             self._bottom_row(menu=False),
-        ], height=lambda: self._footer_rows() - 2, style="class:footer")
+        ], height=lambda: self._footer_rows(), style="class:footer")
         menu_footer = HSplit([
             Window(FormattedTextControl(lambda: self._activity_notice([("class:menu-title", self._menu_title)])), height=1),
             self._menu_window,
             self._bottom_row(menu=True),
-        ], height=lambda: self._footer_rows() - 2, style="class:footer class:menu")
+        ], height=lambda: self._footer_rows(), style="class:footer class:menu")
         setting_footer = HSplit([
             Window(FormattedTextControl(lambda: self._activity_notice([("class:menu-title", "Folder Opener")])), height=1),
             self._options_panel.field,
             self._bottom_row(menu=False),
-        ], height=lambda: self._footer_rows() - 2, style="class:footer class:menu")
+        ], height=lambda: self._footer_rows(), style="class:footer class:menu")
         context = HSplit([
             Window(FormattedTextControl("Context — latest model request | Ctrl+\\: close"), height=1, style="class:status"),
             self.context_window,
@@ -243,7 +243,6 @@ class TerminalUI:
             VSplit([DynamicContainer(lambda: self._editor_container if self._editor_active else self._viewer_container if self._viewer_active else
                                      context if self.context_visible else transcript),
                     ConditionalContainer(self._inspection_panel, Condition(lambda: self._inspection_visible and self.output.get_size().columns >= 60))]),
-            Window(height=2),
             DynamicContainer(lambda: menu_footer if self._menu_future is not None else setting_footer if self._options_field_active else footer),
         ]), focused_element=self._menu_window if self._menu_future is not None else self._options_panel.field if self._options_field_active else self._editor_input if self._editor_active else
             self._viewer_window if self._viewer_active else self.input)
@@ -358,7 +357,7 @@ class TerminalUI:
 
     def _footer_rows(self) -> int:
         """Leave room for feed output when the terminal is very short."""
-        return min(FOOTER_ROWS, max(5, self.output.get_size().rows - 3))
+        return min(FOOTER_ROWS, max(3, self.output.get_size().rows - 3))
 
     def _show_scroll_bottom(self) -> bool:
         return not (self.transcript._following or self._viewer_active or self._editor_active or self.context_visible)
@@ -1249,7 +1248,7 @@ class TerminalUI:
                         self._editor_panel.move_cursor(-3 if event.event_type == MouseEventType.SCROLL_UP else 3)
                         app.invalidate()
                         return None
-                if self._menu_future is None and size.rows - self._footer_rows() + 3 <= event.position.y < size.rows - 1:
+                if self._menu_future is None and size.rows - self._footer_rows() + 1 <= event.position.y < size.rows - 1:
                     if self._editor_active:
                         return None
                     window = self.input.window

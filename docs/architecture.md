@@ -235,14 +235,22 @@ request-error path. Background summaries do not use this working-response guard.
 `capabilities.py` selects native tool calling from the live endpoints' `tools`
 support, independently of their JSON-format support. Startup and explicit model
 selection refresh the profile; ordinary requests reuse it. Native-capable routes
-take priority. Schema-capable endpoints receive a small strict response schema.
+take priority. Schema-capable endpoints receive a small strict response schema
+unless disabled by the model profile.
 Other endpoints receive no `response_format`; ordinary replies are accepted.
 Native routes without schemas request plain reply text. JSON-only routes request
 `response` and `tool_calls` on every step, including final answers.
 Selection preflight publishes neither the model nor its profile on failure.
 
-`prompts/model-profiles.json` applies exact-model prompt sections and optional
-tool-channel overrides at request construction. GLM-5.3 uses embedded calls:
+`prompts/model-profiles.json` applies exact-model prompt sections, optional
+tool-channel overrides, and a boolean `structured_output` switch at request
+construction. `protocol.model_response_format` supplies the same effective
+constraint to prompt construction, context budgeting, and the outgoing API body.
+Setting the switch to `false` omits `response_format`; native-tool models receive
+plain reply instructions and retain native tools. Embedded-tool models retain
+their JSON call instructions and local validation. Omission or `true` follows
+endpoint capabilities. Both Dots3 Note Preview IDs disable the constraint.
+GLM-5.3 uses embedded calls:
 its schema includes `tool_calls`, its system prompt explains that channel, and
 native tool definitions are omitted from the API body but remain in the system
 prompt. Its profile also enables invoke/parameter XML parsing in assistant

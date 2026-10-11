@@ -26,7 +26,19 @@ System instructions and tool definitions remain separate from the user-input JSO
 
 `tool_channel: "embedded"` requests calls inside response JSON and includes them in the response schema. Omit this setting, or use `"native"`, to follow the endpoint's normal tool capabilities. `xml_tool_calls: true` additionally accepts explicit invoke/parameter XML and whole XML fences in assistant output. JSON and native API calls remain accepted. Thoughts and quoted examples are not executable calls.
 
-The `z-ai/glm-5.3` profile uses `models/glm-5.3.md`, embedded calls, and XML compatibility. Other models have no overrides.
+`structured_output: false` omits the API `response_format` parameter for that model. Native-tool models receive plain Markdown reply instructions and keep their API tools. Embedded-tool models still receive JSON call instructions, with local validation before execution. Set `structured_output` to `true`, or omit it, to use the endpoint's normal formatting capabilities; this does not enable unsupported formats. The setting must be a JSON boolean and is reread when building requests, including after model switches.
+
+For example, to disable structured reply formatting for one exact model:
+
+```json
+{
+    "dots-studio/dots-3-note-preview:free": {
+        "structured_output": false
+    }
+}
+```
+
+The `z-ai/glm-5.3` profile uses `models/glm-5.3.md`, embedded calls, and XML compatibility. The `dots-studio/dots-3-note-preview` and `dots-studio/dots-3-note-preview:free` profiles disable structured reply formatting to avoid interference with native tool calling. Other models have no overrides.
 
 ## Resource Files
 

@@ -14,7 +14,7 @@ from .context import ContextError, ConversationHistory, tool_history_as_text
 from .data_text import render_data
 from .mcp import MCPTool
 from .prompts import PromptSections, load_prompt, model_prompt_profile
-from .protocol import agent_response_format
+from .protocol import model_response_format
 from .repomap import RepositoryMap
 from .tools.base import ToolRegistry
 from .tools.discovery import CORE_TOOLS
@@ -84,7 +84,9 @@ class ContextBuilder:
         environment = self.registry.resources.environment
         if environment is not None:
             sections.add("environment", "Project Python Environment", load_prompt('environment-snapshot.md', environment=render_data(await environment.snapshot())), 30, owner="environment")
-        if not native_tools or capabilities is not None and capabilities.format == "json_schema":
+        response_format = model_response_format(self.settings.model, capabilities, native_tools=native_tools)
+        schema = response_format if response_format is not None and response_format["type"] == "json_schema" else None
+        if not native_tools or schema is not None:
             sections.add("schema", "Response Schema",
                 load_prompt('response-json.md') + '\n\n'
                 + (load_prompt('response-native-json.md')
@@ -154,7 +156,7 @@ class ContextBuilder:
             max_output=self.settings.max_tokens or min(8192, max(256, length // 8)),
             native_tools=native_tools,
             text_tool_history=not native_tools,
-            schema=agent_response_format(native_tools=native_tools) if capabilities is not None and capabilities.format == "json_schema" else None,
+            schema=schema,
             token_scale=token_scale,
         )
         try:

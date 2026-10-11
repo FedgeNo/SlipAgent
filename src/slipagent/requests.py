@@ -15,7 +15,7 @@ from .context import ContextError
 from .contextlegacy import _visible_response
 from .progress import StreamLoopError, StreamLoopGuard
 from .prompts import load_prompt, model_prompt_profile
-from .protocol import AgentResponse, ResponseFormatError, agent_response_format, parse_agent_response
+from .protocol import AgentResponse, ResponseFormatError, model_response_format, parse_agent_response
 from .streaming import ResponseStream
 from .tools.base import ToolRegistry
 from .types import Completion, Message, ToolSpec, Usage
@@ -78,10 +78,9 @@ class RequestDriver:
         capabilities: RequestProfile | None, native_tools: bool,
     ) -> RequestAccepted | RequestStopped:
         extra_body: dict[str, Any] = {}
-        if capabilities is not None and capabilities.format == "json_schema":
-            extra_body["response_format"] = agent_response_format(native_tools=native_tools)
-        elif not native_tools:
-            extra_body["response_format"] = {"type": "json_object"}
+        response_format = model_response_format(self.settings.model, capabilities, native_tools=native_tools)
+        if response_format is not None:
+            extra_body["response_format"] = response_format
         step_usage = Usage()
         attempts = 0
         overflows = 0

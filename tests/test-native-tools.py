@@ -137,6 +137,28 @@ async def test_glm_53_requests_embedded_calls_and_executes_them(parameters, form
     await registry.aclose()
 
 
+@pytest.mark.parametrize("model", ["dots-studio/dots-3-note-preview", "dots-studio/dots-3-note-preview:free"])
+async def test_dots_3_keeps_native_calls_without_structured_reply_constraints(model):
+    router = Router({model: ["tools", "structured_outputs"]}, [
+        wire("", [native_call()]), wire(),
+    ])
+    tool = RecordingTool("actual result")
+    registry = ToolRegistry([tool])
+    async with OpenRouterClient("dummy", transport=httpx.MockTransport(router.handle)) as client:
+        agent = Agent(client, registry, model)
+        assert await agent.run("Record A") == "Done."
+        await agent.wait_for_compaction()
+    assert tool.seen == [{"value": "A"}]
+    assert len(router.requests) == 2
+    for request in router.requests:
+        assert request["tools"]
+        assert "response_format" not in request
+        assert "Markdown reply text" in request["messages"][0]["content"]
+        assert "Return exactly one JSON object" not in request["messages"][0]["content"]
+    assert "actual result" in json.dumps(context_records(router.requests[1]["messages"]))
+    await registry.aclose()
+
+
 @pytest.mark.parametrize("model", ["z-ai/glm-5.3-prime", "z-ai/glm-5.3-flash", "z-ai/glm-5.2", "other/model"])
 async def test_other_models_keep_native_tool_channel(model):
     router = Router({model: ["tools", "structured_outputs"]}, [wire()])

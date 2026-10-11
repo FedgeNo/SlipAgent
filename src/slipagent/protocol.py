@@ -13,8 +13,9 @@ import re
 import uuid
 from typing import Any
 
+from .capabilities import RequestProfile
 from .types import ToolCall, ToolSpec
-from .prompts import load_prompt
+from .prompts import load_prompt, model_prompt_profile
 
 RECORD_MAX_CHARS = 6000
 COMPRESSED_FIELDS = (
@@ -66,6 +67,18 @@ def agent_response_format(*, native_tools: bool) -> dict[str, Any]:
     # Strict schemas require every property; suggestions must remain omittable.
     result["json_schema"]["strict"] = False
     return result
+
+
+def model_response_format(model: str, capabilities: RequestProfile | None, *,
+                          native_tools: bool) -> dict[str, Any] | None:
+    """Select the working reply constraint for both prompt and API construction."""
+    if not model_prompt_profile(model).get("structured_output", True):
+        return None
+    if capabilities is not None and capabilities.format == "json_schema":
+        return agent_response_format(native_tools=native_tools)
+    if not native_tools:
+        return {"type": "json_object"}
+    return None
 
 
 def parse_agent_response(text: str, native_calls: list[ToolCall], *, native_tools: bool = True,

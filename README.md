@@ -1118,7 +1118,7 @@ with streamed reply previews, thoughts, and tool activity on stderr.
 
 All built-in model prompts and tool guidance are in the top-level [`prompts/`](prompts/README.md) folder for direct human editing. The `.md` templates contain Markdown headings, lists, tables, and fenced examples; static headings and response-schema descriptions live in these resources rather than Python. Only imported history retains the large opening and closing warning banners. SlipAgent rereads templates when building requests and tool definitions, including with live reload disabled. Start with `prompts/system-prompt.md` for general behavior or `prompts/background-summary-prompt.md` for compression. Preserve placeholder names and each prompt's output contract; Markdown instructions can still require JSON replies or plain-text summaries. The installer copies this folder, and wheels bundle it inside the package. See its README for the resource map and formatting conventions.
 
-For model-specific instructions, map the exact model ID to Markdown files in `prompts/model-profiles.json`. Profiles can also select embedded tool calls and XML call compatibility. GLM-5.3 has an embedded-call profile; other models retain their existing behavior. See [Model Profiles](prompts/README.md#model-profiles) for the settings.
+For model-specific instructions, map the exact model ID to Markdown files in `prompts/model-profiles.json`. Profiles can also select embedded tool calls, XML call compatibility, and structured reply formatting. Set `structured_output` to `false` to omit the API reply-format constraint for one model; set it to `true` or omit it to follow endpoint capabilities. Dots3 Note Preview has this setting disabled for both its standard and `:free` IDs, keeping native tools enabled. GLM-5.3 has an embedded-call profile. See [Model Profiles](prompts/README.md#model-profiles) for the settings.
 
 Runtime guidance distinguishes exploratory questions from authorized implementation and keeps work within the user's requested scope. Background summaries prioritize user requests, corrections, and boundaries over agent plans, preserve source attribution, and distinguish completed or rejected actions from unfinished requested work. Historical reasoning and optional agent suggestions do not authorize additional work.
 
@@ -1146,19 +1146,20 @@ to its call under `result` or `error`. Native calls remain the model's
 response format; the input records describe completed history. SlipAgent does
 not force a `tool_choice` setting.
 
-The selected response/tool format stays consistent between calls, including
-retries, until another model selection. Endpoint metadata, including reasoning
-support and provider limits, remains cached between selections.
+Endpoint metadata, including reasoning support and provider limits, remains
+cached between selections. Model-profile formatting overrides are reread when
+building working requests.
 Selection prefers native-capable endpoints;
 models without them can use the JSON call format below if they support JSON
 output. Their tool definitions enter the system prompt, and their history uses
 the same JSON input records, without unsupported native tool parameters.
 
 **Native-tool models without schema support use plain reply text.** They receive
-no `response_format` parameter and need no JSON content record. JSON-only models
-receive `response_format: {"type":"json_object"}` when schemas are unavailable.
+no `response_format` parameter and need no JSON content record. Unless disabled
+in the model profile, JSON-only models receive
+`response_format: {"type":"json_object"}` when schemas are unavailable.
 Reply text is encouraged on tool turns but may be empty when calls are present.
-Endpoints advertising `structured_outputs`
+Unless disabled in the model profile, endpoints advertising `structured_outputs`
 receive a small [strict schema](https://openrouter.ai/docs/guides/features/structured-outputs):
 `response` contains the plain terminal reply. Models using embedded calls also
 include `tool_calls`, an ordered array, empty for a final answer. Neither mode

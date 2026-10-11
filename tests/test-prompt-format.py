@@ -111,6 +111,55 @@ async def test_model_prompt_sections_reload_and_follow_model_selection(editable_
     await registry.aclose()
 
 
+@pytest.mark.parametrize("native", [False, True])
+async def test_model_structured_output_switch_reload_and_model_selection(editable_prompts, native):
+    requests = []
+    def handle(request):
+        body = json.loads(request.content)
+        summary = summary_response(body)
+        if summary is not None:
+            return httpx.Response(200, json=summary)
+        requests.append(body)
+        text = "Done" if native and "response_format" not in body else json.dumps({
+            "response": "Done", **({} if native else {"tool_calls": []}),
+        })
+        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": text},
+                                                    "finish_reason": "stop"}]})
+    parameters = ["structured_outputs", "tools" if native else "response_format"]
+    profile = ModelCapabilities({}, [{"tag": "stub", "supported_parameters": parameters, "context_length": 1000000}])
+    mapping = editable_prompts / "model-profiles.json"
+    registry = ToolRegistry()
+    async with OpenRouterClient("dummy", transport=httpx.MockTransport(handle)) as client:
+        client.cache_capabilities("custom/model", profile)
+        client.cache_capabilities("other/model", profile)
+        agent = Agent(client, registry, "custom/model")
+        for enabled in (True, False, True):
+            mapping.write_text(json.dumps({"custom/model": {"structured_output": enabled}}))
+            assert await agent.run("Say done") == "Done"
+            await agent.wait_for_compaction()
+            assert ("response_format" in requests[-1]) == enabled
+            assert ("tools" in requests[-1]) == native
+            system = requests[-1]["messages"][0]["content"]
+            assert ("Return exactly one JSON object" in system) == (enabled or not native)
+        mapping.write_text(json.dumps({"custom/model": {"structured_output": False}}))
+        agent.model = "other/model"
+        assert await agent.run("Say done") == "Done"
+        await agent.wait_for_compaction()
+        assert requests[-1]["response_format"]["type"] == "json_schema"
+        assert profile.format == "json_schema"
+    await registry.aclose()
+
+
+@pytest.mark.parametrize("value", ["false", 0, None, []])
+def test_model_structured_output_switch_rejects_non_booleans(editable_prompts, value):
+    from slipagent.prompts import PromptError, model_prompt_profile
+    (editable_prompts / "model-profiles.json").write_text(json.dumps({
+        "custom/model": {"structured_output": value},
+    }))
+    with pytest.raises(PromptError, match="structured_output for custom/model must be a boolean"):
+        model_prompt_profile("custom/model")
+
+
 async def test_request_rereads_system_and_protocol_prompts_without_reload(editable_prompts, workspace):
     from test_agent import StubClient
     registry = ToolRegistry()

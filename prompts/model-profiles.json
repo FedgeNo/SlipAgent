@@ -1,4 +1,10 @@
 {
+    "dots-studio/dots-3-note-preview": {
+        "structured_output": false
+    },
+    "dots-studio/dots-3-note-preview:free": {
+        "structured_output": false
+    },
     "z-ai/glm-5.3": {
         "tool_channel": "embedded",
         "xml_tool_calls": true,

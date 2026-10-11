@@ -41,7 +41,7 @@ def __getattr__(name: str) -> str:
 
 
 def model_prompt_profile(model: str) -> dict[str, Any]:
-    """Load an exact model's optional prompt sections and tool-channel override."""
+    """Load an exact model's optional prompt sections and response settings."""
     try:
         profiles = json.loads(load_prompt("model-profiles.json"))
     except ValueError as exc:
@@ -56,6 +56,8 @@ def model_prompt_profile(model: str) -> dict[str, Any]:
         raise PromptError(f"Prompt sections for {model} must be a list of filenames")
     if not isinstance(profile.get("xml_tool_calls", False), bool):
         raise PromptError(f"xml_tool_calls for {model} must be a boolean")
+    if not isinstance(profile.get("structured_output", True), bool):
+        raise PromptError(f"structured_output for {model} must be a boolean")
     return profile
 
 

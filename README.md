@@ -618,10 +618,11 @@ renaming lasts only for the current conversation in the running process.
 
 On an interactive terminal, seven fixed rows sit at the bottom of the screen:
 a pulsing activity indicator, five rows for wrapping input,
-and the readout `<cwd>  │  model: <slug>  │  free: <n>`. An empty row
-separates this area from the scrolling transcript. Output and redraws preserve
-partially typed input. Input and output wrap at word boundaries to the terminal
-width and reflow when you resize it. Wrapping preserves the submitted prompt's
+and the readout `<cwd>  │  model: <slug>  │  free: <n>`. Two empty rows
+separate this area from the scrolling transcript. Output and redraws preserve
+partially typed input. The controls have a dark blue background, menus use
+dark purple, and the prompt retains its dark green background. Input and output wrap at word boundaries to the
+terminal width and reflow when you resize it. Wrapping preserves the submitted prompt's
 original text. The mouse wheel scrolls overflowing input when hovered and scrolls
 the transcript over the output area, preserving
 your draft and prompt history. Scrolling back pauses automatic scrolling until you
@@ -671,6 +672,8 @@ saved, or offers the same unsaved-change menu first. The agent stays held
 throughout the switch.
 Files are backed by private snapshots, with only
 one bounded page in the editing buffer; **Page Up/Down** moves between pages.
+Over the editor, each mouse wheel event moves the cursor three lines up or down,
+and the viewport follows it.
 Untouched content and line endings are preserved. External disk changes offer
 Reload and require an explicit choice before overwriting. Editor reload retains
 the cursor's logical line, clamping to the last line if the file became shorter.
@@ -749,10 +752,10 @@ count is fetched from OpenRouter at startup and refreshed every 15 minutes,
 including while idle or working.
 
 The underlined **Commands** link beside **Ready**, or `/menu`, replaces the
-nine-row input footer with a heading, a five-row scrolling list of all commands with their
+seven-row input footer with a heading, a five-row scrolling list of all commands with their
 help syntax and descriptions, and `↑/↓ or wheel = move | Enter or click = select | Esc = back` on
 the bottom line, with shorter wording on narrow terminals.
-Use the mouse wheel or arrow keys to move, and click an item or press Enter to
+Use the mouse wheel or arrow keys to move one item at a time, and click an item or press Enter to
 select it. The transcript stays visible above it. Escape closes the menu without running
 anything, preserving your draft and scroll position. Selecting an item saves the
 current draft in input history and inserts the command into the input without

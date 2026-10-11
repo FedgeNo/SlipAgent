@@ -34,7 +34,7 @@ from prompt_toolkit.widgets import TextArea
 from wcwidth import iter_graphemes, width as display_width, wrap
 
 from .transcript import TranscriptFile, WrappedTranscript
-from .palette import MUTED_COLOR, USER_PROMPT_STYLE
+from .palette import FOOTER_BACKGROUND_COLOR, MENU_BACKGROUND_COLOR, MUTED_COLOR, USER_PROMPT_STYLE
 from .markdown import THEMES, MarkdownRenderer, code_blocks
 from .clipboard import clipboard_sequence, copy_to_clipboard
 from .explorer import folder_opener, open_folder
@@ -249,6 +249,7 @@ class TerminalUI:
         self.input.window.height = body_height
         self._menu_window.height = body_height
         self._editor_panel.controls.height = body_height
+        self._editor_panel.controls.style = "class:menu"
         self._options_panel.field.window.height = body_height
         # Attach during layout rebuilds so existing sessions gain input wrapping.
         processors = self.input.control.input_processors or []
@@ -266,25 +267,19 @@ class TerminalUI:
         ])
         footer = HSplit([
             DynamicContainer(lambda: scroll_row if self._show_scroll_bottom() else activity_row),
-            Window(height=1),
             DynamicContainer(lambda: self._editor_panel.controls if self._editor_active else self.input),
-            Window(height=1),
             self._bottom_row(menu=False),
-        ], height=self._footer_rows)
+        ], height=lambda: self._footer_rows() - 2, style="class:footer")
         menu_footer = HSplit([
             Window(FormattedTextControl(lambda: self._menu_title), height=1, style="class:menu-title"),
-            Window(height=1),
             self._menu_window,
-            Window(height=1),
             self._bottom_row(menu=True),
-        ], height=self._footer_rows)
+        ], height=lambda: self._footer_rows() - 2, style="class:footer class:menu")
         setting_footer = HSplit([
             Window(FormattedTextControl("Folder Opener"), height=1, style="class:menu-title"),
-            Window(height=1),
             self._options_panel.field,
-            Window(height=1),
             self._bottom_row(menu=False),
-        ], height=self._footer_rows)
+        ], height=lambda: self._footer_rows() - 2, style="class:footer class:menu")
         context = HSplit([
             Window(FormattedTextControl("Context — latest model request | Ctrl+\\: close"), height=1, style="class:status"),
             self.context_window,
@@ -300,6 +295,7 @@ class TerminalUI:
             VSplit([DynamicContainer(lambda: self._editor_container if self._editor_active else self._viewer_container if self._viewer_active else
                                      context if self.context_visible else transcript),
                     ConditionalContainer(self._inspection_panel, Condition(lambda: self._inspection_visible and self.output.get_size().columns >= 60))]),
+            Window(height=2),
             DynamicContainer(lambda: menu_footer if self._menu_future is not None else setting_footer if self._options_field_active else footer),
         ]), focused_element=self._menu_window if self._menu_future is not None else self._options_panel.field if self._options_field_active else self._editor_input if self._editor_active else
             self._viewer_window if self._viewer_active else self.input)
@@ -321,7 +317,7 @@ class TerminalUI:
             Window(height=1),
             HSplit([Window(FormattedTextControl("Calls"), height=1, style="class:menu-title"),
                     self._calls_window]),
-        ], width=lambda: Dimension.exact(max(1, self.output.get_size().columns // 4)))
+        ], width=lambda: Dimension.exact(max(1, self.output.get_size().columns // 4)), style="class:menu")
 
     def toggle_inspection(self) -> None:
         self._ensure_inspection()
@@ -1229,6 +1225,8 @@ class TerminalUI:
         return Style.from_dict({
             "status": MUTED_COLOR, "pulse": "bold ansicyan", "idle": "ansicyan", "user": USER_PROMPT_STYLE,
             "context-system": "#ffff00", "retry": "ansired",
+            "footer": "bg:" + FOOTER_BACKGROUND_COLOR,
+            "menu": "bg:" + MENU_BACKGROUND_COLOR,
             "menu-title": "bold", "menu-selected": "reverse bold",
             "clickable": "underline", "hover": "reverse",
             "diff-number": MUTED_COLOR,
@@ -1266,12 +1264,19 @@ class TerminalUI:
                 self._selection_dragging = False
             if event.event_type in (MouseEventType.SCROLL_UP, MouseEventType.SCROLL_DOWN):
                 size = self.output.get_size()
+                if self._menu_future is not None:
+                    self._move_menu(-1 if event.event_type == MouseEventType.SCROLL_UP else 1)
+                    return None
                 if self._editor_active and event.position.y < size.rows - self._footer_rows() and self._menu_future is None:
                     if not (self._inspection_visible and size.columns >= 60 and event.position.x >= size.columns - size.columns // 4):
-                        self._editor_input.window.vertical_scroll = max(0, self._editor_input.window.vertical_scroll + (-3 if event.event_type == MouseEventType.SCROLL_UP else 3))
+                        buffer = self._editor_input.buffer
+                        if event.event_type == MouseEventType.SCROLL_UP:
+                            buffer.cursor_up(count=3)
+                        else:
+                            buffer.cursor_down(count=3)
                         app.invalidate()
                         return None
-                if self._menu_future is None and size.rows - self._footer_rows() + 2 <= event.position.y < size.rows - 2:
+                if self._menu_future is None and size.rows - self._footer_rows() + 3 <= event.position.y < size.rows - 1:
                     if self._editor_active:
                         return None
                     window = self.input.window

@@ -833,9 +833,10 @@ to the model along with the active generation number.
   not conversation persistence or model context. Password entry owns a separate
   history-free buffer/queue, not just a masking processor.
   UI choices use the shared footer selector by default.
-  `TerminalUI.choose(title, options)` temporarily replaces the nine-row footer
-  with a heading, a blank row, five option rows, another blank row, and a bottom
-  key legend. Very short terminals reduce the input/list rows to retain feed
+  `TerminalUI.choose(title, options)` temporarily replaces the seven-row footer
+  with a heading, five option rows, and a bottom key legend. Two blank rows
+  separate the footer from the feed. The footer background is dark blue, menus
+  use dark purple, and the prompt uses dark green. Very short terminals reduce the input/list rows to retain feed
   output. The displayed **back** action cancels the selector like Escape.
   A focused menu
   control owns navigation; the input buffer, history, queue, and transcript stay

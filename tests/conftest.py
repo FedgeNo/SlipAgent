@@ -75,3 +75,5 @@ def alternate_provider_catalogs(monkeypatch):
     async def empty_catalog(provider, **options):
         return []
     monkeypatch.setattr(cli, "fetch_catalog", empty_catalog)
+    import slipagent.sessionstate as sessionstate
+    monkeypatch.setattr(sessionstate, "fetch_catalog", empty_catalog)

@@ -81,7 +81,7 @@ class PresentationCommand(Command):
 
 class StoredSessionCommand(Command):
     async def run(self, context: CommandContext, argument: str) -> bool | None:
-        journal = context.session.registry.services.get("session_journal")
+        journal = context.session.registry.resources.journal
         if journal is None:
             print(context.style.red("  session persistence is disabled; restart without --no-session to enable it."), file=context.out)
             return None
@@ -95,7 +95,7 @@ class StoredSessionCommand(Command):
 class BranchSessionCommand(Command):
     async def run(self, context: CommandContext, argument: str) -> bool | None:
         session, style, out = context.session, context.style, context.out
-        journal = session.registry.services.get("session_journal")
+        journal = session.registry.resources.journal
         if argument:
             print(style.red(f"  usage: /{self.name}"), file=out)
         elif journal is None:
@@ -107,7 +107,7 @@ class BranchSessionCommand(Command):
                 return False
             try:
                 await session.agent.wait_for_compaction()
-                jobs = session.registry.services.get("command_jobs")
+                jobs = session.registry.resources.jobs
                 if jobs is not None:
                     await jobs.stop_all()
                 session.agent._persist()
@@ -186,7 +186,7 @@ class ViewCommand(Command):
     async def run(self, context: CommandContext, argument: str) -> bool | None:
         session, style, out = context.session, context.style, context.out
         terminal = session.renderer.terminal
-        store = session.registry.services.get("artifact_store")
+        store = session.registry.resources.artifacts
         if terminal is None or store is None:
             print(style.red("  /view requires an interactive terminal with inspection records."), file=out)
             return False
@@ -502,7 +502,7 @@ class RenameCommand(Command):
         else:
             try:
                 title = session_title(argument)
-                journal = session.registry.services.get("session_journal")
+                journal = session.registry.resources.journal
                 if journal is not None:
                     await asyncio.to_thread(journal.rename, argument)
                 else:
@@ -628,7 +628,7 @@ class RewindCommand(ExclusiveCommand):
                 confirm = await terminal.choose("Restore These Files?", [("restore", "Restore Files"), ("cancel", "Cancel")])
                 if confirm == "restore":
                     try:
-                        jobs = session.registry.services.get("command_jobs")
+                        jobs = session.registry.resources.jobs
                         if jobs is not None:
                             await jobs.stop_all()
                         restored = await run_blocking(checkpoints.rewind, selected)
@@ -678,7 +678,7 @@ class ResumeCommand(StoredSessionCommand):
                 argument = selected
             await session.agent.wait_for_compaction()
             data = await asyncio.to_thread(journal.load, argument)
-            jobs = session.registry.services.get("command_jobs")
+            jobs = session.registry.resources.jobs
             if jobs is not None:
                 await jobs.stop_all()
             journal.restore(session.agent, data)
@@ -699,7 +699,7 @@ class RequestsCommand(Command):
 
     async def run(self, context: CommandContext, argument: str) -> bool | None:
         session, style, out = context.session, context.style, context.out
-        diagnostics = session.registry.services.get("request_diagnostics")
+        diagnostics = session.registry.resources.diagnostics
         if diagnostics is None:
             print(style.red("  Request diagnostics are unavailable in this session."), file=out)
         else:
@@ -748,7 +748,7 @@ class ResetCommand(ExclusiveCommand):
 
     async def run(self, context: CommandContext, argument: str) -> bool | None:
         session, style, out = context.session, context.style, context.out
-        jobs = session.registry.services.get("command_jobs")
+        jobs = session.registry.resources.jobs
         if jobs is not None:
             await jobs.stop_all()
         session.agent.reset()

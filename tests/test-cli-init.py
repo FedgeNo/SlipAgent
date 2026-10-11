@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from slipagent.work import SessionWork
 from slipagent.agent import Agent, build_system_prompt
 from slipagent.cli import Renderer, Style, _execute_command, _init_command
 from slipagent.instructions import load_project_instructions
@@ -18,11 +19,12 @@ from slipagent.workspace import Workspace, WorkspaceError
 def session_for(workspace):
     prompt = build_system_prompt(str(workspace.root))
     agent = Agent(client=None, registry=ToolRegistry(), model="test", system_prompt=prompt)
+    extensions = {}
     return SimpleNamespace(
         workspace=workspace, agent=agent,
         renderer=Renderer(Style(False), io.StringIO(), False),
         reloader=SimpleNamespace(_project_instructions=prompt),
-        extensions={},
+        extensions=extensions, work=SessionWork(extensions),
     )
 
 

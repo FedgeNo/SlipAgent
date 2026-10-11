@@ -1,5 +1,7 @@
 """Provider selection, public catalogs, and NVIDIA wire compatibility."""
 
+import slipagent.sessionstate as sessionstate
+
 import io
 import json
 from unittest.mock import AsyncMock
@@ -127,7 +129,7 @@ async def test_search_combines_providers_and_duplicate_ids_require_selection(tmp
         session = session_for(client, tmp_path)
         alternate = ModelInfo(ULTRA_MODEL, provider="nvidia")
         fetch = AsyncMock(return_value=[alternate])
-        monkeypatch.setattr(cli, "fetch_catalog", fetch)
+        monkeypatch.setattr(sessionstate, "fetch_catalog", fetch)
         models = await session.catalog()
         assert {model.provider for model in models} == {"openrouter", "nvidia"}
         fetch.assert_awaited_once()
@@ -147,7 +149,7 @@ async def test_partial_catalog_failure_preserves_other_results(tmp_path, monkeyp
     monkeypatch.setenv("NVIDIA_API_KEY", "dummy-nvidia")
     async with OpenRouterClient("dummy", transport=transport_for("openrouter", [])) as client:
         session = session_for(client, tmp_path)
-        monkeypatch.setattr(cli, "fetch_catalog", AsyncMock(side_effect=APIResponseError("unavailable", 503)))
+        monkeypatch.setattr(sessionstate, "fetch_catalog", AsyncMock(side_effect=APIResponseError("unavailable", 503)))
         assert len(await session.catalog()) == 1
         out = io.StringIO()
         await cli._models_command(session, "nemotron", cli.Style(False), out)
@@ -163,7 +165,7 @@ async def test_model_switch_does_not_wait_for_background_compression(tmp_path, m
         def factory(provider, **kwargs):
             kwargs['transport'] = transport_for(provider, [])
             return create_client(provider, **kwargs)
-        monkeypatch.setattr(cli, 'create_client', factory)
+        monkeypatch.setattr(sessionstate, 'create_client', factory)
         compactor = session.agent._compactor()
         job = asyncio.create_task(asyncio.Event().wait())
         compactor.jobs.add(job)
@@ -193,7 +195,7 @@ async def test_provider_switch_is_atomic_and_key_replacement_keeps_provider(tmp_
             replacement = create_client(provider, **kwargs)
             replacements.append(replacement)
             return replacement
-        monkeypatch.setattr(cli, "create_client", factory)
+        monkeypatch.setattr(sessionstate, "create_client", factory)
         await session.select_model(entry)
         assert session.client.provider == "nvidia" and client._client.is_closed
         assert session.agent.messages == original_messages
@@ -212,7 +214,7 @@ async def test_failed_candidate_closes_itself_and_preserves_active_model(tmp_pat
     async with NvidiaClient("dummy", transport=transport_for("nvidia", [])) as client:
         session = session_for(client, tmp_path)
         replacement = OpenRouterClient("dummy", transport=transport_for("openrouter", [], fail_profile=True))
-        monkeypatch.setattr(cli, "create_client", lambda *args, **kwargs: replacement)
+        monkeypatch.setattr(sessionstate, "create_client", lambda *args, **kwargs: replacement)
         with pytest.raises(APIResponseError):
             await session.select_model(ModelInfo(ULTRA_MODEL))
         assert replacement._client.is_closed and not client._client.is_closed
@@ -224,7 +226,7 @@ async def test_provider_without_key_is_not_queried_and_activation_refreshes_cach
     async with OpenRouterClient("session-key", transport=transport_for("openrouter", [])) as client:
         session = session_for(client, tmp_path)
         fetch = AsyncMock(return_value=[ModelInfo(ULTRA_MODEL, provider="nvidia")])
-        monkeypatch.setattr(cli, "fetch_catalog", fetch)
+        monkeypatch.setattr(sessionstate, "fetch_catalog", fetch)
         monkeypatch.setenv("NVIDIA_API_KEY", "   ")
         assert {model.provider for model in await session.catalog()} == {"openrouter"}
         fetch.assert_not_awaited()
@@ -321,6 +323,7 @@ async def test_coding_listings_hide_curated_ids_and_keep_unknown_models(provider
     )]
     fetch = AsyncMock(return_value=entries)
     monkeypatch.setattr(cli, "fetch_catalog", fetch)
+    monkeypatch.setattr(sessionstate, "fetch_catalog", fetch)
     async with create_client(provider, api_key="dummy", transport=transport_for(provider, [])) as client:
         monkeypatch.setattr(client, "list_models", AsyncMock(return_value=entries))
         session = session_for(client, tmp_path)

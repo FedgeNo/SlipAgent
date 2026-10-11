@@ -1,5 +1,7 @@
 """Kilo catalog selection, capabilities, and wire requests stay provider-specific."""
 
+import slipagent.sessionstate as sessionstate
+
 import io
 import json
 from unittest.mock import AsyncMock
@@ -101,7 +103,7 @@ async def test_kilo_catalog_is_public_and_filters_specialists(tmp_path, monkeypa
         assert models[-2].pricing["prompt"] == "0.000001"
     monkeypatch.setenv("KILO_API_KEY", "dummy")
     fetch = AsyncMock(return_value=[ModelInfo("new/coding-model", provider="kilo")])
-    monkeypatch.setattr(cli, "fetch_catalog", fetch)
+    monkeypatch.setattr(sessionstate, "fetch_catalog", fetch)
     from slipagent.openrouter import OpenRouterClient
     async with OpenRouterClient("dummy") as client:
         monkeypatch.setattr(client, "list_models", AsyncMock(return_value=[]))

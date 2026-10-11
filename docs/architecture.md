@@ -427,11 +427,21 @@ or metadata inside tool arguments.
 
 ## Resource Ownership and Project Settings
 
-`Session` owns the API client, registry, MCP manager, renderer, terminal lifecycle,
+`sessionstate.Session` owns the API client, registry, MCP manager, renderer, terminal lifecycle,
 and optional runtime frame. Startup uses `AsyncExitStack` until ownership transfers
 to the complete session, so cancellation/preflight failure closes acquired resources.
 Shutdown cancels command tasks, closes MCP connections, closes tools and registry
 services, closes the API client, and releases the runtime generation.
+
+`SessionResources` supplies typed resource references over the authoritative
+`ToolRegistry.services` compatibility map. `SessionWork` similarly exposes active
+tasks and deferred commands over `Session.extensions`; writes through either
+interface refer to the same objects. New code uses typed references for known
+owners, while extensions and runtime metadata can retain dictionary entries.
+`WorkCoordinator` owns the agent-boundary gate and the exact reload frame held
+by an editor. `UserEdits` specializes it with editor opening and diff delivery.
+Changing focus never releases that gate. Session layout, resource adapters, and
+work-gate contracts require a restart from the earlier architecture.
 
 `ToolRegistry.services` holds the session's `ProjectEnvironment` and
 `CommandArchive`, plus `StepCompactor` after agent initialization. The loop lazily
@@ -449,8 +459,11 @@ service module from a retained extension. The stable `Lifetime` primitive owns
 tasks and LIFO cleanup callbacks. Its retained close task drains resources once,
 even if multiple callers close it or a waiter is cancelled repeatedly. Cleanup
 continues after an individual callback fails, then reports the failure.
-Tools close before services; services close in reverse creation order, so jobs
-finish draining before their command archive closes. Captured generation closers
+Tools close before services. `SessionResources.shutdown_keys` explicitly closes
+editing, compaction, jobs and language servers before their durable stores;
+jobs drain before artifacts and the command archive close. Unknown extension
+owners retain reverse insertion order, and shared identities close only once.
+Captured generation closers
 release the resources they created. MCP disconnect uses the same retained-cleanup
 principle, including cancellation during startup or shutdown.
 
@@ -757,7 +770,7 @@ behavior reloads after it preserve the component owners and their selections.
 
 `runtime.py` is the stable frame. Its `CORE_MODULES` set also pins package root,
 configuration, wire types, their `data_text` renderer, workspace, tool base, MCP
-connections, and `lifecycle`.
+connections, `lifecycle`, typed `resources`, and `work` ownership contracts.
 These classes/state contracts must agree for the session's lifetime. Editing a
 pinned module requires a restart; most agent, tool, UI, API, task, and context
 behavior is reloadable when layouts remain compatible.

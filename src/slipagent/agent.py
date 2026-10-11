@@ -152,7 +152,7 @@ class Agent:
         self.registry.register(RecallHistoryTool(self.history))
         self.set_planning(self.planning)
         self._compactor()
-        jobs = self.registry.services.get("command_jobs")
+        jobs = self.registry.resources.jobs
         if jobs is not None:
             # Idle is a safe display boundary, but must never launch model work.
             # Resolve the current method at delivery so behavior reloads apply.
@@ -161,22 +161,23 @@ class Agent:
     def _compactor(self) -> StepCompactor:
         # A behavior reload can introduce this service into an existing session
         # without running Agent.__post_init__ again. The shared registry owns it.
-        if "step_compactor" not in self.registry.services:
-            self.registry.services["step_compactor"] = StepCompactor(
+        result = self.registry.resources.compactor
+        if result is None:
+            result = StepCompactor(
                 self._compaction_usage,
                 lambda text: self._emit(AgentEvent(kind="warning", text=text)),
             )
-        result: StepCompactor = self.registry.services["step_compactor"]
+            self.registry.resources.compactor = result
         result.on_step = self._persist_step
         return result
 
     def _persist(self) -> None:
-        journal = self.registry.services.get("session_journal")
+        journal = self.registry.resources.journal
         if journal is not None:
             journal.record(self)
 
     def _persist_step(self, step: CompletedStep) -> None:
-        journal = self.registry.services.get("session_journal")
+        journal = self.registry.resources.journal
         if journal is not None:
             journal.step(step)
 
@@ -185,24 +186,27 @@ class Agent:
         self._persist()
 
     def _loop_guard(self) -> LoopGuard:
-        if "loop_guard" not in self.registry.services:
-            self.registry.services["loop_guard"] = LoopGuard()
-        guard: LoopGuard = self.registry.services["loop_guard"]
+        guard = self.registry.resources.loop_guard
+        if guard is None:
+            guard = LoopGuard()
+            self.registry.resources.loop_guard = guard
         return guard
 
     def _checkpoints(self) -> FileCheckpoints | None:
-        workspace = self.registry.services.get("workspace")
+        workspace = self.registry.resources.workspace
         if workspace is None:
             return None
-        if "file_checkpoints" not in self.registry.services:
-            self.registry.services["file_checkpoints"] = FileCheckpoints(workspace)
-        checkpoints: FileCheckpoints = self.registry.services["file_checkpoints"]
+        checkpoints = self.registry.resources.checkpoints
+        if checkpoints is None:
+            checkpoints = FileCheckpoints(workspace)
+            self.registry.resources.checkpoints = checkpoints
         return checkpoints
 
     def _budget(self) -> ContextBudget:
-        if "context_budget" not in self.registry.services:
-            self.registry.services["context_budget"] = ContextBudget()
-        budget: ContextBudget = self.registry.services["context_budget"]
+        budget = self.registry.resources.budget
+        if budget is None:
+            budget = ContextBudget()
+            self.registry.resources.budget = budget
         return budget
 
     async def wait_for_compaction(self) -> None:
@@ -225,10 +229,10 @@ class Agent:
 
     def reset(self, *, new_session: bool = True) -> None:
         """Clear the conversation, keeping the system prompt."""
-        jobs = self.registry.services.get("command_jobs")
+        jobs = self.registry.resources.jobs
         if jobs is not None:
             jobs.clear()
-        diagnostics = self.registry.services.get("request_diagnostics")
+        diagnostics = self.registry.resources.diagnostics
         if diagnostics is not None:
             diagnostics.clear()
         self._compactor().reset()
@@ -241,15 +245,15 @@ class Agent:
         self.stop_requested = False
         self.stopped = False
         self.history.clear()
-        archive = self.registry.services.get("command_archive")
+        archive = self.registry.resources.archive
         if archive is not None:
             archive.clear()
-        artifacts = self.registry.services.get("artifact_store")
+        artifacts = self.registry.resources.artifacts
         if artifacts is not None:
             artifacts.clear()
         self._summary_progress.clear()
         self._loop_guard().reset()
-        checkpoints = self.registry.services.get("file_checkpoints")
+        checkpoints = self.registry.resources.checkpoints
         if checkpoints is not None:
             checkpoints.clear()
         self.registry.context_notes.pop("file_rewind", None)
@@ -258,7 +262,7 @@ class Agent:
         self.registry.context_notes.pop("background_commands", None)
         self.registry.context_notes.pop("request_diagnostics", None)
         self.registry.context_notes.pop("user_edits", None)
-        journal = self.registry.services.get("session_journal")
+        journal = self.registry.resources.journal
         if journal is not None and new_session:
             journal.begin(self)
 
@@ -280,7 +284,7 @@ class Agent:
         return STOP_NOTICE
 
     def _notify_jobs(self) -> None:
-        jobs = self.registry.services.get("command_jobs")
+        jobs = self.registry.resources.jobs
         if jobs is None:
             return
         completed = jobs.completions()
@@ -305,7 +309,7 @@ class Agent:
             if any(saved["record_id"] == reference["record_id"] for saved in references):
                 return
             references.append(reference)
-            journal = self.registry.services.get("session_journal")
+            journal = self.registry.resources.journal
             if journal is not None:
                 for index, original in enumerate(self.messages):
                     if original is message:
@@ -375,7 +379,7 @@ class Agent:
                                           plan=render_data(saved_plan[1]))
             sections.add('plan', 'Working Plan', load_prompt('working-plan.md',
                          plan_record=plan_record.strip()), 45)
-        workspace = self.registry.services.get("workspace")
+        workspace = self.registry.resources.workspace
         if workspace is not None and self.registry.services.get("editable_prompts"):
             self.system_prompt = build_system_prompt(str(workspace.root))
             if self.messages and self.messages[0].role == "system":
@@ -388,13 +392,13 @@ class Agent:
                          load_prompt('workspace-access.md', access=access.strip(), workspace=workspace.root,
                                      temporary_directory=workspace.temporary_directory),
                          15, owner="workspace")
-        instructions = self.registry.services.get("project_instructions")
+        instructions = self.registry.resources.instructions
         if instructions is not None:
             snapshot = instructions.snapshot()
             sections.add("project", "Project Instructions (Current)", instructions.render(snapshot), 20, owner="instructions")
             if not preview:
                 self.registry.services["instruction_snapshot"] = snapshot
-        environment = self.registry.services.get("project_environment")
+        environment = self.registry.resources.environment
         if environment is not None:
             sections.add("environment", "Project Python Environment", load_prompt('environment-snapshot.md', environment=render_data(await environment.snapshot())), 30, owner="environment")
         native_tools = self._uses_native_tools(capabilities)
@@ -607,7 +611,7 @@ class Agent:
         # Run budgets restart; invocation identity follows the archived conversation.
         step = len(self.history.steps) + 1
         self._notify_jobs()
-        servers = self.registry.services.get("language_servers")
+        servers = self.registry.resources.servers
         if servers is not None:
             await servers.refresh()
         specs = self._filter_specs(self.registry.specs())
@@ -637,7 +641,7 @@ class Agent:
             self._reserve_request()
             request_body: dict[str, Any] = {}
             diagnostic_id: int | None = None
-            diagnostics = self.registry.services.get("request_diagnostics")
+            diagnostics = self.registry.resources.diagnostics
             def finish_attempt(outcome: str, *, detail: str = "", response: str = "", usage: Usage | None = None) -> None:
                 if diagnostics is not None:
                     diagnostics.finish(diagnostic_id, outcome, detail=detail, response=response,
@@ -651,7 +655,7 @@ class Agent:
                 self._queued_messages_sent()
                 if diagnostics is not None:
                     diagnostic_id = diagnostics.begin(request, step=run_step, step_id=step)
-                instructions = self.registry.services.get("project_instructions")
+                instructions = self.registry.resources.instructions
                 if instructions is not None:
                     instructions.presented(self.registry.services.get("instruction_snapshot", {}))
                 self._emit(AgentEvent(kind="context", step=step, text=json.dumps(request, ensure_ascii=False)))
@@ -672,7 +676,7 @@ class Agent:
             try:
                 if not options:
                     self._queued_messages_sent()
-                    instructions = self.registry.services.get("project_instructions")
+                    instructions = self.registry.resources.instructions
                     if instructions is not None:
                         instructions.presented(self.registry.services.get("instruction_snapshot", {}))
                 completion = await self.client.chat(
@@ -838,7 +842,7 @@ class Agent:
         calls = message.tool_calls or []
         batch_results: list[tuple[ToolCall, ToolResult]] = []
         async def invoke_call(tool_call: ToolCall) -> ToolResult:
-            journal = self.registry.services.get("session_journal")
+            journal = self.registry.resources.journal
             if journal is not None:
                 journal.tool_started(step, tool_call.id)
             self._emit(AgentEvent(kind="tool_start", step=step, tool_call=tool_call))
@@ -859,7 +863,7 @@ class Agent:
             return result
 
         def commit_call(tool_call: ToolCall, result: ToolResult) -> None:
-            artifacts = self.registry.services.get("artifact_store")
+            artifacts = self.registry.resources.artifacts
             references = artifacts.references(step, tool_call.id) if artifacts is not None else []
             observation = _tool_message(tool_call, result)
             if references:
@@ -888,18 +892,18 @@ class Agent:
             if checkpoints is not None:
                 checkpoints.finish()
 
-        diagnostics = await check_edit_batch(self.registry, batch_results, step)
-        if diagnostics:
+        check_report = await check_edit_batch(self.registry, batch_results, step)
+        if check_report:
             call, result = batch_results[-1]
-            content = (result.content + "\n\nHarness Checks After This Complete Tool Batch:\n" + diagnostics
-                       if isinstance(result.content, str) else {"result": result.content, "harness_checks": diagnostics})
+            content = (result.content + "\n\nHarness Checks After This Complete Tool Batch:\n" + check_report
+                       if isinstance(result.content, str) else {"result": result.content, "harness_checks": check_report})
             checked = ToolResult(content, result.is_error)
             artifacts = self.messages[-1].content.get("artifacts", [])
             self.messages[-1] = _tool_message(call, checked)
             if artifacts:
                 self.messages[-1].content["artifacts"] = artifacts
             batch_results[-1] = call, checked
-            visible_diagnostics = "\n".join(line for line in diagnostics.splitlines()
+            visible_diagnostics = "\n".join(line for line in check_report.splitlines()
                                             if "SKIPPED — no selected project Python." not in line)
             if any(word in visible_diagnostics for word in ("FAILED", "TIMED OUT", "SKIPPED", "unavailable")):
                 self._emit(AgentEvent(kind="warning", step=step, text=visible_diagnostics))

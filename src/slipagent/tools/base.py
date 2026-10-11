@@ -20,6 +20,7 @@ from typing import Any
 
 from ..types import ToolSpec, content_text, decode_json_content
 from ..lifecycle import Lifetime
+from ..resources import SessionResources
 
 # A call ID is unique only within one numbered history step. Context-local
 # provenance also works when callers invoke independent tools concurrently.
@@ -301,6 +302,7 @@ class ToolRegistry:
         self.builtin_names: frozenset[str] = frozenset()
         self.context_notes: dict[str, Any] = {}
         self.services = services if services is not None else {}
+        self.resources = SessionResources(self.services)
         self.owns_services = owns_services
         self._closing: Lifetime | None = None
         for tool in tools or ():
@@ -383,7 +385,7 @@ class ToolRegistry:
         """Drain resources exactly once, including when shutdown is cancelled."""
         if self._closing is None:
             self._closing = Lifetime("tool registry")
-            owners = [*self.tools, *(reversed(list(self.services.values())) if self.owns_services else [])]
+            owners = self.resources.close_order(self.tools) if self.owns_services else list(self.tools)
             seen: set[int] = set()
             for owner in reversed(owners):
                 closer = getattr(owner, "aclose", None)

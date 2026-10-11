@@ -2,20 +2,23 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from .work import WorkCoordinator
+
+if TYPE_CHECKING:
+    from .sessionstate import Session
+    from .terminal import TerminalUI
 
 
-class UserEdits:
-    def __init__(self, session: Any, terminal: Any) -> None:
+class UserEdits(WorkCoordinator):
+    def __init__(self, session: Session, terminal: TerminalUI) -> None:
+        super().__init__(lambda: session.reloader)
         self.session = session
         self.terminal = terminal
         self.pending: tuple[Path, int] | None = None
-        self.released = asyncio.Event()
-        self.released.set()
         self.opening = False
-        self.frame_held = False
 
     async def request(self, path: Path, line: int = 1) -> None:
         if self.pending is not None or self.opening:
@@ -30,10 +33,7 @@ class UserEdits:
             finally:
                 self.opening = False
         self.pending = path, line
-        self.released.clear()
-        if self.session.reloader is not None and not self.frame_held:
-            self.session.reloader.busy += 1
-            self.frame_held = True
+        self.hold()
         if self.session.agent.running and not switching:
             self.terminal.notify("Editor queued until this turn finishes.")
         else:
@@ -45,7 +45,7 @@ class UserEdits:
             path, line = self.pending
             self.pending = None
             try:
-                jobs = self.session.registry.services.get("command_jobs")
+                jobs = self.session.registry.resources.jobs
                 if jobs is not None:
                     await jobs.stop_all()
                 await self.terminal._open_editor_now(path, line=line)
@@ -67,7 +67,7 @@ class UserEdits:
             return
         entry: dict[str, Any] = {"path": str(path), "diff": diff, "source": "user",
                                  "saved_before_step": len(self.session.agent.history.steps) + 1}
-        store = self.session.registry.services.get("artifact_store")
+        store = self.session.registry.resources.artifacts
         if store is not None:
             try:
                 record = store.save(f"User edited {path}", diff, kind="diff", call_id="user-edit", step_id=len(self.session.agent.history.steps) + 1)
@@ -81,19 +81,8 @@ class UserEdits:
         self.session.agent._persist()
 
     def close(self) -> None:
-        if self.frame_held:
-            self.session.reloader.busy -= 1
-            self.frame_held = False
         self.pending = None
-        self.released.set()
-
-    async def checkpoint(self) -> None:
-        task = asyncio.current_task()
-        if task is not None and task.cancelling():
-            return
-        await self.boundary()
-        if self.session.reloader is not None:
-            await self.session.reloader.checkpoint(boundary=True)
+        self.release()
 
     async def aclose(self) -> None:
         try:

@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from .cli import Session
 
 # Wire/state contracts and resource owners stay in the running frame.
-CORE_MODULES = frozenset({"", "runtime", "config", "types", "data_text", "workspace", "tools.base", "mcp", "lifecycle"})
+CORE_MODULES = frozenset({"", "runtime", "config", "types", "data_text", "workspace", "tools.base", "mcp", "lifecycle", "resources", "work"})
 POLL_INTERVAL = .5
 _CLASS_INTERNALS = frozenset({
     "__dict__", "__weakref__", "__slots__", "__module__", "__classcell__",

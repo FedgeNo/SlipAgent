@@ -2394,9 +2394,11 @@ async def test_turn_token_counts_follow_output_without_blank_line(monkeypatch):
         return "Finished."
     async def read(*args):
         await asyncio.Event().wait()
+    from slipagent.work import SessionWork
+    extensions = {}
     session = SimpleNamespace(
         renderer=renderer,
-        extensions={},
+        extensions=extensions, work=SessionWork(extensions),
         agent=SimpleNamespace(run=run, pending=[], stopped=False,
                               usage=Usage(prompt_tokens=10, completion_tokens=5, cost=0.0)),
     )

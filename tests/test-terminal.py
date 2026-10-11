@@ -1449,6 +1449,57 @@ def display():
     return sink, size, output, screen, snapshot
 
 
+@pytest.mark.parametrize("item_rows, details", [(1, 0), (2, 7), (7, 33)])
+async def test_menu_arrows_reveal_whole_items_with_minimum_scroll(display, item_rows, details):
+    sink, size, output, screen, snapshot = display
+    columns = 40 if item_rows > 1 else 100
+    size[0] = Size(rows=24, columns=columns)
+    screen.resize(lines=24, columns=columns)
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        task = asyncio.create_task(ui.run())
+        choice = None
+        try:
+            await wait_until(lambda: "Ready" in snapshot()[17])
+            choice = asyncio.create_task(ui.choose("Choices", [
+                (str(i), f"Item {i:02d}" + (" detail" * details + f" END{i:02d}" if details else ""))
+                for i in range(12)
+            ]))
+            top = 0
+            async def assert_selection(index, expected_top):
+                marker = f"› Item {index:02d}"
+                await wait_until(lambda: marker in "\n".join(snapshot()[18:23]))
+                assert ui._menu_index == index
+                rows = snapshot()[18:23]
+                assert marker in rows[item_rows * index - expected_top]
+                info = ui._menu_window.render_info
+                assert sum(line == index for row, (line, column) in info.visible_line_to_row_col.items()
+                           if 0 <= row < 5) == min(item_rows, 5)
+                if item_rows == 2:
+                    assert f"END{index:02d}" in "\n".join(rows)
+            await assert_selection(0, top)
+            for index in range(1, 12):
+                pipe.send_text("\x1b[B")
+                top = max(top, item_rows * index + min(item_rows, 5) - 5)
+                await assert_selection(index, top)
+            pipe.send_text("\x1b[B" * 3)
+            await asyncio.sleep(.05)
+            await assert_selection(11, top)
+            for index in range(10, -1, -1):
+                pipe.send_text("\x1b[A")
+                top = min(top, item_rows * index)
+                await assert_selection(index, top)
+            pipe.send_text("\x1b[A" * 3 + "\x1b[B" * 7)
+            await assert_selection(7, item_rows * 7 + min(item_rows, 5) - 5)
+            pipe.send_text("\r")
+            assert await asyncio.wait_for(choice, 3) == "7"
+        finally:
+            ui.close()
+            if choice is not None:
+                await choice
+            await task
+
+
 async def test_menu_uses_footer_and_scrolls_selection_through_refresh_and_resize(display):
     sink, size, output, screen, snapshot = display
     with create_pipe_input() as pipe:

@@ -956,7 +956,9 @@ seven-row input footer with a heading, a five-row scrolling list of all commands
 help syntax and descriptions, and `↑/↓ or wheel = move | Enter or click = select | Esc = back` on
 the bottom line, with shorter wording on narrow terminals.
 Use the mouse wheel or arrow keys to move one item at a time, and click an item or press Enter to
-select it. The transcript stays visible above it. Escape closes the menu without running
+select it. At the edge, the list scrolls just far enough to show the whole selected
+item when it fits. Items taller than the list show their beginning. The transcript
+stays visible above it. Escape closes the menu without running
 anything, preserving your draft and scroll position. Selecting an item saves the
 current draft in input history and inserts the command into the input without
 running it. Add any arguments and press Enter to submit it. The Commands link

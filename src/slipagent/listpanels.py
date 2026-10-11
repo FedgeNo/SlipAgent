@@ -13,7 +13,7 @@ from prompt_toolkit.formatted_text import StyleAndTextTuples
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 
-from .uiwindows import TranscriptWindow
+from .uiwindows import ListWindow
 
 K = TypeVar("K")
 
@@ -35,7 +35,7 @@ class ListPanel(ABC, Generic[K]):
     def __init__(self, actions: ListActions[K]) -> None:
         self.actions = actions
         self.selected_key: K | None = None
-        self.window = TranscriptWindow(FormattedTextControl(
+        self.window = ListWindow(FormattedTextControl(
             self.fragments, focusable=True, show_cursor=False,
             get_cursor_position=lambda: Point(0, self.index),
         ))
@@ -73,17 +73,7 @@ class ListPanel(ABC, Generic[K]):
         self.actions.invalidate()
 
     def reveal(self) -> None:
-        window = self.window
-        info = window.render_info
-        index = self.index
-        window._following = False
-        window._pending_scroll = 0
-        # Key events can change the viewport before another frame renders.
-        if (info is None or info.vertical_scroll != window.vertical_scroll
-                or index not in info.displayed_lines
-                or (index == window.vertical_scroll and window.vertical_scroll_2)):
-            window.vertical_scroll = index
-            window.vertical_scroll_2 = 0
+        self.window.reveal()
 
     def open_selected(self) -> None:
         key = self.selection

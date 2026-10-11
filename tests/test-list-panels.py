@@ -55,9 +55,15 @@ def test_choices_clamp_rapid_moves_and_use_the_same_activation_path():
     for _ in range(40):
         panel.move(1)
     assert panel.selection == 29
-    assert panel.window.vertical_scroll == 29
+    content = panel.window.content.create_content(40, 5)
+    panel.window._scroll(content, 40, 5)
+    visible = ["".join(part[1] for part in content.get_line(index))
+               for index in range(panel.window.vertical_scroll, panel.window.vertical_scroll + 5)]
+    assert visible[0].strip() == "choice 25"
+    assert visible[-1] == "› choice 29"
     for _ in range(40):
         panel.move(-1)
     panel.open_selected()
     assert opened == [0]
+    panel.window._scroll(panel.window.content.create_content(40, 5), 40, 5)
     assert panel.window.vertical_scroll == 0

@@ -793,7 +793,11 @@ and mouse activation. `TouchedPanel`, `CallsPanel`, and `ChoicePanel` supply the
 items, labels, and opening policy. `ListActions` supplies explicit host callbacks;
 the components do not depend on `TerminalUI`. Wrapped manual scrolling belongs
 to `uiwindows.TranscriptWindow`. Sidebar wheels scroll the viewport; bottom-menu
-wheels move selection. Those policies remain distinct.
+wheels move selection. `ListWindow` defers selection visibility until rendering
+supplies the viewport dimensions, then scrolls the minimum number of wrapped
+screen rows needed to reveal the whole selected item. Items taller than the
+viewport reveal their beginning. Resizing recalculates visibility; manual sidebar
+scrolling preserves its position until selection moves. Those policies remain distinct.
 
 `FocusCoordinator` owns clockwise traversal (Prompt, open Editor, Touched,
 Calls) and primary-panel restoration. Editor and options operations use that

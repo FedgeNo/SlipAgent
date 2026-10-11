@@ -59,3 +59,47 @@ class TranscriptWindow(Window):
         self.vertical_scroll, self.vertical_scroll_2 = min((line, offset), bottom)
         self._following = (self.vertical_scroll, self.vertical_scroll_2) == bottom
         self.horizontal_scroll = 0
+
+
+class ListWindow(TranscriptWindow):
+    """Reveal selected items by the minimum number of wrapped screen rows."""
+
+    def __init__(self, content: UIControl) -> None:
+        super().__init__(content)
+        self._reveal_selection = True
+        self._size: tuple[int, int] | None = None
+
+    def reveal(self) -> None:
+        self._reveal_selection = True
+        self._following = False
+        self._pending_scroll = 0
+
+    def _scroll(self, ui_content: UIContent, width: int, height: int) -> None:
+        if width <= 0 or height <= 0:
+            return
+        reveal = self._reveal_selection or self._size != (width, height)
+        self._reveal_selection = False
+        self._size = (width, height)
+        if reveal:
+            self._following = False
+        super()._scroll(ui_content, width, height)
+        if not reveal:
+            return
+
+        index = ui_content.cursor_position.y
+        if index < self.vertical_scroll or index == self.vertical_scroll and self.vertical_scroll_2:
+            self.vertical_scroll = index
+            self.vertical_scroll_2 = 0
+        else:
+            def line_height(line: int) -> int:
+                return ui_content.get_height_for_line(line, width, self.get_line_prefix)
+
+            before = sum(line_height(line) for line in range(self.vertical_scroll, index)) - self.vertical_scroll_2
+            # Items taller than the viewport reveal their beginning; all
+            # shorter items include their final wrapped row.
+            rows = before + min(line_height(index), height) - height
+            if rows > 0:
+                self._following = False
+                self._pending_scroll = rows
+                super()._scroll(ui_content, width, height)
+        self._following = False

@@ -706,6 +706,55 @@ async def test_pending_editor_status_keeps_spinner_and_read_only_calls_open_imme
             ui._close_transcript()
 
 
+@pytest.mark.parametrize("notification", ["", "Saved changes."])
+async def test_pending_editor_cancel_link_replaces_status_and_releases_hold(display, tmp_path, notification):
+    from unittest.mock import AsyncMock
+    from slipagent.tools.base import ToolRegistry
+    from slipagent.useredits import UserEdits
+
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
+        frame = SimpleNamespace(busy=0)
+        session = SimpleNamespace(agent=SimpleNamespace(running=True), registry=ToolRegistry(), reloader=frame)
+        jobs = SimpleNamespace(stop_all=AsyncMock())
+        session.registry.services["command_jobs"] = jobs
+        edits = UserEdits(session, ui)
+        ui.__dict__["_user_edits"] = edits
+        opened = AsyncMock()
+        ui._open_editor_now = opened
+        ui.input.text = "keep draft"
+        ui.set_working(True)
+        if notification:
+            ui.notify(notification)
+        await edits.request(tmp_path / "file.txt")
+        assert frame.busy == 1 and not edits.released.is_set()
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: "Cancel Opening Editor" in snapshot()[17])
+            row = snapshot()[17]
+            assert "Opening editor after this turn  Cancel Opening Editor" in row
+            assert "status" not in row and "Saved changes." not in row
+            start = row.index("Cancel Opening Editor") + 8
+            pipe.send_text(f"\x1b[<35;{start};18M")
+            await wait_until(lambda: ui.__dict__.get("_hovered_control") == "cancel-opening-editor")
+            pipe.send_text(f"\x1b[<0;{start};18M\x1b[<0;{start};18m")
+            await wait_until(lambda: edits.pending is None)
+            await wait_until(lambda: "Working" in snapshot()[17])
+            assert edits.released.is_set() and frame.busy == 0
+            await asyncio.wait_for(edits.boundary(), 1)
+            opened.assert_not_awaited()
+            jobs.stop_all.assert_not_awaited()
+            assert session.agent.running and ui.working
+            assert ui.input.text == "keep draft"
+            assert "Cancel Opening Editor" not in snapshot()[17]
+            assert (notification or "Select and right-click") in snapshot()[17]
+        finally:
+            edits.close()
+            ui.close()
+            await task
+
+
 async def test_editor_wheel_moves_cursor_three_lines_and_viewport_follows(display, tmp_path):
     path = tmp_path / "lines.txt"
     original = "\n".join(f"line {n:03}" for n in range(32))

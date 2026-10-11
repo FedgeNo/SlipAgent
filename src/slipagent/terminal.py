@@ -1343,6 +1343,11 @@ class TerminalUI:
 
     def _activity(self) -> StyleAndTextTuples:
         fragments = self._activity_status()
+        edits = self.__dict__.get("_user_edits")
+        if edits is not None and getattr(edits, "pending", None) is not None:
+            return [*fragments, ("", "  "), *self._action_link(
+                "Cancel Opening Editor", "cancel-opening-editor", edits.close,
+                enabled=lambda: edits.pending is not None), ("", " ")]
         if self._viewer_active or self._editor_active:
             mode = "editor" if self._editor_active else "viewer"
             label = "Close Text Editor" if self._editor_active else "exit viewer"

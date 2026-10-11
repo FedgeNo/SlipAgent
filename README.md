@@ -831,7 +831,9 @@ in the feed. No editing or saving is enabled in these viewers.
 File links open the built-in editor at the linked line. An active agent finishes
 its current tool batch first; managed background commands are stopped, and further
 agent work waits until the editor closes. While queued, the animated status reads
-**Opening editor after this turn**. Read-only viewers open immediately while the
+**Opening editor after this turn**, with a **Cancel Opening Editor** link beside
+it in place of the status notice. Cancelling releases the queued editor hold so
+the agent continues working. Read-only viewers open immediately while the
 agent continues working. **Ctrl+S** saves; **Esc** or **Close Text Editor**
 closes, showing **Save**, **Don't Save**, and **Cancel** in the bottom menu when
 there are unsaved changes. Clicking text places the cursor there; clicking right of a line places

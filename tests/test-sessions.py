@@ -45,7 +45,7 @@ async def test_resume_ignores_legacy_task_snapshot_and_retains_original_prompt(w
     await restored.wait_for_compaction()
     system = content_text(client.calls[0]["messages"][0].content)
     from data_text_reader import request_input
-    assert request_input(client.calls[0]["messages"])["retained_user_request"] == []
+    assert request_input(client.calls[0]["messages"])["retained_user_requests"] == []
     assert "Original user request" not in system
     assert "Obsolete model interpretation" not in "\n".join(content_text(message.content) for message in client.calls[0]["messages"])
 

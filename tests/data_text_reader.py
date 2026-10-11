@@ -76,8 +76,8 @@ def current_input(messages):
                 payload = request_input(messages)
                 prompts = list(payload['user_messages'])
                 supplied = [text for record in payload['history'] for text in record.get('user_prompt', [])]
-                if not prompts and '\n'.join(payload['retained_user_request']) not in supplied and not all(text in supplied for text in payload['retained_user_request']):
-                    prompts = list(payload['retained_user_request'])
+                if not prompts and '\n'.join(payload['retained_user_requests']) not in supplied and not all(text in supplied for text in payload['retained_user_requests']):
+                    prompts = list(payload['retained_user_requests'])
                 prompts += [load_prompt('tool-use-correction.md', correction=error).strip() for error in payload['errors']]
                 return {'record_type': 'current_step', 'representation': 'full',
                         'user_prompt': prompts, 'agent_response': None, 'tool_calls': [], 'tool_results': [], **metadata}

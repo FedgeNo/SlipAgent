@@ -40,7 +40,7 @@ async def test_current_run_command_survives_tool_results_without_entering_histor
     current = context_records(view)[-1]
     assert current["record_type"] == "current_step"
     payload = json.loads(view[-1].to_api()['content'])
-    assert payload['retained_user_request'] == ["Current request"]
+    assert payload['retained_user_requests'] == ["Current request"]
     assert current["is_tool_result_response"] is True
     assert "step_id 2" in content_text(view[0].content)
     assert 'Current request' not in content_text(view[0].content)
@@ -53,7 +53,7 @@ async def test_current_run_command_survives_tool_results_without_entering_histor
     view = await history.view(messages, [], keep_steps=50,
                               context_length=1_000_000, max_output=8192)
     assert context_records(view)[-1]["user_prompt"] == ["New request"]
-    assert json.loads(view[-1].to_api()['content'])['retained_user_request'] == []
+    assert json.loads(view[-1].to_api()['content'])['retained_user_requests'] == []
     assert "step_id 4" in content_text(view[0].content)
     assert "This turn includes new user input" in content_text(view[0].content)
     assert 'additional_user_messages' not in content_text(view[0].content)
@@ -66,17 +66,17 @@ async def test_new_messages_are_retained_only_after_their_tool_batch():
     options = dict(keep_steps=50, context_length=100000, max_output=1000)
     fresh = json.loads((await history.view(messages, [], **options))[-1].to_api()['content'])
     assert fresh['user_messages'] == ["Inspect the file", "Use the literal path a'b.py"]
-    assert fresh['retained_user_request'] == []
+    assert fresh['retained_user_requests'] == []
     fresh_system = content_text((await history.view(messages, [], **options))[0].content)
-    assert 'retained_user_request' not in fresh_system
+    assert 'retained_user_requests' not in fresh_system
     assert 'Later messages supersede earlier ones where they conflict' in fresh_system
     messages.extend([Message.assistant("Reading", [ToolCall('r', 'read_file', {'path': "a'b.py"})]),
                      Message.tool_result('r', 'File contents')])
     continuation = json.loads((await history.view(messages, [], **options))[-1].to_api()['content'])
     assert continuation['user_messages'] == []
-    assert continuation['retained_user_request'] == ["Inspect the file", "Use the literal path a'b.py"]
+    assert continuation['retained_user_requests'] == fresh['user_messages']
     continued_system = content_text((await history.view(messages, [], **options))[0].content)
-    assert '`retained_user_request` contains the request made before this tool-use sequence began' in continued_system
+    assert '`retained_user_requests` contains the full array of user messages received before this tool-use sequence began' in continued_system
     assert '`user_messages`' not in continued_system
     assert '`additional_user_messages`' not in continued_system
 
@@ -87,9 +87,9 @@ async def test_continuation_after_an_answer_does_not_claim_tool_results():
     view = await history.view(messages, [], keep_steps=50, context_length=100000, max_output=1000)
     payload = json.loads(view[-1].to_api()['content'])
     assert payload['user_messages'] == []
-    assert payload['retained_user_request'] == []
+    assert payload['retained_user_requests'] == []
     assert 'No new user message or new tool results were supplied' in content_text(view[0].content)
-    assert 'retained_user_request' not in content_text(view[0].content)
+    assert 'retained_user_requests' not in content_text(view[0].content)
 
 
 async def test_large_recent_originals_use_the_model_allowance_above_200000_tokens():

@@ -436,7 +436,7 @@ class ConversationHistory:
             source_step = self.task.current_prompt_step
             payload = {
                 "user_messages": user_text,
-                "retained_user_request": self.task.sources[source_step] if source_step is not None and continuing_tools else [],
+                "retained_user_requests": self.task.sources[source_step] if source_step is not None and continuing_tools else [],
                 "history": [linked_tool_results(message.content) for message in selected],
                 "errors": [user_corrections] if user_corrections.strip() else [],
             }

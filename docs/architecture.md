@@ -158,7 +158,7 @@ Context construction proceeds in this order:
 4. Current-step metadata in the system prompt supplies `step_id` and
    `is_tool_result_response`. One user-input JSON object contains `user_messages`
    (new messages in chronological order, or `[]` without new input),
-   `retained_user_request`, `history`, and `errors`. Later user messages supersede
+   `retained_user_requests`, `history`, and `errors`. Later user messages supersede
    conflicting earlier instructions. Tool errors belong to their
    calls; `errors` holds harness corrections not attached to a call. Keys label
    content without inserting labels into its values. If the supplied results
@@ -174,7 +174,7 @@ Context construction proceeds in this order:
    occupy `response_excerpts`. Request assembly does not append its JSON envelope,
    tool definitions, or system guidance to archived turns.
 5. `TaskMemory` retains original requests independently of compression. Request
-   assembly supplies the active source messages in `retained_user_request`,
+   assembly supplies the active source messages in `retained_user_requests`,
    with their source step ID in system task metadata. Retained input counts
    against the endpoint budget. The active prompt is independent
    of the historical representation of the call that first received it.

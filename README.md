@@ -869,7 +869,7 @@ contains one JSON object with these fields:
 | Field | Content |
 | --- | --- |
 | `user_messages` | New messages in chronological order, or `[]` without new input; later messages supersede conflicting earlier instructions |
-| `retained_user_request` | Request made before tool use began; supplied only after tools when no new user messages are present |
+| `retained_user_requests` | Full ordered array of user messages received before tool use began; supplied only after tools when no new user messages are present |
 | `history` | Selected completed steps, oldest to newest |
 | `errors` | Harness errors and response corrections not attached to a call |
 

@@ -876,7 +876,7 @@ def test_real_cli_rejects_invalid_calls_before_reply_and_readonly_batch(tmp_path
     prompts = context_records(stub.requests[1]["messages"])[-1]["user_prompt"]
     assert prompts[0] == "List the directory"
     assert len(prompts) == 2 and prompts[1].startswith("Harness tool-use correction:")
-    assert "List the directory" in json.loads(stub.requests[2]["messages"][-1]["content"])["retained_user_request"]
+    assert "List the directory" in json.loads(stub.requests[2]["messages"][-1]["content"])["retained_user_requests"]
     assert all(not prompt.startswith("Harness tool-use correction:")
                for record in context_records(stub.requests[2]["messages"])
                for prompt in record.get("user_prompt", []))

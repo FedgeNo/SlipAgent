@@ -44,7 +44,7 @@ async def test_current_run_command_survives_tool_results_without_entering_histor
     assert current["is_tool_result_response"] is True
     assert "step_id 2" in content_text(view[0].content)
     assert 'Current request' not in content_text(view[0].content)
-    assert "No new user message was supplied" in content_text(view[0].content)
+    assert "No new user message was supplied" not in content_text(view[0].content)
     assert payload['user_messages'] == []
     assert "This turn includes new user input" not in content_text(view[0].content)
     assert [step.full_text() for step in history.steps] == originals

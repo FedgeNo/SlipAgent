@@ -229,6 +229,100 @@ def test_one_shot_answers_on_stdout(project_dir: Path) -> None:
     assert stub.requests[0]["model"] == "stub/model"
 
 
+def test_json_events_preserve_tool_objects_and_literal_prompt(project_dir):
+    prompt = 'Inspect "src/app.py".\r\nKeep \\paths and apostrophes literal.\r\n'
+    source = project_dir / 'prompt.txt'
+    source.write_bytes(prompt.encode('utf-8'))
+    with StubOpenRouter([tool_step('read_file', {'path': 'src/app.py'}), text_step('Done.')]) as stub:
+        result = run_cli('--json-events', '--prompt-file', str(source), '--no-reload',
+                         '--base-url', stub.base_url, '--model', 'stub/model', cwd=project_dir)
+    assert result.returncode == 0, result.stderr
+    records = [json.loads(line) for line in result.stdout.splitlines()]
+    assert records[0]['record_type'] == 'run_start'
+    assert records[-1]['status'] == 'completed'
+    assert records[-1]['answer'] == 'Done.'
+    assert records[-1]['exit_code'] == 0
+    request = next(record['request'] for record in records if record.get('kind') == 'context')
+    assert json.loads(request['messages'][-1]['content'])['user_messages'] == [prompt]
+    call = next(record for record in records if record.get('kind') == 'tool_start')
+    observation = next(record for record in records if record.get('kind') == 'tool_end')
+    assert call['tool_call']['arguments'] == {'path': 'src/app.py'}
+    assert observation['tool_call']['id'] == call['tool_call']['id']
+    assert observation['result']['is_error'] is False
+    assert 'def main():' in observation['result']['content']
+    assert records[-1]['usage']['total_tokens'] > 0
+
+
+def test_json_events_report_step_limit_as_incomplete(project_dir):
+    with StubOpenRouter([tool_step('list_dir', {})]) as stub:
+        result = run_cli('--json-events', '-p', 'Inspect', '--max-steps', '1',
+                         '--base-url', stub.base_url, '--model', 'stub/model', cwd=project_dir)
+    assert result.returncode == 1, result.stderr
+    final = json.loads(result.stdout.splitlines()[-1])
+    assert final['record_type'] == 'run_end'
+    assert final['status'] == 'step_limit'
+    assert final['exit_code'] == 1
+
+
+def test_json_events_accept_stdin_without_remembering_model(project_dir):
+    prompt = 'Read this exactly.\r\nSecond line.\r\n'
+    with StubOpenRouter([text_step('Done.')]) as stub:
+        env = cli_environment()
+        result = subprocess.run(
+            [sys.executable, '-m', 'slipagent.cli', '--json-events', '--prompt-file', '-',
+             '--base-url', stub.base_url, '--model', 'stub/model'],
+            cwd=project_dir, env=env, input=prompt.encode('utf-8'), capture_output=True, timeout=60,
+        )
+    assert result.returncode == 0, result.stderr
+    assert not (Path(env['SLIPAGENT_STATE_DIR']) / 'preferences.json').exists()
+    records = [json.loads(line) for line in result.stdout.splitlines()]
+    request = next(record['request'] for record in records if record.get('kind') == 'context')
+    assert json.loads(request['messages'][-1]['content'])['user_messages'] == [prompt]
+
+
+def test_json_events_include_tool_errors_without_claiming_task_failure(project_dir):
+    with StubOpenRouter([tool_step('read_file', {'path': 'missing.txt'}), text_step('File missing.')]) as stub:
+        result = run_cli('--json-events', '-p', 'Read missing.txt', '--base-url', stub.base_url,
+                         '--model', 'stub/model', cwd=project_dir)
+    assert result.returncode == 0, result.stderr
+    records = [json.loads(line) for line in result.stdout.splitlines()]
+    error = next(record for record in records if record.get('kind') == 'tool_end')
+    assert error['result']['is_error'] is True
+    assert records[-1]['status'] == 'completed'
+
+
+def test_json_events_report_setup_error(project_dir):
+    result = run_cli('--json-events', '-p', 'Hello', '--provider', 'unsupported', cwd=project_dir)
+    # Argument errors remain argparse diagnostics and never start a run.
+    assert result.returncode == 2
+    assert not result.stdout
+    result = run_cli('--json-events', '-p', 'Hello', '--workspace', str(project_dir / 'missing'), cwd=project_dir)
+    assert result.returncode == 2
+    final = json.loads(result.stdout)
+    assert final['status'] == 'error'
+    assert final['phase'] == 'setup'
+
+
+def test_json_events_report_repeated_action_stop(project_dir):
+    with StubOpenRouter([tool_step('read_file', {'path': 'src/app.py'})]) as stub:
+        result = run_cli('--json-events', '-p', 'Inspect the code', '--max-steps', '12',
+                         '--base-url', stub.base_url, '--model', 'stub/model', cwd=project_dir)
+    assert result.returncode == 1, result.stderr
+    final = json.loads(result.stdout.splitlines()[-1])
+    assert final['status'] == 'stopped'
+    assert final['exit_code'] == 1
+
+
+@pytest.mark.parametrize('arguments', [
+    ['--json-events'], ['--json-events', '--list-models', '-p', 'Hello'],
+    ['--prompt-file', '-', '-p', 'Conflicting'],
+])
+def test_automation_argument_errors_do_not_start_requests(project_dir, arguments):
+    result = run_cli(*arguments, cwd=project_dir)
+    assert result.returncode == 2
+    assert not result.stdout
+
+
 @pytest.mark.parametrize("danger", [False, True])
 def test_danger_flag_controls_unattended_external_write(project_dir, danger):
     target = project_dir.parent / "external.txt"

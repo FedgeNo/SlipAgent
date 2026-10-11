@@ -47,6 +47,14 @@ not loaded accidentally. Never point test tools at working files they might
 overwrite; give them temporary workspaces. Do not run the live REPL driver as
 an offline smoke test.
 
+For automated harness trials, use the normal one-shot CLI with `--json-events`
+and `--prompt-file PATH` (or `-` for stdin). This preserves the production request,
+tool, and compaction path while emitting structured events and final status.
+Use fresh workspaces and `SLIPAGENT_STATE_DIR` directories for repeated trials;
+grade resulting behavior separately from harness completion. See the README's
+[automation guide](README.md#headless-automation-and-evaluations). Offline tests
+must still use stub providers and the existing child-process environment guard.
+
 ## Find the Owner of the Change
 
 Use [Internal Contracts](docs/architecture.md) to locate the component that owns

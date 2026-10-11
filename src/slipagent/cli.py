@@ -24,12 +24,13 @@ import sys
 import time
 import threading
 import shlex
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any, TextIO, cast
 
 from .agent import Agent, AgentEvent, STEP_LIMIT_NOTICE, STOP_NOTICE, build_system_prompt
+from .automation import JsonEventStream
 from .config import Config, ConfigError, configured_provider, dotenv_path, save_dotenv_value, save_model_choice
 from .instructions import load_project_instructions, ProjectInstructions
 from .lifecycle import finish_cleanup
@@ -596,7 +597,7 @@ async def build_session(args: argparse.Namespace) -> Session:
 
         # Skip automatic MCP startup for one-shot runs unless --mcp is set.
         mcp: MCPManager | None = None
-        if not args.no_mcp and (args.mcp or not args.prompt_flag and not args.prompt):
+        if not args.no_mcp and (args.mcp or not args.prompt_flag and not args.prompt and not getattr(args, "prompt_file", None)):
             manager = MCPManager(workspace.root, registry=registry)
             mcp = manager
             resources.push_async_callback(manager.aclose)
@@ -642,7 +643,7 @@ async def build_session(args: argparse.Namespace) -> Session:
             frame = RuntimeFrame(session, sys.modules[__name__])
             session.reloader = frame
             agent.on_boundary = lambda: frame.checkpoint(boundary=True)
-        if args.model and model_error is None:
+        if args.model and model_error is None and not getattr(args, "json_events", False):
             try:
                 await asyncio.to_thread(save_model_choice, config.model, config.provider)
             except (OSError, ConfigError) as exc:
@@ -656,17 +657,36 @@ async def build_session(args: argparse.Namespace) -> Session:
 # --------------------------------------------------------------------------- #
 
 
-async def run_one_shot(session: Session, prompt: str) -> int:
+async def run_one_shot(session: Session, prompt: str, events: JsonEventStream | None = None) -> int:
     """Run a single task. Progress goes to stderr so stdout stays pipeable."""
     session.renderer.show_assistant_text = False
+    failure: Exception | None = None
+    answer = ""
     try:
         answer = await session.agent.run(prompt)
         await session.agent.wait_for_compaction()
     except (APIError, WorkspaceError) as exc:
         print(f"slipagent: {exc}", file=sys.stderr)
-        return 1
+        failure = exc
     finally:
         await _shutdown(session)
+
+    if events is not None:
+        status = "completed"
+        if failure is not None:
+            status = "error"
+        elif answer == STEP_LIMIT_NOTICE:
+            status = "step_limit"
+        elif session.agent.stopped:
+            status = "stopped"
+        exit_code = 0 if status == "completed" else 1
+        events.write("run_end", status=status, exit_code=exit_code, answer=answer,
+                     error={"type": type(failure).__name__, "message": str(failure)} if failure else None,
+                     session_id=session.agent.session_id, requests=session.agent._requests,
+                     usage=asdict(session.agent.usage))
+        return exit_code
+    if failure is not None:
+        return 1
 
     # Rendered to stdout so `slipagent -p "..." | pbcopy` behaves.
     if session.renderer.output_markdown:
@@ -1870,6 +1890,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("prompt", nargs="*", help="Task to run, then exit.")
     parser.add_argument("-p", "--prompt", dest="prompt_flag",
                         help="Task to run, then exit.")
+    parser.add_argument("--prompt-file", metavar="PATH", help="Read a UTF-8 one-shot prompt verbatim; use - for stdin.")
+    parser.add_argument("--json-events", action="store_true",
+                        help="One-shot automation: stream JSON Lines events and final status on stdout.")
     parser.add_argument("-m", "--model", help="Select and remember a model (default: environment, saved choice, then Nemotron Ultra).")
     parser.add_argument("-w", "--workspace", default=None,
                         help="Project root and default path boundary (lifted by --danger). Default: cwd.")
@@ -1945,6 +1968,21 @@ def main(argv: list[str] | None = None) -> int:
 
     # argparse allows both a positional prompt and -p; prefer the explicit flag.
     prompt = args.prompt_flag or " ".join(args.prompt).strip() or None
+    if args.prompt_file is not None:
+        if args.prompt_flag is not None or args.prompt:
+            parser.error("--prompt-file cannot be combined with -p or a positional prompt.")
+        try:
+            if args.prompt_file == "-":
+                prompt = sys.stdin.buffer.read().decode("utf-8")
+            else:
+                with Path(args.prompt_file).open(encoding="utf-8", newline="") as source:
+                    prompt = source.read()
+        except (OSError, UnicodeError) as exc:
+            parser.error(f"Cannot read prompt: {exc}")
+        if not prompt.strip():
+            parser.error("--prompt-file requires a nonempty prompt.")
+    if args.json_events and (not prompt or args.list_models):
+        parser.error("--json-events requires a one-shot prompt and cannot be combined with --list-models.")
 
     try:
         return asyncio.run(_dispatch(args, prompt))
@@ -1968,14 +2006,27 @@ async def _dispatch(args: argparse.Namespace, prompt: str | None) -> int:
             print(f"slipagent: {exc}", file=sys.stderr)
             return 2
 
+    events = JsonEventStream(sys.stdout) if getattr(args, "json_events", False) else None
     try:
         session = await build_session(args)
     except (ConfigError, APIError) as exc:
         print(f"slipagent: {exc}", file=sys.stderr)
+        if events is not None:
+            events.write("run_end", status="error", exit_code=2, phase="setup",
+                         error={"type": type(exc).__name__, "message": str(exc)})
         return 2
 
     if prompt:
-        return await run_one_shot(session, prompt)
+        if events is not None:
+            previous_handler = session.agent.on_event
+            def handle(event: AgentEvent) -> None:
+                events.event(event)
+                if previous_handler is not None:
+                    previous_handler(event)
+            session.agent.on_event = handle
+            events.write("run_start", model=session.agent.model, provider=session.client.provider,
+                         workspace=str(session.workspace.root), session_id=session.agent.session_id)
+        return await run_one_shot(session, prompt, events)
     return await run_repl(session)
 
 

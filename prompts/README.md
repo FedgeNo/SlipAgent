@@ -39,7 +39,7 @@ The `z-ai/glm-5.3` profile uses `models/glm-5.3.md`, embedded calls, and XML com
 | `working-plan.md`, `working-plan-record.md`, `working-plan-empty.md` | Persistent plan guidance and last successful update step, subordinate to user instructions |
 | `json-tools.md`, `native-tools.md`, `response-*.md` | Response formats and tool-calling protocols |
 | `history-records.md`, `history-excerpt.md`, `summary-unavailable.md` | History interpretation and retrieval |
-| `user-request.md`, `new-user-request.md`, `tool-result-response.md` | Current request and automatic return after tools |
+| `user-request.md`, `new-user-request.md`, `queued-user-messages.md`, `tool-result-response.md`, `continuation.md` | Current request, queued input, automatic return after tools, and continuation without new input |
 | `overthinking-*.md` | Archived reasoning guidance |
 | `workspace-*.md`, `environment-*.md` | Access policy and Python environment guidance |
 | `tool-definitions.md`, `harness-state.md` | Headed runtime data blocks |

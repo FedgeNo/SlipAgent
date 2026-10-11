@@ -1,8 +1,8 @@
 # User Request for This Run
 
-## Retained Goal
+## Active Goal
 
-The retained user request originated at step_id ${step_id}. Its original messages are supplied in `retained_user_request` in the JSON user input. Apply subsequent user corrections and system constraints.
+The active request originated at step_id ${step_id}. Apply subsequent user corrections and system constraints.
 
 ## Current Input
 

@@ -870,7 +870,7 @@ contains one JSON object with these fields:
 | --- | --- |
 | `user_message` | First new user message, or `""` without new input |
 | `additional_user_messages` | Remaining queued messages, in order |
-| `retained_user_request` | Original messages for the active request |
+| `retained_user_request` | Request made before tool use began; supplied only after tools when no new user messages are present |
 | `history` | Selected completed steps, oldest to newest |
 | `errors` | Harness errors and response corrections not attached to a call |
 

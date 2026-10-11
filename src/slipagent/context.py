@@ -395,6 +395,8 @@ class ConversationHistory:
         Oversized new observations use explicit excerpts as a last resort.
         """
         self.sync(messages)
+        has_new_user_input = any(message.role == "user" for message in messages[self.cursor:])
+        continuing_tools = not has_new_user_input and bool(self.steps and self.steps[-1].has_results)
         def tokens(part: list[Message]) -> int:
             return math.ceil(message_tokens(tool_history_as_text(part) if text_tool_history else part) * token_scale)
         sections = [load_prompt("native-tools.md" if native_tools else "json-tools.md"), load_prompt("history-records.md"),
@@ -409,12 +411,13 @@ class ConversationHistory:
         # state. Keep one system-message prefix for provider compatibility.
         sections.extend([extra_instructions, self.instructions(native_tools=native_tools)])
         if self.task.current_prompt_step is not None:
-            has_new_user_input = any(message.role == "user" for message in messages[self.cursor:])
             input_guidance = (
                 load_prompt('new-user-request.md')
                 if has_new_user_input else
-                load_prompt('tool-result-response.md')
+                load_prompt('tool-result-response.md' if continuing_tools else 'continuation.md')
             )
+            if sum(message.role == "user" for message in messages[self.cursor:]) > 1:
+                input_guidance += load_prompt('queued-user-messages.md')
             sections.append(
                 load_prompt('user-request.md', step_id=self.task.current_prompt_step, input_guidance=input_guidance)
             )
@@ -436,7 +439,7 @@ class ConversationHistory:
             payload = {
                 "user_message": user_text[0] if user_text else "",
                 "additional_user_messages": user_text[1:],
-                "retained_user_request": self.task.sources[source_step] if source_step is not None else [],
+                "retained_user_request": self.task.sources[source_step] if source_step is not None and continuing_tools else [],
                 "history": [linked_tool_results(message.content) for message in selected],
                 "errors": [user_corrections] if user_corrections.strip() else [],
             }

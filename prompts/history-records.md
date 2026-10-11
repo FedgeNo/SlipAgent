@@ -6,9 +6,6 @@ The user message is one JSON object. Keys identify each part; values contain the
 
 | Key | Meaning |
 | --- | --- |
-| `user_message` | First new user message, or `""` when none was supplied |
-| `additional_user_messages` | Additional queued user messages, in order |
-| `retained_user_request` | Original messages for the active request, not newly issued messages |
 | `history` | Selected completed steps, oldest to newest |
 | `errors` | Harness errors or response corrections not attached to a tool call |
 | `user_edits` | Saved user changes per editing session, with `path`, `diff`, `source`, and `saved_before_step`; optional archive reference |

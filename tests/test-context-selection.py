@@ -53,9 +53,45 @@ async def test_current_run_command_survives_tool_results_without_entering_histor
     view = await history.view(messages, [], keep_steps=50,
                               context_length=1_000_000, max_output=8192)
     assert context_records(view)[-1]["user_prompt"] == ["New request"]
+    assert json.loads(view[-1].to_api()['content'])['retained_user_request'] == []
     assert "step_id 4" in content_text(view[0].content)
     assert "This turn includes new user input" in content_text(view[0].content)
+    assert 'additional_user_messages' not in content_text(view[0].content)
     assert "without new user input" not in content_text(view[0].content)
+
+
+async def test_new_messages_are_retained_only_after_their_tool_batch():
+    history = ConversationHistory()
+    messages = [Message.user("Inspect the file"), Message.user("Use the literal path a'b.py")]
+    options = dict(keep_steps=50, context_length=100000, max_output=1000)
+    fresh = json.loads((await history.view(messages, [], **options))[-1].to_api()['content'])
+    assert fresh['user_message'] == "Inspect the file"
+    assert fresh['additional_user_messages'] == ["Use the literal path a'b.py"]
+    assert fresh['retained_user_request'] == []
+    fresh_system = content_text((await history.view(messages, [], **options))[0].content)
+    assert 'retained_user_request' not in fresh_system
+    assert '`additional_user_messages` contains the remaining new messages in order' in fresh_system
+    messages.extend([Message.assistant("Reading", [ToolCall('r', 'read_file', {'path': "a'b.py"})]),
+                     Message.tool_result('r', 'File contents')])
+    continuation = json.loads((await history.view(messages, [], **options))[-1].to_api()['content'])
+    assert continuation['user_message'] == ""
+    assert continuation['additional_user_messages'] == []
+    assert continuation['retained_user_request'] == ["Inspect the file", "Use the literal path a'b.py"]
+    continued_system = content_text((await history.view(messages, [], **options))[0].content)
+    assert '`retained_user_request` contains the request made before this tool-use sequence began' in continued_system
+    assert '`user_message`' not in continued_system
+    assert '`additional_user_messages`' not in continued_system
+
+
+async def test_continuation_after_an_answer_does_not_claim_tool_results():
+    history = ConversationHistory()
+    messages = [Message.user('Explain'), Message.assistant('Explanation')]
+    view = await history.view(messages, [], keep_steps=50, context_length=100000, max_output=1000)
+    payload = json.loads(view[-1].to_api()['content'])
+    assert payload['user_message'] == ''
+    assert payload['retained_user_request'] == []
+    assert 'No new user message or new tool results were supplied' in content_text(view[0].content)
+    assert 'retained_user_request' not in content_text(view[0].content)
 
 
 async def test_large_recent_originals_use_the_model_allowance_above_200000_tokens():

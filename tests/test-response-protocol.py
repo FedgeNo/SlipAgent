@@ -83,7 +83,7 @@ async def test_missing_legacy_compressed_field_does_not_reject_valid_tools(field
     assert len(agent.history.steps) == 2
 
 
-async def test_only_separate_reasoning_streams_while_json_and_tools_wait():
+async def test_reasoning_and_json_response_stream_while_embedded_tools_wait():
     started, release = asyncio.Event(), asyncio.Event()
     requests, events = [], []
     tool = RecordingTool()
@@ -115,7 +115,8 @@ async def test_only_separate_reasoning_streams_while_json_and_tools_wait():
         await asyncio.wait_for(started.wait(), 3)
         try:
             assert any(event.kind == "reasoning_delta" for event in events)
-            assert not any(event.kind in {"assistant_text", "assistant_delta", "tool_start"} for event in events)
+            assert "".join(event.text for event in events if event.kind == "assistant_delta") == "Reading."
+            assert not any(event.kind in {"assistant_text", "tool_start"} for event in events)
             assert tool.seen == [] and not task.done()
         finally:
             release.set()

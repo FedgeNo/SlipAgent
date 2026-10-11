@@ -310,8 +310,15 @@ SlipAgent does not use a model-name allowlist or attempt arbitrary JSON repair.
 
 Acceptance validates response structure and executable calls. Working plans
 use the ordinary `update_plan` tool; no task envelope or revision echo is required.
-Until validation passes, only separately delivered reasoning can appear.
-Reply text and all tool effects wait. A rejected response is not appended as
+`streaming.py` incrementally previews plain prose and top-level JSON `response`
+strings, including JSON fences. Its lexer retains split escapes and surrogate
+pairs, skips other fields and nested values, and never repairs malformed JSON.
+Line-prefix filtering keeps bookkeeping and top-level call carriers out of
+previews while preserving fenced examples. Other carriers wait for acceptance.
+Providers returning a complete JSON HTTP response instead of SSE also wait for
+acceptance; the transport does not publish a buffered reply as a content delta.
+Reply previews and separately delivered reasoning can appear before validation;
+all tool effects wait. A rejected response is not appended as
 executed history. A bounded excerpt and precise diagnosis enter the next request
 as invalid diagnostic data, with their size included in the context budget.
 Three invalid attempts end the run; retries count against usage and the step cap.
@@ -326,7 +333,10 @@ Direct metadata and isolated compaction calls retain their own client policy.
 No tool runs before response acceptance. Diagnostic request/attempt records
 can preserve failed partial responses, but those records do not enter working
 history or summarization. Cancellation and stream failures end the visible
-reasoning block before a retry begins.
+reasoning/reply block before a retry begins. Failed reply previews receive an
+explicit warning. Each attempt starts with a fresh decoder and renderer preview
+record; successful final reply events remain available to automation and saved
+history, while the renderer suppresses a duplicate of already streamed text.
 
 `run_batch` executes up to four adjacent independent read tools concurrently.
 `Tool.allows_concurrency(arguments)` defaults to false; audited file reads,
@@ -910,7 +920,8 @@ to the model along with the active generation number.
   through the REPL without editing the draft or dispatching slash commands.
   Busy runs, open viewers/editors, and modal input prevent suggestion submission.
   Suggestions have no tool/sidebar records and do not execute automatically.
-  Structured model responses retain their validation boundary before display.
+  Structured model responses retain their validation boundary before tool effects
+  and history storage; provisional reply text can stream before acceptance.
   `transcript.py` also stores original literal chunks and completed styled rows
   in separate private session files, indexed by byte offsets. Block boundaries
   retain the renderer's spacing and ANSI resets. The ANSI decoder carries style

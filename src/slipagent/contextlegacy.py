@@ -59,7 +59,7 @@ def tool_response_memory(text: str, calls: list[ToolCall], step_id: int, previou
 
 
 class VisibleStream:
-    """Legacy prose-stream filter; current replies wait for action validation."""
+    """Compatibility prose-stream filter for earlier inline summary envelopes."""
 
     def __init__(self) -> None:
         self.content = ""

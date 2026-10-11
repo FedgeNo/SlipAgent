@@ -1,7 +1,7 @@
 """One source for the response schema and strict local acceptance boundary.
 
 The provider's structured-output mode is assistance, not validation. Local
-checks run before reply display or tool effects for every provider. The harness
+checks run before reply acceptance or tool effects for every provider. The harness
 supplies the active user prompt; responses need no task-memory acknowledgment.
 """
 

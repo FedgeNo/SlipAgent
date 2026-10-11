@@ -2384,6 +2384,31 @@ async def test_input_word_wrap_preserves_editing_submission_and_resize(display) 
             await task
 
 
+def test_streamed_markdown_reply_is_rendered_once(display):
+    sink, _, output, _, _ = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda columns: "status", sink, input=pipe, output=output)
+        renderer = Renderer(Style(False), sink, verbose=False)
+        renderer.terminal = ui
+        try:
+            renderer.handle(AgentEvent(kind="step_start", step=1))
+            renderer.handle(AgentEvent(kind="assistant_delta", step=1, text="**Working"))
+            content = ui._transcript_content(80)
+            partial = "\n".join("".join(part[1] for part in content.get_line(i))
+                                for i in range(content.line_count))
+            assert "Working" in partial
+            renderer.handle(AgentEvent(kind="assistant_delta", step=1, text=" now.**"))
+            renderer.handle(AgentEvent(kind="stream_end", step=1))
+            renderer.handle(AgentEvent(kind="assistant_text", step=1, text="**Working now.**"))
+            content = ui._transcript_content(80)
+            rows = [content.get_line(i) for i in range(content.line_count)]
+            text = "\n".join("".join(part[1] for part in row) for row in rows)
+            assert text.count("Working now.") == 1 and "**" not in text
+            assert any("bold" in style and "Working" in value for row in rows for style, value in row)
+        finally:
+            ui.close()
+
+
 def test_startup_and_help_list_all_commands_with_requested_spacing():
     banner = BANNER.format(model="test/model", workspace="project", tools="read_file", mcp="")
     for command in [

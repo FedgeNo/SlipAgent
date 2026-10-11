@@ -380,28 +380,35 @@ class Renderer:
 
     def handle(self, event: AgentEvent) -> None:
         if event.kind == "context":
+            self.__dict__["_reply_preview"] = []
             if self.terminal is not None:
                 self.terminal.set_context(event.text)
 
         elif event.kind == "step_start":
             self._finish_stream()
+            self.__dict__["_reply_preview"] = []
             if event.step == 1:
                 self._model_block = object()
 
         elif event.kind in {"assistant_delta", "reasoning_delta"}:
+            if event.kind == "assistant_delta":
+                self.__dict__.setdefault("_reply_preview", []).append(event.text)
             self._stream_text(event.kind, event.text)
 
         elif event.kind == "stream_end":
             self._finish_stream()
 
         elif event.kind == "retry":
+            self.__dict__["_reply_preview"] = []
             self.emit(self.style.red(f"  ✗ {event.text}"))
 
         elif event.kind == "retry_wait":
+            self.__dict__["_reply_preview"] = []
             self.retry_countdown(event.text, event.step)
 
         elif event.kind == "assistant_text":
-            if self.show_assistant_text:
+            preview = "".join(self.__dict__.pop("_reply_preview", []))
+            if self.show_assistant_text and preview != event.text:
                 self._finish_stream()
                 self._model_block = object()
                 if self.terminal is not None:

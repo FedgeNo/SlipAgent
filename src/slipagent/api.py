@@ -268,8 +268,6 @@ class APIClient:
                         try:
                             for text in _reasoning_text(wire):
                                 on_delta("reasoning", text)
-                            if completion.text:
-                                on_delta("content", completion.text)
                         except APIResponseError as exc:
                             exc.usage = completion.usage
                             exc.partial_response = json.dumps(wire, ensure_ascii=False)

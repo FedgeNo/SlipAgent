@@ -133,10 +133,13 @@ async def test_current_response_reasoning_is_one_string_without_rewriting_histor
 ])
 async def test_json_completion_retains_reasoning_string(reasoning, stream):
     raw = {"choices": [{"message": {"role": "assistant", "content": "Done", **reasoning}, "finish_reason": "stop"}]}
+    chunks = []
     async with OpenRouterClient("test", transport=httpx.MockTransport(lambda _: httpx.Response(200, json=raw))) as client:
-        result = await client.chat(model="test", messages=[Message.user("work")], on_delta=(lambda *_: None) if stream else None)
+        result = await client.chat(model="test", messages=[Message.user("work")],
+                                   on_delta=(lambda *chunk: chunks.append(chunk)) if stream else None)
     assert result.message.reasoning == "Inspect\nλ."
     assert result.message.to_api()["reasoning"] == "Inspect\nλ."
+    assert not any(kind == "content" for kind, text in chunks)
 
 
 async def test_signed_stream_assembles_only_current_native_blocks_and_keeps_one_readable_string():
@@ -200,18 +203,24 @@ async def test_retryable_http_error_before_stream_retries_once():
     assert result.text == "Done" and len(requests) == 2
 
 
-async def test_agent_streams_only_thoughts_and_keeps_tools_out_of_compressed_fields():
+@pytest.mark.parametrize("envelope", [False, True])
+async def test_agent_streams_reply_before_completion_and_waits_to_run_tools(envelope):
     started, release = asyncio.Event(), asyncio.Event()
     events, requests = [], []
     tool = RecordingTool()
-    content = "Working."
+    content = '{"response":"Working.' if envelope else "Working."
+    sink = io.StringIO()
+    renderer = Renderer(Style(False), sink, False)
+    def emit(event):
+        events.append(event)
+        renderer.handle(event)
     class Paused(httpx.AsyncByteStream):
         async def __aiter__(self):
             yield packet(frame({"reasoning": "Inspecting the project."}))
             yield packet(frame({"content": content[:50]}))
             started.set()
             await release.wait()
-            yield packet(frame({"content": content[50:]}))
+            yield packet(frame({"content": '"}' if envelope else ""}))
             yield packet(frame({"tool_calls": [{"index": 0, "id": "c", "type": "function", "function": {"name": "record", "arguments": '{"value":"A"}'}}]}, "tool_calls", usage={"total_tokens": 15, "cost": .01}))
             yield packet("[DONE]")
     def handle(request):
@@ -225,13 +234,15 @@ async def test_agent_streams_only_thoughts_and_keeps_tools_out_of_compressed_fie
             return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Paused())
         return streamed([frame({"content": reply(2, "Done.")}, "stop"), "[DONE]"])
     async with OpenRouterClient("test", transport=httpx.MockTransport(handle)) as client:
-        agent = Agent(client, ToolRegistry([tool]), "test", on_event=events.append)
+        agent = Agent(client, ToolRegistry([tool]), "test", on_event=emit)
         task = asyncio.create_task(agent.run("inspect"))
         await asyncio.wait_for(started.wait(), 3)
         try:
             assert tool.seen == [] and not task.done()
             assert any(e.kind == "reasoning_delta" and "Inspecting" in e.text for e in events)
-            assert not any(e.kind in {"assistant_delta", "assistant_text"} for e in events)
+            assert "".join(e.text for e in events if e.kind == "assistant_delta") == "Working."
+            assert not any(e.kind == "assistant_text" for e in events)
+            assert sink.getvalue().endswith("Working.")
         finally:
             release.set()
         assert await task == "Done."
@@ -241,6 +252,7 @@ async def test_agent_streams_only_thoughts_and_keeps_tools_out_of_compressed_fie
     assert not any("<slipagent_context>" in e.text for e in events)
     assert "response_format" not in requests[0]
     assert TOOL_SUMMARY_KEY not in tool.parameters["properties"]
+    assert sink.getvalue().count("Working.") == sink.getvalue().count("Done.") == 1
 
 
 async def test_three_invalid_actions_stop_without_spending_the_200_request_budget():
@@ -253,7 +265,8 @@ async def test_three_invalid_actions_stop_without_spending_the_200_request_budge
     assert agent.history.steps == []
 
 
-async def test_invalid_stream_reports_red_error_and_restarts_before_running_tools():
+@pytest.mark.parametrize("envelope", [False, True])
+async def test_invalid_stream_reports_red_error_and_restarts_before_running_tools(envelope):
     sink = io.StringIO()
     renderer = Renderer(Style(True), sink, False)
     requests, events = [], []
@@ -268,9 +281,9 @@ async def test_invalid_stream_reports_red_error_and_restarts_before_running_tool
         if len(requests) == 1:
             return streamed([
                 frame({"reasoning": "First attempt."}),
-                frame({"content": "Rejected plan."}),
+                frame({"content": '{"response":"Rejected plan.","unexpected":true}' if envelope else "Rejected plan."}),
                 frame({"tool_calls": [{"index": 0, "id": "bad", "function": {
-                    "name": "record", "arguments": '{"value":',
+                    "name": "record", "arguments": '{"value":"must not run"}' if envelope else '{"value":',
                 }}]}, "tool_calls"), "[DONE]",
             ])
         assert tool.seen == []
@@ -289,7 +302,8 @@ async def test_invalid_stream_reports_red_error_and_restarts_before_running_tool
     assert len(retries) == 1 and "from the start" in retries[0].text
     assert renderer.style.red("  ✗ " + retries[0].text) in sink.getvalue()
     assert "Thinking: Starting again." in sink.getvalue()
-    assert "Rejected plan." not in sink.getvalue()
+    assert "Rejected plan." in sink.getvalue()
+    assert "Response preview was not accepted" in sink.getvalue()
     assert sink.getvalue().index("Response rejected") < sink.getvalue().index("Accepted response.")
     assert len(agent.history.steps) == 1
     assert "Rejected plan" not in agent.history.steps[0].full_text()
@@ -301,6 +315,47 @@ async def test_invalid_stream_reports_red_error_and_restarts_before_running_tool
     assert "No tools from it were executed" in corrections[1]
     assert retry == first
     assert tool.seen == []
+
+
+async def test_interrupted_response_preview_is_marked_and_retry_is_not_duplicated():
+    sink = io.StringIO()
+    renderer = Renderer(Style(False), sink, False)
+    events, requests = [], []
+    tool = RecordingTool()
+
+    class Interrupted(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield packet(frame({"content": '{"response":"Same reply.'}))
+            yield packet(frame({"tool_calls": [{"index": 0, "id": "bad", "function": {
+                "name": "record", "arguments": '{"value":"must not run"}',
+            }}]}))
+            raise httpx.ReadError("connection dropped")
+
+    def handle(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"data": [{"id": "test"}]})
+        summary = summary_response(json.loads(request.content))
+        if summary is not None:
+            return httpx.Response(200, json=summary)
+        requests.append(json.loads(request.content))
+        if len(requests) == 1:
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Interrupted())
+        return streamed([frame({"content": '{"response":"Same reply."}'}, "stop"), "[DONE]"])
+
+    def emit(event):
+        events.append(event)
+        renderer.handle(event)
+
+    async with OpenRouterClient("test", transport=httpx.MockTransport(handle), retry=RetryPolicy(1, 0, 0)) as client:
+        agent = Agent(client, ToolRegistry([tool]), "test", on_event=emit)
+        assert await agent.run("work") == "Same reply."
+        await agent.wait_for_compaction()
+        await agent.registry.aclose()
+    assert len(requests) == 2 and tool.seen == []
+    assert sink.getvalue().count("Same reply.") == 2
+    assert sink.getvalue().count("Response preview was not accepted") == 1
+    assert len(agent.history.steps) == 1
+    assert [event.text for event in events if event.kind == "assistant_text"] == ["Same reply."]
 
 
 async def test_streamed_literal_metadata_example_stays_in_one_output_block():
@@ -317,7 +372,7 @@ async def test_streamed_literal_metadata_example_stays_in_one_output_block():
     async with OpenRouterClient("test", transport=httpx.MockTransport(handle)) as client:
         agent = Agent(client, ToolRegistry(), "test", on_event=renderer.handle)
         assert await agent.run("show a literal example") == text
-    assert sink.getvalue() == "\nExample:\n[Harness context metadata]\n"
+    assert sink.getvalue() == "\n" + text + "\n"
 
 
 def test_reserved_metadata_never_flashes_when_markers_are_split_into_characters():

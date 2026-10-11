@@ -16,6 +16,7 @@ from .contextlegacy import _visible_response
 from .progress import StreamLoopError, StreamLoopGuard
 from .prompts import load_prompt, model_prompt_profile
 from .protocol import AgentResponse, ResponseFormatError, agent_response_format, parse_agent_response
+from .streaming import ResponseStream
 from .tools.base import ToolRegistry
 from .types import Completion, Message, ToolSpec, Usage
 
@@ -94,6 +95,15 @@ class RequestDriver:
             request_body: dict[str, Any] = {}
             diagnostic_id: int | None = None
             diagnostics = self.registry.resources.diagnostics
+            xml_tool_calls = model_prompt_profile(self.settings.model).get("xml_tool_calls", False)
+            preview = ResponseStream(xml_tool_calls=xml_tool_calls)
+            received_content = False
+            def end_preview(*, failed: bool = False) -> None:
+                self.hooks.emit(AgentEvent(kind="stream_end", step=step))
+                if failed and preview.text:
+                    self.hooks.emit(AgentEvent(kind="warning", step=step, text=(
+                        "Response preview was not accepted. No tools from this attempt were executed."
+                    )))
             def finish_attempt(outcome: str, *, detail: str = "", response: str = "", usage: Usage | None = None) -> None:
                 if diagnostics is not None:
                     diagnostics.finish(diagnostic_id, outcome, detail=detail, response=response,
@@ -112,9 +122,16 @@ class RequestDriver:
                     instructions.presented(self.registry.services.get("instruction_snapshot", {}))
                 self.hooks.emit(AgentEvent(kind="context", step=step, text=json.dumps(request, ensure_ascii=False)))
             def delta(kind: str, chunk: str) -> None:
+                nonlocal received_content
+                if kind == "content":
+                    received_content = True
                 stream_guard.feed(kind, chunk)
                 if kind == "reasoning" and chunk:
                     self.hooks.emit(AgentEvent(kind="reasoning_delta", step=step, text=chunk))
+                elif kind == "content" and chunk:
+                    visible = preview.push(chunk)
+                    if visible:
+                        self.hooks.emit(AgentEvent(kind="assistant_delta", step=step, text=visible))
             def response_received(body: dict[str, Any]) -> None:
                 if diagnostics is not None:
                     diagnostics.response(diagnostic_id, body)
@@ -144,6 +161,7 @@ class RequestDriver:
                 try:
                     if not options:
                         stream_guard.feed("reasoning", completion.message.reasoning or "")
+                    if not received_content:
                         stream_guard.feed("content", completion.text)
                     stream_guard.finish()
                 except StreamLoopError as exc:
@@ -153,12 +171,12 @@ class RequestDriver:
             except StreamLoopError as exc:
                 self.hooks.account(exc.usage)
                 finish_attempt("loop_stopped", detail=str(exc), response=exc.partial_response, usage=exc.usage)
-                self.hooks.emit(AgentEvent(kind="stream_end", step=step))
+                end_preview(failed=True)
                 self.hooks.emit(AgentEvent(kind="warning", step=step, text=str(exc)))
                 return RequestStopped(str(exc), loop_stopped=True)
             except APIContextError as exc:
                 finish_attempt("context_overflow", detail=str(exc))
-                self.hooks.emit(AgentEvent(kind="stream_end", step=step))
+                end_preview(failed=True)
                 if self.hooks.stop_requested():
                     return RequestStopped(self.hooks.stop_notice(step))
                 if overflows >= 2:
@@ -176,7 +194,7 @@ class RequestDriver:
                 self.hooks.account(exc.usage)
                 step_usage = step_usage + exc.usage
                 finish_attempt("request_error", detail=str(exc), response=exc.partial_response or exc.body or "", usage=exc.usage)
-                self.hooks.emit(AgentEvent(kind="stream_end", step=step))
+                end_preview(failed=True)
                 if self.hooks.stop_requested():
                     return RequestStopped(self.hooks.stop_notice(step))
                 transient = isinstance(exc, APITransportError) or exc.status_code in RETRYABLE_STATUS
@@ -195,7 +213,7 @@ class RequestDriver:
                 continue
             except BaseException as exc:
                 finish_attempt("cancelled" if isinstance(exc, asyncio.CancelledError) else "request_error", detail=str(exc))
-                self.hooks.emit(AgentEvent(kind="stream_end", step=step))
+                end_preview(failed=True)
                 raise
             attempts += 1
             self.budget.observe(request_body, completion.usage.prompt_tokens)
@@ -206,7 +224,7 @@ class RequestDriver:
                 if completion.response_error:
                     raise ResponseFormatError(completion.response_error, excerpt=completion.response_excerpt)
                 record = parse_agent_response(completion.text, completion.tool_calls, tools=specs,
-                                              xml_tool_calls=model_prompt_profile(self.settings.model).get("xml_tool_calls", False))
+                                              xml_tool_calls=xml_tool_calls)
                 record.text = _visible_response(record.text)
                 if not record.calls and not record.text.strip():
                     raise ResponseFormatError(load_prompt("response-bookkeeping-error.md"))
@@ -220,7 +238,7 @@ class RequestDriver:
             except StreamLoopError as exc:
                 finish_attempt("loop_stopped", detail=str(exc),
                                response=json.dumps(completion.message.to_api(), ensure_ascii=False), usage=completion.usage)
-                self.hooks.emit(AgentEvent(kind="stream_end", step=step))
+                end_preview(failed=True)
                 self.hooks.emit(AgentEvent(kind="warning", step=step, text=str(exc)))
                 return RequestStopped(str(exc), loop_stopped=True)
             except ResponseFormatError as exc:
@@ -229,8 +247,18 @@ class RequestDriver:
                 rejected_excerpt = exc.excerpt
             else:
                 finish_attempt("accepted", response=json.dumps(completion.message.to_api(), ensure_ascii=False), usage=completion.usage)
+                accepted_text = record.text.strip()
+                if preview.text and not accepted_text.startswith(preview.text):
+                    end_preview()
+                    self.hooks.emit(AgentEvent(kind="warning", step=step, text=(
+                        "Response preview differs from the accepted reply; showing the validated reply below."
+                    )))
+                else:
+                    remaining = preview.finish(accepted_text)
+                    if remaining:
+                        self.hooks.emit(AgentEvent(kind="assistant_delta", step=step, text=remaining))
                 break
-            self.hooks.emit(AgentEvent(kind="stream_end", step=step))
+            end_preview(failed=True)
             if self.hooks.stop_requested():
                 return RequestStopped(self.hooks.stop_notice(step))
             if self.hooks.exhausted():

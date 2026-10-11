@@ -250,6 +250,7 @@ src/slipagent/
 ├── progress.py       unchanged-batch cycles and streamed-repetition detection
 ├── activity.py       throttled command-output callbacks
 ├── protocol.py       ordinary replies, optional schemas, call normalization
+├── streaming.py      provisional plain-text and incremental JSON reply decoding
 ├── compaction.py     isolated background summaries of completed steps
 ├── task.py           retained original user prompts and source references
 ├── inference.py      capability-filtered sampling defaults
@@ -1100,11 +1101,14 @@ An empty filtered result stays empty. Original thoughts remain available through
 For OpenRouter, the harness selects the highest reasoning effort
 explicitly listed by the API. When reasoning is supported without listed effort
 choices, it enables reasoning; when unsupported, it sends no reasoning setting.
-Reply text and tool calls are buffered until call validation completes. Models
-that expose no separate reasoning use the working indicator while generating.
+Reply text streams as it arrives, including text inside an unfinished JSON
+`response` string. JSON escapes are decoded across chunk boundaries; tool
+arguments and bookkeeping stay out of previews. These previews are provisional:
+failed or rejected attempts are marked in the transcript. Tool calls still wait
+for complete response validation, and only accepted responses enter history.
 The terminal displays the reply text defined by the selected response contract, followed by tool activity. Background summaries
 stay out of the transcript. One-shot mode keeps the final answer on stdout,
-with streamed thoughts and tool activity on stderr.
+with streamed reply previews, thoughts, and tool activity on stderr.
 
 ### Response Protocol
 
@@ -1196,7 +1200,8 @@ IDs within a carrier, and truncated batches reject the complete response before
 execution. Quoted and fenced examples within explanatory prose remain text.
 Request-side API capabilities still determine which parameters can be sent.
 Three consecutive invalid responses stop the run; retries count against the
-working-request limit. Separate thoughts already streamed remain visible.
+working-request limit. Streamed thoughts and provisional reply text remain visible;
+failed reply previews are marked as unaccepted.
 
 Interrupted streams, overloads inside streamed/JSON responses, and transient HTTP failures receive three silent retries. If failures continue, SlipAgent displays the error and a countdown while retrying with increasing delays. It gives up before scheduling an interval longer than **60 seconds**; a server `Retry-After` beyond that limit also stops recovery. The minute is an interval limit, not a total request deadline. Permanent authentication, credit, and request errors are not retried. Every working attempt counts against `--max-steps`, with no nested retry loop. `/stop` and Esc interrupt waits. Each attempt starts fresh:
 partial tool arguments and rejected replies never execute or enter accepted history.
@@ -1414,9 +1419,9 @@ choose explicitly. F2 toggles the view and F3 copies the latest reply. Dragging
 selects feed text; right-click the selection to copy it without wrap decorations.
 Clipboard access uses an installed local utility or the terminal's OSC 52 support.
 
-The renderer updates incoming Markdown chunks as they arrive. Structured model
-responses remain buffered until validated; rendering does not bypass that
-validation boundary.
+The renderer updates incoming Markdown chunks as they arrive, including provisional
+text decoded from JSON response strings. Tool calls remain buffered until the
+complete response is validated; previews do not authorize tool execution.
 
 ## Headless Automation and Evaluations
 

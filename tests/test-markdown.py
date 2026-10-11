@@ -141,11 +141,53 @@ def test_mouse_release_stops_dragging_and_retains_selection_without_copying(monk
             mouse(MouseEventType.MOUSE_MOVE, MouseButton.LEFT, 7)
             mouse(MouseEventType.MOUSE_UP, release_button, 7)
             assert copied == []
-            assert ui.selected_text() == "bcd"
+            assert ui.selected_text() == "bcde"
             mouse(MouseEventType.MOUSE_DOWN, MouseButton.RIGHT, 6)
-            assert ui.selected_text() == "bcd"
+            assert ui.selected_text() == "bcde"
             mouse(MouseEventType.MOUSE_MOVE, MouseButton.LEFT, 7)
-            assert ui.selected_text() == "bcd"
+            assert ui.selected_text() == "bcde"
+        finally:
+            ui._close_transcript()
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("source, columns, first, last, expected", [
+    ("first\nsecond\n", 20, Point(0, 0), Point(5, 1), "first\nsecond"),
+    ("first\nsecond\n", 20, Point(1, 0), Point(3, 1), "irst\nseco"),
+    ("abcdef\n", 20, Point(1, 0), Point(4, 0), "bcde"),
+    ("abcdefghij\n", 5, Point(0, 0), Point(4, 1), "abcdefghij"),
+    ("first\nA🌕\n", 20, Point(0, 0), Point(1, 1), "first\nA🌕"),
+    ("first\nAe\u0301\n", 20, Point(0, 0), Point(1, 1), "first\nAe\u0301"),
+])
+def test_drag_selection_includes_last_cell_in_copied_and_highlighted_text(source, columns, first, last, expected, reverse):
+    with create_pipe_input() as terminal_input:
+        ui = TerminalUI(lambda width: "", io.StringIO(), input=terminal_input, output=DummyOutput())
+        try:
+            ui.write(source)
+            ui._transcript_content(columns)
+            start, end = (last, first) if reverse else (first, last)
+            for kind, point in [(MouseEventType.MOUSE_DOWN, start),
+                                (MouseEventType.MOUSE_MOVE, end), (MouseEventType.MOUSE_UP, end)]:
+                ui._select_transcript(MouseEvent(point, kind, MouseButton.LEFT, frozenset()))
+            assert ui.selected_text() == expected
+            content = ui._transcript_content(columns)
+            highlighted = "".join(text for row in range(content.line_count)
+                                  for style, text, *_ in content.get_line(row) if "reverse" in style.split())
+            assert highlighted == expected.replace("\n", "")
+        finally:
+            ui._close_transcript()
+
+
+def test_plain_text_click_does_not_select_a_character():
+    with create_pipe_input() as terminal_input:
+        ui = TerminalUI(lambda width: "", io.StringIO(), input=terminal_input, output=DummyOutput())
+        try:
+            ui.write("abcdef\n")
+            ui._transcript_content(20)
+            for kind in (MouseEventType.MOUSE_DOWN, MouseEventType.MOUSE_UP):
+                ui._select_transcript(MouseEvent(Point(2, 0), kind, MouseButton.LEFT, frozenset()))
+            assert ui.selected_text() == ""
+            assert not any("reverse" in style.split() for style, *_ in ui._transcript_content(20).get_line(0))
         finally:
             ui._close_transcript()
 

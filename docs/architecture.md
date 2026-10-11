@@ -985,7 +985,9 @@ to the model along with the active generation number.
   open menu's selection. `/menu` dispatches complete command strings through the
   normal handlers, retaining busy-state checks and background execution for
   read-only network commands during a step.
-  Feed dragging retains a selection; right-click uses the same selector for
+  Feed dragging retains a selection. Copying and highlighting share the same
+  bounds, including the last selected cell in reading order; a click without a
+  drag leaves no text selected. Right-click uses the same selector for
   copying text, appending it to the draft, and copying recognized reference
   paths. Arbitrary selected prose does not become a path. File links retain
   source-line targets through wrapping and reflow. Diff gutters index old/new

@@ -1635,10 +1635,18 @@ class TerminalUI:
             self._copy_text(paths[action])
             self.notify("Path copied.")
 
-    def selected_text(self) -> str:
-        if self._flow is None or self._selection_start is None or self._selection_end is None:
-            return ""
+    def _selection_bounds(self) -> tuple[Point, Point] | None:
+        """Convert dragged cell positions to an exclusive range for copy and paint."""
+        if self._selection_start is None or self._selection_end is None or self._selection_start == self._selection_end:
+            return None
         start, end = sorted([self._selection_start, self._selection_end], key=lambda p: (p.y, p.x))
+        return start, Point(end.x + 1, end.y)
+
+    def selected_text(self) -> str:
+        bounds = self._selection_bounds()
+        if self._flow is None or bounds is None:
+            return ""
+        start, end = bounds
         pieces = []
         count = len(self._flow.rows) + len(self._flow.content_rows())
         for index in range(max(0, start.y), min(end.y + 1, count)):
@@ -1756,8 +1764,9 @@ class TerminalUI:
         def get_line(index: int) -> StyleAndTextTuples:
             if index < complete:
                 fragments = flow.get_row(index)
-                if self._selection_start is not None and self._selection_end is not None:
-                    start, end = sorted([self._selection_start, self._selection_end], key=lambda p: (p.y, p.x))
+                bounds = self._selection_bounds()
+                if bounds is not None:
+                    start, end = bounds
                     if start.y <= index <= end.y:
                         highlighted: StyleAndTextTuples = []
                         column = 0

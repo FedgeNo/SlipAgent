@@ -1457,6 +1457,10 @@ class TerminalUI:
         return self._activity_notice(fragments)
 
     def _activity_notice(self, fragments: StyleAndTextTuples) -> StyleAndTextTuples:
+        signature = fragment_list_to_text(fragments)
+        notification = self.__dict__.get("_notification", "")
+        if notification:
+            signature += "  " + notification
         text = self._notification_text() if self.__dict__.get("_notification") or (self._menu_future is None and not self._options_field_active) else ""
         if text:
             available = self.output.get_size().columns
@@ -1465,7 +1469,6 @@ class TerminalUI:
             if display_width(fragment_list_to_text(fragments)) + 2 >= available:
                 fragments = []
             fragments = [*fragments, ("class:status", ("  " if fragments else "") + text)]
-        signature = fragment_list_to_text(fragments)
         if signature and signature[0] in PULSE_FRAMES:
             signature = signature[2:]
         now = time.monotonic()

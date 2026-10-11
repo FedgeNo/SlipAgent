@@ -2075,6 +2075,26 @@ async def test_working_indicator_pulses_and_becomes_idle(display) -> None:
             await task
 
 
+def test_rotating_tips_do_not_flash_status(display, monkeypatch):
+    sink, _, output, _, _ = display
+    clock = [0.0]
+    monkeypatch.setattr("slipagent.terminal.time.monotonic", lambda: clock[0])
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        try:
+            ui._activity()
+            clock[0] = 1.0
+            original = ui._activity()
+            clock[0] = 15.01
+            rotated = ui._activity()
+            assert "".join(part[1] for part in rotated) != "".join(part[1] for part in original)
+            assert all("status-flash" not in part[0] for part in rotated)
+            ui.notify("Saved changes.")
+            assert any("status-flash" in part[0] for part in ui._activity())
+        finally:
+            ui.close()
+
+
 def test_status_updates_flash_three_times_then_remain_steady(display, monkeypatch):
     sink, _, output, _, _ = display
     clock = [0.0]

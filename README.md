@@ -671,10 +671,12 @@ Clicking another touched file opens it immediately when the current file is
 saved, or offers the same unsaved-change menu first. The agent stays held
 throughout the switch.
 Files are backed by private snapshots, with only
-one bounded page in the editing buffer; **Page Up/Down** moves between pages.
-Over the editor, each mouse wheel event moves the cursor three lines up or down,
-and the viewport follows it. Wheel navigation loads adjacent pages automatically
-and preserves edits as it crosses their boundaries.
+one bounded section in the editing buffer and neighboring sections in the view.
+Arrow keys and the mouse wheel cross section boundaries automatically; each
+wheel event moves the cursor three lines. **Page Up/Down** moves one line less
+than the editor height in either direction, retaining visible overlap.
+**Ctrl+Home/End** moves to the start/end of the document. The viewport follows
+the cursor, and section changes preserve edits.
 Untouched content and line endings are preserved. External disk changes offer
 Reload and require an explicit choice before overwriting. Editor reload retains
 the cursor's logical line, clamping to the last line if the file became shorter.

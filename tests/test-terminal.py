@@ -334,10 +334,10 @@ async def test_editor_reload_preserves_logical_cursor_line(display, tmp_path, lo
             ui._close_transcript()
 
 
-async def test_editor_standard_page_keys_navigate_and_retain_edits(display, tmp_path):
+async def test_editor_standard_page_keys_overlap_and_retain_edits(display, tmp_path):
     path = tmp_path / "file.txt"
-    path.write_text("".join(f"line-{n}\n" for n in range(100)))
-    sink, _, output, _, _ = display
+    path.write_text("".join(f"line-{n:03}\n" for n in range(100)))
+    sink, _, output, _, snapshot = display
     with create_pipe_input() as pipe:
         ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
         ui.input.text = "keep draft"
@@ -345,13 +345,33 @@ async def test_editor_standard_page_keys_navigate_and_retain_edits(display, tmp_
         try:
             await wait_until(lambda: ui.app.is_running)
             await ui._open_editor_now(path)
-            ui._editor_input.buffer.insert_text("user edit\n")
+            panel = ui._editor_panel
+            buffer = panel.input.buffer
+            buffer.insert_text("user edit\n")
+            await wait_until(lambda: "line-012" in "\n".join(snapshot()[:15]))
+            # Start with the cursor at the bottom of the viewport, as an editor
+            # normally does after consecutive downward movement.
+            panel.move_cursor(12)
+            await wait_until(lambda: buffer.document.cursor_position_row == 13)
+            await asyncio.sleep(.05)
+            before = snapshot()[1:15]
+            height = panel.input.window.render_info.window_height
             pipe.send_text("\x1b[6~")
-            await wait_until(lambda: ui._editor_panel.page == 1)
-            assert ui._editor_input.text.startswith("line-32\n")
+            await wait_until(lambda: buffer.document.cursor_position_row == 13 + height - 1)
+            await wait_until(lambda: snapshot()[1:15] != before)
+            assert set(row.strip() for row in before) & set(row.strip() for row in snapshot()[1:15])
+            # Cross a storage boundary and retain the same one-line overlap.
+            before = snapshot()[1:15]
+            pipe.send_text("\x1b[6~")
+            await wait_until(lambda: panel.page == 1)
+            await wait_until(lambda: snapshot()[1:15] != before)
+            assert set(row.strip() for row in before) & set(row.strip() for row in snapshot()[1:15])
+            before = snapshot()[1:15]
             pipe.send_text("\x1b[5~")
-            await wait_until(lambda: ui._editor_panel.page == 0)
-            assert ui._editor_input.text.startswith("user edit\nline-0\n")
+            await wait_until(lambda: panel.page == 0)
+            await wait_until(lambda: snapshot()[1:15] != before)
+            assert set(row.strip() for row in before) & set(row.strip() for row in snapshot()[1:15])
+            assert buffer.text.startswith("user edit\nline-000\n")
             assert ui.input.text == "keep draft"
         finally:
             ui.close()
@@ -565,6 +585,75 @@ async def test_editor_wheel_crosses_pages_and_retains_edits(display, tmp_path):
             assert panel.file is not None
             assert "".join(panel.file.chunks()) == original.replace("line 030", "edited line 030")
             assert path.read_text() == original
+        finally:
+            ui.close()
+            await task
+
+
+async def test_editor_arrows_cross_sections_and_document_endpoints(display, tmp_path):
+    path = tmp_path / "arrows.txt"
+    original = "\n".join(f"line {n:03}" for n in range(80))
+    path.write_text(original)
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: ui.app.is_running)
+            await ui._open_editor_now(path, line=32)
+            panel = ui._editor_panel
+            buffer = panel.input.buffer
+            buffer.cursor_position += 4
+            await wait_until(lambda: "line 031" in "\n".join(snapshot()[:15]))
+            before = snapshot()[1:15]
+            pipe.send_text("\x1b[B")
+            await wait_until(lambda: panel.page == 1 and buffer.document.cursor_position_row == 0)
+            assert buffer.document.cursor_position_col == 4
+            await wait_until(lambda: "line 032" in "\n".join(snapshot()[:15]))
+            assert set(before) & set(snapshot()[1:15])
+            pipe.send_text("\x1b[A")
+            await wait_until(lambda: panel.page == 0 and buffer.document.cursor_position_row == 31)
+            assert buffer.document.cursor_position_col == 4
+            # Right/left traverse the newline between stored sections.
+            buffer.cursor_position = len(buffer.text) - 1
+            pipe.send_text("\x1b[C")
+            await wait_until(lambda: panel.page == 1 and buffer.cursor_position == 0)
+            pipe.send_text("\x1b[D")
+            await wait_until(lambda: panel.page == 0 and buffer.cursor_position == len(buffer.text) - 1)
+            pipe.send_text("\x1b[1;5F")
+            await wait_until(lambda: panel.page == 2 and buffer.cursor_position == len(buffer.text))
+            await wait_until(lambda: "line 079" in "\n".join(snapshot()[:15]))
+            pipe.send_text("\x1b[1;5H")
+            await wait_until(lambda: panel.page == 0 and buffer.cursor_position == 0)
+            await wait_until(lambda: "line 000" in snapshot()[1])
+            assert path.read_text() == original
+            assert not panel.dirty()
+        finally:
+            ui.close()
+            await task
+
+
+async def test_editor_click_opens_visible_neighbor_section_at_clicked_position(display, tmp_path):
+    path = tmp_path / "click.txt"
+    path.write_text("\n".join(f"line {n:03}" for n in range(80)))
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: ui.app.is_running)
+            await ui._open_editor_now(path, line=32)
+            panel = ui._editor_panel
+            panel.input.window.vertical_scroll = 25
+            ui.app.invalidate()
+            await wait_until(lambda: "line 032" in "\n".join(snapshot()[:15]))
+            row = next(i for i, text in enumerate(snapshot()[:15]) if text.startswith("line 032"))
+            pipe.send_text(f"\x1b[<0;5;{row + 1}M\x1b[<0;5;{row + 1}m")
+            await wait_until(lambda: panel.page == 1)
+            await asyncio.sleep(.05)
+            assert panel.input.buffer.document.cursor_position_row == 0
+            assert panel.input.buffer.document.cursor_position_col == 4
+            assert not panel.dirty()
         finally:
             ui.close()
             await task

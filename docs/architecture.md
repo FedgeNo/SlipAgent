@@ -851,7 +851,9 @@ to the model along with the active generation number.
   source-line targets through wrapping and reflow. Diff gutters index old/new
   coordinates on disk, independently of viewport traversal order.
   `editor.py` owns file snapshots, bounded pages, changed-page files, and atomic
-  publication with disk-signature checks. `editorui.py` owns the editable buffer,
+  publication with disk-signature checks. `editorcontrol.py` renders neighboring
+  sections around the editable buffer and translates mouse coordinates back to
+  their section. `editorui.py` owns the editable buffer,
   navigation, save/reload choices, and unsaved-change handling. `useredits.py`
   owns the session gate: the existing agent boundary finishes the complete tool
   batch, drains managed background jobs, and waits while editing is active.

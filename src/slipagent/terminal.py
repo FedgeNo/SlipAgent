@@ -527,6 +527,7 @@ class TerminalUI:
             self._editor_active = False
             self._editor_input = self._editor_panel.input
             self._editor_container = self._editor_panel.container
+        self._editor_panel.ensure_control()
 
     async def _open_editor_now(self, path: Path, *, line: int = 1) -> None:
         self._ensure_editor()
@@ -1107,7 +1108,24 @@ class TerminalUI:
         @bindings.add("pageup", filter=in_editor)
         @bindings.add("pagedown", filter=in_editor)
         def page_editor(event: KeyPressEvent) -> None:
-            self._change_editor_page(-1 if event.key_sequence[-1].key == Keys.PageUp else 1)
+            self._editor_panel.move_screen(-1 if event.key_sequence[-1].key == Keys.PageUp else 1)
+
+        @bindings.add("up", filter=in_editor)
+        @bindings.add("down", filter=in_editor)
+        def move_editor_vertical(event: KeyPressEvent) -> None:
+            self._editor_panel.move_cursor(-event.arg if event.key_sequence[-1].key == Keys.Up else event.arg)
+
+        @bindings.add("left", filter=in_editor)
+        @bindings.add("right", filter=in_editor)
+        def move_editor_horizontal(event: KeyPressEvent) -> None:
+            direction = -1 if event.key_sequence[-1].key == Keys.Left else 1
+            for _ in range(event.arg):
+                self._editor_panel.move_horizontal(direction)
+
+        @bindings.add("c-home", filter=in_editor)
+        @bindings.add("c-end", filter=in_editor)
+        def move_editor_end(event: KeyPressEvent) -> None:
+            self._editor_panel.move_to_end(end=event.key_sequence[-1].key == Keys.ControlEnd)
 
         @bindings.add("c-o")
         def inspect_panel(event: KeyPressEvent) -> None:

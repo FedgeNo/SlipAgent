@@ -16,6 +16,7 @@ from prompt_toolkit.mouse_events import MouseEvent, MouseEventType, MouseButton
 from prompt_toolkit.widgets import TextArea
 
 from .editor import FileEditor, PAGE_SEGMENTS, signature
+from .editorcontrol import EditorControl
 
 
 class EditorPanel:
@@ -28,16 +29,22 @@ class EditorPanel:
         self.saved_pages: dict[int, str] = {}
         self.input = TextArea(multiline=True, wrap_lines=True,
                               read_only=Condition(lambda: self.busy))
+        self.ensure_control()
         self.container = HSplit([Window(FormattedTextControl(self.header), height=1, style="class:status"), self.input])
         self.controls = Window(FormattedTextControl(self.actions), height=5)
+
+    def ensure_control(self) -> None:
+        if not isinstance(self.input.control, EditorControl):
+            self.input.control = EditorControl(self, self.input.control)
+            self.input.window.content = self.input.control
 
     def actions(self) -> StyleAndTextTuples:
         result: StyleAndTextTuples = [("class:menu-title", "Editor Actions\n")]
         groups = [
             [("Save File [Ctrl+S]", lambda: self.terminal.app.create_background_task(self.save())),
              ("Reload File [Ctrl+R]", lambda: self.terminal.app.create_background_task(self.reload()))],
-            [("Previous Page [PgUp]", lambda: self.change_page(-1)),
-             ("Next Page [PgDn]", lambda: self.change_page(1))],
+            [("Page Up [PgUp]", lambda: self.move_screen(-1)),
+             ("Page Down [PgDn]", lambda: self.move_screen(1))],
             [("Undo [Ctrl+Z]", self.input.buffer.undo), ("Redo [Ctrl+Y]", self.input.buffer.redo)],
             [("Editor Options [F4]", lambda: self.terminal.app.create_background_task(self.terminal._options_panel.show()))],
         ]
@@ -62,7 +69,7 @@ class EditorPanel:
         if self.file is None:
             return []
         changed = signature(self.file.path) != self.file.loaded
-        text = f"{self.file.path.name} — Editor | Page {self.page + 1}/{self.file.page_count} | Ctrl+S: Save | PgUp/PgDn: Pages"
+        text = f"{self.file.path.name} — Editor | Ctrl+S: Save | PgUp/PgDn: Scroll"
         if changed:
             text = "File changed on disk. " + text
         def reload(event: MouseEvent) -> object:
@@ -131,8 +138,17 @@ class EditorPanel:
             self.terminal.notify("Could not change page; edits retained.")
             self.terminal.write(str(exc))
             return False
+        previous = self.page
+        control = self.input.control
+        shift = 0
+        if isinstance(control, EditorControl):
+            if page == previous + 1:
+                shift = -len(control.neighbor_lines(previous - 1))
+            elif page == previous - 1:
+                shift = len(control.neighbor_lines(page - 1))
         self.page = page
         self.input.buffer.reset(document=Document(self.file.page_text(self.page)))
+        self.input.window.vertical_scroll = max(0, self.input.window.vertical_scroll + shift) if abs(page - previous) == 1 else 0
         self.terminal.app.invalidate()
         return True
 
@@ -141,7 +157,9 @@ class EditorPanel:
         if self.busy or self.file is None:
             return
         buffer = self.input.buffer
-        column = buffer.document.cursor_position_col
+        column = buffer.preferred_column
+        if column is None:
+            column = buffer.document.cursor_position_col
         direction = -1 if rows < 0 else 1
         for _ in range(abs(rows)):
             row = buffer.document.cursor_position_row
@@ -162,6 +180,40 @@ class EditorPanel:
                     target -= 1
                 target = max(0, target)
             buffer.cursor_position = buffer.document.translate_row_col_to_index(target, column)
+        buffer.preferred_column = column
+        self.terminal.app.invalidate()
+
+    def move_horizontal(self, direction: int) -> None:
+        if self.busy or self.file is None:
+            return
+        buffer = self.input.buffer
+        position = buffer.cursor_position
+        if direction < 0 and position == 0:
+            if self.change_page(-1):
+                buffer.cursor_position = max(0, len(buffer.text) - 1)
+        elif direction > 0 and position >= len(buffer.text) - int(buffer.text.endswith("\n")):
+            offset = max(0, position - len(buffer.text) + 1)
+            if self.change_page(1):
+                buffer.cursor_position = min(offset, len(buffer.text))
+            else:
+                buffer.cursor_position = min(position + 1, len(buffer.text))
+        else:
+            buffer.cursor_position = max(0, min(len(buffer.text), position + direction))
+        self.terminal.app.invalidate()
+
+    def move_screen(self, direction: int) -> None:
+        info = self.input.window.render_info
+        height = info.window_height if info is not None else max(1, self.terminal.output.get_size().rows - self.terminal._footer_rows() - 1)
+        rows = direction * max(1, height - 1)
+        self.move_cursor(rows)
+        self.input.window.vertical_scroll = max(0, self.input.window.vertical_scroll + rows)
+
+    def move_to_end(self, *, end: bool) -> None:
+        if self.busy or self.file is None:
+            return
+        self.change_page(self.file.page_count if end else -self.file.page_count)
+        if self.page == (self.file.page_count - 1 if end else 0):
+            self.input.buffer.cursor_position = len(self.input.text) if end else 0
         self.terminal.app.invalidate()
 
     async def save(self) -> bool:

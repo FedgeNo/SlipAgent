@@ -352,6 +352,8 @@ class TerminalUI:
         target = panels[(index + 1) % len(panels)]
         self.__dict__["_panel_prompt_active"] = target is self.input
         self.app.layout.focus(target)
+        if self._inspection_focused():
+            self._move_inspection(0)
         self.app.invalidate()
 
     def _inspection_keys(self, files: bool) -> list[Any]:
@@ -371,9 +373,14 @@ class TerminalUI:
         self.__dict__.setdefault("_inspection_selection_keys", {})[files] = keys[index]
         window = self._files_window if files else self._calls_window
         info = window.render_info
-        if info is not None and index not in info.displayed_lines:
+        window._following = False
+        window._pending_scroll = 0
+        # Several key events can move the viewport before another frame renders.
+        if (info is None or info.vertical_scroll != window.vertical_scroll
+                or index not in info.displayed_lines
+                or (index == window.vertical_scroll and window.vertical_scroll_2)):
             window.vertical_scroll = index
-            window.vertical_scroll_2 = window._pending_scroll = 0
+            window.vertical_scroll_2 = 0
         self.app.invalidate()
 
     def _activate_inspection(self) -> None:

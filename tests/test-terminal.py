@@ -86,6 +86,35 @@ async def test_control_space_cycles_panels_without_changing_draft(display, tmp_p
             await task
 
 
+async def test_inspection_focus_reveals_selection_and_up_stays_at_first_item(display, tmp_path):
+    sink, _, output, screen, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
+        for number in range(30):
+            ui.track_call(ToolCall(str(number), f"tool-{number}", {"path": f"file-{number}"}), 1)
+        ui._touched_items.update({f"file-{number}": "read" for number in range(30)})
+        task = asyncio.create_task(ui.run())
+        try:
+            ui.toggle_inspection()
+            await wait_until(lambda: "Touched" in snapshot()[0])
+            ui._files_window.scroll(20)
+            await wait_until(lambda: "file-29" not in snapshot()[1])
+            pipe.send_text("\x00")
+            await wait_until(lambda: ui.app.layout.current_window is ui._files_window)
+            await wait_until(lambda: "file-29" in snapshot()[1])
+            assert screen.buffer[1][75].reverse
+            pipe.send_text("\x00")
+            await wait_until(lambda: ui.app.layout.current_window is ui._calls_window)
+            pipe.send_text("\x1b[B" * 20 + "\x1b[A" * 40)
+            await wait_until(lambda: ui._inspection_selection(False) == (1, "29"))
+            await asyncio.sleep(.1)
+            assert "tool-29" in snapshot()[9]
+            assert screen.buffer[9][75].reverse
+        finally:
+            ui.close()
+            await task
+
+
 async def test_footer_background_separates_controls_from_feed(display):
     sink, _, output, screen, snapshot = display
     with create_pipe_input() as pipe:

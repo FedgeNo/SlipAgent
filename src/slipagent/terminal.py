@@ -1269,11 +1269,7 @@ class TerminalUI:
                     return None
                 if self._editor_active and event.position.y < size.rows - self._footer_rows() and self._menu_future is None:
                     if not (self._inspection_visible and size.columns >= 60 and event.position.x >= size.columns - size.columns // 4):
-                        buffer = self._editor_input.buffer
-                        if event.event_type == MouseEventType.SCROLL_UP:
-                            buffer.cursor_up(count=3)
-                        else:
-                            buffer.cursor_down(count=3)
+                        self._editor_panel.move_cursor(-3 if event.event_type == MouseEventType.SCROLL_UP else 3)
                         app.invalidate()
                         return None
                 if self._menu_future is None and size.rows - self._footer_rows() + 3 <= event.position.y < size.rows - 1:

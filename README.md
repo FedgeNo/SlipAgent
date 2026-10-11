@@ -673,7 +673,8 @@ throughout the switch.
 Files are backed by private snapshots, with only
 one bounded page in the editing buffer; **Page Up/Down** moves between pages.
 Over the editor, each mouse wheel event moves the cursor three lines up or down,
-and the viewport follows it.
+and the viewport follows it. Wheel navigation loads adjacent pages automatically
+and preserves edits as it crosses their boundaries.
 Untouched content and line endings are preserved. External disk changes offer
 Reload and require an explicit choice before overwriting. Editor reload retains
 the cursor's logical line, clamping to the last line if the file became shorter.

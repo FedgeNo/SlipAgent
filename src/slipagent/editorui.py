@@ -119,17 +119,49 @@ class EditorPanel:
             current[self.page] = hashlib.sha256(self.input.text.encode()).hexdigest()
         return current != self.saved_pages
 
-    def change_page(self, delta: int) -> None:
+    def change_page(self, delta: int) -> bool:
         if self.busy or self.file is None:
-            return
+            return False
+        page = max(0, min(self.file.page_count - 1, self.page + delta))
+        if page == self.page:
+            return False
         try:
             self.flush()
         except (OSError, UnicodeError) as exc:
             self.terminal.notify("Could not change page; edits retained.")
             self.terminal.write(str(exc))
-            return
-        self.page = max(0, min(self.file.page_count - 1, self.page + delta))
+            return False
+        self.page = page
         self.input.buffer.reset(document=Document(self.file.page_text(self.page)))
+        self.terminal.app.invalidate()
+        return True
+
+    def move_cursor(self, rows: int) -> None:
+        """Cross disk-backed page boundaries without losing local edits."""
+        if self.busy or self.file is None:
+            return
+        buffer = self.input.buffer
+        column = buffer.document.cursor_position_col
+        direction = -1 if rows < 0 else 1
+        for _ in range(abs(rows)):
+            row = buffer.document.cursor_position_row
+            last = buffer.document.line_count - 1
+            # A page-ending newline belongs to the next page's first line.
+            if buffer.text.endswith("\n") and self.page < self.file.page_count - 1:
+                last -= 1
+            target = row + direction
+            if direction > 0 and target > last:
+                if not self.change_page(1):
+                    break
+                target = 0
+            elif target < 0:
+                if not self.change_page(-1):
+                    break
+                target = buffer.document.line_count - 1
+                if buffer.text.endswith("\n"):
+                    target -= 1
+                target = max(0, target)
+            buffer.cursor_position = buffer.document.translate_row_col_to_index(target, column)
         self.terminal.app.invalidate()
 
     async def save(self) -> bool:

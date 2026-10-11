@@ -535,6 +535,41 @@ async def test_editor_wheel_moves_cursor_three_lines_and_viewport_follows(displa
             await task
 
 
+async def test_editor_wheel_crosses_pages_and_retains_edits(display, tmp_path):
+    path = tmp_path / "long.txt"
+    original = "\n".join(f"line {n:03}" for n in range(80))
+    path.write_text(original)
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: ui.app.is_running)
+            await ui._open_editor_now(path, line=31)
+            panel = ui._editor_panel
+            buffer = panel.input.buffer
+            buffer.insert_text("edited ")
+            pipe.send_text("\x1b[<65;5;5M")
+            await wait_until(lambda: panel.page == 1 and buffer.document.cursor_position_row == 1)
+            await wait_until(lambda: "line 033" in "\n".join(snapshot()[:15]))
+            pipe.send_text("\x1b[<64;5;5M")
+            await wait_until(lambda: panel.page == 0 and buffer.document.cursor_position_row == 30)
+            assert "edited line 030" in buffer.text
+            pipe.send_text("\x1b[<65;5;5M" * 30)
+            await wait_until(lambda: panel.page == 2 and buffer.document.cursor_position_row == 15)
+            await wait_until(lambda: "line 079" in "\n".join(snapshot()[:15]))
+            pipe.send_text("\x1b[<64;5;5M" * 30)
+            await wait_until(lambda: panel.page == 0 and buffer.document.cursor_position_row == 0)
+            await wait_until(lambda: "line 000" in snapshot()[1])
+            panel.flush()
+            assert panel.file is not None
+            assert "".join(panel.file.chunks()) == original.replace("line 030", "edited line 030")
+            assert path.read_text() == original
+        finally:
+            ui.close()
+            await task
+
+
 async def test_read_only_viewer_scrolls_targets_lines_keeps_work_running_and_esc_only_closes(display):
     from unittest.mock import Mock
     sink, _, output, _, snapshot = display

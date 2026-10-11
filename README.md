@@ -661,7 +661,7 @@ File links open the built-in editor at the linked line. An active agent finishes
 its current tool batch first; managed background commands are stopped, and further
 agent work waits until the editor closes. While queued, the animated status reads
 **Opening editor after this turn**. Read-only viewers open immediately while the
-agent continues working. **Ctrl+S** saves; **Esc** or **exit editor**
+agent continues working. **Ctrl+S** saves; **Esc** or **Close Text Editor**
 closes, showing **Save**, **Don't Save**, and **Cancel** in the bottom menu when
 there are unsaved changes. Clicking text places the cursor there; clicking right of a line places
 it at that line's end, and clicking below the content places it at the file's end.

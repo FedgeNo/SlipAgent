@@ -702,7 +702,7 @@ class TerminalUI:
                 columns = max(0, (self.output.get_size().columns - 18) // 2)
             prefix = fragment_list_to_text(self._activity_status())
             if self._editor_active or self._viewer_active:
-                prefix += "  ESC to exit editor " if self._editor_active else "  ESC to exit viewer "
+                prefix += "  ESC to Close Text Editor " if self._editor_active else "  ESC to exit viewer "
         remaining = columns - display_width(prefix) - 2
         return max(1, remaining if remaining > 0 else columns)
 
@@ -1356,6 +1356,7 @@ class TerminalUI:
         fragments = self._activity_status()
         if self._viewer_active or self._editor_active:
             mode = "editor" if self._editor_active else "viewer"
+            label = "Close Text Editor" if self._editor_active else "exit viewer"
             def close(event: MouseEvent) -> object:
                 if event.event_type == MouseEventType.MOUSE_MOVE:
                     self.__dict__["_hovered_control"] = "exit-" + mode
@@ -1366,9 +1367,9 @@ class TerminalUI:
                         self.close_viewer()
                 return None
             style = "class:clickable" + (" class:hover" if self.__dict__.get("_hovered_control") == "exit-" + mode else "")
-            if display_width(fragment_list_to_text(fragments)) + len("  ESC to exit viewer ") > self.output.get_size().columns - self._right_control_width():
+            if display_width(fragment_list_to_text(fragments)) + len("  ESC to " + label + " ") > self.output.get_size().columns - self._right_control_width():
                 fragments = []
-            fragments.extend([("", "  ESC to " if fragments else "ESC to "), (style, "exit " + mode, close), ("", " ")])
+            fragments.extend([("", "  ESC to " if fragments else "ESC to "), (style, label, close), ("", " ")])
         return self._activity_notice(fragments)
 
     def _activity_notice(self, fragments: StyleAndTextTuples) -> StyleAndTextTuples:

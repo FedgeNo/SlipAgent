@@ -394,7 +394,7 @@ async def test_editor_saves_and_requires_choice_before_discarding(display, tmp_p
         try:
             await wait_until(lambda: ui.app.is_running)
             await ui._open_editor_now(path)
-            await wait_until(lambda: "exit editor" in snapshot()[17])
+            await wait_until(lambda: "Close Text Editor" in snapshot()[17])
             assert "Editor Actions" in snapshot()[18]
             assert "prompt draft" not in "\n".join(snapshot()[18:23])
             pipe.send_text("user ")

@@ -11,6 +11,7 @@ from slipagent.checks import check_edit_batch
 from slipagent.environment import load_project_settings
 from slipagent.repomap import RepositoryMap
 from slipagent.tools import build_default_registry
+from slipagent.tools.discovery import tool_catalog
 from slipagent.tools.base import ToolResult
 from slipagent.types import ToolCall
 from test_agent import StubClient, completion
@@ -111,6 +112,7 @@ def configure(workspace, **settings):
 async def test_python_check_uses_final_batch_state_and_does_not_import_code(workspace):
     configure(workspace, python=sys.executable)
     registry = build_default_registry(workspace)
+    tool_catalog(registry).loaded.add("write_file")
     client = StubClient([
         completion("Editing", [ToolCall("1", "write_file", {"path": "code.py", "content": "def incomplete("}),
                                ToolCall("2", "write_file", {"path": "code.py", "content": "raise RuntimeError('must not execute')\n"})]),
@@ -162,6 +164,7 @@ async def test_syntax_failures_and_absent_environment_are_reported(workspace):
 
 async def test_missing_python_check_is_retained_for_agent_without_chat_warning(workspace):
     registry = build_default_registry(workspace)
+    tool_catalog(registry).loaded.add("write_file")
     events = []
     client = StubClient([
         completion("Editing", [ToolCall("1", "write_file", {"path": "code.py", "content": "value = 1\n"})]),

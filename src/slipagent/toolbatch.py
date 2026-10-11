@@ -41,10 +41,7 @@ class ToolBatch:
             lambda chunk: self.emit(AgentEvent(kind="tool_output", step=self.step, text=chunk, tool_call=tool_call))
         )
         try:
-            if self.allowed_tools is not None and tool_call.name not in self.allowed_tools:
-                result = ToolResult.error("This tool is not available in the current request.")
-            else:
-                result = await self.registry.invoke(tool_call.name, tool_call.arguments)
+            result = await self.registry.invoke(tool_call.name, tool_call.arguments)
         except Exception as exc:
             result = ToolResult.error(f"Tool dispatch failed: {type(exc).__name__}: {exc}. Effects may be partial; inspect before retrying.")
         finally:
@@ -69,6 +66,19 @@ class ToolBatch:
                                   result=ToolResult.ok(reference)))
 
     async def run(self, calls: list[ToolCall]) -> list[tuple[ToolCall, ToolResult]]:
+        unavailable = sorted({call.name for call in calls
+                              if self.allowed_tools is not None and call.name not in self.allowed_tools})
+        if unavailable:
+            # Validate the whole response before dispatch so earlier calls cannot have effects.
+            error = ("No tools were executed. The entire batch was rejected because these tools are not available "
+                     f"in the current request: {', '.join(unavailable)}. "
+                     "Only call tools whose full definitions are supplied in the current request. "
+                     "For deferred catalog tools, call load_tools in a separate response and wait for the "
+                     "next request before using them. Tools excluded by session restrictions cannot be loaded.")
+            for call in calls:
+                self.emit(AgentEvent(kind="tool_start", step=self.step, tool_call=call))
+                self.commit_call(call, ToolResult.error(error))
+            return self.results
         checkpoints = self.checkpoints
         if checkpoints is not None:
             checkpoints.begin(self.step)

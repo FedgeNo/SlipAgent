@@ -14,6 +14,7 @@ import pytest
 
 from slipagent import cli
 from slipagent.tools.base import Tool, ToolResult
+from slipagent.tools.discovery import tool_catalog
 from test_agent import StubClient, call, completion
 from test_cli_e2e import metadata_server
 
@@ -116,6 +117,7 @@ async def test_interrupt_preserves_results_and_prevents_continuation(tmp_path, m
             return ToolResult.ok("Completed " + value)
 
     session.registry.register(ProbeTool())
+    tool_catalog(session.registry).loaded.add("probe_interrupt")
     calls = [call("probe_interrupt", value=value) for value in ["done", "blocked", "unstarted"]]
     for index, tool_call in enumerate(calls):
         tool_call.id = str(index)

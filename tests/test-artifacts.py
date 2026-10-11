@@ -13,6 +13,7 @@ from slipagent.context import CompletedStep
 from slipagent.records import linked_tool_results, step_record
 from slipagent.sessions import SessionJournal
 from slipagent.tools import build_default_registry
+from slipagent.tools.discovery import tool_catalog
 from slipagent.tools.output import CommandArchive, ReadCommandOutputTool
 from slipagent.types import Message, ToolCall
 from test_agent import StubClient, completion
@@ -82,6 +83,7 @@ async def test_command_records_keep_streams_separate_without_changing_log_offset
 
 async def test_agent_edit_records_survive_compression_resume_and_fork(workspace, tmp_path):
     registry = build_default_registry(workspace)
+    tool_catalog(registry).loaded.add("write_file")
     call = ToolCall("edit-1", "write_file", {"path": "new.txt", "content": "new contents\n"})
     agent = Agent(StubClient([completion(tool_calls=[call]), completion("Done")]), registry, "test")
     journal = SessionJournal(str(workspace.root), tmp_path / "sessions")

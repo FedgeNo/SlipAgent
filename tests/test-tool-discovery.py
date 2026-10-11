@@ -1,4 +1,4 @@
-"""Deferred definitions reach both request carriers without restricting valid calls."""
+"""Tool definitions and execution share the current request's allowlist."""
 
 import json
 from importlib import import_module
@@ -14,7 +14,7 @@ from slipagent.tools.base import ToolRegistry
 from slipagent.tools.discovery import CORE_TOOLS, LoadToolsTool, tool_catalog
 from slipagent.types import Message, ToolCall
 from slipagent.workspace import Workspace
-from test_agent import RecordingTool
+from test_agent import RecordingTool, StubClient, completion
 from test_mcp import stub_spec
 
 Router = import_module("test-native-tools").Router
@@ -149,20 +149,49 @@ async def test_load_is_idempotent_and_preserves_valid_names_alongside_errors():
         await tools.aclose()
 
 
-async def test_valid_deferred_calls_still_execute_and_retain_their_definition():
-    router = Router({"test/model": ["tools"]}, [
-        reply("Record it.", [ToolCall("use", "optional_record", {"value": "data"})], True),
-        reply("Done.", [], True),
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("allowlist", [None, ("read_file", "optional_record"), ("read_file",)])
+@pytest.mark.parametrize("unavailable", ["optional_record", "missing"])
+async def test_unavailable_call_rejects_the_whole_batch(monkeypatch, native, allowlist, unavailable):
+    calls = [ToolCall("before", "read_file", {"value": "before"}),
+             ToolCall("load", "load_tools", {"names": ["optional_record"]}),
+             ToolCall("unavailable", unavailable, {"value": "data"}),
+             ToolCall("after", "read_file", {"value": "after"})]
+    router = Router({"test/model": ["tools"] if native else ["response_format"]}, [
+        reply("Run the batch.", calls, native), reply("Done.", [], native),
     ])
     tools = registry()
+    loads = []
+    loader = tools.get("load_tools")
+    original_load = loader.run
+
+    async def load(names):
+        loads.append(names)
+        return await original_load(names)
+
+    monkeypatch.setattr(loader, "run", load)
+    core = RecordingTool()
+    core.name = "read_file"
+    tools.register(core)
     try:
         async with OpenRouterClient("dummy", transport=httpx.MockTransport(router.handle)) as client:
-            agent = Agent(client, tools, "test/model")
+            agent = Agent(client, tools, "test/model", exposed_tools=allowlist)
             assert await agent.run("Record this value.") == "Done."
             await agent.wait_for_compaction()
-        assert tools.get("optional_record").seen == [{"value": "data"}]
-        assert {tool["function"]["name"] for tool in router.requests[0]["tools"]} == {"load_tools"}
-        assert "optional_record" in {tool["function"]["name"] for tool in router.requests[1]["tools"]}
+        assert core.seen == []
+        assert loads == []
+        assert tools.get("optional_record").seen == []
+        observations = [m for m in agent.messages if m.role == "tool"]
+        assert [m.tool_call_id for m in observations] == [call.id for call in calls]
+        assert all(m.content["status"] == "error" for m in observations)
+        assert all("No tools were executed" in m.content["content"] for m in observations)
+        assert all(unavailable in m.content["content"] for m in observations)
+        if unavailable == "optional_record" and allowlist != ("read_file",):
+            assert all("load_tools" in m.content["content"] for m in observations)
+        if native:
+            assert {tool["function"]["name"] for tool in router.requests[0]["tools"]} == {"load_tools", "read_file"}
+        errors = [m for m in router.requests[1]["messages"] if m["role"] in {"tool", "user"}]
+        assert any("No tools were executed" in str(m["content"]) for m in errors)
     finally:
         await tools.aclose()
 
@@ -177,6 +206,28 @@ async def test_loader_cannot_expand_an_explicit_tool_allowlist():
         assert result.is_error
         assert result.content["loaded"] == []
         assert "optional_record" not in {spec.name for spec in agent._visible_specs(tools.specs())}
+    finally:
+        await tools.aclose()
+
+
+async def test_rejected_batch_preserves_files_and_creates_no_checkpoints(tmp_path):
+    path = tmp_path / "existing.txt"
+    path.write_text("original")
+    tools = build_default_registry(Workspace(tmp_path))
+    client = StubClient([
+        completion(tool_calls=[
+            ToolCall("edit", "edit_file", {"path": "existing.txt", "old_string": "original", "new_string": "changed"}),
+            ToolCall("write", "write_file", {"path": "new.txt", "content": "new"}),
+        ]),
+        completion("Correct the batch first."),
+    ])
+    try:
+        agent = Agent(client, tools, "test")
+        assert await agent.run("Edit the files.") == "Correct the batch first."
+        await agent.wait_for_compaction()
+        assert path.read_text() == "original"
+        assert not (tmp_path / "new.txt").exists()
+        assert agent._checkpoints().listing() == []
     finally:
         await tools.aclose()
 

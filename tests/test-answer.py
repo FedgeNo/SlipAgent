@@ -114,15 +114,16 @@ def test_json_tag_accepts_missing_outer_close_after_complete_arguments():
 
 
 async def test_one_shot_cli_prints_answer_once_and_exits(tmp_path, monkeypatch):
-    from test_cli_e2e import StubOpenRouter, run_cli
+    from test_cli_e2e import StubOpenRouter, run_cli, tool_step
     monkeypatch.setattr('test_cli_e2e.structured_message', lambda message, *args, **kwargs: message)
-    script = [{'choices': [{'message': {'role': 'assistant', 'content': '<tool_call>\n<answer>Task fulfilled.</answer>'}, 'finish_reason': 'stop'}]}]
+    script = [tool_step('load_tools', {'names': ['answer']}),
+              {'choices': [{'message': {'role': 'assistant', 'content': '<tool_call>\n<answer>Task fulfilled.</answer>'}, 'finish_reason': 'stop'}]}]
     with StubOpenRouter(script, include_memory=False) as stub:
         result = run_cli('--no-mcp', '--no-reload', '-p', 'Answer', '--base-url', stub.base_url, cwd=tmp_path)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == 'Task fulfilled.'
     assert 'Task fulfilled.' not in result.stderr
-    assert len(stub.requests) == 1
+    assert len(stub.requests) == 2
 
 
 async def test_restored_answer_displays_as_text_without_tool_json():

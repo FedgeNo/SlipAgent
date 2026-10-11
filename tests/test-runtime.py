@@ -29,6 +29,7 @@ import slipagent.openrouter as router
 from slipagent.runtime import RuntimeFrame
 from slipagent.tools import build_default_registry
 from slipagent.tools.base import Tool, ToolResult
+from slipagent.tools.discovery import tool_catalog
 from slipagent.types import Completion, Message, ToolCall, Usage, content_text
 from slipagent.workspace import Workspace
 
@@ -198,6 +199,7 @@ def test_file_checkpoints_and_cycle_guard_survive_behavior_reload(run_copy):
         checkpoints.rewind(checkpoint_id)
         assert path.read_text() == 'original'
         responses.extend([{'role': 'assistant', 'content': '', 'tool_calls': [{'id': 'write', 'type': 'function', 'function': {'name': 'write_file', 'arguments': '{"path":"file.txt","content":"second edit"}'}}]}, {'role': 'assistant', 'content': 'Done'}])
+        tool_catalog(registry).loaded.add('write_file')
         assert await agent.run('edit file') == 'Done'
         assert len(checkpoints.listing()) == 1
         checkpoints.rewind(checkpoints.listing()[0]['id'])
@@ -432,6 +434,7 @@ def test_edit_waits_for_complete_tool_batch_and_next_step_uses_new_behavior(run_
                 return ToolResult.ok('wait complete')
         remote = WaitTool()
         registry.register(remote)
+        tool_catalog(registry).loaded.add('wait')
         responses.extend([
             {'role': 'assistant', 'content': 'starting', 'tool_calls': [
                 {'id': 'one', 'type': 'function', 'function': {'name': 'wait', 'arguments': '{}'}},
@@ -472,6 +475,7 @@ def test_stop_with_pending_reload_does_not_take_another_model_turn(run_copy):
                 await release.wait()
                 return ToolResult.ok('saved result')
         registry.register(WaitTool())
+        tool_catalog(registry).loaded.add('wait')
         responses.append({'role': 'assistant', 'content': 'starting', 'tool_calls': [
             {'id': 'one', 'type': 'function', 'function': {'name': 'wait', 'arguments': '{}'}},
         ]})

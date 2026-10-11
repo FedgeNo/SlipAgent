@@ -410,7 +410,8 @@ async def test_unknown_tool_error_is_fed_back_to_model() -> None:
 
     assert answer == "recovered"
     tool_message = [m for m in agent.messages if m.role == "tool"][0]
-    assert "Unknown tool" in content_text(tool_message.content)
+    assert "No tools were executed" in content_text(tool_message.content)
+    assert "does_not_exist" in content_text(tool_message.content)
     # The model must receive the tool error before its next step.
     assert unpack_context(client.calls[1]["messages"])[-1].role == "tool"
 

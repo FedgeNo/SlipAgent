@@ -572,7 +572,7 @@ class Agent:
             self.registry, step, self.messages, emit=self._emit, persist=self._persist,
             archive_interrupted=lambda: self._archive_step(capabilities),
             checkpoints=self._checkpoints(),
-            allowed_tools={spec.name for spec in specs} if self.exposed_tools is not None else None,
+            allowed_tools={spec.name for spec in visible_specs},
         )
         batch_results = await batch.run(message.tool_calls or [])
         await self._archive_step(capabilities)

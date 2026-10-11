@@ -958,6 +958,8 @@ def test_real_cli_hides_memory_rolls_window_and_recalls_originals(tmp_path):
     first = tool_step("read_file", {"path": "app.py"})
     first["choices"][0]["message"]["content"] = reply(1, "Reading file.", "User asked inspect and report; model requested app.py.")
     second = tool_step("list_dir", {})
+    second["choices"][0]["message"]["tool_calls"].append(
+        ToolCall("load-history", "load_tools", {"names": ["recall_history"]}).to_api())
     second["choices"][0]["message"]["content"] = reply(2, "Checking layout.", "User asked inspect and report; model requested directory layout.",
                                                          "User asked inspect and report; model read app.py and found original file content.")
     third = tool_step("recall_history", {"step_id": 1})

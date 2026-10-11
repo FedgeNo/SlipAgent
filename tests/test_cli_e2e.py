@@ -326,7 +326,8 @@ def test_automation_argument_errors_do_not_start_requests(project_dir, arguments
 @pytest.mark.parametrize("danger", [False, True])
 def test_danger_flag_controls_unattended_external_write(project_dir, danger):
     target = project_dir.parent / "external.txt"
-    with StubOpenRouter([tool_step("write_file", {"path": str(target), "content": "outside"}),
+    with StubOpenRouter([tool_step("load_tools", {"names": ["write_file"]}),
+                         tool_step("write_file", {"path": str(target), "content": "outside"}),
                          text_step("Finished")]) as stub:
         result = run_cli("-p", "Write the requested file", "--base-url", stub.base_url,
                          "--model", "stub/model", *(["--danger"] if danger else []), cwd=project_dir)
@@ -435,6 +436,7 @@ def test_one_shot_refuses_to_write_outside_workspace(project_dir: Path, tmp_path
 
     with StubOpenRouter(
         [
+            tool_step("load_tools", {"names": ["write_file"]}),
             tool_step("write_file", {"path": "../victim.txt", "content": "pwned"}),
             text_step("I could not write there."),
         ]
@@ -445,7 +447,7 @@ def test_one_shot_refuses_to_write_outside_workspace(project_dir: Path, tmp_path
     assert result.returncode == 0, result.stderr
     assert victim.read_text() == "original"
 
-    tool_messages = context_records(stub.requests[1]["messages"])[0]["tool_results"]
+    tool_messages = context_records(stub.requests[2]["messages"])[1]["tool_results"]
     assert "outside the workspace" in tool_messages[0]["content"]
 
 
@@ -746,6 +748,7 @@ def test_mcp_tool_is_callable_by_the_model(project_dir: Path) -> None:
 
     with StubOpenRouter(
         [
+            tool_step("load_tools", {"names": ["stub__echo"]}),
             tool_step("stub__echo", {"message": "from the model"}),
             text_step("The MCP tool replied."),
         ]
@@ -754,7 +757,7 @@ def test_mcp_tool_is_callable_by_the_model(project_dir: Path) -> None:
 
     assert proc.returncode == 0, proc.stderr
     # The result must come back to the model on the next request.
-    tool_messages = context_records(stub.requests[1]["messages"])[0]["tool_results"]
+    tool_messages = context_records(stub.requests[2]["messages"])[1]["tool_results"]
     assert context_body(tool_messages[0]["content"]) == "echo: from the model"
 
 
@@ -1467,7 +1470,8 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
                     super().do_POST()
             return Handler
 
-    step = tool_step("write_file", {"path": "finished.txt", "content": "completed"})
+    (project_dir / "finished.txt").write_text("pending")
+    step = tool_step("edit_file", {"path": "finished.txt", "old_string": "pending", "new_string": "completed"})
     step["choices"][0]["message"]["content"] = "Writing the file and checking the directory."
     step["choices"][0]["message"]["tool_calls"].append({
         "id": "call_2", "type": "function", "function": {"name": "list_dir", "arguments": "{}"}})

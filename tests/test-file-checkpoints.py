@@ -11,6 +11,7 @@ from slipagent.agent import Agent
 from slipagent.checkpoints import CheckpointError, FileCheckpoints, current_checkpoint
 from slipagent.sessions import SessionJournal
 from slipagent.tools import build_default_registry
+from slipagent.tools.discovery import tool_catalog
 from slipagent.tools.files import _atomic_write
 from slipagent.types import ToolCall
 from test_agent import StubClient, completion
@@ -110,6 +111,7 @@ async def test_pending_checkpoint_recovers_only_a_published_edit(workspace):
 
 async def test_agent_checkpoints_complete_batches_and_preserves_history(workspace):
     registry = build_default_registry(workspace)
+    tool_catalog(registry).loaded.add("write_file")
     client = StubClient([
         completion("", [ToolCall("one", "write_file", {"path": "file.txt", "content": "one"}),
                         ToolCall("bad", "edit_file", {"path": "file.txt", "old_string": "missing", "new_string": "two"}),
@@ -133,6 +135,7 @@ async def test_agent_checkpoints_complete_batches_and_preserves_history(workspac
 
 async def test_resume_fork_and_delete_keep_checkpoint_storage_separate(workspace, tmp_path):
     registry = build_default_registry(workspace)
+    tool_catalog(registry).loaded.add("write_file")
     client = StubClient([completion("", [ToolCall("one", "write_file", {"path": "file.txt", "content": "one"})]), completion("Done")])
     agent = Agent(client, registry, "test")
     journal = SessionJournal(str(workspace.root), tmp_path / "state")

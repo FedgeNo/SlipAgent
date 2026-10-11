@@ -1559,6 +1559,9 @@ The model initially gets complete definitions for `read_file`, `list_dir`,
 compact names-and-purpose catalog. The model calls `load_tools` with selected
 names to obtain their full descriptions and argument schemas; those definitions
 join subsequent system prompts and API tool lists for the conversation.
+Only tools whose full definitions are supplied in the current request can run.
+If a response calls an unavailable tool, the entire batch returns errors without
+executing any calls. Load deferred tools in a separate response before using them.
 System definitions separate core and loaded tools, keyed by name in indented
 JSON. Harness-generated input JSON also uses indentation; file contents and
 command-output strings retain their original text.

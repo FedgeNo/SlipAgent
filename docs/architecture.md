@@ -74,11 +74,16 @@ selection. System definitions group core and additional loaded tools by name,
 with indented JSON schemas; the remaining eligible tools have short table entries without
 argument schemas. `load_tools` returns structured definitions and retains the
 selected names for subsequent requests. It does not execute tools or expand the
-allowlist. Existing valid calls remain executable even if their definitions were
-deferred; recorded calls also retain their definitions on subsequent requests.
+allowlist. The selected definitions also form the tool batch's execution
+allowlist, frozen before the response. `ToolBatch` rejects every call in a batch
+before dispatch if any name is outside that set, returning an error for each call
+without invoking tools or starting checkpoints. Loading a definition in the same
+batch does not authorize its use. Recorded calls retain their definitions on
+subsequent requests.
 Reset clears discovery state, and saved load results/calls restore it on resume.
 Reload candidates borrow the same catalog through registry services. MCP server
-guidance enters requests when a tool from that server has a supplied definition.
+guidance enters requests when a tool from that server is eligible in the catalog,
+including before its full definition is loaded.
 
 `Agent` coordinates the pipeline. `ContextBuilder` receives immutable
 `ContextSettings`, the conversation, token budget, and registry resources;

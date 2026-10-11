@@ -8,6 +8,7 @@ import pytest
 
 from slipagent import cli
 from slipagent.tools.base import Tool, ToolResult
+from slipagent.tools.discovery import tool_catalog
 from test_agent import StubClient, call, completion
 from test_cli_e2e import metadata_server
 
@@ -41,6 +42,7 @@ async def test_commands_wait_for_tools_and_preserve_stop_and_request_budget(
             return ToolResult.ok("The current tool finished before the mode changed.")
 
     session.registry.register(GatedTool())
+    tool_catalog(session.registry).loaded.add("gated_read")
     client = StubClient([
         completion(tool_calls=[call("gated_read")]),
         completion("Finished with the selected access mode."),

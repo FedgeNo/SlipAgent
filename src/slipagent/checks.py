@@ -6,6 +6,7 @@ import asyncio
 import math
 import os
 import shlex
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,58 @@ for name in sys.argv[1:]:
         failed = True
 sys.exit(1 if failed else 0)
 """
+
+
+def _project_directories(path: Path, root: Path) -> list[Path]:
+    """Search the edited file's ancestors without leaving the project."""
+    if not path.is_relative_to(root):
+        return [root]
+    return [path, *[parent for parent in path.parents if parent.is_relative_to(root)]]
+
+
+def _automatic_checks(paths: set[str], root: Path) -> list[dict[str, Any]]:
+    checks: list[dict[str, Any]] = []
+    for name, executable, extensions, flags in (
+        ("JavaScript syntax", "node", {".js", ".mjs", ".cjs"}, ["--check"]),
+        ("PHP syntax", "php", {".php", ".phtml"}, ["-l"]),
+    ):
+        selected = sorted(path for path in paths if Path(path).suffix in extensions)
+        if not selected:
+            continue
+        program = shutil.which(executable)
+        if program is None:
+            checks.append({"name": name, "skip": f"{executable} is not installed or not on PATH"})
+            continue
+        # Older PHP and Node versions only check one input file per invocation.
+        checks.extend({"name": f"{name} ({Path(path).relative_to(root) if Path(path).is_relative_to(root) else path})",
+                       "argv": [program, *flags, path]} for path in selected)
+
+    groups: dict[tuple[Path, Path | None], list[str]] = {}
+    for path in sorted(paths):
+        source = Path(path)
+        if source.suffix not in {".ts", ".tsx", ".mts", ".cts"}:
+            continue
+        directories = _project_directories(source.parent, root)
+        config = next((directory / "tsconfig.json" for directory in directories
+                       if (directory / "tsconfig.json").is_file()), None)
+        directory = config.parent if config else source.parent
+        groups.setdefault((directory, config), []).append(path)
+    for (directory, config), selected in groups.items():
+        search_path = os.pathsep.join([*(str(parent / "node_modules" / ".bin")
+                                        for parent in _project_directories(directory, root)),
+                                      os.environ.get("PATH", "")])
+        program = shutil.which("tsc", path=search_path)
+        name = f"TypeScript check ({config or directory})"
+        if program is None:
+            checks.append({"name": name, "skip": "tsc is not installed locally or on PATH"})
+            continue
+        # noEmit still permits incremental metadata; discard it rather than
+        # creating or replacing the project's .tsbuildinfo file.
+        argv = [program, "--noEmit", "--pretty", "false", "--incremental",
+                "--tsBuildInfoFile", os.devnull]
+        argv.extend(["--project", str(config)] if config else selected)
+        checks.append({"name": name, "argv": argv, "timeout": 120, "cwd": directory})
+    return checks
 
 
 def validate_checks(options: dict[str, Any]) -> None:
@@ -72,8 +125,12 @@ async def check_edit_batch(registry: ToolRegistry, batch: list[tuple[ToolCall, T
         checks = list(options.get("checks", []))
         if options.get("python_syntax", True):
             checks.insert(0, {"name": "Python syntax", "argv": ["{python}", "-I", "-c", SYNTAX_CHECK, "{files}"], "extensions": [".py", ".pyi"]})
+        checks.extend(_automatic_checks(paths, environment.workspace.root))
         reports: list[str] = []
         for check in checks:
+            if "skip" in check:
+                reports.append(f"{check['name']}: SKIPPED — {check['skip']}.")
+                continue
             selected = sorted(path for path in paths if not check.get("extensions") or Path(path).suffix in check["extensions"])
             if not selected:
                 continue
@@ -87,7 +144,7 @@ async def check_edit_batch(registry: ToolRegistry, batch: list[tuple[ToolCall, T
             archive = registry.services.get("command_archive")
             log = archive.start(shlex.join(argv), step_id=step_id, call_id="batch-check") if archive is not None else None
             try:
-                process = await asyncio.create_subprocess_exec(*argv, cwd=environment.workspace.root,
+                process = await asyncio.create_subprocess_exec(*argv, cwd=check.get("cwd", environment.workspace.root),
                     env=_subprocess_env(), stdin=asyncio.subprocess.DEVNULL,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                     start_new_session=os.name == "posix")

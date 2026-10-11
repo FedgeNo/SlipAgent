@@ -459,7 +459,24 @@ After each complete batch containing successful `write_file` or `edit_file`
 calls, Python syntax is checked with the selected project interpreter without
 executing/importing the edited code. No selected interpreter means an explicit
 skipped check. Set `python_syntax` to false to disable it. Additional checks are
-explicit argument arrays, for example:
+also run automatically when their tools are installed:
+
+| Edited files | Automatic check |
+| --- | --- |
+| `.js`, `.mjs`, `.cjs` | `node --check`, one file at a time |
+| `.php`, `.phtml` | `php -l`, one file at a time |
+| `.ts`, `.tsx`, `.mts`, `.cts` | `tsc --noEmit`, once per nearest `tsconfig.json`, or on edited files when no configuration exists |
+
+Missing tools are reported as skipped; nothing is installed automatically.
+TypeScript prefers `node_modules/.bin/tsc` in the configuration directory (or
+edited file's directory without a configuration) and its ancestors within the
+workspace, then `tsc` on PATH. Its checks include type
+checking and may report existing errors elsewhere in the same project. They
+emit no compiled files and discard incremental build metadata. TypeScript
+checks have a 120-second timeout; JavaScript and PHP checks allow 10 seconds per
+file. These checks do not execute the edited source.
+
+Custom checks use explicit argument arrays, for example:
 
 ```json
 {"name":"Ruff", "argv":["{python}","-m","ruff","check","{files}"],

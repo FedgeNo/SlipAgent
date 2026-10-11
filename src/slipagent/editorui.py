@@ -209,24 +209,26 @@ class EditorPanel:
         else:
             old.close()
 
-    async def close(self) -> None:
+    async def close(self, *, release: bool = True) -> bool:
         if self.busy or self.file is None:
-            return
+            return False
         if self.dirty():
-            action = await self.terminal.choose("Unsaved File Edits", [("cancel", "Keep Editing"), ("save", "Save and Close"), ("discard", "Discard Unsaved Edits and Close")])
+            action = await self.terminal.choose("Unsaved Changes", [("save", "Save"), ("discard", "Don't Save"), ("cancel", "Cancel")])
             if action == "save":
                 if not await self.save():
-                    return
+                    return False
             elif action != "discard":
                 self.terminal.app.layout.focus(self.input)
-                return
+                return False
         self.dispose()
         self.terminal.app.layout.focus(self.terminal.input)
         coordinator = self.terminal.__dict__.get("_user_edits")
-        if coordinator is not None:
+        if release and coordinator is not None:
             coordinator.close()
-        self.terminal.notify("Editor closed.")
+        if release:
+            self.terminal.notify("Editor closed.")
         self.terminal.app.invalidate()
+        return True
 
     def dispose(self) -> None:
         if self.file is not None:

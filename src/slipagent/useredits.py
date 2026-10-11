@@ -18,15 +18,23 @@ class UserEdits:
         self.frame_held = False
 
     async def request(self, path: Path, line: int = 1) -> None:
-        if self.pending is not None or self.opening or self.terminal.__dict__.get("_editor_active"):
-            self.terminal.notify("Close the current editor first.")
+        if self.pending is not None or self.opening:
+            self.terminal.notify("An editor request is already pending.")
             return
+        switching = bool(self.terminal.__dict__.get("_editor_active"))
+        if switching:
+            self.opening = True
+            try:
+                if not await self.terminal._editor_panel.close(release=False):
+                    return
+            finally:
+                self.opening = False
         self.pending = path, line
         self.released.clear()
-        if self.session.reloader is not None:
+        if self.session.reloader is not None and not self.frame_held:
             self.session.reloader.busy += 1
             self.frame_held = True
-        if self.session.agent.running:
+        if self.session.agent.running and not switching:
             self.terminal.notify("Editor queued until this turn finishes.")
         else:
             await self.boundary()

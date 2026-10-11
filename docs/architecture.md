@@ -832,8 +832,12 @@ to the model along with the active generation number.
   Closing the terminal releases both temporary files. These files serve display,
   not conversation persistence or model context. Password entry owns a separate
   history-free buffer/queue, not just a masking processor.
-  `TerminalUI.choose(title, options)` temporarily replaces the seven-row footer
-  with a heading, five option rows, and a bottom key legend. A focused menu
+  UI choices use the shared footer selector by default.
+  `TerminalUI.choose(title, options)` temporarily replaces the nine-row footer
+  with a heading, a blank row, five option rows, another blank row, and a bottom
+  key legend. Very short terminals reduce the input/list rows to retain feed
+  output. The displayed **back** action cancels the selector like Escape.
+  A focused menu
   control owns navigation; the input buffer, history, queue, and transcript stay
   intact. It returns the selected value or `None` on Escape, Ctrl-D, or
   terminal closure. Cancellation restores input focus, and refresh preserves an

@@ -661,11 +661,14 @@ its current tool batch first; managed background commands are stopped, and furth
 agent work waits until the editor closes. While queued, the animated status reads
 **Opening editor after this turn**. Read-only viewers open immediately while the
 agent continues working. **Ctrl+S** saves; **Esc** or **exit editor**
-closes, asking whether to save, discard, or keep editing when there are unsaved
-changes. Clicking text places the cursor there; clicking right of a line places
+closes, showing **Save**, **Don't Save**, and **Cancel** in the bottom menu when
+there are unsaved changes. Clicking text places the cursor there; clicking right of a line places
 it at that line's end, and clicking below the content places it at the file's end.
 Editor action controls replace the prompt area while editing; the same prompt
 buffer, text, cursor, and scrolling return when the editor closes.
+Clicking another touched file opens it immediately when the current file is
+saved, or offers the same unsaved-change menu first. The agent stays held
+throughout the switch.
 Files are backed by private snapshots, with only
 one bounded page in the editing buffer; **Page Up/Down** moves between pages.
 Untouched content and line endings are preserved. External disk changes offer
@@ -746,7 +749,7 @@ count is fetched from OpenRouter at startup and refreshed every 15 minutes,
 including while idle or working.
 
 The underlined **Commands** link beside **Ready**, or `/menu`, replaces the
-seven-row input footer with a heading, a five-row scrolling list of all commands with their
+nine-row input footer with a heading, a five-row scrolling list of all commands with their
 help syntax and descriptions, and `↑/↓ or wheel = move | Enter or click = select | Esc = back` on
 the bottom line, with shorter wording on narrow terminals.
 Use the mouse wheel or arrow keys to move, and click an item or press Enter to

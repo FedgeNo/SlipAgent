@@ -1405,7 +1405,7 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             wait_for(lambda: "model: stub/one" in screen.display[23])
             assert screen.title == f"{project_dir} | SlipAgent"
             assert screen.display[22].strip() == ""
-            startup = "\n".join(screen.display[:17])
+            startup = "\n".join(screen.display[:15])
             for command in ["/help", "/menu", "/danger", "/tools", "/model", "/models", "/key", "/cost", "/mcp", "/rename", "/reset", "/reload", "/generations", "/init", "/stop", "/exit", "/quit"]:
                 assert command in startup
             assert "Follow-ups queue" in startup
@@ -1418,34 +1418,34 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             wait_for(lambda: "Danger Mode" not in screen.display[23])
             os.write(master, b"/menu\r")
             wait_for(lambda: "Enter/click select" in screen.display[23])
-            assert screen.display[17].strip() == "Commands"
+            assert screen.display[15].strip() == "Commands"
             os.write(master, b"\x1b")
-            wait_for(lambda: "Ready" in screen.display[17])
+            wait_for(lambda: "Ready" in screen.display[15])
             assert not stub.requests
             os.write(master, b"/menu\r")
             wait_for(lambda: "Enter/click select" in screen.display[23])
             from slipagent.cli import MENU_OPTIONS
             tools_index = next(index for index, (command, _) in enumerate(MENU_OPTIONS) if command == "/tools")
             os.write(master, b"\x1b[B" * tools_index + b"\r")
-            wait_for(lambda: "Ready" in screen.display[17] and "/tools" in screen.display[18])
-            assert "read_file" not in "\n".join(screen.display[:17])
+            wait_for(lambda: "Ready" in screen.display[15] and "/tools" in screen.display[17])
+            assert "read_file" not in "\n".join(screen.display[:15])
             os.write(master, b"\r")
-            wait_for(lambda: "Ready" in screen.display[17] and "read_file" in "\n".join(screen.display[:17]))
+            wait_for(lambda: "Ready" in screen.display[15] and "read_file" in "\n".join(screen.display[:15]))
             assert not stub.requests
             os.write(master, b"go\r")
             wait_for(started.is_set)
             os.write(master, b"/rename Work in progress\r")
             wait_for(lambda: screen.title.endswith("Work in progress | SlipAgent"))
             os.write(master, b"/stop\r")
-            wait_for(lambda: "Stopping After This Step" in screen.display[17])
+            wait_for(lambda: "Stopping After This Step" in screen.display[15])
             os.write(master, b"queued followup\r")
-            wait_for(lambda: "queued followup" in "\n".join(screen.display[:17]))
+            wait_for(lambda: "queued followup" in "\n".join(screen.display[:15]))
             release.set()
-            wait_for(lambda: "Stopped after the current step" in "\n".join(screen.display[:17]) and "Ready" in screen.display[17])
+            wait_for(lambda: "Stopped after the current step" in "\n".join(screen.display[:15]) and "Ready" in screen.display[15])
             assert (project_dir / "finished.txt").read_text() == "completed"
             assert len(stub.requests) == 1
             os.write(master, b"continue\r")
-            wait_for(lambda: "resumed successfully" in "\n".join(screen.display[:17]))
+            wait_for(lambda: "resumed successfully" in "\n".join(screen.display[:15]))
             assert len(stub.requests) == 2
             history = unpack_api_context(stub.requests[1]["messages"])
             assert [m["tool_call_id"] for m in history if m["role"] == "tool"] == ["call_1", "call_2"]
@@ -1455,20 +1455,20 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             assert screen.title.endswith("Work in progress | SlipAgent")
             os.write(master, b"/reset\r")
             wait_for(lambda: screen.title == f"{project_dir} | SlipAgent")
-            wait_for(lambda: "conversation cleared" in "\n".join(screen.display[:17]))
+            wait_for(lambda: "conversation cleared" in "\n".join(screen.display[:15]))
             os.write(master, b"/resume\r")
-            wait_for(lambda: screen.display[17].strip() == "Resume Session")
+            wait_for(lambda: screen.display[15].strip() == "Resume Session")
             os.write(master, b"\x1b")
-            wait_for(lambda: "Ready" in screen.display[17])
+            wait_for(lambda: "Ready" in screen.display[15])
             assert screen.title == f"{project_dir} | SlipAgent"
-            assert "conversation cleared" in "\n".join(screen.display[:17])
+            assert "conversation cleared" in "\n".join(screen.display[:15])
             os.write(master, b"/resume\r")
-            wait_for(lambda: screen.display[17].strip() == "Resume Session")
+            wait_for(lambda: screen.display[15].strip() == "Resume Session")
             os.write(master, b"\x1b[B\r")
             wait_for(lambda: screen.title == "Work in progress | SlipAgent")
-            wait_for(lambda: "restored " in "\n".join(screen.display[:17]))
-            assert "resumed successfully" in "\n".join(screen.display[:17])
-            assert "conversation cleared" not in "\n".join(screen.display[:17])
+            wait_for(lambda: "restored " in "\n".join(screen.display[:15]))
+            assert "resumed successfully" in "\n".join(screen.display[:15])
+            assert "conversation cleared" not in "\n".join(screen.display[:15])
             os.write(master, b"/exit\r")
             assert proc.wait(timeout=5) == 0
             assert termios.tcgetattr(slave) == original_modes

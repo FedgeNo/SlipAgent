@@ -43,14 +43,14 @@ class OptionsPanel:
         self.field_future = asyncio.get_running_loop().create_future()
         self.terminal._options_field_active = True
         self.terminal.notify("Use {path}, or the directory is appended.")
-        self.terminal.app.layout.focus(self.field)
+        self.terminal._focus.focus(self.field)
         self.terminal.app.invalidate()
         try:
             return await self.field_future
         finally:
             self.field_future = None
             self.terminal._options_field_active = False
-            self.terminal.app.layout.focus(self.terminal._editor_input if self.terminal._editor_active else self.terminal.input)
+            self.terminal._focus.restore_primary()
             self.terminal.app.invalidate()
 
     async def show(self) -> None:
@@ -96,5 +96,5 @@ class OptionsPanel:
                     self.terminal.write(str(exc))
         finally:
             self.active = False
-            self.terminal.app.layout.focus(self.terminal._editor_input if self.terminal._editor_active else self.terminal._viewer_window if self.terminal._viewer_active else self.terminal.input)
+            self.terminal._focus.restore_primary()
             self.terminal.app.invalidate()

@@ -6,7 +6,7 @@ import asyncio
 import json
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from typing import TextIO
 from pathlib import Path
 from typing import Any
@@ -35,6 +35,8 @@ from wcwidth import iter_graphemes, width as display_width, wrap
 
 from .transcript import TranscriptFile, WrappedTranscript
 from .uiwindows import TranscriptWindow
+from .focus import FocusCoordinator, FocusTarget
+from .links import CallbackLink, TaskLink, LinkHover
 from .listpanels import TouchedPanel, CallsPanel, ChoicePanel, ListActions
 from .palette import FOOTER_BACKGROUND_COLOR, MENU_BACKGROUND_COLOR, MUTED_COLOR, USER_PROMPT_STYLE
 from .markdown import THEMES, MarkdownRenderer, code_blocks
@@ -187,6 +189,7 @@ class TerminalUI:
         self._ensure_menu()
         self._ensure_viewer()
         self._ensure_inspection()
+        self._ensure_focus()
         if not isinstance(self.input.window, InputWindow):
             self.input.window = InputWindow(self.input.control)
             self.input.window.style = "class:text-area class:user"
@@ -212,7 +215,7 @@ class TerminalUI:
         ])
         footer = HSplit([
             DynamicContainer(lambda: scroll_row if self._show_scroll_bottom() else activity_row),
-            DynamicContainer(lambda: self._editor_panel.controls if self._editor_active and not self.__dict__.get("_panel_prompt_active", False) else self.input),
+            DynamicContainer(lambda: self._editor_panel.controls if self._editor_active and not self._focus.prompt_active else self.input),
             self._bottom_row(menu=False),
         ], height=lambda: self._footer_rows() - 2, style="class:footer")
         menu_footer = HSplit([
@@ -285,12 +288,12 @@ class TerminalUI:
         self._ensure_inspection()
         self._inspection_visible = not self._inspection_visible
         if not self._inspection_visible and self._inspection_focused():
-            self.app.layout.focus(self._primary_panel())
+            self._focus.restore_primary()
         if self._inspection_visible and self.output.get_size().columns < 60:
             self.notify("Widen terminal to show Inspect.")
         self.app.invalidate()
 
-    def _primary_panel(self) -> Any:
+    def _primary_panel(self) -> FocusTarget:
         return self._editor_input if self._editor_active else self._viewer_window if self._viewer_active else self.input
 
     def _inspection_focused(self) -> bool:
@@ -301,22 +304,17 @@ class TerminalUI:
             self.notify("Widen terminal to show Inspect.")
             return
         self._inspection_visible = True
-        panels: list[TextArea | Window] = [self.input]
-        if self._editor_active:
-            panels.append(self._editor_input)
-        panels.extend([self._files_window, self._calls_window])
-        for window in (self._files_window, self._calls_window):
-            if isinstance(window.content, FormattedTextControl):
-                window.content.focusable = to_filter(True)
-        current = self.app.layout.current_control
-        index = next((i for i, panel in enumerate(panels)
-                      if (panel.control if isinstance(panel, TextArea) else panel.content) is current), -1)
-        target = panels[(index + 1) % len(panels)]
-        self.__dict__["_panel_prompt_active"] = target is self.input
-        self.app.layout.focus(target)
-        if self._inspection_focused():
-            self._move_inspection(0)
+        self._focus.cycle()
         self.app.invalidate()
+
+    def _ensure_focus(self) -> None:
+        if "_focus" not in self.__dict__:
+            self._focus = FocusCoordinator(
+                lambda: self.app, self.input,
+                lambda: self._editor_input if self._editor_active else None,
+                self._primary_panel, (self._files_window, self._calls_window),
+                lambda: self._move_inspection(0),
+            )
 
     def _inspection_keys(self, files: bool) -> list[Any]:
         return self._touched_panel.keys() if files else self._calls_panel.keys()
@@ -336,23 +334,23 @@ class TerminalUI:
         else:
             self._calls_panel.open_selected()
 
+    def _link_hover(self) -> LinkHover:
+        return LinkHover(lambda: self.__dict__.get("_hovered_control"),
+                         lambda key: self.__dict__.__setitem__("_hovered_control", key))
+
+    def _action_link(self, label: str, key: object, action: Callable[[], object], *,
+                     style: str = "", enabled: Callable[[], bool] = lambda: True) -> StyleAndTextTuples:
+        return CallbackLink(label, key, self._link_hover(), action, style=style, enabled=enabled).fragments()
+
+    def _task_link(self, label: str, key: object, operation: Callable[[], Coroutine[Any, Any, None]], *,
+                   style: str = "", enabled: Callable[[], bool] = lambda: True) -> StyleAndTextTuples:
+        return TaskLink(label, key, self._link_hover(), operation, self.app.create_background_task,
+                        style=style, enabled=enabled).fragments()
+
     def _inspect_link(self) -> StyleAndTextTuples:
-        def click(event: MouseEvent) -> object:
-            if event.event_type == MouseEventType.MOUSE_MOVE:
-                self.__dict__["_hovered_control"] = "inspect"
-            elif event.event_type == MouseEventType.MOUSE_UP and event.button == MouseButton.LEFT:
-                self.toggle_inspection()
-            return None
-        style = "class:clickable" + (" class:hover" if self.__dict__.get("_hovered_control") == "inspect" else "")
-        def options(event: MouseEvent) -> object:
-            if event.event_type == MouseEventType.MOUSE_MOVE:
-                self.__dict__["_hovered_control"] = "options"
-            elif event.event_type == MouseEventType.MOUSE_UP and event.button == MouseButton.LEFT:
-                self.app.create_background_task(self._options_panel.show())
-            return None
-        option_style = "class:clickable" + (" class:hover" if self.__dict__.get("_hovered_control") == "options" else "")
-        return [(style, "Inspect [Ctrl+O]" if self._right_control_width() > 18 else "Inspect", click),
-                ("", "  "), (option_style, "Options", options), ("", " ")]
+        label = "Inspect [Ctrl+O]" if self._right_control_width() > 18 else "Inspect"
+        return [*self._action_link(label, "inspect", self.toggle_inspection), ("", "  "),
+                *self._task_link("Options", "options", self._options_panel.show), ("", " ")]
 
     def _right_control_width(self) -> int:
         columns = self.output.get_size().columns
@@ -366,16 +364,7 @@ class TerminalUI:
         return not (self.transcript._following or self._viewer_active or self._editor_active or self.context_visible)
 
     def _scroll_bottom_link(self) -> StyleAndTextTuples:
-        def click(event: MouseEvent) -> object:
-            if event.event_type == MouseEventType.MOUSE_MOVE:
-                self.__dict__["_hovered_control"] = "scroll-bottom"
-            elif event.event_type == MouseEventType.MOUSE_UP and event.button == MouseButton.LEFT:
-                self.scroll_to_end()
-            return None
-        style = "class:clickable"
-        if self.__dict__.get("_hovered_control") == "scroll-bottom":
-            style += " class:hover"
-        return [("", " "), (style, "Scroll to Bottom", click), ("", " ")]
+        return [("", " "), *self._action_link("Scroll to Bottom", "scroll-bottom", self.scroll_to_end), ("", " ")]
 
     def _ensure_options(self) -> None:
         if "_options_panel" not in self.__dict__:
@@ -513,7 +502,7 @@ class TerminalUI:
 
     async def _open_editor_now(self, path: Path, *, line: int = 1) -> None:
         self._ensure_editor()
-        self.__dict__["_panel_prompt_active"] = False
+        self._focus.prompt_active = False
         await self._editor_panel.open(path, line)
 
     async def _save_editor(self) -> None:
@@ -598,7 +587,7 @@ class TerminalUI:
         self._viewer_window.vertical_scroll_2 = self._viewer_window._pending_scroll = 0
         self._viewer_window._following = False
         self._viewer_active = True
-        self.app.layout.focus(self._viewer_window)
+        self._focus.focus(self._viewer_window)
         self.app.invalidate()
 
     def close_viewer(self) -> None:
@@ -609,7 +598,7 @@ class TerminalUI:
         if isinstance(content, TextViewControl):
             content.close()
         self._viewer_window.content = TextViewControl("")
-        self.app.layout.focus(self._menu_window if self._menu_future is not None else self.input)
+        self._focus.focus(self._menu_window if self._menu_future is not None else self.input)
         self.app.invalidate()
 
     async def open_artifact(self, record_id: int, *, line: int = 1) -> None:
@@ -767,16 +756,8 @@ class TerminalUI:
         prefix, separator, tail = hint.partition("back")
         if not separator:
             return list(to_formatted_text(ANSI(hint + suffix)))
-        def back(event: MouseEvent) -> object:
-            if event.event_type == MouseEventType.MOUSE_MOVE:
-                self.__dict__["_hovered_control"] = "menu-back"
-            elif event.event_type == MouseEventType.MOUSE_UP and event.button == MouseButton.LEFT:
-                self._finish_menu(None)
-            return None
-        style = "class:clickable"
-        if self.__dict__.get("_hovered_control") == "menu-back":
-            style += " class:hover"
-        return [("", prefix), (style, "back", back), ("", tail), *to_formatted_text(ANSI(suffix))]
+        return [("", prefix), *self._action_link("back", "menu-back", lambda: self._finish_menu(None)),
+                ("", tail), *to_formatted_text(ANSI(suffix))]
 
     async def choose(self, title: str, options: list[tuple[str, str]]) -> str | None:
         """Choose a value/label pair in the footer; cancellation preserves the draft."""
@@ -793,13 +774,13 @@ class TerminalUI:
         self._menu_index = 0
         self._menu_window.vertical_scroll = self._menu_window.vertical_scroll_2 = 0
         try:
-            self.app.layout.focus(self._menu_window)
+            self._focus.focus(self._menu_window)
             self.app.invalidate()
             return await future
         finally:
             self._menu_future = None
             self._menu_options = []
-            self.app.layout.focus(self._editor_input if self._editor_active else self._viewer_window if self._viewer_active else self.input)
+            self._focus.restore_primary()
             self.app.invalidate()
 
     def _move_menu(self, rows: int) -> None:
@@ -813,7 +794,7 @@ class TerminalUI:
         """Retain the ordinary draft in input history without submitting it."""
         self.input.buffer.append_to_history()
         self.input.buffer.reset(document=Document(command, len(command)))
-        self.app.layout.focus(self.input)
+        self._focus.focus(self.input)
         self.app.invalidate()
 
     async def _choose_command(self) -> None:
@@ -1078,7 +1059,7 @@ class TerminalUI:
 
         @bindings.add("escape", filter=in_inspection, eager=True)
         def leave_inspection(event: KeyPressEvent) -> None:
-            self.app.layout.focus(self._primary_panel())
+            self._focus.restore_primary()
 
         @bindings.add(Keys.Any, filter=in_inspection)
         def ignore_inspection_text(event: KeyPressEvent) -> None:
@@ -1273,12 +1254,7 @@ class TerminalUI:
         # a rejected reload can still run the previous generation's methods.
         focused = self.app.layout.current_control
         layout = self._layout()
-        if self._inspection_visible and self.output.get_size().columns >= 60 and focused in (
-            self._files_window.content, self._calls_window.content,
-        ):
-            layout.focus(focused)
-        elif focused is self.input.control and self.__dict__.get("_panel_prompt_active", False):
-            layout.focus(self.input)
+        self._focus.preserve(layout, focused)
         bindings = self._bindings()
         style = self._style()
         self._ensure_transcript()
@@ -1372,19 +1348,11 @@ class TerminalUI:
         if self._viewer_active or self._editor_active:
             mode = "editor" if self._editor_active else "viewer"
             label = "Close Text Editor" if self._editor_active else "exit viewer"
-            def close(event: MouseEvent) -> object:
-                if event.event_type == MouseEventType.MOUSE_MOVE:
-                    self.__dict__["_hovered_control"] = "exit-" + mode
-                elif event.event_type == MouseEventType.MOUSE_UP and event.button == MouseButton.LEFT:
-                    if mode == "editor":
-                        self.app.create_background_task(self._close_editor())
-                    else:
-                        self.close_viewer()
-                return None
-            style = "class:clickable" + (" class:hover" if self.__dict__.get("_hovered_control") == "exit-" + mode else "")
+            link = (self._task_link(label, "exit-editor", self._close_editor) if mode == "editor" else
+                    self._action_link(label, "exit-viewer", self.close_viewer))
             if display_width(fragment_list_to_text(fragments)) + len("  ESC to " + label + " ") > self.output.get_size().columns - self._right_control_width():
                 fragments = []
-            fragments.extend([("", "  ESC to " if fragments else "ESC to "), (style, label, close), ("", " ")])
+            fragments.extend([("", "  ESC to " if fragments else "ESC to "), *link, ("", " ")])
         return self._activity_notice(fragments)
 
     def _activity_notice(self, fragments: StyleAndTextTuples) -> StyleAndTextTuples:
@@ -1434,11 +1402,8 @@ class TerminalUI:
         if not self.working:
             fragments: StyleAndTextTuples = [("class:idle", "Ready")]
             if self._input_label == "> " and not self._viewer_active:
-                style = "class:clickable"
-                if self.__dict__.get("_hovered_control") == "commands":
-                    style += " class:hover"
                 # Window maps clicks past text onto its last character.
-                fragments.extend([("", "  "), (style, "Commands", self._commands_mouse), ("", " ")])
+                fragments.extend([("", "  "), *self._task_link("Commands", "commands", self._choose_command), ("", " ")])
             return fragments
         frame = self.__dict__.get("_activity_frame", PULSE_FRAMES[int(time.monotonic() * 4) % len(PULSE_FRAMES)])
         label = "Stopping After This Step" if self.stopping else "Working" if self._viewer_active else "Working (esc to interrupt)"

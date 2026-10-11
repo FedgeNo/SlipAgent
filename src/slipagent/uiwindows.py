@@ -59,5 +59,3 @@ class TranscriptWindow(Window):
         self.vertical_scroll, self.vertical_scroll_2 = min((line, offset), bottom)
         self._following = (self.vertical_scroll, self.vertical_scroll_2) == bottom
         self.horizontal_scroll = 0
-
-

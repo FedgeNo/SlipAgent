@@ -12,7 +12,6 @@ from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 from prompt_toolkit.layout import HSplit, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
-from prompt_toolkit.mouse_events import MouseEvent, MouseEventType, MouseButton
 from prompt_toolkit.widgets import TextArea
 from wcwidth import iter_graphemes, width as display_width
 
@@ -67,16 +66,10 @@ class EditorPanel:
             for index, (label, action) in enumerate(group):
                 if index:
                     result.append(("", "  |  "))
-                def click(event: MouseEvent, action: Any = action, label: str = label) -> object:
-                    if event.event_type == MouseEventType.MOUSE_MOVE:
-                        self.terminal.__dict__["_hovered_control"] = ("editor-action", label)
-                    elif event.event_type == MouseEventType.MOUSE_UP and event.button == MouseButton.LEFT and not self.busy:
-                        action()
-                    return None
-                style = "class:menu-item class:clickable"
-                if self.terminal.__dict__.get("_hovered_control") == ("editor-action", label):
-                    style += " class:hover"
-                result.append((style, label, click))
+                result.extend(self.terminal._action_link(
+                    label, ("editor-action", label), action, style="class:menu-item",
+                    enabled=lambda: not self.busy,
+                ))
             result.append(("", " \n"))
         return result
 
@@ -125,7 +118,7 @@ class EditorPanel:
             position = sum(len(file.original.segment(self.page * PAGE_SEGMENTS + n)) for n in range(segment))
             self.input.buffer.cursor_position = position
             self.terminal._editor_active = True
-            self.terminal.app.layout.focus(self.input)
+            self.terminal._focus.focus(self.input)
             self.terminal.notify("Agent held while editor is open.")
         except (OSError, UnicodeError, ValueError) as exc:
             self.terminal.notify("Could not open editor.")
@@ -269,7 +262,7 @@ class EditorPanel:
         finally:
             self.saving_task = None
             self.busy = False
-            self.terminal.app.layout.focus(self.input)
+            self.terminal._focus.focus(self.input)
             self.terminal.app.invalidate()
 
     async def reload(self) -> None:
@@ -278,7 +271,7 @@ class EditorPanel:
         if self.dirty():
             action = await self.terminal.choose("Reload Discards Unsaved Edits", [("cancel", "Keep Editing"), ("reload", "Discard Unsaved Edits and Reload")])
             if action != "reload":
-                self.terminal.app.layout.focus(self.input)
+                self.terminal._focus.focus(self.input)
                 return
         old = self.file
         line = old.original.line_number(self.page * PAGE_SEGMENTS) + self.input.buffer.document.cursor_position_row
@@ -289,7 +282,7 @@ class EditorPanel:
         await self.open(old.path, line)
         if getattr(self, "file") is None:
             self.file = old
-            self.terminal.app.layout.focus(self.input)
+            self.terminal._focus.focus(self.input)
         else:
             old.close()
 
@@ -302,10 +295,10 @@ class EditorPanel:
                 if not await self.save():
                     return False
             elif action != "discard":
-                self.terminal.app.layout.focus(self.input)
+                self.terminal._focus.focus(self.input)
                 return False
         self.dispose()
-        self.terminal.app.layout.focus(self.terminal.input)
+        self.terminal._focus.focus(self.terminal.input)
         coordinator = self.terminal.__dict__.get("_user_edits")
         if release and coordinator is not None:
             coordinator.close()

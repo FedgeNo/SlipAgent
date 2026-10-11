@@ -719,6 +719,14 @@ the components do not depend on `TerminalUI`. Wrapped manual scrolling belongs
 to `uiwindows.TranscriptWindow`. Sidebar wheels scroll the viewport; bottom-menu
 wheels move selection. Those policies remain distinct.
 
+`FocusCoordinator` owns clockwise traversal (Prompt, open Editor, Touched,
+Calls) and primary-panel restoration. Editor and options operations use that
+owner rather than choosing focus destinations independently. Focus never
+changes the editor's hold on agent activity. `ActionLink` supplies common hover
+and left-click behavior; `CallbackLink` invokes synchronous actions and
+`TaskLink` submits asynchronous actions to an explicit application task owner.
+Links cover their rendered labels; list hit testing remains a list concern.
+
 `AgentEvent.step` is the conversation step ID, matching archival, checkpoints,
 tool provenance, and artifact references. A new user request does not restart
 that identity. Run-local request budgets and diagnostic attempt numbers remain

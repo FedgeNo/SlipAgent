@@ -734,6 +734,38 @@ def test_rebuilt_tools_can_change_resource_fields_without_leaking_old_clients(ru
     ''')
 
 
+def test_shared_lists_retain_selection_across_accepted_and_rejected_reloads(run_copy):
+    run_copy('''
+        from prompt_toolkit.input import create_pipe_input
+        from prompt_toolkit.output import DummyOutput
+        from slipagent.terminal import TerminalUI
+        with create_pipe_input() as pipe:
+            terminal = TerminalUI(lambda columns: 'status', sink, input=pipe, output=DummyOutput())
+            renderer.terminal = terminal
+            try:
+                for number in range(10):
+                    terminal.track_call(ToolCall(str(number), 'read_file', {'path': f'file-{number}'}), 1)
+                panel = terminal._touched_panel
+                panel.move(4)
+                selected = panel.selection
+                edit('listpanels.py', 'return f"{key} [{self.items[key]}]"', 'return f"Updated {key} [{self.items[key]}]"')
+                await frame.checkpoint()
+                assert frame.generation == 1, sink.getvalue()
+                assert terminal._touched_panel is panel
+                assert panel.selection == selected
+                assert panel.label(selected).startswith('Updated ')
+                edit('listpanels.py', 'class TouchedPanel(ListPanel[str]):', 'class TouchedPanel(ListPanel[str]):\\n    __slots__ = ()')
+                await frame.checkpoint()
+                assert frame.generation == 1, sink.getvalue()
+                assert terminal._touched_panel is panel
+                assert panel.selection == selected
+                assert panel.label(selected).startswith('Updated ')
+            finally:
+                terminal.close()
+                renderer.terminal = None
+    ''')
+
+
 def test_running_terminal_accepts_input_after_component_reload(run_copy):
     run_copy('''
         from prompt_toolkit.input import create_pipe_input

@@ -727,6 +727,14 @@ and left-click behavior; `CallbackLink` invokes synchronous actions and
 `TaskLink` submits asynchronous actions to an explicit application task owner.
 Links cover their rendered labels; list hit testing remains a list concern.
 
+`ViewerDeck` owns the read-only viewport and asynchronous-open tokens.
+`TextViewerPanel` owns its indexed snapshot and renderer; `DiffViewerPanel`
+selects the diff renderer, and `FileViewerPanel` owns source-change checks.
+Replacing or closing a panel releases its snapshot exactly once. A completed
+check for a replaced panel cannot alter the current panel. Calls and ordinary
+output use the shared text panel. This ownership transition requires restarting
+processes with the earlier viewer state; reload rejects that state explicitly.
+
 `AgentEvent.step` is the conversation step ID, matching archival, checkpoints,
 tool provenance, and artifact references. A new user request does not restart
 that identity. Run-local request budgets and diagnostic attempt numbers remain

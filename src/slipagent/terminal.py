@@ -42,7 +42,7 @@ from .palette import FOOTER_BACKGROUND_COLOR, MENU_BACKGROUND_COLOR, MUTED_COLOR
 from .markdown import THEMES, MarkdownRenderer, code_blocks
 from .clipboard import clipboard_sequence, copy_to_clipboard
 from .explorer import folder_opener, open_folder
-from .viewers import TextViewControl, DiffViewControl
+from .viewerpanels import ViewerDeck, TextViewerPanel, DiffViewerPanel, FileViewerPanel, file_signature
 from .inspection import IndexedText, field_snapshot, artifact_snapshot, build_snapshot
 from .types import ToolCall
 
@@ -466,12 +466,10 @@ class TerminalUI:
             self.notify("Could not open text file.")
             self.write(f"{path}: {exc}")
             return
-        if request != self.__dict__.get("_viewer_request"):
+        if request != self._viewer.request:
             text.close()
             return
-        self.open_viewer(path, text, line=line)
-        self.__dict__["_viewer_source"] = target
-        self.__dict__["_viewer_source_stat"] = self._file_signature(before)
+        self._show_viewer(FileViewerPanel(path, text, target, file_signature(before)), line=line)
 
     async def _inspect_call(self, call: dict[str, Any]) -> None:
         request = self._new_viewer_request()
@@ -481,15 +479,13 @@ class TerminalUI:
             self.notify("Could not open call record.")
             self.write(f"Call {call['call_id']}: {exc}")
             return
-        if request != self.__dict__.get("_viewer_request"):
+        if request != self._viewer.request:
             snapshot.close()
             return
         self.open_viewer(f"{call['tool']} — {call['call_id']}", snapshot)
 
     def _new_viewer_request(self) -> int:
-        request = int(self.__dict__.get("_viewer_request", 0)) + 1
-        self.__dict__["_viewer_request"] = request
-        return request
+        return self._viewer.next_request()
 
     def _ensure_editor(self) -> None:
         if "_editor_panel" not in self.__dict__:
@@ -518,86 +514,52 @@ class TerminalUI:
         self._editor_panel.change_page(delta)
 
     def _ensure_viewer(self) -> None:
-        if "_viewer_active" in self.__dict__:
-            return
-        self._viewer_active = False
-        self._viewer_title = ""
-        self._viewer_window = TranscriptWindow(TextViewControl(""))
-        self._viewer_window._following = False
-        self._viewer_container = HSplit([
-            Window(FormattedTextControl(self._viewer_header),
-                   height=1, style="class:status"),
-            self._viewer_window,
-        ])
+        if "_viewer" not in self.__dict__:
+            if "_viewer_window" in self.__dict__:
+                raise RuntimeError("Restart required: viewer ownership changed.")
+            self._viewer = ViewerDeck(self._viewer_header)
+
+    @property
+    def _viewer_active(self) -> bool:
+        return self._viewer.active
+
+    @property
+    def _viewer_window(self) -> TranscriptWindow:
+        return self._viewer.window
+
+    @property
+    def _viewer_container(self) -> HSplit:
+        return self._viewer.container
 
     def _viewer_header(self) -> StyleAndTextTuples:
-        text = self._viewer_title + " — Read Only | ↑↓ / Wheel / PgUp / PgDn | Esc: Close"
-        if not self.__dict__.get("_viewer_changed"):
+        text = self._viewer.panel.title + " — Read Only | ↑↓ / Wheel / PgUp / PgDn | Esc: Close"
+        if not self._viewer.panel.changed:
             return [("", text)]
-        def reload(event: MouseEvent) -> object:
-            if event.event_type == MouseEventType.MOUSE_MOVE:
-                self.__dict__["_hovered_control"] = "reload-viewer"
-            if event.event_type == MouseEventType.MOUSE_UP and event.button == MouseButton.LEFT:
-                self.app.create_background_task(self._reload_viewer())
-            return None
         return [("class:retry", "File changed on disk. "),
-                ("class:clickable" + (" class:hover" if self.__dict__.get("_hovered_control") == "reload-viewer" else ""),
-                 "Reload [Ctrl+R]", reload), ("", " | " + text)]
-
-    @staticmethod
-    def _file_signature(metadata: Any) -> tuple[int, int, int, int, int]:
-        return (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns)
-
-    async def _check_viewer_file(self, source: Path) -> None:
-        try:
-            try:
-                signature = self._file_signature(await asyncio.to_thread(source.stat))
-            except OSError:
-                signature = None
-            if self.__dict__.get("_viewer_source") == source and signature != self.__dict__.get("_viewer_source_stat"):
-                self.__dict__["_viewer_changed"] = True
-                self.app.invalidate()
-        finally:
-            self.__dict__["_viewer_check_pending"] = False
+                *self._task_link("Reload [Ctrl+R]", "reload-viewer", self._reload_viewer), ("", " | " + text)]
 
     async def _reload_viewer(self) -> None:
-        source = self.__dict__.get("_viewer_source")
-        if source is not None:
+        panel = self._viewer.panel
+        if isinstance(panel, FileViewerPanel):
             scroll = self._viewer_window.vertical_scroll
-            await self._read_file(str(source))
+            await self._read_file(str(panel.source))
             self._viewer_window.vertical_scroll = scroll
             self.app.invalidate()
 
     def open_viewer(self, title: str, text: str | IndexedText, *, diff: bool = False, line: int = 1) -> None:
-        if self.__dict__.get("_editor_active"):
-            if isinstance(text, IndexedText):
-                text.close()
+        self._show_viewer((DiffViewerPanel if diff else TextViewerPanel)(title, text), line=line)
+
+    def _show_viewer(self, panel: TextViewerPanel, *, line: int = 1) -> None:
+        if self._editor_active:
+            panel.close()
             self.notify("Close the editor before opening a viewer.")
             return
-        self._ensure_viewer()
-        self._new_viewer_request()
-        old = self._viewer_window.content
-        if isinstance(old, TextViewControl):
-            old.close()
-        self.__dict__.pop("_viewer_source", None)
-        self.__dict__["_viewer_changed"] = False
-        self._viewer_title = " ".join(title.split())
-        self._viewer_window.content = DiffViewControl(text) if diff else TextViewControl(text)
-        self._viewer_window.vertical_scroll = text.line_index(line) if isinstance(text, IndexedText) else max(0, line - 1)
-        self._viewer_window.vertical_scroll_2 = self._viewer_window._pending_scroll = 0
-        self._viewer_window._following = False
-        self._viewer_active = True
+        self._viewer.show(panel, line)
         self._focus.focus(self._viewer_window)
         self.app.invalidate()
 
     def close_viewer(self) -> None:
-        self._new_viewer_request()
-        self._viewer_active = False
-        self.__dict__.pop("_viewer_source", None)
-        content = self._viewer_window.content
-        if isinstance(content, TextViewControl):
-            content.close()
-        self._viewer_window.content = TextViewControl("")
+        self._viewer.close()
         self._focus.focus(self._menu_window if self._menu_future is not None else self.input)
         self.app.invalidate()
 
@@ -615,7 +577,7 @@ class TerminalUI:
             self.notify("Could not open inspection record.")
             self.write(f"Inspection record {record_id}: {exc}")
             return
-        if request != self.__dict__.get("_viewer_request"):
+        if request != self._viewer.request:
             snapshot.close()
             return
         self.open_viewer(f"Record {record_id}", snapshot, diff=record["kind"] == "diff", line=line)
@@ -1032,7 +994,7 @@ class TerminalUI:
         if self._menu_future is not None:
             self._move_menu(rows)
             return
-        window = self._viewer_window if self.__dict__.get("_viewer_active") else self.context_window if self.context_visible else self.transcript
+        window = self._viewer_window if self._viewer.active else self.context_window if self.context_visible else self.transcript
         window.scroll(rows)
         self.app.invalidate()
 
@@ -1042,7 +1004,7 @@ class TerminalUI:
         in_setting = Condition(lambda: self.__dict__.get("_options_field_active", False))
         in_inspection = Condition(self._inspection_focused) & ~in_menu & ~in_setting
         in_editor = Condition(lambda: self.__dict__.get("_editor_active", False) and self.app.layout.current_control is self._editor_input.control) & ~in_menu & ~in_setting
-        in_viewer = Condition(lambda: self.__dict__.get("_viewer_active", False)) & ~in_menu & ~in_editor & ~in_setting & ~in_inspection
+        in_viewer = Condition(lambda: self._viewer.active) & ~in_menu & ~in_editor & ~in_setting & ~in_inspection
 
         @bindings.add("c-space", filter=~in_menu & ~in_setting)
         def cycle_panel(event: KeyPressEvent) -> None:
@@ -1434,12 +1396,7 @@ class TerminalUI:
 
     def _update_title(self) -> None:
         """Refresh the title animation and schedule open-file change checks."""
-        source = self.__dict__.get("_viewer_source")
-        now = time.monotonic()
-        if source is not None and not self.__dict__.get("_viewer_check_pending") and now >= self.__dict__.get("_viewer_check_at", 0):
-            self.__dict__["_viewer_check_at"] = now + 1
-            self.__dict__["_viewer_check_pending"] = True
-            self.app.create_background_task(self._check_viewer_file(source))
+        self._viewer.tick(self.app.create_background_task, self.app.invalidate)
         frame = PULSE_FRAMES[int(time.monotonic() * 4) % len(PULSE_FRAMES)]
         self._activity_frame = frame
         title = self.__dict__.get("_title")
@@ -1463,7 +1420,7 @@ class TerminalUI:
         self.__dict__.setdefault("_artifact_links", {}).clear()
         self.__dict__.setdefault("_touched_items", {}).clear()
         self.__dict__.setdefault("_inspection_calls", {}).clear()
-        if self.__dict__.get("_viewer_active"):
+        if self._viewer.active:
             self.close_viewer()
         self._continuation_indents.clear()
         self._markdown_chunks.clear()
@@ -1861,10 +1818,7 @@ class TerminalUI:
         coordinator = self.__dict__.get("_user_edits")
         if coordinator is not None:
             coordinator.close()
-        self._new_viewer_request()
-        viewer = self.__dict__.get("_viewer_window")
-        if viewer is not None and isinstance(viewer.content, TextViewControl):
-            viewer.content.close()
+        self._viewer.close()
         self._raw_output.close()
         if self._flow is not None:
             self._flow.close()

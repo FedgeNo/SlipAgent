@@ -47,7 +47,7 @@ from .inspection import IndexedText, field_snapshot, artifact_snapshot, build_sn
 from .types import ToolCall
 
 FOOTER_ROWS = 7
-PULSE_FRAMES = ("▌", "▛", "▀", "▜", "▐", "▟", "▄", "▙")
+PULSE_FRAMES = ("🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘")
 
 
 class SuggestedPrompt(str):

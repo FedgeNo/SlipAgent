@@ -1581,6 +1581,8 @@ async def test_ready_commands_link_preserves_draft_and_inserts_command(display):
 @pytest.mark.parametrize("working", [False, True])
 @pytest.mark.parametrize("columns", [40, 100])
 async def test_viewer_exit_link_replaces_commands_and_closes_only_on_its_words(display, working, columns):
+    from wcwidth import width
+
     sink, size, output, screen, snapshot = display
     size[0] = Size(rows=24, columns=columns)
     screen.resize(lines=24, columns=columns)
@@ -1596,7 +1598,7 @@ async def test_viewer_exit_link_replaces_commands_and_closes_only_on_its_words(d
             row = snapshot()[17]
             assert "Commands" not in row
             assert "esc to interrupt" not in row
-            start = row.index("exit viewer")
+            start = width(row[:row.index("exit viewer")])
             assert screen.buffer[17][start].underscore
             assert not screen.buffer[17][start - 2].underscore
             blank = 21 if columns == 40 else 70
@@ -2293,13 +2295,13 @@ def test_title_animation_matches_working_and_stops_when_ready(display, monkeypat
             assert titles[-1] == "Task | SlipAgent"
             assert ui._activity()[0][1] == "Ready"
             ui.set_working(True)
-            assert titles[-1] == "▌ Task | SlipAgent"
+            assert titles[-1] == "🌑 Task | SlipAgent"
             clock[0] = .25
             ui.app.before_render.fire()
-            assert titles[-1] == "▛ Task | SlipAgent"
+            assert titles[-1] == "🌒 Task | SlipAgent"
             assert ui._activity()[0][1].startswith(titles[-1][0])
             ui.set_title("Renamed | SlipAgent")
-            assert titles[-1] == "▛ Renamed | SlipAgent"
+            assert titles[-1] == "🌒 Renamed | SlipAgent"
             ui._editor_active = True
             ui.app.before_render.fire()
             assert titles[-1] == "Renamed | SlipAgent"
@@ -2321,7 +2323,7 @@ def test_title_animation_matches_working_and_stops_when_ready(display, monkeypat
             assert ui._activity()[0][1] == "Ready"
             from slipagent.terminal import PULSE_FRAMES
             from wcwidth import width
-            assert all(width(frame) == 1 for frame in PULSE_FRAMES)
+            assert all(width(frame) == 2 for frame in PULSE_FRAMES)
             ready = ui.app.style.get_attrs_for_style_str("class:idle")
             working = ui.app.style.get_attrs_for_style_str("class:pulse")
             assert ready.color == working.color

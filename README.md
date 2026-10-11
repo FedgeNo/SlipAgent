@@ -971,7 +971,9 @@ the task without resetting its request limit. `/stop` prevents automatic
 continuation; reset, resume, and `/task new` replace the task instead of restarting
 the previous work. Slash commands are never sent to the model as user messages.
 
-The working indicator shows `Working (esc to interrupt)`. Press Escape outside a chooser to interrupt the active step immediately. It
+The working indicator shows a moon-phase spinner beside `Working (esc to interrupt)`.
+The spinner uses eight emoji frames of two terminal columns each and also appears
+in the terminal title. Press Escape outside a chooser to interrupt the active step immediately. It
 cancels model requests, active tools, background commands, and pending summaries;
 queued settings are discarded and no follow-up step starts automatically.
 Completed tool results remain stored, while interrupted or unstarted calls are

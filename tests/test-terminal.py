@@ -39,10 +39,11 @@ async def test_control_tab_cycles_panels_without_changing_draft(display, tmp_pat
             ui.track_call(ToolCall(str(number), "read_file", {"path": f"file-{number}"}), 1)
         task = asyncio.create_task(ui.run())
         try:
-            ui.toggle_inspection()
-            await wait_until(lambda: "Touched" in snapshot()[0])
+            await wait_until(lambda: "Ready" in snapshot()[17])
+            assert not ui._inspection_visible
             pipe.send_text(sequence)
             await wait_until(lambda: ui.app.layout.current_window is ui._files_window)
+            await wait_until(lambda: "Touched" in snapshot()[0])
             for _ in range(20):
                 pipe.send_text("\x1b[B")
             await wait_until(lambda: ui._inspection_selection(True) == "file-9")
@@ -66,6 +67,14 @@ async def test_control_tab_cycles_panels_without_changing_draft(display, tmp_pat
             assert ui._editor_input.text == edited
             pipe.send_text(sequence)
             await wait_until(lambda: ui.app.layout.current_window is ui._calls_window)
+            pipe.send_text(sequence)
+            await wait_until(lambda: ui.app.layout.current_control is ui.input.control)
+            assert ui.input.text == "keep draft"
+            ui.refresh()
+            assert ui.app.layout.current_control is ui.input.control
+            pipe.send_text(" more")
+            await wait_until(lambda: ui.input.text == " morekeep draft")
+            assert ui._editor_input.text == edited
             pipe.send_text(sequence)
             await wait_until(lambda: ui.app.layout.current_control is ui._editor_input.control)
             pipe.send_text(sequence)
@@ -2077,16 +2086,17 @@ async def test_working_indicator_pulses_and_becomes_idle(display) -> None:
 
 def test_rotating_tips_do_not_flash_status(display, monkeypatch):
     sink, _, output, _, _ = display
-    clock = [0.0]
+    clock = [12345.0]
     monkeypatch.setattr("slipagent.terminal.time.monotonic", lambda: clock[0])
     with create_pipe_input() as pipe:
         ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
         try:
             ui._activity()
-            clock[0] = 1.0
+            clock[0] += 1.0
             original = ui._activity()
-            clock[0] = 15.01
+            clock[0] += 14.01
             rotated = ui._activity()
+            assert "Ctrl + Tab or mouse to get around" in ui._notification_text()
             assert "".join(part[1] for part in rotated) != "".join(part[1] for part in original)
             assert all("status-flash" not in part[0] for part in rotated)
             ui.notify("Saved changes.")

@@ -268,7 +268,7 @@ class TerminalUI:
         ])
         footer = HSplit([
             DynamicContainer(lambda: scroll_row if self._show_scroll_bottom() else activity_row),
-            DynamicContainer(lambda: self._editor_panel.controls if self._editor_active else self.input),
+            DynamicContainer(lambda: self._editor_panel.controls if self._editor_active and not self.__dict__.get("_panel_prompt_active", False) else self.input),
             self._bottom_row(menu=False),
         ], height=lambda: self._footer_rows() - 2, style="class:footer")
         menu_footer = HSplit([
@@ -336,16 +336,23 @@ class TerminalUI:
         return self.app.layout.current_window in (self._files_window, self._calls_window)
 
     def _cycle_panel(self) -> None:
-        panels = [self._primary_panel()]
-        if self._inspection_visible and self.output.get_size().columns >= 60:
-            panels.extend([self._files_window, self._calls_window])
+        if self.output.get_size().columns < 60:
+            self.notify("Widen terminal to show Inspect.")
+            return
+        self._inspection_visible = True
+        panels: list[TextArea | Window] = [self.input]
+        if self._editor_active:
+            panels.append(self._editor_input)
+        panels.extend([self._files_window, self._calls_window])
         for window in (self._files_window, self._calls_window):
             if isinstance(window.content, FormattedTextControl):
                 window.content.focusable = to_filter(True)
         current = self.app.layout.current_control
         index = next((i for i, panel in enumerate(panels)
                       if (panel.control if isinstance(panel, TextArea) else panel.content) is current), -1)
-        self.app.layout.focus(panels[(index + 1) % len(panels)])
+        target = panels[(index + 1) % len(panels)]
+        self.__dict__["_panel_prompt_active"] = target is self.input
+        self.app.layout.focus(target)
         self.app.invalidate()
 
     def _inspection_keys(self, files: bool) -> list[Any]:
@@ -585,6 +592,7 @@ class TerminalUI:
 
     async def _open_editor_now(self, path: Path, *, line: int = 1) -> None:
         self._ensure_editor()
+        self.__dict__["_panel_prompt_active"] = False
         await self._editor_panel.open(path, line)
 
     async def _save_editor(self) -> None:
@@ -782,11 +790,14 @@ class TerminalUI:
                 tips = ["Ctrl+S saves; Esc closes the editor.", "PgUp/PgDn scrolls with overlap."]
             elif self._viewer_active:
                 tips = ["Scroll to inspect; Esc closes the viewer."]
+            tips.insert(1, "Ctrl + Tab or mouse to get around")
             if not self.working and self._input_label == "> " and self._menu_future is None and not self._viewer_active and not self._editor_active:
                 tips.append("Click Commands to browse commands.")
             if self.__dict__.get("_folder_opener") is not None:
                 tips.append("Click directory links to open folders.")
-            text = tips[int(time.monotonic() // 15) % len(tips)]
+            now = time.monotonic()
+            started = self.__dict__.setdefault("_tips_started_at", now)
+            text = tips[int((now - started) // 15) % len(tips)]
         columns = self._notice_width()
         if display_width(text) <= columns:
             return str(text)
@@ -1127,7 +1138,7 @@ class TerminalUI:
         in_menu = Condition(lambda: self._menu_future is not None)
         in_setting = Condition(lambda: self.__dict__.get("_options_field_active", False))
         in_inspection = Condition(self._inspection_focused) & ~in_menu & ~in_setting
-        in_editor = Condition(lambda: self.__dict__.get("_editor_active", False)) & ~in_menu & ~in_setting & ~in_inspection
+        in_editor = Condition(lambda: self.__dict__.get("_editor_active", False) and self.app.layout.current_control is self._editor_input.control) & ~in_menu & ~in_setting
         in_viewer = Condition(lambda: self.__dict__.get("_viewer_active", False)) & ~in_menu & ~in_editor & ~in_setting & ~in_inspection
 
         # Ctrl+Tab encodings used by terminals with modified-key reporting.
@@ -1348,6 +1359,8 @@ class TerminalUI:
             self._files_window.content, self._calls_window.content,
         ):
             layout.focus(focused)
+        elif focused is self.input.control and self.__dict__.get("_panel_prompt_active", False):
+            layout.focus(self.input)
         bindings = self._bindings()
         style = self._style()
         self._ensure_transcript()

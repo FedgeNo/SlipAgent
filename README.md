@@ -641,8 +641,9 @@ directories, which open in the file explorer when one is available.
 Click a file to edit it, or a call
 to inspect its decoded arguments and result as labelled fields with literal text
 and line breaks. The mouse wheel scrolls the section under
-the pointer. **Ctrl+Tab** cycles between the input (or open editor/viewer),
-Touched, and Calls; use **Up/Down** to select an entry and **Enter** to open it.
+the pointer. **Ctrl+Tab** opens the inspection panel and cycles clockwise through
+**Prompt → Editor → Touched → Calls → Prompt**, skipping the editor when closed.
+Use **Up/Down** to select an entry and **Enter** to open it.
 Plain **Tab** retains its text-entry behavior. Ctrl+Tab requires a terminal
 that sends modified Tab key sequences. Terminals narrower than 60 columns
 temporarily hide the panel.

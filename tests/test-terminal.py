@@ -373,6 +373,86 @@ async def test_cancelled_save_finishes_publication_and_records_diff_before_clean
             ui._close_transcript()
 
 
+@pytest.mark.parametrize("word,count,length,ending,final_newline", [
+    ("long text with spaces ", 70, 240, "\n", True),
+    ("long text with spaces ", 70, 240, "\r\n", True),
+    ("界 café 👩🏽‍💻 content ", 70, 240, "\n", False),
+    ("very long text ", 12, 5000, "\n", True),
+])
+@pytest.mark.parametrize("edit", [False, True])
+async def test_repeated_wrap_toggles_and_saves_preserve_long_lines_and_diff(
+    display, tmp_path, word, count, length, ending, final_newline, edit,
+):
+    from unittest.mock import Mock
+    from slipagent.artifacts import ArtifactStore
+    from slipagent.tools.base import ToolRegistry
+    from slipagent.useredits import UserEdits
+
+    sink, size, output, _, _ = display
+    size[0] = Size(rows=24, columns=40)
+    original = ending.join(f"line-{n:03} " + (word * length)[:length] for n in range(count))
+    if final_newline:
+        original += ending
+    path = tmp_path / "wrapped-lines.txt"
+    path.write_bytes(original.encode())
+    store = ArtifactStore(4_000_000)
+    store.use_directory(tmp_path / "artifacts")
+    registry = ToolRegistry()
+    registry.services["artifact_store"] = store
+    agent = SimpleNamespace(history=SimpleNamespace(steps=[]), _persist=Mock())
+    session = SimpleNamespace(agent=agent, registry=registry, reloader=None)
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output, project_directory=tmp_path)
+        ui.__dict__["_user_edits"] = UserEdits(session, ui)
+        app = asyncio.create_task(ui.run())
+        menu = None
+        try:
+            await wait_until(lambda: ui.app.is_running)
+            await ui._open_editor_now(path)
+            panel = ui._editor_panel
+            expected = ("INSERTED " if edit else "") + original
+            if edit:
+                pipe.send_text("INSERTED ")
+                await wait_until(lambda: panel.input.text.startswith("INSERTED "))
+            for turn in range(8):
+                previous_text = panel.input.text
+                previous_wrap = bool(panel.input.window.wrap_lines())
+                menu = asyncio.create_task(ui._options_panel.show())
+                await wait_until(lambda: ui._menu_future is not None and not ui._menu_future.done())
+                first_menu = ui._menu_future
+                ui._finish_menu("wrap")
+                await wait_until(lambda: ui._menu_future is not None and ui._menu_future is not first_menu)
+                assert bool(panel.input.window.wrap_lines()) is not previous_wrap
+                ui._finish_menu("done")
+                await menu
+                assert panel.input.text == previous_text
+                recorded = agent._persist.call_count
+                pipe.send_text("\x13")
+                await wait_until(lambda: agent._persist.call_count > recorded and not panel.busy)
+                assert path.read_bytes() == expected.encode()
+                entries = registry.context_notes["user_edits"]
+                if edit:
+                    entry = entries[panel.file.edit_id]
+                    diff = entry["diff"]
+                    removed = [line[1:] for line in diff.splitlines() if line.startswith("-") and not line.startswith("---")]
+                    added = [line[1:] for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++")]
+                    assert removed == [original.splitlines()[0]]
+                    assert added == [expected.splitlines()[0]]
+                    assert store.read(entry["artifact"]["record_id"])["output"] == diff
+                else:
+                    assert not entries
+                    assert not store.records
+                panel.move_screen(1 if turn % 2 == 0 else -1)
+                ui.app.invalidate()
+        finally:
+            if menu is not None and not menu.done():
+                menu.cancel()
+                await asyncio.gather(menu, return_exceptions=True)
+            ui.close()
+            await app
+            await store.aclose()
+
+
 async def test_options_field_isolated_from_prompt_queue_and_draft(display, monkeypatch):
     from slipagent import options
     from unittest.mock import Mock
@@ -958,6 +1038,182 @@ async def test_read_only_viewer_scrolls_targets_lines_keeps_work_running_and_esc
             await task
 
 
+@pytest.mark.parametrize("following", ["emit", "assistant_text", "assistant_delta", "reasoning_delta", "warning", "notice", "user_message"])
+@pytest.mark.parametrize("leading_newline", [False, True])
+@pytest.mark.parametrize("source", [False, True])
+def test_artifact_links_keep_tools_together_and_separate_following_output(display, following, leading_newline, source):
+    sink, _, output, _, _ = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        ui.configure_markdown(source=source)
+        renderer = Renderer(Style(False), sink, verbose=False)
+        renderer.terminal = ui
+        try:
+            for step in (1, 2):
+                call = ToolCall(str(step), "example_tool")
+                renderer.handle(AgentEvent("step_start", step=step))
+                renderer.handle(AgentEvent("tool_start", tool_call=call, step=step))
+                renderer.handle(AgentEvent("tool_end", tool_call=call, step=step, result=ToolResult.ok("result")))
+                renderer.handle(AgentEvent("artifact", result=ToolResult.ok({"record_id": step, "kind": "command_output"})))
+            content = ui._transcript_content(100)
+            lines = ["".join(text for _, text, *_ in content.get_line(y)) for y in range(content.line_count)]
+            first = lines.index("    View Output — Record 1")
+            assert lines[first + 1:first + 3] == ['  ⚙ example_tool({})', "    View Output — Record 2"]
+            assert not lines[first + 3:-1]
+            text = ("\n" if leading_newline else "") + "Next entry"
+            if following == "emit":
+                renderer.emit(text)
+            else:
+                renderer.handle(AgentEvent(following, text=text))
+            content = ui._transcript_content(100)
+            lines = ["".join(text for _, text, *_ in content.get_line(y)) for y in range(content.line_count)]
+            last = lines.index("    View Output — Record 2")
+            assert not lines[last + 1].strip()
+            assert lines[last + 2].strip()
+            assert "Next entry" in "\n".join(lines[last + 2:])
+        finally:
+            ui.close()
+
+
+@pytest.mark.parametrize("restored", [False, True])
+async def test_tool_groups_keep_file_references_tight_after_restore(display, tmp_path, restored):
+    sink, _, output, _, _ = display
+    (tmp_path / "sample.py").write_text("pass\n")
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
+        renderer = Renderer(Style(False), sink, verbose=False)
+        renderer.terminal = ui
+        messages = []
+        try:
+            for step in (1, 2):
+                call = ToolCall(str(step), "read_file", {"path": "sample.py"})
+                reference = {"record_id": step, "kind": "command_output"}
+                if restored:
+                    messages.extend([
+                        Message.assistant("", [call]),
+                        Message.tool_result(call.id, {"tool": "read_file", "status": "success", "content": "",
+                                                      "artifacts": [reference]}),
+                    ])
+                else:
+                    renderer.handle(AgentEvent("step_start", step=step))
+                    renderer.handle(AgentEvent("tool_start", tool_call=call, step=step))
+                    renderer.handle(AgentEvent("tool_end", tool_call=call, step=step, result=ToolResult.ok("")))
+                    renderer.handle(AgentEvent("artifact", result=ToolResult.ok(reference)))
+            if restored:
+                await renderer.restore_transcript(messages, [])
+            content = ui._transcript_content(100)
+            lines = ["".join(text for _, text, *_ in content.get_line(y)) for y in range(content.line_count)]
+            first = next(index for index, line in enumerate(lines) if "⚙" in line)
+            last = lines.index("    View Output — Record 2")
+            assert all(line.strip() for line in lines[first:last + 1])
+            assert lines[first + 1] == "    sample.py:1"
+        finally:
+            ui.close()
+
+
+@pytest.mark.parametrize("kind", ["command_output", "diff", "file"])
+@pytest.mark.parametrize("columns", [24, 100])
+async def test_feed_link_styling_and_mouse_target_follow_text(display, tmp_path, kind, columns):
+    from unittest.mock import AsyncMock
+
+    sink, size, output, screen, snapshot = display
+    size[0] = Size(rows=24, columns=columns)
+    screen.resize(lines=24, columns=columns)
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
+        request = AsyncMock()
+        ui.__dict__["_user_edits"] = SimpleNamespace(request=request, close=lambda: None)
+        if kind == "file":
+            path = tmp_path / "a-long-written-file-name.txt"
+            path.write_text("contents\n")
+            ui.write_file_reference(path.name, line=3)
+            label = "a-long-written"
+            hover = ("file", (path, 3))
+        else:
+            ui.write_artifact_reference({"record_id": 123456789, "kind": kind})
+            label = "View "
+            hover = ("artifact", 123456789)
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: label in snapshot()[0])
+            rows = [(y, row) for y, row in enumerate(snapshot()[:17]) if row.strip()]
+            for y, row in rows:
+                left = len(row) - len(row.lstrip())
+                right = len(row.rstrip())
+                assert all(screen.buffer[y][x].underscore == (left <= x < right) for x in range(columns))
+                for x in (left, right - 1):
+                    pipe.send_text(f"\x1b[<35;{x + 1};{y + 1}M")
+                    await wait_until(lambda: snapshot() and screen.buffer[y][x].reverse)
+                    assert all(screen.buffer[y][column].reverse == (left <= column < right)
+                               for column in range(columns))
+                for x in (0, left - 1, right, columns - 1):
+                    if left <= x < right or x >= columns:
+                        continue
+                    pipe.send_text(f"\x1b[<35;{x + 1};{y + 1}M")
+                    await wait_until(lambda: snapshot() and not screen.buffer[y][left].reverse)
+                    assert ui.__dict__.get("_hovered_control") != hover
+                    pipe.send_text(f"\x1b[<0;{x + 1};{y + 1}M\x1b[<0;{x + 1};{y + 1}m")
+                    await asyncio.sleep(.05)
+                    assert not ui._viewer_active
+                    assert ui._viewer.request == 0
+                    request.assert_not_awaited()
+        finally:
+            ui.close()
+            await task
+
+
+@pytest.mark.parametrize("restored", [False, True])
+@pytest.mark.parametrize("verbose", [False, True])
+@pytest.mark.parametrize("tool", ["write_file", "edit_file"])
+async def test_edit_diff_stays_in_viewer_and_follows_file_link(display, tmp_path, restored, verbose, tool):
+    from prompt_toolkit.data_structures import Point
+    from slipagent.artifacts import ArtifactStore
+
+    sink, _, output, _, _ = display
+    path = tmp_path / "written.txt"
+    path.write_text("new\n")
+    store = ArtifactStore(1_000_000)
+    store.use_directory(tmp_path / "artifacts")
+    diff = "--- written.txt\n+++ written.txt\n@@ -1 +1 @@\n-old\n+new"
+    reference = store.save(f"{tool} 'written.txt'", diff, kind="diff", call_id="edit", step_id=1)
+    call = ToolCall("edit", tool, {"path": path.name})
+    result = "Updated written.txt.\n" + diff
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
+        ui.__dict__["_artifact_store"] = store
+        renderer = Renderer(Style(False), sink, verbose=verbose)
+        renderer.terminal = ui
+        try:
+            if restored:
+                await renderer.restore_transcript([
+                    Message.assistant("", [call]),
+                    Message.tool_result(call.id, {"tool": tool, "status": "success", "content": result,
+                                                  "artifacts": [reference]}),
+                ], [])
+            else:
+                renderer.handle(AgentEvent("tool_start", tool_call=call, step=1))
+                renderer.handle(AgentEvent("tool_end", tool_call=call, step=1, result=ToolResult.ok(result)))
+                renderer.handle(AgentEvent("artifact", result=ToolResult.ok(reference)))
+            content = ui._transcript_content(100)
+            lines = ["".join(text for _, text, *_ in content.get_line(y)) for y in range(content.line_count)]
+            expected = f"    written.txt:1  View Diff — Record {reference['record_id']}"
+            assert expected in lines
+            assert "Updated written.txt." in "\n".join(lines)
+            assert not any(line.lstrip().startswith(("---", "+++", "@@", "-old", "+new")) for line in lines)
+            row = lines.index(expected)
+            file_end = expected.index("  View")
+            diff_start = expected.index("View Diff")
+            assert ui._file_at(Point(x=4, y=row)) == (path, 1)
+            assert ui._artifact_at(Point(x=diff_start, y=row)) == reference["record_id"]
+            for x in (0, 3, file_end, file_end + 1, len(expected), 99):
+                assert ui._file_at(Point(x=x, y=row)) is None
+                assert ui._artifact_at(Point(x=x, y=row)) is None
+            assert store.read(reference["record_id"])["output"] == diff
+        finally:
+            ui.close()
+            await store.aclose()
+
+
 async def test_artifact_link_opens_colored_diff_without_desktop_and_preserves_notice(display, tmp_path):
     from slipagent.artifacts import ArtifactStore
     sink, _, output, screen, snapshot = display
@@ -1214,13 +1470,105 @@ async def test_notifications_remain_visible_in_menu_context_and_after_resize(dis
             ui.app._on_resize()
             await wait_until(lambda: ui._notification_text() in snapshot()[17])
             ui.notify("")
-            assert ui._notification_text().endswith("…")
+            assert not ui._notification_text().endswith("…")
             assert "Saved" not in ui._notification_text()
         finally:
             if choice is not None and not choice.done():
                 choice.cancel()
             ui.close()
             await task
+
+
+def test_long_status_and_notice_scroll_and_restart_after_changes(display, monkeypatch):
+    from prompt_toolkit.formatted_text.utils import fragment_list_to_text
+
+    sink, size, output, _, _ = display
+    now = [100.0]
+    monkeypatch.setattr("slipagent.terminal.time.monotonic", lambda: now[0])
+    size[0] = Size(rows=24, columns=20)
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        try:
+            ui.set_command_status("Connecting to MCP servers and loading their tools")
+            first = fragment_list_to_text(ui._activity())
+            assert first == "Connecting to MCP se"
+            now[0] += 2
+            assert fragment_list_to_text(ui._activity()) != first
+            ui.set_command_status("Loading model metadata")
+            assert fragment_list_to_text(ui._activity()) == "Loading model metada"
+            size[0] = Size(rows=24, columns=100)
+            assert "Loading model metadata" in fragment_list_to_text(ui._activity())
+            ui.set_command_status("")
+            size[0] = Size(rows=24, columns=20)
+            ui.notify("Connected to all MCP servers and loaded their tools")
+            first = ui._notification_text()
+            assert not first.endswith("…")
+            now[0] += 2
+            assert ui._notification_text() != first
+            ui.notify("Done.")
+            assert ui._notification_text() == "Done."
+        finally:
+            ui.close()
+
+
+async def test_long_status_scrolls_on_screen_without_moving_input(display):
+    sink, size, output, screen, snapshot = display
+    size[0] = Size(rows=24, columns=20)
+    screen.resize(lines=24, columns=20)
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        task = asyncio.create_task(ui.run())
+        try:
+            ui.set_command_status("Connecting to MCP servers and loading their tools")
+            await wait_until(lambda: snapshot()[17] == "Connecting to MCP se")
+            first = snapshot()[17]
+            pipe.send_text("draft")
+            await wait_until(lambda: ui.input.text == "draft")
+            await wait_until(lambda: snapshot()[17] != first)
+            assert ui.input.text == "draft"
+            assert "readout" in snapshot()[23]
+        finally:
+            ui.close()
+            await task
+
+
+def test_status_marquee_preserves_graphemes_styles_and_mouse_handlers(display, monkeypatch):
+    from prompt_toolkit.formatted_text.utils import fragment_list_to_text
+    from wcwidth import iter_graphemes, width
+
+    sink, _, output, _, _ = display
+    now = [100.0]
+    monkeypatch.setattr("slipagent.terminal.time.monotonic", lambda: now[0])
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda columns: "readout", sink, input=pipe, output=output)
+        try:
+            clicked = []
+            def mouse(event):
+                clicked.append(event)
+            text = "Start 👩🏽‍💻 e\u0301 界 end"
+            fragments = [("class:status", "Start "), ("class:clickable", "👩🏽‍💻 e\u0301 界", mouse),
+                         ("class:status", " end")]
+            expected = set(iter_graphemes(text))
+            seen = set()
+            for tick in range(100):
+                now[0] = 100 + tick * .2
+                shown = ui._marquee(fragments, 7, "test")
+                plain = fragment_list_to_text(shown)
+                assert width(plain) <= 7
+                clusters = set(iter_graphemes(plain))
+                assert clusters <= expected
+                seen.update(clusters)
+                for fragment in shown:
+                    if "clickable" in fragment[0]:
+                        assert fragment[2] is mouse
+                        fragment[2]("click")
+            assert seen == expected
+            assert clicked
+            assert ui._marquee(fragments, 100, "test") == fragments
+            now[0] += 10
+            assert ui._marquee(fragments, 100, "test") == fragments
+        finally:
+            ui.close()
 
 
 @pytest.mark.parametrize("working", [False, True])
@@ -1496,6 +1844,62 @@ def display():
         offset[0] = len(data)
         return screen.display
     return sink, size, output, screen, snapshot
+
+
+@pytest.mark.parametrize("ending", ["ready", "escape", "exit", "eof"])
+async def test_startup_scrolls_welcome_keeps_input_live_and_drains(display, tmp_path, ending):
+    from slipagent.cli import _read_line, _start_repl
+    from slipagent.workspace import Workspace
+
+    sink, _, output, _, snapshot = display
+    entered, release, drained = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "startup", sink, input=pipe, output=output)
+        renderer = Renderer(Style(False), sink, False)
+        renderer.terminal = ui
+
+        async def startup():
+            renderer.emit("  MCP: stub connected, 2 tools.", separate=False)
+            entered.set()
+            try:
+                await release.wait()
+            finally:
+                await asyncio.sleep(0)
+                drained.set()
+
+        session = SimpleNamespace(renderer=renderer, agent=SimpleNamespace(model="stub"),
+            registry=SimpleNamespace(names=["read_file"], services={}), workspace=Workspace(tmp_path),
+            extensions={"startup": startup}, free_calls=None, client=None)
+        app = asyncio.create_task(ui.run())
+        task = asyncio.create_task(_start_repl(session))
+        try:
+            await wait_until(lambda: "SlipAgent — coding" in "\n".join(snapshot()))
+            assert "Working" in "\n".join(snapshot())
+            assert "Use /help" not in "\n".join(snapshot())
+            await entered.wait()
+            await wait_until(lambda: "MCP: stub connected" in "\n".join(snapshot()))
+            pipe.send_text("first task\rsecond task\rstill typing")
+            await wait_until(lambda: ui.input.text == "still typing")
+            assert not task.done()
+            if ending == "ready":
+                release.set()
+                assert await task
+                assert await _read_line(session, renderer.style) == "first task"
+                assert await _read_line(session, renderer.style) == "second task"
+                assert ui.input.text == "still typing"
+                await wait_until(lambda: "Ready" in "\n".join(snapshot()))
+            else:
+                ui.input.text = ""
+                pipe.send_text({"escape": "\x1b", "exit": "/exit\r", "eof": "\x04"}[ending])
+                assert not await asyncio.wait_for(task, 3)
+            assert drained.is_set()
+        finally:
+            release.set()
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            ui.close()
+            await app
 
 
 @pytest.mark.parametrize("item_rows, details", [(1, 0), (2, 7), (7, 33)])

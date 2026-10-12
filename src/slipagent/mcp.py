@@ -23,7 +23,7 @@ import asyncio
 import json
 import os
 import signal
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -485,6 +485,15 @@ class MCPClient:
             None,
         )
         if "error" in response:
+            error = response.get("error")
+            data = error.get("data") if isinstance(error, dict) else None
+            supported = data.get("supported") if isinstance(data, dict) else None
+            if (isinstance(error, dict) and error.get("code") == ERR_UNSUPPORTED_VERSION
+                    and isinstance(supported, list) and MODERN_PROTOCOL_VERSION in supported):
+                # A slow discovery may already have selected the modern era on
+                # this connection. Its handshake rejection is positive evidence.
+                if await self._try_modern():
+                    return
             raise MCPError(self._describe_error("initialize", response))
 
         result = response.get("result") or {}
@@ -874,12 +883,27 @@ class MCPManager:
             registered.append(qualified)
         return registered
 
-    async def connect_all(self) -> list[ServerState]:
-        """Connect every configured server, reporting failures per server."""
-        states: list[ServerState] = []
-        for name, spec in sorted(self.configured().items()):
-            states.append(await self.connect(name, spec))
-        return states
+    async def connect_all(self, *, on_state: Callable[[ServerState], None] | None = None) -> list[ServerState]:
+        """Connect up to four servers concurrently, returning configuration order."""
+        limit = asyncio.Semaphore(4)
+
+        async def connect(name: str, spec: ServerSpec) -> ServerState:
+            async with limit:
+                state = await self.connect(name, spec)
+                if on_state is not None:
+                    on_state(state)
+                return state
+
+        tasks = [asyncio.create_task(connect(name, spec)) for name, spec in sorted(self.configured().items())]
+        try:
+            return list(await asyncio.gather(*tasks))
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            async def drain() -> None:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            await finish_cleanup(asyncio.create_task(drain()))
 
     async def disconnect(self, name: str) -> None:
         """Close a server and remove any tools it contributed."""

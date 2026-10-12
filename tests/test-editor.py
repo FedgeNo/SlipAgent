@@ -118,3 +118,81 @@ def test_overwrite_consent_does_not_cover_later_external_changes(tmp_path):
         assert path.read_text() == "external again"
     finally:
         editor.close()
+
+
+@pytest.mark.parametrize("operation", ["diff", "save"])
+@pytest.mark.parametrize("legacy_snapshot", [False, True])
+def test_redraw_during_worker_read_preserves_diff_and_file(tmp_path, monkeypatch, operation, legacy_snapshot):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    import slipagent.inspection as inspection
+
+    positioned, release, render_progress = (threading.Event() for _ in range(3))
+    role = threading.local()
+
+    class ObservedLock:
+        def __init__(self):
+            self.lock = threading.RLock()
+
+        def __enter__(self):
+            if getattr(role, "render", False):
+                render_progress.set()
+            return self.lock.__enter__()
+
+        def __exit__(self, *args):
+            return self.lock.__exit__(*args)
+
+    monkeypatch.setattr(inspection, "RLock", ObservedLock, raising=False)
+    path = tmp_path / "long-lines.txt"
+    original = "".join(f"line-{n:03} " + "long wrapped contents " * 12 + "\n" for n in range(70))
+    path.write_text(original)
+    editor = FileEditor(path)
+    if legacy_snapshot:
+        editor.original.__dict__.pop("_snapshot_lock", None)
+
+    class PauseWorkerAfterSeek:
+        def __init__(self, source):
+            self.source = source
+            self.paused = False
+
+        def __getattr__(self, name):
+            return getattr(self.source, name)
+
+        def seek(self, *args):
+            result = self.source.seek(*args)
+            if getattr(role, "worker", False) and not self.paused:
+                self.paused = True
+                positioned.set()
+                assert release.wait(5)
+            return result
+
+    editor.original.text = PauseWorkerAfterSeek(editor.original.text)
+
+    def publish():
+        role.worker = True
+        return getattr(editor, operation)()
+
+    def render():
+        role.render = True
+        try:
+            return editor.page_text(1)
+        finally:
+            render_progress.set()
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            worker = pool.submit(publish)
+            try:
+                assert positioned.wait(5)
+                drawing = pool.submit(render)
+                # Wait for either a blocked read or the unsynchronized redraw.
+                assert render_progress.wait(5)
+            finally:
+                release.set()
+            result = worker.result(timeout=5)
+            assert drawing.result(timeout=5) == "".join(original.splitlines(keepends=True)[32:64])
+        assert path.read_bytes() == original.encode()
+        if operation == "diff":
+            assert result == ""
+    finally:
+        editor.close()

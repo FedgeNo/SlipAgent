@@ -126,6 +126,57 @@ async def test_legacy_server_falls_back_to_initialize() -> None:
         await client.disconnect()
 
 
+@pytest.mark.parametrize("probe_failure", ["timeout", "error"])
+async def test_modern_server_recovers_when_initial_probe_failed(probe_failure) -> None:
+    class SlowModernClient(MCPClient):
+        def __init__(self):
+            super().__init__(stub_spec())
+            self.methods = []
+
+        async def _request(self, method, params, meta, **kwargs):
+            self.methods.append(method)
+            if len(self.methods) == 1:
+                if probe_failure == "timeout":
+                    raise MCPError("discovery timed out during server startup")
+                return {"error": {"code": -32603, "message": "server warming up"}}
+            if method == "initialize":
+                return {"error": {"code": -32022,
+                    "message": "connection is serving the 2026-07-28 protocol; the initialize handshake is not accepted",
+                    "data": {"supported": ["2026-07-28"], "requested": "2025-11-25"}}}
+            return {"result": {"supportedVersions": ["2026-07-28"],
+                               "capabilities": {"tools": {}}, "instructions": "Use echo."}}
+
+    client = SlowModernClient()
+    await client._negotiate()
+    assert client.methods == ["server/discover", "initialize", "server/discover"]
+    assert client.era == "modern"
+    assert client.protocol_version == "2026-07-28"
+    assert client.instructions == "Use echo."
+
+
+@pytest.mark.parametrize("supported", [["2026-07-28"], ["2099-01-01"], None, "2026-07-28"])
+async def test_modern_handshake_recovery_is_bounded(supported) -> None:
+    class RejectingClient(MCPClient):
+        def __init__(self):
+            super().__init__(stub_spec())
+            self.methods = []
+
+        async def _request(self, method, params, meta, **kwargs):
+            self.methods.append(method)
+            if method == "initialize":
+                return {"error": {"code": -32022, "message": "handshake rejected",
+                                  "data": {"supported": supported}}}
+            return {"error": {"code": -32601, "message": "discovery unavailable"}}
+
+    client = RejectingClient()
+    with pytest.raises(MCPError, match="handshake rejected"):
+        await client._negotiate()
+    expected = ["server/discover", "initialize"]
+    if supported == ["2026-07-28"]:
+        expected.append("server/discover")
+    assert client.methods == expected
+
+
 async def test_version_mismatch_retries_a_supported_version() -> None:
     """A modern server that rejects our version names one it does support."""
     client = MCPClient(stub_spec(mode="modern-old"))

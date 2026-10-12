@@ -47,6 +47,8 @@ class Router:
     def handle(self, request):
         if request.method == "GET":
             self.gets.append(request.url.path)
+            if request.url.path.endswith("/key"):
+                return httpx.Response(200, json={"data": {"is_free_tier": True}})
             if request.url.path.endswith("/models"):
                 return httpx.Response(200, json={"data": [
                     {"id": name, "supported_parameters": params} for name, params in self.parameters.items()]})
@@ -344,7 +346,7 @@ async def test_startup_detects_protocol_without_an_inference_call(tmp_path, monk
     try:
         profile = await session.client.model_capabilities(DEFAULT_MODEL)
         assert profile.native_tools is ("tools" in params)
-        assert router.requests == [] and len(router.gets) == 2
+        assert router.requests == [] and len(router.gets) == 3
     finally:
         await cli._shutdown(session)
 

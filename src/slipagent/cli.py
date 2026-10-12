@@ -26,6 +26,8 @@ import threading
 import shlex
 from dataclasses import asdict, dataclass
 from contextlib import AsyncExitStack
+from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, TextIO, cast
 
@@ -52,6 +54,8 @@ from .workspace import Workspace, WorkspaceError
 from .terminal import TerminalUI, SuggestedPrompt
 from .palette import ERROR_COLOR, MUTED_COLOR, THOUGHT_COLOR, USER_BACKGROUND_COLOR, USER_COLOR, USER_TEXT_COLOR, foreground_code
 from .runtime import RuntimeFrame
+from .repomap import RepositoryMap
+from .tools.blocking import run_blocking
 from .sessionstate import Session as Session
 from .sessions import SessionJournal, SessionError, session_title
 from wcwidth import iter_graphemes, strip_sequences, wcswidth
@@ -162,6 +166,7 @@ class Renderer:
         self._model_block = object()
         self._stream_kind: str | None = None
         self._last_output_blank = False
+        self._tool_group = False
         # The live prompt line: the text drawn on it, so output arriving mid-step
         # can be written around it and the prompt put back. Holding the whole
         # line is what stops a redraw from erasing a line the agent has just
@@ -190,20 +195,25 @@ class Renderer:
             # it: the user keeps a line to type into rather than a lost one.
             self._draw(*prompt)
 
-    def _begin_block(self, block: object | None = None) -> None:
+    def _begin_block(self, block: object | None = None, *, text: str = "", tool: bool = False) -> None:
+        if getattr(self, "_tool_group", False) and not tool:
+            self._active_block = None
+        self._tool_group = tool
         if block is None or block != self._active_block:
-            if not self._last_output_blank:
+            first, newline, _ = strip_sequences(text).partition("\n")
+            if not self._last_output_blank and not (newline and not first.strip()):
                 self._write("")
             self._active_block = block
 
     def emit(
         self, text: str = "", *, block: object | None = None, separate: bool = True,
         continuation_indents: dict[int, int] | None = None,
+        tool: bool = False,
     ) -> None:
         """Separate output units while keeping their lines together."""
         self._finish_stream()
-        if separate and strip_sequences(text).strip():
-            self._begin_block(block)
+        if (separate or (getattr(self, "_tool_group", False) and not tool)) and strip_sequences(text).strip():
+            self._begin_block(block, text=text, tool=tool)
         self._write(text, continuation_indents=continuation_indents)
 
     def show_banner(self, *, model: str, workspace: Path, tools: list[str], mcp: str = "") -> None:
@@ -217,6 +227,17 @@ class Renderer:
             continuation_indents={index: prefix.end() for index, line in enumerate(banner.splitlines())
                                   if (prefix := re.match(r"  (?:Tools|Commands): +", line)) is not None},
         )
+
+    async def show_welcome(self, *, model: str, workspace: Path, tools: list[str], mcp: str = "") -> None:
+        """Reveal the welcome a line at a time while the terminal stays responsive."""
+        banner = BANNER.format(model=model, workspace=workspace, tools=", ".join(tools), mcp=mcp)
+        lines = banner.splitlines()
+        for index, line in enumerate(lines):
+            prefix = re.match(r"  (?:Tools|Commands): +", line)
+            self.emit(line, separate=False,
+                      continuation_indents={0: prefix.end()} if prefix else None)
+            if self.terminal is not None and index < len(lines) - 1:
+                await asyncio.sleep(.06)
 
     def _finish_stream(self) -> None:
         if getattr(self, "_stream_kind", None) is None:
@@ -235,9 +256,12 @@ class Renderer:
             self._finish_stream()
             if kind != "tool_output":
                 self._model_block = object()
-            self._begin_block(self._model_block)
             if kind == "reasoning_delta":
                 text = "Thinking: " + text
+            leading = text
+            if kind == "assistant_delta" and self.terminal is not None and not getattr(self.terminal, "_markdown_source", False):
+                leading = ""  # Rendered Markdown discards leading blank lines.
+            self._begin_block(self._model_block, text=leading, tool=kind == "tool_output")
         styled = literal(text)
         if kind == "reasoning_delta":
             styled = self.style.thought(text)
@@ -284,6 +308,7 @@ class Renderer:
         self._active_block = None
         self._model_block = object()
         self._last_output_blank = True
+        self._tool_group = False
         restored_step = 0
         restored_calls: dict[str, ToolCall] = {}
         for index, message in enumerate(messages):
@@ -291,7 +316,6 @@ class Renderer:
                 self.user_prompt(message.content or "", queued=index in (queued_messages or {}))
             elif message.role == "assistant":
                 restored_step += 1
-                self._model_block = object()
                 if message.reasoning:
                     self._stream_text("reasoning_delta", message.reasoning)
                     self._finish_stream()
@@ -307,6 +331,10 @@ class Renderer:
                         and "content" in saved):
                     result = ToolResult(saved["content"], saved["status"] == "error")
                 restored_call = restored_calls.get(message.tool_call_id or "")
+                saved_diff = (self.terminal is not None and restored_call is not None
+                              and restored_call.name in {"write_file", "edit_file"} and not result.is_error
+                              and isinstance(saved, dict)
+                              and any(reference.get("kind") == "diff" for reference in saved.get("artifacts", [])))
                 if self.terminal is not None and restored_call is not None:
                     self.terminal.finish_call(restored_call, restored_step, result.content, result.is_error)
                 if isinstance(saved, dict) and saved.get("tool") == "answer" and not result.is_error:
@@ -314,13 +342,19 @@ class Renderer:
                     continue
                 if result.content:
                     body = result.text()
+                    if saved_diff:
+                        body = body.splitlines()[0]
                     if self.terminal is not None and restored_call is not None and restored_call.name in COMMAND_OUTPUT_TOOLS:
                         body = "Command failed; see Calls." if result.is_error else "Command completed."
                     body = _literal_tool_output(body)
                     if result.is_error:
-                        self.emit(self.style.red(f"  ✗ {body}"), block=self._model_block)
+                        self.emit(self.style.red(f"  ✗ {body}"), block=self._model_block, tool=True)
                     else:
-                        self.emit(self.style.dim(body), block=self._model_block)
+                        self.emit(self.style.dim(body), block=self._model_block, tool=True)
+                if saved_diff and self.terminal is not None and restored_call is not None:
+                    path = restored_call.arguments.get("path")
+                    if isinstance(path, str):
+                        self.terminal.write_file_reference(path)
                 if isinstance(saved, dict):
                     for reference in saved.get("artifacts", []):
                         self.handle(AgentEvent(kind="artifact", result=ToolResult.ok(reference)))
@@ -412,7 +446,7 @@ class Renderer:
                 self._finish_stream()
                 self._model_block = object()
                 if self.terminal is not None:
-                    self._begin_block(self._model_block)
+                    self._begin_block(self._model_block, text=event.text if getattr(self.terminal, "_markdown_source", False) else "")
                     self.terminal.write_markdown(event.text)
                     self._last_output_blank = False
                 else:
@@ -448,7 +482,7 @@ class Renderer:
                 self.terminal.track_call(event.tool_call, event.step)
             if event.tool_call.name == "answer":
                 return
-            self.emit(self.style.magenta(f"  ⚙ {event.tool_call.brief()}"), block=self._model_block)
+            self.emit(self.style.magenta(f"  ⚙ {event.tool_call.brief()}"), block=self._model_block, tool=True)
             if self.terminal is not None:
                 path = event.tool_call.arguments.get("path")
                 if path is None and event.tool_call.name == "list_dir":
@@ -477,20 +511,20 @@ class Renderer:
             if self.terminal is not None and event.tool_call is not None and event.tool_call.name in COMMAND_OUTPUT_TOOLS:
                 body = "Command failed; see Calls." if result.is_error else "Command completed."
                 color = self.style.red if result.is_error else self.style.dim
-                self.emit(color(f"  {'✗' if result.is_error else '✓'} {body}"), block=self._model_block)
+                self.emit(color(f"  {'✗' if result.is_error else '✓'} {body}"), block=self._model_block, tool=True)
             elif result.is_error:
                 # Errors are the most useful signal; always surface them.
-                self.emit(self.style.red(f"  ✗ {result.text()}"), block=self._model_block)
+                self.emit(self.style.red(f"  ✗ {result.text()}"), block=self._model_block, tool=True)
             elif event.tool_call is not None and event.tool_call.name == "answer":
                 self.handle(AgentEvent(kind="assistant_text", step=event.step, text=result.content["text"]))
             elif self.terminal is not None and event.tool_call is not None and event.tool_call.name in {"write_file", "edit_file"} and self.terminal.has_diff(event.tool_call.id):
-                self.emit(self.style.dim("    " + result.text().splitlines()[0]), block=self._model_block)
+                self.emit(self.style.dim("    " + result.text().splitlines()[0]), block=self._model_block, tool=True)
             elif getattr(self, "_tool_streamed", False):
-                self.emit(self.style.dim("  ✓ Command completed."), block=self._model_block)
+                self.emit(self.style.dim("  ✓ Command completed."), block=self._model_block, tool=True)
             elif self.verbose and result.text().strip():
                 body = result.text().strip()
                 for line in body.splitlines():
-                    self.emit(self.style.dim(f"    {line}"), block=self._model_block)
+                    self.emit(self.style.dim(f"    {line}"), block=self._model_block, tool=True)
             if self.terminal is not None and event.tool_call is not None and not result.is_error:
                 if event.tool_call.name in {"write_file", "edit_file", "copy_path", "move_path"}:
                     for key in ("path", "destination"):
@@ -504,20 +538,12 @@ class Renderer:
         elif event.kind == "artifact" and event.result is not None:
             reference = event.result.content
             if self.terminal is not None:
-                store = self.terminal.__dict__.get("_artifact_store")
-                if reference["kind"] == "diff" and reference["bytes"] <= 16_000 and store is not None:
-                    try:
-                        record = store.read(reference["record_id"])
-                    except (OSError, ValueError, UnicodeError):
-                        record = None
-                        self.terminal.notify("Could not read saved diff.")
-                    if record is not None and len(record["output"].splitlines()) <= 40:
-                        for line in record["output"].splitlines():
-                            color = self.style.cyan if line.startswith(("--- ", "+++ ", "@@")) else self.style.green if line.startswith("+") else self.style.red if line.startswith("-") else self.style.dim
-                            self.emit(color(_literal_tool_output(line)), block=self._model_block)
+                self._finish_stream()
+                self._begin_block(self._model_block, tool=True)
                 self.terminal.write_artifact_reference(reference)
+                self._last_output_blank = False
             else:
-                self.emit(self.style.dim(f"  Saved {reference['kind']} record {reference['record_id']}."), block=self._model_block)
+                self.emit(self.style.dim(f"  Saved {reference['kind']} record {reference['record_id']}."), block=self._model_block, tool=True)
 
         elif event.kind == "warning":
             if event.text == STOP_NOTICE and getattr(self, '_queued_settings_pause', False):
@@ -537,7 +563,7 @@ class Renderer:
 # --------------------------------------------------------------------------- #
 
 
-async def build_session(args: argparse.Namespace) -> Session:
+async def build_session(args: argparse.Namespace, *, defer_startup: bool = False) -> Session:
     if getattr(args, "no_session", False) and getattr(args, "resume", None):
         raise ConfigError("--resume cannot be combined with --no-session.")
     config = Config.from_env(
@@ -572,13 +598,6 @@ async def build_session(args: argparse.Namespace) -> Session:
     )
     async with AsyncExitStack() as resources:
         resources.push_async_callback(client.aclose)
-        model_error: APIError | None = None
-        try:
-            await client.list_models()
-            if await client.model_capabilities(config.model, refresh=True) is None:
-                raise APIConfigError("The API did not supply capabilities to verify the configured model's compatibility.")
-        except APIError as exc:
-            model_error = exc
         registry = build_default_registry(workspace)
         registry.services["editable_prompts"] = True
         resources.push_async_callback(registry.aclose)
@@ -608,16 +627,6 @@ async def build_session(args: argparse.Namespace) -> Session:
             manager = MCPManager(workspace.root, registry=registry)
             mcp = manager
             resources.push_async_callback(manager.aclose)
-            # A server that cannot start must not block the session, so failures
-            # are reported per server and the built-in tools stay available.
-            try:
-                states = await manager.connect_all()
-            except MCPError as exc:
-                print(style.red(f"  Warning: mcp: {exc}"), file=sys.stderr)
-                states = []
-            for state in states:
-                if state.status == "error":
-                    print(style.red(f"  Warning: mcp: {state.line()}"), file=sys.stderr)
 
         session = Session(
             agent=agent,
@@ -631,32 +640,130 @@ async def build_session(args: argparse.Namespace) -> Session:
             app_title=config.app_title,
             mcp=mcp,
         )
-        if model_error is None:
+        if defer_startup:
+            session.extensions["startup"] = lambda: _initialize_session(session, args, config, announce=True)
+        else:
+            await _initialize_session(session, args, config)
+        resources.pop_all()
+        return session
+
+
+async def _initialize_session(session: Session, args: argparse.Namespace, config: Config, *,
+                              announce: bool = False) -> None:
+    """Overlap independent startup work; build context only after its services settle."""
+    renderer, registry, agent = session.renderer, session.registry, session.agent
+    model_error: APIError | None = None
+
+    def notice(text: str) -> None:
+        if announce:
+            renderer.emit(renderer.style.dim(f"  {text}"), separate=False)
+
+    async def phase(label: str, operation: Callable[[], Awaitable[Any]]) -> None:
+        notice(f"{label}…")
+        action = label[0].lower() + label[1:]
+        try:
+            await operation()
+        except BaseException:
+            notice(f"Interrupted or failed while {action}.")
+            raise
+        notice(f"Finished {action}.")
+
+    async def metadata() -> None:
+        nonlocal model_error
+        try:
+            # Each provider fetches its catalog as part of capability discovery.
+            if await session.client.model_capabilities(config.model, refresh=True) is None:
+                raise APIConfigError("The API did not supply capabilities to verify the configured model's compatibility.")
+        except APIError as exc:
+            model_error = exc
+            renderer.emit(f"  model check failed: {exc} Select another model with /models or /model <slug>.")
+
+    async def mcp() -> None:
+        if session.mcp is None:
+            notice("MCP: disabled.")
+            return
+        def report(state: Any) -> None:
+            if state.status == "error":
+                renderer.emit(renderer.style.red(f"  Warning: mcp: {state.line()}"), separate=False)
+            else:
+                notice(f"MCP: {state.line()}")
+        try:
+            states = await session.mcp.connect_all(on_state=report)
+            if not states:
+                notice("MCP: no servers configured.")
+        except MCPError as exc:
+            renderer.emit(renderer.style.red(f"  Warning: mcp: {exc}"), separate=False)
+
+    async def repository() -> None:
+        environment = registry.resources.environment
+        if environment is not None:
+            if registry.resources.repository_map is None:
+                registry.resources.repository_map = RepositoryMap(environment.workspace)
+            # Let an in-flight map finish before closing its workspace or reloading.
+            worker = asyncio.create_task(registry.resources.repository_map.snapshot(""))
             try:
-                await agent._context_view(registry.specs(), 0, preview=True)
-            except APIError as exc:
-                model_error = exc
-        if model_error is not None:
-            renderer.emit(f"  model check failed: {model_error} Select another model with /models or /model <slug>.")
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                await finish_cleanup(worker)
+                raise
+
+    async def environment() -> None:
+        if registry.resources.environment is not None:
+            await registry.resources.environment.snapshot()
+
+    async def quota() -> None:
+        await _refresh_quota(session)
+        notice("Quota: unavailable." if session.free_calls is None else f"Quota: {session.free_calls} free calls remaining.")
+
+    async def resume() -> None:
         if not getattr(args, "no_session", False):
-            journal = SessionJournal(str(config.workspace))
+            journal = await run_blocking(SessionJournal, str(config.workspace))
             registry.services["session_journal"] = journal
             if getattr(args, "resume", None):
-                data = await asyncio.to_thread(journal.load, args.resume)
+                data = await run_blocking(journal.load, args.resume)
                 journal.restore(agent, data)
                 session.extensions["restore_transcript"] = True
                 renderer.emit(f"  Resumed {journal.session_id}; no tools were replayed.")
-        if not getattr(args, "no_reload", False):
-            frame = RuntimeFrame(session, sys.modules[__name__])
-            session.reloader = frame
-            agent.on_boundary = lambda: frame.checkpoint(boundary=True)
-        if args.model and model_error is None and not getattr(args, "json_events", False):
+
+    operations = [
+        ("Fetching the model catalog and checking model capabilities", metadata),
+        ("Connecting to MCP servers and loading their tools", mcp),
+        ("Scanning repository files and building the repository map", repository),
+        ("Finding and validating the project Python environment", environment),
+        ("Retrieving the remaining API quota", quota),
+        ("Preparing session storage and restoring any requested session", resume),
+    ]
+    tasks = [asyncio.create_task(phase(label, operation)) for label, operation in operations]
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await finish_cleanup(asyncio.create_task(_gather_quietly(*tasks)))
+    if model_error is None:
+        notice("Preparing model context…")
+        try:
+            preview = asyncio.create_task(agent._context_view(registry.specs(), 0, preview=True))
             try:
-                await asyncio.to_thread(save_model_choice, config.model, config.provider)
-            except (OSError, ConfigError) as exc:
-                renderer.emit(f"  could not remember model choice: {exc}")
-        resources.pop_all()
-        return session
+                await asyncio.shield(preview)
+            except asyncio.CancelledError:
+                await finish_cleanup(preview)
+                raise
+        except APIError as exc:
+            model_error = exc
+            renderer.emit(f"  model check failed: {exc} Select another model with /models or /model <slug>.")
+    if not getattr(args, "no_reload", False):
+        frame = await run_blocking(RuntimeFrame, session, sys.modules[__name__])
+        session.reloader = frame
+        edits = registry.services.get("user_edits")
+        agent.on_boundary = edits.checkpoint if edits is not None else lambda: frame.checkpoint(boundary=True)
+    if args.model and model_error is None and not getattr(args, "json_events", False):
+        try:
+            await run_blocking(save_model_choice, config.model, config.provider)
+        except (OSError, ConfigError) as exc:
+            renderer.emit(f"  could not remember model choice: {exc}")
+    notice("Startup complete.")
 
 
 # --------------------------------------------------------------------------- #
@@ -711,15 +818,6 @@ async def run_one_shot(session: Session, prompt: str, events: JsonEventStream | 
 
 async def run_repl(session: Session) -> int:
     style = session.renderer.style
-    mcp_line = ""
-    if session.mcp is not None and session.mcp.servers:
-        connected = sum(
-            1 for state in session.mcp.servers.values() if state.status == "connected"
-        )
-        mcp_line = f"  MCP:       {connected}/{len(session.mcp.servers)} server(s) connected\n\n"
-    # Prime the free-call count so the status bar is populated on the first
-    # prompt rather than showing a dash until the first step finishes.
-    await _refresh_quota(session)
     renderer = session.renderer
     terminal_task: asyncio.Task[None] | None = None
     if sys.stdin.isatty() and renderer.stream.isatty() and os.environ.get("TERM") != "dumb":
@@ -742,19 +840,21 @@ async def run_repl(session: Session) -> int:
         terminal.configure_markdown(theme=renderer.markdown_theme, source=renderer.output_markdown)
         terminal.set_interrupt_handler(lambda: _request_interrupt(session))
         terminal_task = asyncio.create_task(terminal.run())
-    renderer.show_banner(
-        model=session.agent.model,
-        workspace=session.workspace.root,
-        tools=session.registry.names,
-        mcp=mcp_line,
-    )
-    if session.extensions.pop("restore_transcript", False):
-        await renderer.restore_transcript(session.agent.messages, session.agent.pending,
-                                          queued_messages=session.agent.queued_messages)
-    quota_task = asyncio.create_task(_poll_quota(session))
-    reload_task = asyncio.create_task(session.reloader.watch()) if session.reloader is not None else None
-
+    quota_task: asyncio.Task[None] | None = None
+    reload_task: asyncio.Task[None] | None = None
     try:
+        try:
+            ready = await _start_repl(session)
+        except (ConfigError, APIError) as exc:
+            renderer.emit(style.red(f"  Startup failed: {exc}"))
+            return 2
+        if not ready:
+            return 0
+        if session.extensions.pop("restore_transcript", False):
+            await renderer.restore_transcript(session.agent.messages, session.agent.pending,
+                                              queued_messages=session.agent.queued_messages)
+        quota_task = asyncio.create_task(_poll_quota(session))
+        reload_task = asyncio.create_task(session.reloader.watch()) if session.reloader is not None else None
         while True:
             try:
                 line = await _read_line(session, style)
@@ -802,8 +902,9 @@ async def run_repl(session: Session) -> int:
         if reload_task is not None:
             reload_task.cancel()
             await _gather_quietly(reload_task)
-        quota_task.cancel()
-        await _gather_quietly(quota_task)
+        if quota_task is not None:
+            quota_task.cancel()
+            await _gather_quietly(quota_task)
         try:
             await _shutdown(session)
         finally:
@@ -815,6 +916,57 @@ async def run_repl(session: Session) -> int:
     return 0
 
 
+async def _start_repl(session: Session) -> bool:
+    """Keep input live during startup, retaining prompts until initialization settles."""
+    renderer, terminal = session.renderer, session.renderer.terminal
+    startup = session.extensions.pop("startup", None)
+
+    async def initialize() -> None:
+        await renderer.show_welcome(model=session.agent.model, workspace=session.workspace.root,
+                                    tools=session.registry.names)
+        if startup is not None:
+            await startup()
+
+    if terminal is None:
+        await initialize()
+        return True
+    terminal.set_working(True)
+    _refresh_title(session)
+    task = asyncio.create_task(initialize())
+
+    def interrupt() -> None:
+        terminal.set_working(True, stopping=True)
+        task.cancel()
+
+    terminal.set_interrupt_handler(interrupt)
+    reader = asyncio.create_task(_read_line(session, renderer.style))
+    queued: list[str | None] = []
+    try:
+        while not task.done():
+            done, _ = await asyncio.wait({task, reader}, return_when=asyncio.FIRST_COMPLETED)
+            if reader in done:
+                line = reader.result()
+                if line is None or line.strip() in {"/exit", "/quit"}:
+                    task.cancel()
+                    return False
+                queued.append(line)
+                reader = asyncio.create_task(_read_line(session, renderer.style))
+        if task.cancelled():
+            return False
+        await task
+        return True
+    finally:
+        if reader.done() and not reader.cancelled():
+            queued.append(reader.result())
+        reader.cancel()
+        if not task.done():
+            task.cancel()
+        await finish_cleanup(asyncio.create_task(_gather_quietly(task, reader)))
+        session.extensions["startup_input_lines"] = queued
+        terminal.set_interrupt_handler(lambda: _request_interrupt(session))
+        terminal.set_working(False)
+
+
 async def _read_line(session: Session, style: Style) -> str | None:
     """Read one line of input, drawing the prompt and readouts around it.
 
@@ -822,6 +974,9 @@ async def _read_line(session: Session, style: Style) -> str | None:
     """
     if "pending_input_line" in session.extensions:
         return cast(str | None, session.extensions.pop("pending_input_line"))
+    queued = session.extensions.get("startup_input_lines")
+    if queued:
+        return cast(str | None, queued.pop(0))
     renderer = session.renderer
     _refresh_title(session)
     renderer.draw_prompt(_status_bar(session, style), style.user("> "))
@@ -2006,6 +2161,7 @@ async def _dispatch(args: argparse.Namespace, prompt: str | None) -> int:
     The httpx client must be created and used in the same loop, so setup and
     execution cannot live in separate `asyncio.run` calls.
     """
+    asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=4, thread_name_prefix="slipagent"))
     if args.list_models:
         try:
             return await _list_models(args)
@@ -2015,7 +2171,8 @@ async def _dispatch(args: argparse.Namespace, prompt: str | None) -> int:
 
     events = JsonEventStream(sys.stdout) if getattr(args, "json_events", False) else None
     try:
-        session = await build_session(args)
+        interactive = not prompt and sys.stdin.isatty() and sys.stderr.isatty() and os.environ.get("TERM") != "dumb"
+        session = await build_session(args, defer_startup=interactive)
     except (ConfigError, APIError) as exc:
         print(f"slipagent: {exc}", file=sys.stderr)
         if events is not None:

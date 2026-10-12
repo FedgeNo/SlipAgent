@@ -7,7 +7,7 @@ from typing import Any
 from ..types import Message, ToolSpec
 from .base import Tool, ToolRegistry, ToolResult
 
-CORE_TOOLS = frozenset({"read_file", "list_dir", "grep", "edit_file", "run_command", "load_tools"})
+CORE_TOOLS = frozenset({"read_file", "write_file", "list_dir", "grep", "edit_file", "run_command", "load_tools"})
 
 
 class ToolCatalog:

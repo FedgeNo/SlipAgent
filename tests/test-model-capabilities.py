@@ -165,6 +165,8 @@ def transport_for(models, endpoints, requests, gets, replies=None):
     def handle(request):
         if request.method == "GET":
             gets.append(request.url.path)
+            if request.url.path.endswith("/key"):
+                return httpx.Response(200, json={"data": {"is_free_tier": True}})
             if request.url.path.endswith("/models"):
                 return httpx.Response(200, json={"data": models})
             model = request.url.path.split("/models/", 1)[1].removesuffix("/endpoints")
@@ -343,10 +345,10 @@ async def test_startup_fetches_model_properties_and_remembers_explicit_choice(tm
     try:
         assert session.agent.model == selected
         assert Config.from_env(environ={"OPENROUTER_API_KEY": "test"}).model == selected
-        assert gets == ["/api/v1/models", f"/api/v1/models/{selected}/endpoints"]
+        assert sorted(gets) == sorted(["/api/v1/models", f"/api/v1/models/{selected}/endpoints", "/api/v1/key"])
         assert requests == []
         assert await session.agent._context_length() == 128000
-        assert len(gets) == 2
+        assert len(gets) == 3
     finally:
         await cli._shutdown(session)
 

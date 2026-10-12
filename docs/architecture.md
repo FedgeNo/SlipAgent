@@ -482,7 +482,21 @@ or metadata inside tool arguments.
 
 `sessionstate.Session` owns the API client, registry, MCP manager, renderer, terminal lifecycle,
 and optional runtime frame. Startup uses `AsyncExitStack` until ownership transfers
-to the complete session, so cancellation/preflight failure closes acquired resources.
+to the session, so cancellation/preflight failure closes acquired resources.
+Interactive terminals open in Working before service initialization. Welcome lines
+appear 60 ms apart, followed by progress and individual MCP connection results.
+Catalog/capability discovery, quota, repository-map warming, Python discovery, MCP,
+and session recovery overlap; context validation follows their completion. Provider
+capability discovery owns catalog loading, avoiding duplicate catalog requests.
+The CLI uses four default executor workers and at most four concurrent MCP starts.
+Prompts and settings entered during startup queue until initialization completes;
+Esc, `/exit`, `/quit`, or EOF cancel startup and drain owned work before shutdown.
+The repository worker finishes before its resources close. Reload watching begins
+after startup settles, preserving the editor's boundary callback when present.
+MCP negotiation prefers modern per-request metadata and retains the legacy
+handshake fallback. If initial discovery failed but the handshake rejection
+identifies a supported modern version, discovery is retried once on that same
+connection. Disjoint versions and a failed recovery remain visible errors.
 Shutdown cancels command tasks, closes MCP connections, closes tools and registry
 services, closes the API client, and releases the runtime generation.
 
@@ -976,6 +990,11 @@ to the model along with the active generation number.
   changes. Only the notice text flashes; activity indicators, links, headings,
   redraws, resizing, repeated notices, and rotating tips do not restart flashing.
   The bottom readout has no separate notice area.
+  Overflowing activity text and notices scroll in their available footer width,
+  pausing for one second before moving five graphemes per second and looping
+  through a three-space gap. Text or width changes restart the scroll; spinner
+  and style changes do not. Grapheme boundaries, styles, and mouse handlers
+  survive clipping. Fitting text stays still and reuses the existing repaint timer.
   Very short terminals reduce the input/list rows to retain feed
   output. The displayed **back** action cancels the selector like Escape.
   A focused menu
@@ -992,8 +1011,17 @@ to the model along with the active generation number.
   paths. Arbitrary selected prose does not become a path. File links retain
   source-line targets through wrapping and reflow. Diff gutters index old/new
   coordinates on disk, independently of viewport traversal order.
+  File-reference, saved-output, and diff links underline and accept mouse events
+  only over their labels, excluding indentation and trailing feed space. Saved
+  edit diffs stay in the viewer; their links follow file links on the same line,
+  including in restored transcripts. Tool calls and result
+  links stay together; the next non-tool entry supplies or receives a blank line.
   `editor.py` owns file snapshots, bounded pages, changed-page files, and atomic
-  publication with disk-signature checks. `editorcontrol.py` renders neighboring
+  publication with disk-signature checks. Each `IndexedText` snapshot serializes
+  its seek/read operations across text and line indexes, preventing redraws from
+  changing the save worker's read position. Locks cover individual bounded reads,
+  and existing snapshots acquire the same protection after a compatible reload.
+  `editorcontrol.py` renders neighboring
   sections around the editable buffer and translates mouse coordinates back to
   their section. Its window scrolls by displayed rows, preserving the cursor's
   screen edge across wrapped lines and section boundaries. `editorui.py` owns the editable buffer,

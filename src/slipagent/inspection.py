@@ -9,6 +9,7 @@ import tempfile
 import asyncio
 from collections.abc import Iterator, Sequence, Callable
 from pathlib import Path
+from threading import RLock
 from typing import Any, TextIO, overload
 
 CHUNK_SIZE = 4096
@@ -35,11 +36,20 @@ class IndexedText(Sequence[str]):
     """
 
     def __init__(self) -> None:
+        self._snapshot_lock = RLock()
         self.text = tempfile.TemporaryFile(mode="w+", encoding="utf-8", newline="\n", errors="surrogatepass")
         self._index = tempfile.TemporaryFile(mode="w+b")
         self.logical = tempfile.TemporaryFile(mode="w+b")
         self._count = 0
         self.logical_count = 0
+
+    @property
+    def _read_lock(self) -> RLock:
+        # Existing snapshots survive reloads. Concurrent first reads must share
+        # one lock, including across the UI and background editor-save worker.
+        if "_snapshot_lock" not in self.__dict__:
+            self.__dict__.setdefault("_snapshot_lock", RLock())
+        return self._snapshot_lock
 
     def finish(self) -> IndexedText:
         self.text.flush()
@@ -76,38 +86,39 @@ class IndexedText(Sequence[str]):
     def line_index(self, line: int) -> int:
         if not self.logical_count:
             return 0
-        self.logical.seek(max(0, min(line - 1, self.logical_count - 1)) * _LINE.size)
-        return int(_LINE.unpack(self.logical.read(_LINE.size))[0])
+        with self._read_lock:
+            self.logical.seek(max(0, min(line - 1, self.logical_count - 1)) * _LINE.size)
+            return int(_LINE.unpack(self.logical.read(_LINE.size))[0])
 
     def line_number(self, index: int) -> int:
         """Return the logical line containing a display segment using the disk index."""
-        low, high = 0, self.logical_count
-        while low < high:
-            middle = (low + high) // 2
-            self.logical.seek(middle * _LINE.size)
-            start = _LINE.unpack(self.logical.read(_LINE.size))[0]
-            if start <= index:
-                low = middle + 1
-            else:
-                high = middle
-        return max(1, low)
+        with self._read_lock:
+            low, high = 0, self.logical_count
+            while low < high:
+                middle = (low + high) // 2
+                self.logical.seek(middle * _LINE.size)
+                start = _LINE.unpack(self.logical.read(_LINE.size))[0]
+                if start <= index:
+                    low = middle + 1
+                else:
+                    high = middle
+            return max(1, low)
 
     def __len__(self) -> int:
         return self._count
 
     def continues_line(self, index: int) -> bool:
         """Whether a display segment continues into the next segment."""
-        self._index.seek(index * _OFFSET.size)
-        offset, length = _OFFSET.unpack(self._index.read(_OFFSET.size))
-        self.text.seek(offset)
-        return bool(length and not self.text.read(length).endswith("\n") and index + 1 < len(self))
+        text = self.segment(index)
+        return bool(text and not text.endswith("\n") and index + 1 < len(self))
 
     def segment(self, index: int) -> str:
         """Read one bounded segment, preserving its original line ending."""
-        self._index.seek(index * _OFFSET.size)
-        offset, length = _OFFSET.unpack(self._index.read(_OFFSET.size))
-        self.text.seek(offset)
-        return self.text.read(length)
+        with self._read_lock:
+            self._index.seek(index * _OFFSET.size)
+            offset, length = _OFFSET.unpack(self._index.read(_OFFSET.size))
+            self.text.seek(offset)
+            return self.text.read(length)
 
     @overload
     def __getitem__(self, index: int) -> str: ...
@@ -120,15 +131,13 @@ class IndexedText(Sequence[str]):
             index += len(self)
         if not 0 <= index < len(self):
             raise IndexError(index)
-        self._index.seek(index * _OFFSET.size)
-        offset, length = _OFFSET.unpack(self._index.read(_OFFSET.size))
-        self.text.seek(offset)
-        return self.text.read(length).removesuffix("\n").removesuffix("\r")
+        return self.segment(index).removesuffix("\n").removesuffix("\r")
 
     def close(self) -> None:
-        self.text.close()
-        self._index.close()
-        self.logical.close()
+        with self._read_lock:
+            self.text.close()
+            self._index.close()
+            self.logical.close()
 
 
 def write_fields(target: TextIO, value: Any, indent: int = 0) -> None:

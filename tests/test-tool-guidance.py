@@ -37,7 +37,9 @@ async def test_tool_guidance_reaches_actual_request_body(workspace, native):
             await client.chat(model="test", messages=view, tools=agent._visible_specs(registry.specs()) if native else None,
                               request_profile=profile)
             initial = system_tool_definitions(captured[0]["messages"][0]["content"])
-            assert "write_file" not in {item["function"]["name"] for item in initial}
+            assert "write_file" in {item["function"]["name"] for item in initial}
+            if native:
+                assert "write_file" in {item["function"]["name"] for item in captured[0]["tools"]}
             loaded = await registry.invoke("load_tools", {"names": registry.names})
             assert not loaded.is_error
             view = await agent._context_view(registry.specs(), 1, capabilities=profile)

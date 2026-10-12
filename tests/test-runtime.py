@@ -905,7 +905,8 @@ def test_renderer_failure_does_not_stop_frame_reporting_or_watching(run_copy):
         original = (root / 'cli.py').read_text()
         watcher = asyncio.create_task(frame.watch())
         try:
-            edit('cli.py', '        if separate and strip_sequences(text).strip():', '        raise ValueError("broken renderer")\\n        if separate and strip_sequences(text).strip():')
+            before = '        """Separate output units while keeping their lines together."""'
+            edit('cli.py', before, before + '\\n        raise ValueError("broken renderer")')
             async with asyncio.timeout(4):
                 while frame.generation < 1:
                     await asyncio.sleep(.05)

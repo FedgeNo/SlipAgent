@@ -28,7 +28,7 @@ conversation or restarting the terminal.
   sidebar. Saved user edits return to the model as diffs.
 - **Mouse and keyboard navigation:** clickable menus, wheel scrolling, a
   selection context menu, and panel focus cycling with Ctrl+Space.
-- **Focused tool definitions:** six core tools are fully described initially;
+- **Focused tool definitions:** seven core tools are fully described initially;
   the model loads other definitions as needed from the available-tool catalog.
 - **A responsive terminal:** wrapping output, a fixed prompt/status area,
   queued follow-ups, optional next-step links, and `/stop` at step boundaries.
@@ -707,7 +707,7 @@ In the REPL:
 | `/danger` or `/danger on` | Disable workspace path confinement; queues while working |
 | `/danger off` | Restore workspace path confinement; queues while working |
 | `/danger status` | Show the current access mode |
-| `/overthinking on\|off` | Enable or disable recent archived thoughts, up to 25 steps; enabled by default; queues while working |
+| `/overthinking [on\|off]` | Enable recent archived thoughts, up to 25 steps, with `/overthinking` or `/overthinking on`; disable with `/overthinking off`. Enabled by default; queues while working. |
 | `/planning [on\|off]` | Enable planning with `/planning` or `/planning on`; disable with `/planning off`. Enabled by default; queues while working. Disabling preserves the saved plan. |
 | `/tools` | List available tools |
 | `/model` | Select a model with Up/Down and Enter; Escape cancels |
@@ -792,7 +792,9 @@ and model names shorten to fit narrow terminals.
 Short notices share the activity area beside **Ready** and remain visible while
 browsing selectors or the context view. Changed event notices flash three times,
 then stay steady until replaced or cleared. Only the notice text flashes; activity
-indicators, the Commands link, and rotating tips remain steady. When no notice is
+indicators, the Commands link, and rotating tips do not flash. Overflowing status
+messages and notices pause briefly, then scroll horizontally in a loop so the
+complete text can be read. Text that fits stays still. When no notice is
 active, this area rotates tips for available controls. Folder-launch failures also
 remain in the transcript.
 
@@ -970,6 +972,13 @@ colors on hover.
 
 ### Queued Input and Stopping
 
+At startup, the interface shows Working while welcome lines appear one at a time.
+Progress then reports repository mapping, model catalogs and metadata, quota,
+Python discovery, session history, and each MCP server's connection result.
+Independent work runs concurrently, with four worker threads and at most four MCP
+connections starting together. Tasks and settings entered during startup queue
+until setup finishes. Esc, `/exit`, `/quit`, or Ctrl-D cancels startup and exits.
+
 State-changing commands queue in order while the agent works. They apply after
 the current response and complete tool batch finish. Settings changes then resume
 the task without resetting its request limit. `/stop` prevents automatic
@@ -1078,7 +1087,8 @@ model reply; each command response is another unit.
 The model can explain its work alongside batched tool calls.
 The interactive feed shows command activity and saved-output links instead of
 printing stdout and stderr inline. Open the output viewer to inspect them;
-the model still receives command results. One-shot progress uses stderr, and
+the model still receives command results. Saved edit diffs also stay in the viewer,
+with their existing View Diff links beside the file links. One-shot progress uses stderr, and
 command archives retain decoded output within their quota.
 
 ### Repeated Actions Without Progress
@@ -1097,7 +1107,7 @@ string and saved with that step's uncompressed originals. Existing history is
 not rewritten. **Overthinking Mode** is enabled by default: the latest 25 completed
 steps include supplied thoughts as a `reasoning` string in each step's input
 record, subject to `--reasoning-history-steps`. Steps without thoughts gain no extra field. Use `/overthinking off` to
-disable this mode, or `/overthinking on` to enable it. Thoughts count
+disable this mode, or `/overthinking` or `/overthinking on` to enable it. Thoughts count
 toward the context budget; omitted steps and budget-limited excerpts omit them.
 Opaque provider reasoning metadata is never included. Background compression returns
 separate `summary` and `reasoning_summary` fields. It receives the completed step's
@@ -1591,9 +1601,9 @@ interpreter in the server's `command` when required.
 
 ## Tools
 
-The model initially gets complete definitions for `read_file`, `list_dir`,
-`grep`, `edit_file`, `run_command`, and `load_tools`. Other tools appear in a
-compact names-and-purpose catalog. The model calls `load_tools` with selected
+The model initially gets complete definitions for `read_file`, `write_file`,
+`list_dir`, `grep`, `edit_file`, `run_command`, and `load_tools`. Other tools appear
+in a compact names-and-purpose catalog. The model calls `load_tools` with selected
 names to obtain their full descriptions and argument schemas; those definitions
 join subsequent system prompts and API tool lists for the conversation.
 Only tools whose full definitions are supplied in the current request can run.

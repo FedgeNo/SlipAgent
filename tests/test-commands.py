@@ -16,6 +16,9 @@ from slipagent.cli import _background_command, _changes_session, _command_help, 
     ("mcp", "remove test", True, False),
     ("danger", "status", False, False),
     ("danger", "off", True, False),
+    ("overthinking", "", True, False),
+    ("overthinking", "on", True, False),
+    ("overthinking", "off", True, False),
     ("task", "", False, False),
     ("task", "new", True, False),
     ("planning", "on", True, False),
@@ -40,6 +43,8 @@ def test_menu_inserts_only_the_command_prefix_and_help_keeps_all_variants():
     assert "/mcp add " in choices
     assert "<command>" in choices["/mcp add "]
     assert "/danger off" in choices
+    assert "/overthinking [on|off]" in choices["/overthinking "]
+    assert "/overthinking [on|off]" in _command_help("overthinking")
     assert _command_help("mcp") == _command_help("/mcp")
     assert all(part in _command_help("mcp") for part in ("/mcp add", "/mcp save", "/mcp remove"))
     assert "/quit" in _command_help("quit")

@@ -588,6 +588,9 @@ class TerminalUI:
     def write_artifact_reference(self, record: dict[str, object]) -> None:
         identifier = record["record_id"]
         self._ensure_transcript()
+        inline = record["kind"] == "diff" and len(self._raw_output) - 1 in self.__dict__.get("_file_links", {})
+        if inline:
+            self.write_chunk("  ")
         self.__dict__.setdefault("_artifact_links", {})[len(self._raw_output)] = identifier
         for call in self.__dict__.get("_inspection_calls", {}).values():
             if call["call_id"] == record.get("call_id") and call["step_id"] == record.get("step_id"):
@@ -595,7 +598,11 @@ class TerminalUI:
                 if not any(saved["record_id"] == identifier for saved in references):
                     references.append(record)
         label = "Diff" if record["kind"] == "diff" else "Output"
-        self.write(f"    View {label} — Record {identifier}\n")
+        text = f"View {label} — Record {identifier}"
+        if inline:
+            self.write_chunk(text)
+        else:
+            self.write("    " + text)
 
     def _artifact_at(self, point: Point) -> int | None:
         if self._flow is None:
@@ -604,6 +611,11 @@ class TerminalUI:
         row = self._flow.get_row(point.y) if 0 <= point.y < len(self._flow.rows) else (
             rows[point.y - len(self._flow.rows)] if 0 <= point.y - len(self._flow.rows) < len(rows) else []
         )
+        text = fragment_list_to_text(row)
+        left = display_width(text[:len(text) - len(text.lstrip())])
+        right = display_width(text.rstrip())
+        if not left <= point.x < right:
+            return None
         column = 0
         for style, text, *_ in row:
             end = column + display_width(text)
@@ -661,6 +673,12 @@ class TerminalUI:
         remaining = columns - display_width(prefix) - 2
         return max(1, remaining if remaining > 0 else columns)
 
+    def _activity_width(self) -> int:
+        columns = self.output.get_size().columns
+        if self._menu_future is not None or self._options_field_active:
+            return columns
+        return max(0, (columns - 18) // 2) if self._show_scroll_bottom() else max(0, columns - self._right_control_width())
+
     def _readout_width(self) -> int:
         return max(1, self.output.get_size().columns)
 
@@ -678,7 +696,7 @@ class TerminalUI:
         self.__dict__["_notification"] = text
         self.app.invalidate()
 
-    def _notification_text(self) -> str:
+    def _notification_text(self, columns: int | None = None) -> str:
         text = self.__dict__.get("_notification", "")
         if not text:
             tips = ["Select and right-click for text options."]
@@ -694,15 +712,49 @@ class TerminalUI:
             now = time.monotonic()
             started = self.__dict__.setdefault("_tips_started_at", now)
             text = tips[int((now - started) // 15) % len(tips)]
-        columns = self._notice_width()
-        if display_width(text) <= columns:
-            return str(text)
-        result = ""
-        for cluster in iter_graphemes(text):
-            if display_width(result + cluster) > columns - 1:
+        if columns is None:
+            columns = self._notice_width()
+            if self.__dict__.get("_notification") and display_width(text) > columns:
+                columns = self._activity_width()
+        return fragment_list_to_text(self._marquee([("", text)], columns, "notice"))
+
+    def _marquee(self, fragments: StyleAndTextTuples, columns: int, key: str) -> StyleAndTextTuples:
+        """Scroll overflowing text without splitting graphemes or losing handlers."""
+        text = fragment_list_to_text(fragments)
+        states = self.__dict__.setdefault("_marquee_states", {})
+        if columns <= 0 or display_width(text) <= columns:
+            states.pop(key, None)
+            return fragments if columns > 0 else []
+        # The working spinner changes every frame; it must not restart scrolling.
+        identity = text
+        for frame in PULSE_FRAMES:
+            if identity.startswith(frame):
+                identity = identity[len(frame):]
                 break
-            result += cluster
-        return result + "…"
+        signature = (identity, columns)
+        now = time.monotonic()
+        if key not in states or states[key][0] != signature:
+            states[key] = (signature, now)
+        expanded = explode_text_fragments([*fragments, ("", "   ")])
+        clusters = []
+        position = 0
+        for cluster in iter_graphemes(text + "   "):
+            end = position + len(cluster)
+            clusters.append((max(0, display_width(cluster)), expanded[position:end]))
+            position = end
+        elapsed = (now - states[key][1]) % (1 + len(clusters) * .2)
+        offset = int(max(0, elapsed - 1) / .2)
+        result: StyleAndTextTuples = []
+        remaining = columns
+        for width, parts in clusters[offset:] + clusters[:offset]:
+            if width > remaining:
+                result.append(("", " " * remaining))
+                break
+            result.extend(parts)
+            remaining -= width
+            if not remaining:
+                break
+        return result
 
     def _menu_fragments(self) -> StyleAndTextTuples:
         return self._choice_panel.fragments()
@@ -839,7 +891,7 @@ class TerminalUI:
         links = self.__dict__.setdefault("_directory_links", {})
         links[len(self._raw_output)] = directory
         label = re.sub(r"[\x00-\x1f\x7f]", lambda match: f"\\x{ord(match[0]):02x}", str(directory))
-        self.write(f"    {label}\n")
+        self.write(f"    {label}")
 
     def write_file_reference(self, value: str, *, line: int = 1) -> None:
         root = self.__dict__.get("_project_directory")
@@ -854,7 +906,7 @@ class TerminalUI:
         links = self.__dict__.setdefault("_file_links", {})
         links[len(self._raw_output)] = (path, line)
         label = re.sub(r"[\x00-\x1f\x7f]", lambda match: f"\\x{ord(match[0]):02x}", value)
-        self.write(f"    {label}:{line}\n")
+        self.write(f"    {label}:{line}")
 
     def write_suggestion(self, prompt: str) -> None:
         """Display the entire prompt without changing the user's draft."""
@@ -893,6 +945,11 @@ class TerminalUI:
         rows = self._flow.content_rows()
         row = self._flow.get_row(point.y) if 0 <= point.y < len(self._flow.rows) else (
             rows[point.y - len(self._flow.rows)] if 0 <= point.y - len(self._flow.rows) < len(rows) else [])
+        text = fragment_list_to_text(row)
+        left = display_width(text[:len(text) - len(text.lstrip())])
+        right = display_width(text.rstrip())
+        if not left <= point.x < right:
+            return None
         column = 0
         for style, text, *_ in row:
             end = column + display_width(text)
@@ -1311,6 +1368,21 @@ class TerminalUI:
             try:
                 screen = app.renderer._last_screen
                 if screen is not None:
+                    position = screen.visible_windows_to_write_positions.get(self.transcript)
+                    info = self.transcript.render_info
+                    if position is not None and info is not None and self.transcript in app.layout.walk_through_modal_area() and (
+                        position.xpos <= event.position.x < position.xpos + position.width
+                        and position.ypos <= event.position.y < position.ypos + position.height
+                    ):
+                        source = info.visible_line_to_row_col.get(event.position.y - position.ypos)
+                        if source is not None and any(token.startswith(("class:artifact-", "class:file-"))
+                                                      for style, _, *_ in info.ui_content.get_line(source[0])
+                                                      for token in style.split()):
+                            # Window clamps blank columns to the last character, which would activate the link.
+                            return self._select_transcript(MouseEvent(
+                                Point(x=source[1] + event.position.x - position.xpos, y=source[0]),
+                                event.event_type, event.button, event.modifiers,
+                            ))
                     for hit_window in (self._menu_window, self._files_window, self._calls_window):
                         position = screen.visible_windows_to_write_positions.get(hit_window)
                         if position is None or not (position.xpos <= event.position.x < position.xpos + position.width
@@ -1345,9 +1417,9 @@ class TerminalUI:
         fragments = self._activity_status()
         edits = self.__dict__.get("_user_edits")
         if edits is not None and getattr(edits, "pending", None) is not None:
-            return [*fragments, ("", "  "), *self._action_link(
+            return self._marquee([*fragments, ("", "  "), *self._action_link(
                 "Cancel Opening Editor", "cancel-opening-editor", edits.close,
-                enabled=lambda: edits.pending is not None), ("", " ")]
+                enabled=lambda: edits.pending is not None), ("", " ")], self._activity_width(), "activity")
         if self._viewer_active or self._editor_active:
             mode = "editor" if self._editor_active else "viewer"
             label = "Close Text Editor" if self._editor_active else "exit viewer"
@@ -1360,12 +1432,18 @@ class TerminalUI:
 
     def _activity_notice(self, fragments: StyleAndTextTuples) -> StyleAndTextTuples:
         notification = self.__dict__.get("_notification", "")
-        text = self._notification_text() if notification or (self._menu_future is None and not self._options_field_active) else ""
+        available = self._activity_width()
+        if not notification and display_width(fragment_list_to_text(fragments)) >= available:
+            return self._marquee(fragments, available, "activity")
+        remaining = max(0, available - display_width(fragment_list_to_text(fragments)) - 2)
+        text = ""
+        if notification:
+            controls_visible = (self._editor_active or self._viewer_active) and self._menu_future is None and not self._options_field_active
+            text = self._notification_text(remaining) if controls_visible and remaining else self._notification_text()
+        elif self._menu_future is None and not self._options_field_active:
+            text = self._notification_text(remaining)
         if text:
-            available = self.output.get_size().columns
-            if self._menu_future is None and not self._options_field_active:
-                available = max(0, (available - 18) // 2) if self._show_scroll_bottom() else available - self._right_control_width()
-            if display_width(fragment_list_to_text(fragments)) + 2 >= available:
+            if display_width(fragment_list_to_text(fragments)) + 2 + display_width(text) > available:
                 fragments = []
             style = "class:status"
             changed_at = self.__dict__.get("_status_changed_at")
@@ -1376,7 +1454,7 @@ class TerminalUI:
             if fragments:
                 fragments = [*fragments, ("", "  ")]
             fragments = [*fragments, (style, text)]
-        return fragments
+        return self._marquee(fragments, available, "activity")
 
     def _activity_status(self) -> StyleAndTextTuples:
         if self._editor_active:
@@ -1790,6 +1868,15 @@ class TerminalUI:
         def decorate_links(fragments: StyleAndTextTuples) -> StyleAndTextTuples:
             result: StyleAndTextTuples = []
             for style, text, *_ in fragments:
+                padding_style = " ".join(token for token in style.split() if not token.startswith(("class:artifact-", "class:file-")))
+                leading = trailing = ""
+                if any(token.startswith(("class:artifact-", "class:file-")) for token in style.split()):
+                    leading = text[:len(text) - len(text.lstrip())]
+                    text = text[len(leading):]
+                    trailing = text[len(text.rstrip()):]
+                    text = text[:len(text) - len(trailing)]
+                    if leading:
+                        result.append((padding_style, leading))
                 for token in style.split():
                     if token.startswith("class:suggestion-"):
                         suggestion = self.__dict__.get("_suggestion_links", {}).get(int(token.removeprefix("class:suggestion-")))
@@ -1812,6 +1899,8 @@ class TerminalUI:
                         if self.__dict__.get("_hovered_control") == ("directory", directory):
                             style += " class:hover"
                 result.append((style, text))
+                if trailing:
+                    result.append((padding_style, trailing))
             return result
 
         return UIContent(get_line=get_line, line_count=self._line_count + 1,

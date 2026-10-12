@@ -1210,11 +1210,17 @@ async def test_overthinking_commands(tmp_path, metadata_server):
         assert not session.agent.overthinking
         await cli._handle_command(session, "/reset")
         assert not session.agent.overthinking
+        await cli._handle_command(session, "/overthinking")
+        assert session.agent.overthinking
+        await cli._handle_command(session, "/overthinking")
+        assert session.agent.overthinking
+        await cli._handle_command(session, "/overthinking off")
+        assert not session.agent.overthinking
         await cli._handle_command(session, "/overthinking on")
         assert session.agent.overthinking
         await cli._handle_command(session, "/overthinking invalid")
         assert session.agent.overthinking
-        assert "usage: /overthinking on|off" in output.getvalue()
+        assert "usage: /overthinking [on|off]" in output.getvalue()
         assert "Overthinking Mode OFF" in output.getvalue()
         assert "Overthinking Mode ON" in output.getvalue()
     finally:
@@ -1501,14 +1507,18 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
                 assert proc.poll() is None, "CLI exited before the expected state"
             pytest.fail("terminal state timed out: " + repr(screen.display))
         try:
-            wait_for(lambda: "Model: stub/one" in screen.display[23])
-            assert screen.title == f"{project_dir} | SlipAgent"
-            assert "Ready" in screen.display[17]
+            wait_for(lambda: "Model: stub/one" in screen.display[23] and "Working" in screen.display[17])
+            assert screen.title.endswith(f"{project_dir} | SlipAgent")
+            wait_for(lambda: "/quit" in "\n".join(screen.display[:17]))
             startup = "\n".join(screen.display[:17])
             for command in ["/help", "/menu", "/danger", "/tools", "/model", "/models", "/key", "/cost", "/mcp", "/rename", "/reset", "/reload", "/generations", "/init", "/stop", "/exit", "/quit"]:
                 assert command in startup
-            assert "Follow-ups queue" in startup
-            assert "Ctrl-D quits" in startup
+            wait_for(lambda: "Ctrl-D quits" in "\n".join(screen.display[:17]))
+            assert "Follow-ups queue" in "\n".join(screen.display[:17])
+            wait_for(lambda: "Ready" in screen.display[17])
+            assert screen.title == f"{project_dir} | SlipAgent"
+            assert "Ready" in screen.display[17]
+            assert "Startup complete" in "\n".join(screen.display[:17])
             os.write(master, b"/danger\r")
             wait_for(lambda: " | Danger Mode" in screen.display[23])
             start = screen.display[23].index("Danger Mode")

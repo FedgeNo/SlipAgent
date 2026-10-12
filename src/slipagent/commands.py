@@ -298,20 +298,20 @@ class DangerCommand(Command):
 
 class OverthinkingCommand(Command):
     name = 'overthinking'
-    banner = '/overthinking on|off'
+    banner = '/overthinking [on|off]'
     help = (
-        CommandHelp('/overthinking on|off', 'enable or disable recent archived thoughts, up to 25 steps (queues while working)', '/overthinking '),
+        CommandHelp('/overthinking [on|off]', 'enable or disable recent archived thoughts, up to 25 steps (queues while working)', '/overthinking '),
     )
 
     def changes_session(self, argument: str) -> bool:
-        return argument.lower() in {"on", "off"}
+        return argument.lower() in {"", "on", "off"}
 
     async def run(self, context: CommandContext, argument: str) -> bool | None:
         session, style, out = context.session, context.style, context.out
-        if argument.lower() not in {"on", "off"}:
-            print(style.red("  usage: /overthinking on|off"), file=out)
+        if argument.lower() not in {"", "on", "off"}:
+            print(style.red("  usage: /overthinking [on|off]"), file=out)
         else:
-            session.agent.overthinking = argument.lower() == "on"
+            session.agent.overthinking = argument.lower() != "off"
             print(f"  Overthinking Mode {'ON' if session.agent.overthinking else 'OFF'}.", file=out)
         return None
 

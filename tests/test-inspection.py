@@ -133,3 +133,37 @@ async def test_cancelled_snapshot_waits_for_worker_and_closes_files():
     with pytest.raises(asyncio.CancelledError):
         await task
     assert snapshot.text.closed and snapshot._index.closed and snapshot.logical.closed
+
+
+def test_concurrent_snapshot_reads_keep_text_and_logical_coordinates(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    lines = [f"line-{n:02} " + ("界 café content " * (400 if n % 3 == 0 else 20)) + "\r\n" for n in range(30)]
+    path = tmp_path / "mixed-long-lines.txt"
+    path.write_bytes("".join(lines).encode())
+    snapshot = IndexedText()
+    snapshot.text.write("".join(lines))
+    snapshot.finish()
+    segments = []
+    starts = []
+    for line_number, line in enumerate(lines, 1):
+        starts.append(len(segments))
+        for start in range(0, len(line), 4096):
+            segments.append((line[start:start + 4096], line_number, start + 4096 < len(line)))
+
+    def read(offset):
+        for turn in range(300):
+            index = (turn * 17 + offset) % len(segments)
+            text, line_number, continued = segments[index]
+            assert snapshot.segment(index) == text
+            assert snapshot[index] == text.removesuffix("\n").removesuffix("\r")
+            assert snapshot.continues_line(index) is continued
+            assert snapshot.line_index(line_number) == starts[line_number - 1]
+            assert snapshot.line_number(index) == line_number
+
+    try:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for result in pool.map(read, range(4)):
+                assert result is None
+    finally:
+        snapshot.close()

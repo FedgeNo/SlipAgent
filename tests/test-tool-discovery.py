@@ -123,8 +123,9 @@ async def test_default_registry_starts_with_only_core_definitions(tmp_path):
         agent = Agent(None, tools, "stub")
         visible = agent._visible_specs(tools.specs())
         assert {spec.name for spec in visible} == CORE_TOOLS
+        assert "write_file" in {spec.name for spec in visible}
         catalog = tool_catalog(tools)
-        assert "write_file" in {entry["name"] for entry in catalog.deferred()}
+        assert "write_file" not in {entry["name"] for entry in catalog.deferred()}
         assert "recall_history" in {entry["name"] for entry in catalog.deferred()}
         assert "update_plan" in {entry["name"] for entry in catalog.deferred()}
     finally:
@@ -214,10 +215,12 @@ async def test_rejected_batch_preserves_files_and_creates_no_checkpoints(tmp_pat
     path = tmp_path / "existing.txt"
     path.write_text("original")
     tools = build_default_registry(Workspace(tmp_path))
+    tools.register(OptionalTool())
     client = StubClient([
         completion(tool_calls=[
             ToolCall("edit", "edit_file", {"path": "existing.txt", "old_string": "original", "new_string": "changed"}),
             ToolCall("write", "write_file", {"path": "new.txt", "content": "new"}),
+            ToolCall("optional", "optional_record", {}),
         ]),
         completion("Correct the batch first."),
     ])

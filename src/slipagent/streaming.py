@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from .contextlegacy import LEGACY_RESPONSE_HEADINGS
+from .protocol import XML_CALL_TAGS
 
 
 class ResponseStream:
@@ -197,7 +198,7 @@ class _VisibleTextStream:
             return "pass"
         if self._fenced:
             return "pass"
-        tags = ("<tool_call>", "<function_call>", "<function_calls>") if self._tagged else ()
+        tags = ("<tool_call>", "<function_call>") + XML_CALL_TAGS if self._tagged else ()
         leading = self._line[:len(self._line) - len(self._line.lstrip(" \t"))]
         if len(leading) < 4 and "\t" not in leading:
             if any(stripped.startswith(tag) for tag in tags):

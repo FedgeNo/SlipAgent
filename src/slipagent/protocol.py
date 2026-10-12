@@ -23,6 +23,7 @@ COMPRESSED_FIELDS = (
     "user_prompt_compressed",
     "agent_response_compressed",
 )
+XML_CALL_TAGS = ("<function_calls>", "<tool_calls>")
 
 
 class ResponseFormatError(ValueError):
@@ -126,13 +127,14 @@ def combine_calls(*sources: list[ToolCall]) -> list[ToolCall]:
 
 
 def _detect_response(text: str, tools: list[ToolSpec], *, xml_tool_calls: bool = False) -> AgentResponse:
+    text = text.removeprefix("\ufeff")
     candidate = text.strip().removeprefix("\ufeff").strip()
     if xml_tool_calls:
         xml_fence = re.fullmatch(r"```xml[ \t]*\r?\n(.*)\r?\n```", candidate, re.DOTALL | re.IGNORECASE)
         if xml_fence:
             candidate = xml_fence[1].strip()
-        if candidate.startswith(("<function_calls>", "<tool_call>", "<function_call>")):
-            return AgentResponse("", _tagged_calls(candidate, tools))
+            if candidate.startswith(XML_CALL_TAGS + ("<tool_call>", "<function_call>")):
+                return AgentResponse("", _tagged_calls(candidate, tools))
     fence = re.fullmatch(r"```(?:json)?[ \t]*\r?\n(.*)\r?\n```", candidate, re.DOTALL | re.IGNORECASE)
     if fence:
         candidate = fence[1].strip()
@@ -178,7 +180,7 @@ def _detect_response(text: str, tools: list[ToolSpec], *, xml_tool_calls: bool =
                 elif marker[1][0] == in_fence[0] and len(marker[1]) >= len(in_fence):
                     in_fence = ""
             elif (not in_fence and len(line) - len(stripped) < 4 and "\t" not in line[:len(line) - len(stripped)]
-                  and stripped.startswith(("<tool_call>", "<function_call>") + (("<function_calls>",) if xml_tool_calls else ()))):
+                  and stripped.startswith(("<tool_call>", "<function_call>") + (XML_CALL_TAGS if xml_tool_calls else ()))):
                 return AgentResponse(text[:offset].rstrip(), _tagged_calls(text[offset:], tools))
             offset += len(line)
     return AgentResponse(text, [])
@@ -189,10 +191,12 @@ def _tagged_calls(text: str, tools: list[ToolSpec]) -> list[ToolCall]:
     raw: list[dict[str, Any]] = []
     decoder = json.JSONDecoder(object_pairs_hook=_object, parse_constant=_constant)
     while remaining:
-        if remaining.startswith("<function_calls>"):
-            block, closing, remaining = remaining.partition("</function_calls>")
+        xml_tag = next((tag for tag in XML_CALL_TAGS if remaining.startswith(tag)), None)
+        if xml_tag is not None:
+            closing_tag = "</" + xml_tag[1:]
+            block, closing, remaining = remaining.partition(closing_tag)
             if not closing:
-                raise ResponseFormatError("Missing closing </function_calls>.")
+                raise ResponseFormatError(f"Missing closing {closing_tag}.")
             raw.extend(_xml_calls(block + closing, tools))
             remaining = remaining.lstrip()
             continue
@@ -237,16 +241,28 @@ def _tagged_calls(text: str, tools: list[ToolSpec]) -> list[ToolCall]:
 
 
 def _xml_calls(text: str, tools: list[ToolSpec]) -> list[dict[str, Any]]:
-    """Decode explicit invoke/parameter XML, preserving parameter string values."""
+    """Decode invoke/parameter XML and tool_calls/call wrappers without repair.
+
+    A call wrapper contains exactly one invoke; missing tool names or broken
+    nesting reject the complete batch before any native or embedded calls run.
+    Parameter strings retain their whitespace and decoded XML entities.
+    """
     from xml.etree import ElementTree
     try:
         root = ElementTree.fromstring(text)
     except ElementTree.ParseError as exc:
         raise ResponseFormatError(f"Invalid tool-call XML: {exc}") from exc
     calls = []
-    for invoke in root:
+    for element in root:
+        invoke = element
+        if root.tag == "tool_calls":
+            if element.tag != "call" or len(element) != 1 or (element.text or "").strip():
+                raise ResponseFormatError("Expected each call in tool_calls to contain exactly one invoke element.")
+            invoke = element[0]
+            if (invoke.tail or "").strip():
+                raise ResponseFormatError("Unexpected text after invoke in call.")
         if invoke.tag != "invoke":
-            raise ResponseFormatError("Expected an invoke element in function_calls.")
+            raise ResponseFormatError(f"Expected an invoke element in {root.tag}.")
         name = invoke.get("name")
         properties: dict[str, Any] = next((tool.parameters.get("properties", {}) for tool in tools if tool.name == name), {})
         arguments = {}
@@ -469,7 +485,7 @@ def _response_object(text: str, *, tools: list[ToolSpec] | None = None, xml_tool
     record: Any = None
     calls: list[ToolCall] = []
     while remaining:
-        if xml_tool_calls and remaining.startswith("<function_calls>"):
+        if xml_tool_calls and remaining.startswith(XML_CALL_TAGS):
             calls.extend(_tagged_calls(remaining, tools or []))
             remaining = ""
             break

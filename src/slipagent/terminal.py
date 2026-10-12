@@ -50,6 +50,12 @@ FOOTER_ROWS = 7
 PULSE_FRAMES = ("🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘")
 
 
+def _key_supplied(text: str) -> bool:
+    parts = text.split(None, 1)
+    return (len(parts) == 2 and parts[0].lower() == "/key"
+            and parts[1].strip().lower() not in {"show", "status"})
+
+
 class SuggestedPrompt(str):
     """A feed action submitted verbatim, without slash-command dispatch."""
 MIN_REDRAW_INTERVAL = 1 / 30
@@ -811,7 +817,8 @@ class TerminalUI:
 
     def insert_command(self, command: str) -> None:
         """Retain the ordinary draft in input history without submitting it."""
-        self.input.buffer.append_to_history()
+        if not _key_supplied(self.input.buffer.text):
+            self.input.buffer.append_to_history()
         self.input.buffer.reset(document=Document(command, len(command)))
         self._focus.focus(self.input)
         self.app.invalidate()
@@ -1411,6 +1418,9 @@ class TerminalUI:
 
     def _accept(self, buffer: Buffer) -> bool:
         self._lines.put_nowait(buffer.text)
+        if _key_supplied(buffer.text):
+            # prompt_toolkit appends history after the accept handler returns.
+            buffer.text = ""
         return False
 
     def _activity(self) -> StyleAndTextTuples:

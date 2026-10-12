@@ -746,6 +746,8 @@ In the REPL:
 
 `/key` replaces the current provider's key. OpenRouter validates it against `GET /key`; NVIDIA has no equivalent account endpoint, so the interface labels a replacement unverified until inference. Neither uses a public model catalog as proof of authentication. Saving to `.env` still requires an explicit `y` at the prompt.
 
+Commands supplying a key with `/key <key>` are omitted from input history.
+
 Conversation titles default to `{full working directory} | SlipAgent`.
 `/rename Fix login` changes the saved conversation and terminal title to
 `Fix login | SlipAgent`, including while the agent works. `/sessions` shows saved

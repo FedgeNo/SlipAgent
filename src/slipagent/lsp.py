@@ -377,6 +377,7 @@ class LanguageServers:
 
 class NavigateCodeTool(Tool):
     name = "navigate_code"
+    parameter_prompts = "tools/navigate-code-parameters.json"
     instruction_path = "path"
     description_prompt = 'tools/navigate-code.md'
     description = load_prompt(description_prompt)

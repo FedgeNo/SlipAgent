@@ -1,0 +1,336 @@
+{
+  "physical_cores": 2,
+  "logical_cpus": 4,
+  "cpu_affinity": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "repeats": 3,
+  "cold_contract": "Fresh subprocess and ONNX session per measurement; no inference warmup. OS filesystem caches are retained; this is model/process cold, not cold disk.",
+  "dataset_sha256": "fe76812b0b59d36a9db0c4d5f7faadeff9a9da4a2823a2e772c680db8dbab6c8",
+  "model_sha256": "6c9c6101a956d62dfb5e7190c538226c0c5bb9cb27b651234b6df063ee7dbfe4",
+  "input_tokens": {
+    "query": [
+      10
+    ],
+    "batch-8": [
+      504,
+      504,
+      504,
+      504,
+      504,
+      503,
+      503,
+      502
+    ]
+  },
+  "inputs": {
+    "query": [
+      "Reuse downloaded model files when offline"
+    ],
+    "batch-8": [
+      "File: Dots/codeindex/storage.py\n\n            (path, digest, size, mtime_ns, line_count),\n        )\n\n    def search(self, query_vector: Sequence[float], limit: int = 10) -> list[dict]:\n        if limit < 1:\n            raise ValueError(\"limit must be positive\")\n        vector = np.asarray(query_vector, dtype=np.float32)\n        if vector.shape != (self.dim,) or not np.isfinite(vector).all() or np.linalg.norm(vector) == 0:\n            raise ValueError(f\"Query must be a finite, nonzero vector of {self.dim} dimensions\")\n        with self.snapshot():\n            index = self._graph()\n            if not len(index):\n                return []\n            matches = index.search(vector, count=min(limit, len(index)), exact=False, threads=2)\n            results = []\n            for key, distance in zip(matches.keys, matches.distances):\n                if distance >= 0.5:\n                    continue\n                row = self.conn.execute(\n                    \"SELECT id, path, start_line, end_line, text FROM chunks WHERE id = ?\", (int(key),)\n                ).fetchone()\n                if row is not None:\n                    results.append({**dict(row), \"distance\": float(distance)})\n            return results\n\n    def clear(self) -> None:\n        if not self.conn.in_transaction:\n            with self.transaction():\n                self.clear()\n            return\n        self._index = self._new_index()\n        row = self.conn.execute(\"SELECT revision FROM search_graph WHERE id = 1\").fetchone()\n        self._revision = row[0] if row else 0\n        self._dirty = True\n        for table in (\"embeddings\", \"chunks\", \"files\", \"configuration\"):\n            self.conn.execute(f\"DELETE FROM {table}\")\n\n    def close(self) -> None:\n        if self._conn is not None:\n            self._conn.close()\n            self._conn = None\n        self._index = None\n        self._revision = None\n\n",
+      "File: Dots/tests/test-index.py\n\n\n    def test_failed_embedding_restores_old_file_and_graph(self):\n        self.index()\n        previous = self.store.file_records()\n        self.source.write_text(\"def auth(): return 'new content'\\n\")\n        with patch.object(self.embedder, \"embed_batch\", side_effect=RuntimeError(\"embedding failed\")):\n            with self.assertRaisesRegex(RuntimeError, \"embedding failed\"):\n                self.index()\n        self.assertEqual(self.store.file_records(), previous)\n        self.assertEqual(self.searcher.search(\"auth\")[0][\"text\"], self.original)\n        self.store.close()\n        self.assertEqual(self.searcher.search(\"auth\")[0][\"text\"], self.original)\n\n    def test_failed_graph_save_rolls_back_sql_and_in_memory_graph(self):\n        self.index()\n        self.source.write_text(\"def auth(): return 'updated'\\n\")\n        with patch(\"usearch.index.Index.save\", side_effect=OSError(\"graph save failed\")):\n            with self.assertRaisesRegex(OSError, \"graph save failed\"):\n                self.index()\n        self.assertEqual(self.searcher.search(\"auth\")[0][\"text\"], self.original)\n\n    def test_failed_rebuild_keeps_previous_index(self):\n        self.index()\n        with patch.object(self.embedder, \"embed_batch\", side_effect=RuntimeError(\"embedding failed\")):\n            with self.assertRaises(RuntimeError):\n                self.index(rebuild=True)\n        self.assertEqual(self.searcher.search(\"auth\")[0][\"text\"], self.original)\n\n    def test_failed_walk_does_not_remove_previous_files(self):\n        self.index()\n",
+      "File: Dots/tests/test-quality.py\n\n            single=\"[CLS] $A [SEP]\", special_tokens=[(\"[CLS]\", 2), (\"[SEP]\", 3)])\n        tokenizer.save(str(self.model_dir / \"tokenizer.json\"))\n        self.feeds = []\n\n        def run(outputs, feed):\n            self.assertEqual(outputs, [\"last_hidden_state\"])\n            self.feeds.append(feed)\n            ids = feed[\"input_ids\"].astype(np.float32)\n            return [np.stack([ids, np.ones_like(ids), -ids], axis=-1)]\n\n        session = SimpleNamespace(run=run, get_inputs=lambda: [SimpleNamespace(name=name) for name in\n                                  (\"input_ids\", \"attention_mask\", \"token_type_ids\")])\n        self.loader = self.enterContext(patch(\"onnxruntime.InferenceSession\", return_value=session))\n\n    def test_mean_baseline_matches_unmodified_production_encoder(self):\n        texts = [\"hello\", \"hello world\", \"world \" * 4]\n        baseline = ONNXEmbedder(model_dir=self.model_dir, batch_size=2)\n        experiment = quality.BenchmarkEmbedder(model_dir=self.model_dir, pooling=\"mean\", batch_size=2)\n        np.testing.assert_array_equal(experiment.embed_batch(texts), baseline.embed_batch(texts))\n\n    def test_cls_uses_first_token_normalization_and_batching(self):\n        encoder = quality.BenchmarkEmbedder(model_dir=self.model_dir, pooling=\"cls\", batch_size=2)\n        vectors = encoder.embed_batch([\"hello\", \"hello world\", \"world \" * 4])\n        expected = np.array([2, 1, -2], dtype=np.float32) / 3\n        np.testing.assert_allclose(vectors, [expected] * 3)\n",
+      "File: SlipAgent/src/slipagent/instructions.py\n\n        paths = []\n        for current, _, filenames in os.walk(folder, onerror=walk_error, followlinks=False):\n            for filename in filenames:\n                if fnmatch.fnmatchcase(filename, pattern):\n                    suffix = (Path(current) / filename).relative_to(folder)\n                    paths.append((Path(relative) / suffix).as_posix())\n        for name in sorted(paths):\n            read(name)\n    return \"\\n\\n\".join(sources)\n\n\nclass ProjectInstructions:\n    \"\"\"Track visited scopes and which exact guidance reached a model request.\"\"\"\n\n    def __init__(self, workspace: Workspace) -> None:\n        self.workspace = workspace\n        self.scopes: set[str] = {\".\"}\n        self.delivered: dict[str, str] = {}\n\n    def snapshot(self) -> dict[str, str]:\n        result = {\".\": load_project_instructions(self.workspace)}\n        for scope in sorted(self.scopes - {\".\"}):\n            # Retain inaccessible scopes for a later access-mode change.\n            if Path(scope).is_absolute() and not self.workspace.allows(Path(scope).resolve()):\n                continue\n            directory = self.workspace.resolve(scope)\n            if directory.exists():\n                # Scope controls applicability, while the original workspace\n                # controls confinement, including links to shared parent rules.\n                result[scope] = load_project_instructions(self.workspace, scope)\n            else:\n                result[scope] = \"\"\n        return result\n\n    def presented(self, snapshot: dict[str, str]) -> None:\n        self.delivered = dict(snapshot)\n\n    def guard(self, tool: Any, raw: str | dict[str, Any] | None) -> str | None:\n        parameter = tool.instruction_path\n        if parameter is None:\n            return None\n        try:\n            arguments = json.loads(raw) if isinstance(raw, str) else raw or {}\n        except ValueError:\n",
+      "File: SlipAgent/src/slipagent/tools/output.py\n\n                            for name, stream in self.streams.items()}}\n\n    def notice(self) -> str:\n        errors = \" \".join(f\"{name}: {stream.error} Lost {stream.lost_bytes} UTF-8 bytes.\"\n                          for name, stream in self.streams.items() if stream.error)\n        arguments = json.dumps({\"log_id\": self.id, \"stream\": \"stdout\"})\n        return load_prompt(\"command-output-recovery.md\", log_id=self.id, arguments=arguments,\n            retention=load_prompt(\"command-output-saved.md\" if getattr(self.archive, \"_persistent\", None) else \"command-output-temporary.md\"),\n            errors=errors).rstrip()\n\n\nclass CommandArchive:\n    \"\"\"Own files once per registry/session; reload candidates borrow this owner.\"\"\"\n\n    def __init__(self, quota_bytes: int, *, directory: Path | None = None) -> None:\n        if type(quota_bytes) is not int or quota_bytes < 1:\n            raise ValueError(\"Command archive quota must be a positive integer\")\n        self.quota_bytes = quota_bytes\n        self.used_bytes = 0\n        self.logs: dict[str, CommandLog] = {}\n        self.artifacts: Any = None\n        self._parent = directory\n        self._temporary: tempfile.TemporaryDirectory[str] | None = None\n\n    @property\n    def directory(self) -> Path:\n        persistent: Path | None = getattr(self, \"_persistent\", None)\n        if persistent is not None:\n            return persistent\n        if self._temporary is None:\n            self._temporary = tempfile.TemporaryDirectory(prefix=\"slipagent-logs-\", dir=self._parent)\n        return Path(self._temporary.name)\n\n    def use_directory(self, directory: Path, on_log: Callable[[CommandLog], None]) -> None:\n        \"\"\"Attach private durable storage; clear detaches it without deleting it.\"\"\"\n",
+      "File: Dots/codeindex/embed.py\n\n        self._session = session\n\n    def embed(self, text: str) -> List[float]:\n        return self.embed_batch([text])[0]\n\n    def embed_batch(self, texts: List[str]) -> List[List[float]]:\n        if not texts:\n            return []\n        import numpy as np\n\n        self._load()\n        vectors: List[List[float]] = []\n        for start in range(0, len(texts), self.batch_size):\n            tokens = self._tokenizer.encode_batch(texts[start:start + self.batch_size])\n            if any(len(token.ids) > self._max_tokens for token in tokens):\n                raise ValueError(f\"Embedding input exceeds the {self._max_tokens}-token limit; \"\n                                 \"split source into token-sized chunks or shorten the query.\")\n            inputs = {\n                \"input_ids\": np.asarray([token.ids for token in tokens], dtype=np.int64),\n                \"attention_mask\": np.asarray([token.attention_mask for token in tokens], dtype=np.int64),\n                \"token_type_ids\": np.asarray([token.type_ids for token in tokens], dtype=np.int64),\n            }\n            feed = {item.name: inputs[item.name] for item in self._session.get_inputs()}\n            hidden = self._session.run([\"last_hidden_state\"], feed)[0]\n            mask = inputs[\"attention_mask\"][..., None].astype(hidden.dtype)\n            pooled = (hidden * mask).sum(axis=1) / np.maximum(mask.sum(axis=1), 1)\n            normalized = pooled / np.maximum(np.linalg.norm(pooled, axis=1, keepdims=True), 1e-12)\n            vectors.extend(normalized.tolist())\n        return vectors\n\n    def dim(self) -> int:\n",
+      "File: Dots/tests/test-quality.py\n\n        source = \"hello world\\n\" * 7\n        data[\"documents\"] = [{\"id\": \"original\", \"path\": \"source.py\", \"start_line\": 1,\n                              \"end_line\": 7, \"text\": source}]\n        data[\"queries\"][0].update(relevant=[\"original\"], target={\"path\": \"source.py\", \"line\": 7,\n                                                               \"anchor\": \"hello world\"})\n        encoder = quality.BenchmarkEmbedder(model_dir=self.model_dir, pooling=\"mean\")\n        result = quality.token_dataset(data, encoder)\n        self.assertGreater(len(result[\"documents\"]), 1)\n        self.assertTrue(all(encoder.token_count(doc[\"text\"]) <= 6 for doc in result[\"documents\"]))\n        lines = {}\n        for doc in result[\"documents\"]:\n            for number, text in enumerate(doc[\"text\"].splitlines(keepends=True), doc[\"start_line\"]):\n                lines[number] = text\n        self.assertEqual(\"\".join(lines[number] for number in sorted(lines)), source)\n        self.assertTrue(result[\"queries\"][0][\"relevant\"])\n        self.assertEqual(data[\"queries\"][0][\"relevant\"], [\"original\"])\n\n    def test_empty_cls_batch_does_not_load(self):\n        encoder = quality.BenchmarkEmbedder(model_dir=self.model_dir, pooling=\"cls\")\n        self.assertEqual(encoder.embed_batch([]), [])\n        self.loader.assert_not_called()\n\n    def test_truncation_diagnostics_do_not_change_encoder_tokenizer(self):\n        encoder = quality.BenchmarkEmbedder(model_dir=self.model_dir, pooling=\"cls\")\n        encoder.dim()\n",
+      "File: Dots/codeindex/embed.py\n\n\n    Reuses the Conventions model cache when available, otherwise uses the\n    Hugging Face cache and downloads missing files on first use. An explicit\n    model_dir always loads locally, without downloading anything.\n    \"\"\"\n\n    def __init__(self, model_name: str = DEFAULT_MODEL, *,\n                 model_dir: str | Path | None = None, batch_size: int = 8):\n        if batch_size < 1:\n            raise ValueError(\"batch_size must be positive\")\n        self.model_name = model_name\n        self.model_dir = Path(model_dir).expanduser() if model_dir is not None else None\n        self.batch_size = batch_size\n        self._session = None\n        self._tokenizer = None\n        self._dimension = None\n        self._identity = None\n        self._max_tokens = None\n\n    def _files(self) -> dict[str, Path]:\n        if self.model_dir is not None:\n            files = {name: self.model_dir / name for name in MODEL_FILES}\n            for path in files.values():\n                if not path.is_file():\n                    raise FileNotFoundError(f\"Missing embedding model file: {path}\")\n            return files\n\n        cache = Path(os.environ.get(\"MEMORY_MODEL_CACHE_PATH\", str(Path.home() / \".conventions-mcp\" / \"models\"))).expanduser()\n        files = {name: cache / self.model_name / name for name in MODEL_FILES}\n        if all(path.is_file() for path in files.values()):\n            return files\n\n        from huggingface_hub import hf_hub_download\n        from huggingface_hub.errors import LocalEntryNotFoundError\n\n        files = {}\n        for name in MODEL_FILES:\n            try:\n                path = hf_hub_download(self.model_name, name, local_files_only=True)\n            except LocalEntryNotFoundError:\n                path = hf_hub_download(self.model_name, name)\n            files[name] = Path(path)\n        return files\n\n    def _load(self) -> None:\n        if self._session is not None:\n            return\n"
+    ]
+  },
+  "runs": [
+    {
+      "repeat": 0,
+      "workload": "batch-8",
+      "threads": 1,
+      "wall_seconds": 7.4595718220225535,
+      "pid": 999074,
+      "load_seconds": 1.2460653239977546,
+      "inference_seconds": 5.773229611979332,
+      "total_seconds": 7.019294935977086,
+      "rss_bytes": 375443456,
+      "cpu_seconds": 6.97,
+      "vector_sha256": "a894d18fec0bfa524c8ea5851ebceab4eecad6f9cea5fa6f78f43dee1554c42d"
+    },
+    {
+      "repeat": 1,
+      "workload": "batch-8",
+      "threads": 1,
+      "wall_seconds": 6.953246416989714,
+      "pid": 999085,
+      "load_seconds": 0.6253316440270282,
+      "inference_seconds": 5.729535630962346,
+      "total_seconds": 6.354867274989374,
+      "rss_bytes": 375369728,
+      "cpu_seconds": 6.83,
+      "vector_sha256": "a894d18fec0bfa524c8ea5851ebceab4eecad6f9cea5fa6f78f43dee1554c42d"
+    },
+    {
+      "repeat": 2,
+      "workload": "query",
+      "threads": 2,
+      "wall_seconds": 1.080408671987243,
+      "pid": 999091,
+      "load_seconds": 0.6233093379996717,
+      "inference_seconds": 0.012962090957444161,
+      "total_seconds": 0.6362714289571159,
+      "rss_bytes": 141008896,
+      "cpu_seconds": 1.31,
+      "vector_sha256": "7a7cb0205071d4cd9599004638c0a0a220eb3db643ff8fe192cfc8f6370104f7"
+    },
+    {
+      "repeat": 0,
+      "workload": "query",
+      "threads": 2,
+      "wall_seconds": 1.1564075640053488,
+      "pid": 999097,
+      "load_seconds": 0.6668655219837092,
+      "inference_seconds": 0.008781544980593026,
+      "total_seconds": 0.6756470669643022,
+      "rss_bytes": 140894208,
+      "cpu_seconds": 1.35,
+      "vector_sha256": "7a7cb0205071d4cd9599004638c0a0a220eb3db643ff8fe192cfc8f6370104f7"
+    },
+    {
+      "repeat": 0,
+      "workload": "query",
+      "threads": 4,
+      "wall_seconds": 1.127128950029146,
+      "pid": 999104,
+      "load_seconds": 0.6602309080190025,
+      "inference_seconds": 0.017665304010733962,
+      "total_seconds": 0.6778962120297365,
+      "rss_bytes": 141389824,
+      "cpu_seconds": 1.4900000000000002,
+      "vector_sha256": "7a7cb0205071d4cd9599004638c0a0a220eb3db643ff8fe192cfc8f6370104f7"
+    },
+    {
+      "repeat": 1,
+      "workload": "query",
+      "threads": 1,
+      "wall_seconds": 1.0801509179873392,
+      "pid": 999112,
+      "load_seconds": 0.6201838519773446,
+      "inference_seconds": 0.01235348399495706,
+      "total_seconds": 0.6325373359723017,
+      "rss_bytes": 140713984,
+      "cpu_seconds": 1.24,
+      "vector_sha256": "7a7cb0205071d4cd9599004638c0a0a220eb3db643ff8fe192cfc8f6370104f7"
+    },
+    {
+      "repeat": 1,
+      "workload": "batch-8",
+      "threads": 2,
+      "wall_seconds": 4.790617285005283,
+      "pid": 999117,
+      "load_seconds": 0.6357705459813587,
+      "inference_seconds": 3.6860046139918268,
+      "total_seconds": 4.3217751599731855,
+      "rss_bytes": 375549952,
+      "cpu_seconds": 8.440000000000001,
+      "vector_sha256": "a894d18fec0bfa524c8ea5851ebceab4eecad6f9cea5fa6f78f43dee1554c42d"
+    },
+    {
+      "repeat": 1,
+      "workload": "query",
+      "threads": 4,
+      "wall_seconds": 1.0899748459924012,
+      "pid": 999128,
+      "load_seconds": 0.6333541530184448,
+      "inference_seconds": 0.012511321052443236,
+      "total_seconds": 0.645865474070888,
+      "rss_bytes": 141316096,
+      "cpu_seconds": 1.4200000000000002,
+      "vector_sha256": "7a7cb0205071d4cd9599004638c0a0a220eb3db643ff8fe192cfc8f6370104f7"
+    },
+    {
+      "repeat": 2,
+      "workload": "batch-8",
+      "threads": 2,
+      "wall_seconds": 4.693607469031122,
+      "pid": 999136,
+      "load_seconds": 0.6378369579906575,
+      "inference_seconds": 3.581705951015465,
+      "total_seconds": 4.2195429090061225,
+      "rss_bytes": 375734272,
+      "cpu_seconds": 8.17,
+      "vector_sha256": "a894d18fec0bfa524c8ea5851ebceab4eecad6f9cea5fa6f78f43dee1554c42d"
+    },
+    {
+      "repeat": 1,
+      "workload": "query",
+      "threads": 2,
+      "wall_seconds": 1.084303045005072,
+      "pid": 999149,
+      "load_seconds": 0.6338777339551598,
+      "inference_seconds": 0.009554395044688135,
+      "total_seconds": 0.6434321289998479,
+      "rss_bytes": 141123584,
+      "cpu_seconds": 1.2999999999999998,
+      "vector_sha256": "7a7cb0205071d4cd9599004638c0a0a220eb3db643ff8fe192cfc8f6370104f7"
+    },
+    {
+      "repeat": 2,
+      "workload": "query",
+      "threads": 4,
+      "wall_seconds": 1.0586793760303408,
+      "pid": 999155,
+      "load_seconds": 0.6147505880217068,
+      "inference_seconds": 0.02029117295751348,
+      "total_seconds": 0.6350417609792203,
+      "rss_bytes": 141279232,
+      "cpu_seconds": 1.4500000000000002,
+      "vector_sha256": "7a7cb0205071d4cd9599004638c0a0a220eb3db643ff8fe192cfc8f6370104f7"
+    },
+    {
+      "repeat": 2,
+      "workload": "query",
+      "threads": 1,
+      "wall_seconds": 1.0414888720260933,
+      "pid": 999163,
+      "load_seconds": 0.5886887750239111,
+      "inference_seconds": 0.01629224797943607,
+      "total_seconds": 0.6049810230033472,
+      "rss_bytes": 140750848,
+      "cpu_seconds": 1.1800000000000002,
+      "vector_sha256": "7a7cb0205071d4cd9599004638c0a0a220eb3db643ff8fe192cfc8f6370104f7"
+    },
+    {
+      "repeat": 0,
+      "workload": "query",
+      "threads": 1,
+      "wall_seconds": 1.0660468540154397,
+      "pid": 999169,
+      "load_seconds": 0.6050118670100346,
+      "inference_seconds": 0.014444319007452577,
+      "total_seconds": 0.6194561860174872,
+      "rss_bytes": 140705792,
+      "cpu_seconds": 1.2200000000000002,
+      "vector_sha256": "7a7cb0205071d4cd9599004638c0a0a220eb3db643ff8fe192cfc8f6370104f7"
+    },
+    {
+      "repeat": 0,
+      "workload": "batch-8",
+      "threads": 2,
+      "wall_seconds": 4.826643641048577,
+      "pid": 999175,
+      "load_seconds": 0.6840752040152438,
+      "inference_seconds": 3.5696691290359013,
+      "total_seconds": 4.253744333051145,
+      "rss_bytes": 375640064,
+      "cpu_seconds": 8.209999999999999,
+      "vector_sha256": "a894d18fec0bfa524c8ea5851ebceab4eecad6f9cea5fa6f78f43dee1554c42d"
+    },
+    {
+      "repeat": 0,
+      "workload": "batch-8",
+      "threads": 4,
+      "wall_seconds": 5.686369966017082,
+      "pid": 999194,
+      "load_seconds": 0.6478210960049182,
+      "inference_seconds": 4.598248845955823,
+      "total_seconds": 5.246069941960741,
+      "rss_bytes": 376000512,
+      "cpu_seconds": 15.56,
+      "vector_sha256": "a894d18fec0bfa524c8ea5851ebceab4eecad6f9cea5fa6f78f43dee1554c42d"
+    },
+    {
+      "repeat": 2,
+      "workload": "batch-8",
+      "threads": 4,
+      "wall_seconds": 5.758161990030203,
+      "pid": 999232,
+      "load_seconds": 0.6718055999954231,
+      "inference_seconds": 4.616561203962192,
+      "total_seconds": 5.288366803957615,
+      "rss_bytes": 376135680,
+      "cpu_seconds": 15.68,
+      "vector_sha256": "a894d18fec0bfa524c8ea5851ebceab4eecad6f9cea5fa6f78f43dee1554c42d"
+    },
+    {
+      "repeat": 1,
+      "workload": "batch-8",
+      "threads": 4,
+      "wall_seconds": 6.150603247981053,
+      "pid": 999252,
+      "load_seconds": 0.7159509460325353,
+      "inference_seconds": 4.903694350970909,
+      "total_seconds": 5.619645297003444,
+      "rss_bytes": 376012800,
+      "cpu_seconds": 16.18,
+      "vector_sha256": "a894d18fec0bfa524c8ea5851ebceab4eecad6f9cea5fa6f78f43dee1554c42d"
+    },
+    {
+      "repeat": 2,
+      "workload": "batch-8",
+      "threads": 1,
+      "wall_seconds": 7.116933429031633,
+      "pid": 999262,
+      "load_seconds": 0.6414316339651123,
+      "inference_seconds": 5.9745750579750165,
+      "total_seconds": 6.616006691940129,
+      "rss_bytes": 375582720,
+      "cpu_seconds": 7.08,
+      "vector_sha256": "a894d18fec0bfa524c8ea5851ebceab4eecad6f9cea5fa6f78f43dee1554c42d"
+    }
+  ],
+  "medians": [
+    {
+      "workload": "query",
+      "threads": 1,
+      "load_seconds": 0.6050118670100346,
+      "inference_seconds": 0.014444319007452577,
+      "total_seconds": 0.6194561860174872,
+      "wall_seconds": 1.0660468540154397,
+      "rss_bytes": 140713984
+    },
+    {
+      "workload": "query",
+      "threads": 2,
+      "load_seconds": 0.6338777339551598,
+      "inference_seconds": 0.009554395044688135,
+      "total_seconds": 0.6434321289998479,
+      "wall_seconds": 1.084303045005072,
+      "rss_bytes": 141008896
+    },
+    {
+      "workload": "query",
+      "threads": 4,
+      "load_seconds": 0.6333541530184448,
+      "inference_seconds": 0.017665304010733962,
+      "total_seconds": 0.645865474070888,
+      "wall_seconds": 1.0899748459924012,
+      "rss_bytes": 141316096
+    },
+    {
+      "workload": "batch-8",
+      "threads": 1,
+      "load_seconds": 0.6414316339651123,
+      "inference_seconds": 5.773229611979332,
+      "total_seconds": 6.616006691940129,
+      "wall_seconds": 7.116933429031633,
+      "rss_bytes": 375443456
+    },
+    {
+      "workload": "batch-8",
+      "threads": 2,
+      "load_seconds": 0.6378369579906575,
+      "inference_seconds": 3.581705951015465,
+      "total_seconds": 4.253744333051145,
+      "wall_seconds": 4.790617285005283,
+      "rss_bytes": 375640064
+    },
+    {
+      "workload": "batch-8",
+      "threads": 4,
+      "load_seconds": 0.6718055999954231,
+      "inference_seconds": 4.616561203962192,
+      "total_seconds": 5.288366803957615,
+      "wall_seconds": 5.758161990030203,
+      "rss_bytes": 376012800
+    }
+  ]
+}

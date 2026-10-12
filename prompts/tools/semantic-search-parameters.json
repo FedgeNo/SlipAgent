@@ -1,0 +1,4 @@
+{
+    "properties/query": "Short description of the code or behavior to find; five or six meaningful words usually work well.",
+    "properties/limit": "Maximum source excerpts to return, from 1 to 10; defaults to 5."
+}

@@ -108,8 +108,9 @@ def test_fresh_download_replaces_application_directories_and_preserves_git(monke
     monkeypatch.setattr(installer.shutil, "copytree", copytree)
     monkeypatch.setattr(installer.shutil, "copy2", copyfile)
     installer.copy_source(checkout, destination)
-    assert [call.args[0] for call in remove.call_args_list] == [destination / name for name in ("src", "docs", "scripts", "tests", "prompts")]
-    assert [call.args[:2] for call in copytree.call_args_list] == [(checkout / name, destination / name) for name in ("src", "docs", "scripts", "tests", "prompts")]
+    directories = ("src", "docs", "scripts", "tests", "prompts", "benchmarks")
+    assert [call.args[0] for call in remove.call_args_list] == [destination / name for name in directories]
+    assert [call.args[:2] for call in copytree.call_args_list] == [(checkout / name, destination / name) for name in directories]
     assert any(call.args == (checkout / "install.py", destination / "install.py") for call in copyfile.call_args_list)
     assert any(call.args == (checkout / ".env.example", destination / ".env.example") for call in copyfile.call_args_list)
 

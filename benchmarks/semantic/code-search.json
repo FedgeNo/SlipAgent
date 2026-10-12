@@ -1,0 +1,905 @@
+{
+  "schema_version": 1,
+  "name": "Dots and SlipAgent Python code-search pilot",
+  "description": "Frozen local source snapshots; hand-written queries and anchor-based binary relevance. Labels identify the intended implementation, not an exhaustive relevance judgment of every chunk.",
+  "chunking": {
+    "max_lines": 50,
+    "overlap": 5
+  },
+  "sources": [
+    {
+      "path": "Dots/codeindex/embed.py",
+      "sha256": "4760f68b7f7f43d8f742a5f8f257cac91d5e299a75b55e92f1f94d75bb80ef3f"
+    },
+    {
+      "path": "Dots/codeindex/storage.py",
+      "sha256": "2ff59ca617acbcc4c40ac719ec8e4af5e9026794a4ce8eb796d8dd5fd9e542c4"
+    },
+    {
+      "path": "Dots/codeindex/search.py",
+      "sha256": "093f79eb41074744668f4b0cbfafbb6400f6400f5aa7da63da1e1fd574d14719"
+    },
+    {
+      "path": "Dots/codeindex/indexer.py",
+      "sha256": "e837108863913272fa6bc27982323f74f3693e157edc72895a6f65c72a838b81"
+    },
+    {
+      "path": "Dots/codeindex/cli.py",
+      "sha256": "7dd68147a34ed468c36a00c29958b5d1156be82b00e84c20f79c20b7d09ba49b"
+    },
+    {
+      "path": "SlipAgent/src/slipagent/workspace.py",
+      "sha256": "ffc1580db6c93b1337a11c7d5b69142f18d192d5176b4cda73d2437eb96dcc16"
+    },
+    {
+      "path": "SlipAgent/src/slipagent/lifecycle.py",
+      "sha256": "1fd39d3bbb824e3d05ee43389e9aaca8b84f75ac92ab838ba0ba259a08f24128"
+    },
+    {
+      "path": "SlipAgent/src/slipagent/instructions.py",
+      "sha256": "f199911be465baae15cee6d8172a48b2696d740d9dd2d4e1dadac8e7f60453b8"
+    },
+    {
+      "path": "SlipAgent/src/slipagent/progress.py",
+      "sha256": "5f93eb900a911eb957d85df9af383ad1bd96d4cf58393c0e06ed8051b2abce6e"
+    },
+    {
+      "path": "SlipAgent/src/slipagent/tools/editing.py",
+      "sha256": "788c2ef2ae098b06d476e0b8b37034ad7a59e22a59de3354ca8eb69fe776644b"
+    },
+    {
+      "path": "SlipAgent/src/slipagent/tools/output.py",
+      "sha256": "9b0563a809354e05828b507861f79ce0fdcc51c98516a31b5b2f2dc134ac7df5"
+    },
+    {
+      "path": "SlipAgent/src/slipagent/clipboard.py",
+      "sha256": "22e9634fe1ef91112eb8e06340ff2ee7669404ca8b64fcf4e6f1007071889e50"
+    }
+  ],
+  "documents": [
+    {
+      "id": "Dots/codeindex/embed.py:1-50",
+      "path": "Dots/codeindex/embed.py",
+      "start_line": 1,
+      "end_line": 50,
+      "text": "\"\"\"Embedding model wrappers.\n\nThe :class:`Embedder` protocol defines the minimal interface every backend must\nimplement so that :class:`~codeindex.search.Searcher` and\n:class:`~codeindex.storage.Store` stay backend-agnostic. The default\nimplementation, :class:`ONNXEmbedder`, runs quantized BGE on CPU, but users\ncan plug in any other backend (API client, ONNX model, hash-based embedder, etc.).\n\"\"\"\n\nfrom __future__ import annotations\n\nimport hashlib\nimport json\nimport os\nfrom pathlib import Path\nfrom typing import List, Protocol, runtime_checkable\n\nDEFAULT_MODEL = \"Xenova/bge-small-en-v1.5\"\nMODEL_FILES = (\"config.json\", \"tokenizer.json\", \"onnx/model_quantized.onnx\")\n\n\n@runtime_checkable\nclass Embedder(Protocol):\n    \"\"\"Protocol for embedding models.\n\n    Implementations need only provide :meth:`embed`, :meth:`embed_batch`, and\n    :meth:`dim`. The protocol is runtime-checkable so callers can duck-type\n    validate an arbitrary object.\n    \"\"\"\n\n    def embed(self, text: str) -> List[float]:\n        \"\"\"Embed a single text and return a list of floats.\"\"\"\n        ...\n\n    def embed_batch(self, texts: List[str]) -> List[List[float]]:\n        \"\"\"Embed multiple texts and return a list of float lists.\"\"\"\n        ...\n\n    def dim(self) -> int:\n        \"\"\"Return the dimensionality of produced embeddings.\"\"\"\n        ...\n\n\nclass ONNXEmbedder:\n    \"\"\"Lazy CPU embeddings matching Conventions MCP's quantized BGE pipeline.\n\n    Reuses the Conventions model cache when available, otherwise uses the\n    Hugging Face cache and downloads missing files on first use. An explicit\n    model_dir always loads locally, without downloading anything.\n    \"\"\"\n"
+    },
+    {
+      "id": "Dots/codeindex/embed.py:46-95",
+      "path": "Dots/codeindex/embed.py",
+      "start_line": 46,
+      "end_line": 95,
+      "text": "\n    Reuses the Conventions model cache when available, otherwise uses the\n    Hugging Face cache and downloads missing files on first use. An explicit\n    model_dir always loads locally, without downloading anything.\n    \"\"\"\n\n    def __init__(self, model_name: str = DEFAULT_MODEL, *,\n                 model_dir: str | Path | None = None, batch_size: int = 8):\n        if batch_size < 1:\n            raise ValueError(\"batch_size must be positive\")\n        self.model_name = model_name\n        self.model_dir = Path(model_dir).expanduser() if model_dir is not None else None\n        self.batch_size = batch_size\n        self._session = None\n        self._tokenizer = None\n        self._dimension = None\n        self._identity = None\n\n    def _files(self) -> dict[str, Path]:\n        if self.model_dir is not None:\n            files = {name: self.model_dir / name for name in MODEL_FILES}\n            for path in files.values():\n                if not path.is_file():\n                    raise FileNotFoundError(f\"Missing embedding model file: {path}\")\n            return files\n\n        cache = Path(os.environ.get(\"MEMORY_MODEL_CACHE_PATH\", str(Path.home() / \".conventions-mcp\" / \"models\"))).expanduser()\n        files = {name: cache / self.model_name / name for name in MODEL_FILES}\n        if all(path.is_file() for path in files.values()):\n            return files\n\n        from huggingface_hub import hf_hub_download\n        from huggingface_hub.errors import LocalEntryNotFoundError\n\n        files = {}\n        for name in MODEL_FILES:\n            try:\n                path = hf_hub_download(self.model_name, name, local_files_only=True)\n            except LocalEntryNotFoundError:\n                path = hf_hub_download(self.model_name, name)\n            files[name] = Path(path)\n        return files\n\n    def _load(self) -> None:\n        if self._session is not None:\n            return\n        import onnxruntime as ort\n        from tokenizers import Tokenizer\n\n        files = self._files()\n"
+    },
+    {
+      "id": "Dots/codeindex/embed.py:91-140",
+      "path": "Dots/codeindex/embed.py",
+      "start_line": 91,
+      "end_line": 140,
+      "text": "            return\n        import onnxruntime as ort\n        from tokenizers import Tokenizer\n\n        files = self._files()\n        config = json.loads(files[\"config.json\"].read_text(encoding=\"utf-8\"))\n        tokenizer = Tokenizer.from_file(str(files[\"tokenizer.json\"]))\n        tokenizer.enable_truncation(max_length=config[\"max_position_embeddings\"])\n        pad_id = config[\"pad_token_id\"]\n        tokenizer.enable_padding(pad_id=pad_id, pad_token=tokenizer.id_to_token(pad_id))\n        options = ort.SessionOptions()\n        # Bound CPU workers so a small model does not occupy every core.\n        options.intra_op_num_threads = 2\n        options.inter_op_num_threads = 1\n        session = ort.InferenceSession(str(files[\"onnx/model_quantized.onnx\"]),\n                                       sess_options=options, providers=[\"CPUExecutionProvider\"])\n        fingerprint = hashlib.sha256()\n        for name in MODEL_FILES:\n            fingerprint.update(name.encode())\n            with files[name].open(\"rb\") as source:\n                for block in iter(lambda: source.read(1024 * 1024), b\"\"):\n                    fingerprint.update(block)\n        self._identity = f\"onnx-q8-mean-l2:{fingerprint.hexdigest()}\"\n        self._dimension = int(config[\"hidden_size\"])\n        self._tokenizer = tokenizer\n        self._session = session\n\n    def embed(self, text: str) -> List[float]:\n        return self.embed_batch([text])[0]\n\n    def embed_batch(self, texts: List[str]) -> List[List[float]]:\n        if not texts:\n            return []\n        import numpy as np\n\n        self._load()\n        vectors: List[List[float]] = []\n        for start in range(0, len(texts), self.batch_size):\n            tokens = self._tokenizer.encode_batch(texts[start:start + self.batch_size])\n            inputs = {\n                \"input_ids\": np.asarray([token.ids for token in tokens], dtype=np.int64),\n                \"attention_mask\": np.asarray([token.attention_mask for token in tokens], dtype=np.int64),\n                \"token_type_ids\": np.asarray([token.type_ids for token in tokens], dtype=np.int64),\n            }\n            feed = {item.name: inputs[item.name] for item in self._session.get_inputs()}\n            hidden = self._session.run([\"last_hidden_state\"], feed)[0]\n            mask = inputs[\"attention_mask\"][..., None].astype(hidden.dtype)\n            pooled = (hidden * mask).sum(axis=1) / np.maximum(mask.sum(axis=1), 1)\n            normalized = pooled / np.maximum(np.linalg.norm(pooled, axis=1, keepdims=True), 1e-12)\n            vectors.extend(normalized.tolist())\n"
+    },
+    {
+      "id": "Dots/codeindex/embed.py:136-185",
+      "path": "Dots/codeindex/embed.py",
+      "start_line": 136,
+      "end_line": 185,
+      "text": "            hidden = self._session.run([\"last_hidden_state\"], feed)[0]\n            mask = inputs[\"attention_mask\"][..., None].astype(hidden.dtype)\n            pooled = (hidden * mask).sum(axis=1) / np.maximum(mask.sum(axis=1), 1)\n            normalized = pooled / np.maximum(np.linalg.norm(pooled, axis=1, keepdims=True), 1e-12)\n            vectors.extend(normalized.tolist())\n        return vectors\n\n    def dim(self) -> int:\n        self._load()\n        return self._dimension\n\n    @property\n    def identity(self) -> str:\n        \"\"\"Identify the actual weights, tokenizer, and pooling used by an index.\"\"\"\n        self._load()\n        return self._identity\n\n    def __repr__(self) -> str:\n        return f\"ONNXEmbedder(model_name={self.model_name!r})\"\n\n\nclass SentenceTransformerEmbedder:\n    \"\"\"Embedder backed by ``sentence-transformers``.\n\n    Install the optional ``sentence-transformers`` extra to use this backend.\n    The underlying model is loaded lazily on first use, so constructing an\n    instance is cheap even when the (heavy) model has not been downloaded yet.\n    \"\"\"\n\n    def __init__(self, model_name: str = \"all-MiniLM-L6-v2\"):\n        self.model_name = model_name\n        self._model = None\n\n    def _load(self):\n        if self._model is None:\n            from sentence_transformers import SentenceTransformer\n\n            self._model = SentenceTransformer(self.model_name)\n        return self._model\n\n    def embed(self, text: str) -> List[float]:\n        model = self._load()\n        return model.encode([text], normalize_embeddings=True, show_progress_bar=False)[0].tolist()\n\n    def embed_batch(self, texts: List[str]) -> List[List[float]]:\n        if not texts:\n            return []\n        model = self._load()\n        return model.encode(\n            texts,\n"
+    },
+    {
+      "id": "Dots/codeindex/embed.py:181-196",
+      "path": "Dots/codeindex/embed.py",
+      "start_line": 181,
+      "end_line": 196,
+      "text": "        if not texts:\n            return []\n        model = self._load()\n        return model.encode(\n            texts,\n            normalize_embeddings=True,\n            show_progress_bar=False,\n            convert_to_numpy=True,\n        ).tolist()\n\n    def dim(self) -> int:\n        model = self._load()\n        return int(model.get_sentence_embedding_dimension())\n\n    def __repr__(self) -> str:  # pragma: no cover - trivial\n        return f\"SentenceTransformerEmbedder(model_name={self.model_name!r})\"\n"
+    },
+    {
+      "id": "Dots/codeindex/storage.py:1-50",
+      "path": "Dots/codeindex/storage.py",
+      "start_line": 1,
+      "end_line": 50,
+      "text": "\"\"\"SQLite chunk storage and a transactionally persisted HNSW search graph.\"\"\"\n\nfrom __future__ import annotations\n\nimport json\nimport sqlite3\nfrom contextlib import contextmanager\nfrom typing import Sequence\n\nimport numpy as np\n\nfrom .indexer import Chunk\n\n\nclass Store:\n    \"\"\"Keep source snapshots, file fingerprints, and an ANN graph in one database.\"\"\"\n\n    def __init__(self, db_path: str, dim: int):\n        if dim < 1:\n            raise ValueError(\"dim must be positive\")\n        self.db_path = db_path\n        self.dim = dim\n        self._conn = None\n        self._index = None\n        self._revision = None\n        self._dirty = False\n\n    @property\n    def conn(self) -> sqlite3.Connection:\n        if self._conn is None:\n            connection = sqlite3.connect(self.db_path)\n            connection.row_factory = sqlite3.Row\n            connection.execute(\"PRAGMA foreign_keys = ON\")\n            connection.execute(\"PRAGMA journal_mode = WAL\")\n            self._conn = connection\n            self._init_schema()\n        return self._conn\n\n    def _init_schema(self) -> None:\n        self.conn.executescript(\"\"\"\n            CREATE TABLE IF NOT EXISTS chunks (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                path TEXT NOT NULL,\n                start_line INTEGER NOT NULL,\n                end_line INTEGER NOT NULL,\n                text TEXT NOT NULL\n            );\n            CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);\n            CREATE TABLE IF NOT EXISTS embeddings (\n                chunk_id INTEGER PRIMARY KEY,\n"
+    },
+    {
+      "id": "Dots/codeindex/storage.py:46-95",
+      "path": "Dots/codeindex/storage.py",
+      "start_line": 46,
+      "end_line": 95,
+      "text": "                text TEXT NOT NULL\n            );\n            CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);\n            CREATE TABLE IF NOT EXISTS embeddings (\n                chunk_id INTEGER PRIMARY KEY,\n                vector BLOB NOT NULL,\n                FOREIGN KEY (chunk_id) REFERENCES chunks(id) ON DELETE CASCADE\n            );\n            CREATE TABLE IF NOT EXISTS files (\n                path TEXT PRIMARY KEY,\n                digest TEXT NOT NULL,\n                size INTEGER NOT NULL,\n                mtime_ns INTEGER NOT NULL,\n                line_count INTEGER NOT NULL\n            );\n            CREATE TABLE IF NOT EXISTS configuration (\n                id INTEGER PRIMARY KEY CHECK(id = 1),\n                data TEXT NOT NULL\n            );\n            CREATE TABLE IF NOT EXISTS search_graph (\n                id INTEGER PRIMARY KEY CHECK(id = 1),\n                revision INTEGER NOT NULL,\n                data BLOB NOT NULL\n            );\n        \"\"\")\n\n    def _new_index(self):\n        from usearch.index import Index\n\n        return Index(ndim=self.dim, metric=\"cos\", dtype=\"f32\",\n                     connectivity=16, expansion_add=128, expansion_search=64)\n\n    def _graph(self):\n        row = self.conn.execute(\"SELECT revision FROM search_graph WHERE id = 1\").fetchone()\n        revision = row[0] if row else 0\n        if self._index is not None and self._revision == revision:\n            return self._index\n        index = self._new_index()\n        if row:\n            data = self.conn.execute(\"SELECT data FROM search_graph WHERE id = 1\").fetchone()[0]\n            index.load(data)\n            if index.ndim != self.dim:\n                raise ValueError(\"Embedding dimensions differ; rebuild the index with the selected model.\")\n        elif self.conn.execute(\"SELECT 1 FROM chunks LIMIT 1\").fetchone():\n            raise ValueError(\"Legacy index has no search graph; run index with --rebuild.\")\n        self._index = index\n        self._revision = revision\n        return index\n\n    @contextmanager\n"
+    },
+    {
+      "id": "Dots/codeindex/storage.py:91-140",
+      "path": "Dots/codeindex/storage.py",
+      "start_line": 91,
+      "end_line": 140,
+      "text": "        self._index = index\n        self._revision = revision\n        return index\n\n    @contextmanager\n    def transaction(self):\n        \"\"\"Publish the graph and SQL rows together, or retain the previous index.\"\"\"\n        connection = self.conn\n        if connection.in_transaction:\n            raise RuntimeError(\"An index transaction is already active\")\n        connection.execute(\"BEGIN IMMEDIATE\")\n        self._dirty = False\n        try:\n            yield\n            revision = self._revision\n            if self._dirty:\n                row = connection.execute(\"SELECT revision FROM search_graph WHERE id = 1\").fetchone()\n                revision = (row[0] if row else 0) + 1\n                connection.execute(\n                    \"INSERT INTO search_graph VALUES (1, ?, ?) \"\n                    \"ON CONFLICT(id) DO UPDATE SET revision=excluded.revision, data=excluded.data\",\n                    (revision, self._index.save()),\n                )\n            connection.commit()\n            self._revision = revision\n        except BaseException:\n            connection.rollback()\n            self._index = None\n            self._revision = None\n            raise\n        finally:\n            self._dirty = False\n\n    def configuration(self) -> dict | None:\n        row = self.conn.execute(\"SELECT data FROM configuration WHERE id = 1\").fetchone()\n        return json.loads(row[0]) if row else None\n\n    @contextmanager\n    def snapshot(self):\n        \"\"\"Keep configuration, graph, and source rows on one committed revision.\"\"\"\n        connection = self.conn\n        own_transaction = not connection.in_transaction\n        if own_transaction:\n            connection.execute(\"BEGIN\")\n        try:\n            yield\n        finally:\n            if own_transaction:\n                connection.rollback()\n\n"
+    },
+    {
+      "id": "Dots/codeindex/storage.py:136-185",
+      "path": "Dots/codeindex/storage.py",
+      "start_line": 136,
+      "end_line": 185,
+      "text": "            yield\n        finally:\n            if own_transaction:\n                connection.rollback()\n\n    def configure(self, configuration: dict) -> None:\n        current = self.configuration()\n        if current is not None and current != configuration:\n            raise ValueError(\"Workspace, model, or chunk settings differ; use a separate database or index --rebuild.\")\n        if current is None and self.conn.execute(\"SELECT 1 FROM chunks LIMIT 1\").fetchone():\n            raise ValueError(\"Legacy index has no model identity; run index with --rebuild.\")\n        self.conn.execute(\"INSERT OR IGNORE INTO configuration VALUES (1, ?)\",\n                          (json.dumps(configuration, sort_keys=True),))\n\n    def add_chunks(self, chunks: Sequence[Chunk], vectors: Sequence[Sequence[float]]) -> None:\n        if len(chunks) != len(vectors):\n            raise ValueError(\"chunks and vectors must have the same length\")\n        if not chunks:\n            return\n        matrix = np.asarray(vectors, dtype=np.float32)\n        if matrix.shape != (len(chunks), self.dim):\n            raise ValueError(f\"Each vector must have {self.dim} dimensions\")\n        if not np.isfinite(matrix).all() or np.any(np.linalg.norm(matrix, axis=1) == 0):\n            raise ValueError(\"Embedding vectors must be finite and nonzero\")\n        if not self.conn.in_transaction:\n            with self.transaction():\n                self.add_chunks(chunks, vectors)\n            return\n        index = self._graph()\n        ids = []\n        for chunk, vector in zip(chunks, matrix):\n            cursor = self.conn.execute(\n                \"INSERT INTO chunks(path, start_line, end_line, text) VALUES (?, ?, ?, ?)\",\n                (chunk.path, chunk.start_line, chunk.end_line, chunk.text),\n            )\n            ids.append(cursor.lastrowid)\n            self.conn.execute(\"INSERT INTO embeddings VALUES (?, ?)\", (cursor.lastrowid, vector.tobytes()))\n        index.add(np.asarray(ids, dtype=np.uint64), matrix, threads=2)\n        self._dirty = True\n\n    def remove_file(self, path: str) -> None:\n        index = self._graph()\n        ids = [row[0] for row in self.conn.execute(\"SELECT id FROM chunks WHERE path = ?\", (path,))]\n        if ids:\n            index.remove(ids, threads=2)\n            self._dirty = True\n        self.conn.execute(\"DELETE FROM chunks WHERE path = ?\", (path,))\n        self.conn.execute(\"DELETE FROM files WHERE path = ?\", (path,))\n\n    def file_records(self) -> dict[str, dict]:\n"
+    },
+    {
+      "id": "Dots/codeindex/storage.py:181-230",
+      "path": "Dots/codeindex/storage.py",
+      "start_line": 181,
+      "end_line": 230,
+      "text": "            self._dirty = True\n        self.conn.execute(\"DELETE FROM chunks WHERE path = ?\", (path,))\n        self.conn.execute(\"DELETE FROM files WHERE path = ?\", (path,))\n\n    def file_records(self) -> dict[str, dict]:\n        return {row[\"path\"]: dict(row) for row in self.conn.execute(\"SELECT * FROM files\")}\n\n    def save_file(self, path: str, digest: str, size: int, mtime_ns: int, line_count: int) -> None:\n        self.conn.execute(\n            \"INSERT INTO files VALUES (?, ?, ?, ?, ?) ON CONFLICT(path) DO UPDATE SET \"\n            \"digest=excluded.digest, size=excluded.size, mtime_ns=excluded.mtime_ns, line_count=excluded.line_count\",\n            (path, digest, size, mtime_ns, line_count),\n        )\n\n    def search(self, query_vector: Sequence[float], limit: int = 10) -> list[dict]:\n        if limit < 1:\n            raise ValueError(\"limit must be positive\")\n        vector = np.asarray(query_vector, dtype=np.float32)\n        if vector.shape != (self.dim,) or not np.isfinite(vector).all() or np.linalg.norm(vector) == 0:\n            raise ValueError(f\"Query must be a finite, nonzero vector of {self.dim} dimensions\")\n        with self.snapshot():\n            index = self._graph()\n            if not len(index):\n                return []\n            matches = index.search(vector, count=min(limit, len(index)), exact=False, threads=2)\n            results = []\n            for key, distance in zip(matches.keys, matches.distances):\n                if distance >= 0.5:\n                    continue\n                row = self.conn.execute(\n                    \"SELECT id, path, start_line, end_line, text FROM chunks WHERE id = ?\", (int(key),)\n                ).fetchone()\n                if row is not None:\n                    results.append({**dict(row), \"distance\": float(distance)})\n            return results\n\n    def clear(self) -> None:\n        if not self.conn.in_transaction:\n            with self.transaction():\n                self.clear()\n            return\n        self._index = self._new_index()\n        row = self.conn.execute(\"SELECT revision FROM search_graph WHERE id = 1\").fetchone()\n        self._revision = row[0] if row else 0\n        self._dirty = True\n        for table in (\"embeddings\", \"chunks\", \"files\", \"configuration\"):\n            self.conn.execute(f\"DELETE FROM {table}\")\n\n    def close(self) -> None:\n        if self._conn is not None:\n"
+    },
+    {
+      "id": "Dots/codeindex/storage.py:226-240",
+      "path": "Dots/codeindex/storage.py",
+      "start_line": 226,
+      "end_line": 240,
+      "text": "        for table in (\"embeddings\", \"chunks\", \"files\", \"configuration\"):\n            self.conn.execute(f\"DELETE FROM {table}\")\n\n    def close(self) -> None:\n        if self._conn is not None:\n            self._conn.close()\n            self._conn = None\n        self._index = None\n        self._revision = None\n\n    def __enter__(self) -> Store:\n        return self\n\n    def __exit__(self, *args: object) -> None:\n        self.close()\n"
+    },
+    {
+      "id": "Dots/codeindex/search.py:1-50",
+      "path": "Dots/codeindex/search.py",
+      "start_line": 1,
+      "end_line": 50,
+      "text": "\"\"\"Incremental workspace indexing and semantic search over stored snapshots.\"\"\"\n\nfrom __future__ import annotations\n\nimport hashlib\nfrom dataclasses import dataclass\nfrom pathlib import Path\n\nfrom .embed import Embedder\nfrom .indexer import chunk_text, walk_files\nfrom .storage import Store\n\n\n@dataclass\nclass IndexStats:\n    indexed_files: int = 0\n    unchanged_files: int = 0\n    deleted_files: int = 0\n    indexed_chunks: int = 0\n\n\nclass Searcher:\n    def __init__(self, store: Store, embedder: Embedder, *, embedding_id: str | None = None):\n        self.store = store\n        self.embedder = embedder\n        self.embedding_id = embedding_id\n        self.last_index_stats = IndexStats()\n\n    def _model_identity(self) -> str:\n        if self.embedding_id is not None:\n            return self.embedding_id\n        identity = getattr(self.embedder, \"identity\", None)\n        if identity is not None:\n            return str(identity)\n        model = getattr(self.embedder, \"model_name\", \"\")\n        cls = type(self.embedder)\n        return f\"{cls.__module__}.{cls.__qualname__}:{model}:{self.embedder.dim()}\"\n\n    def index_path(self, path: str, max_lines: int = 50, overlap: int = 5, *, rebuild: bool = False) -> int:\n        \"\"\"Embed new/changed files, remove deleted files, and return updated chunk count.\n\n        Timestamp and size skip unchanged files without reading them. Files with\n        changed metadata are hashed before deciding whether to embed again.\n        The complete update is atomic; a failed traversal/read/embedding keeps\n        the previous searchable index. Rebuild explicitly replaces its contents.\n        \"\"\"\n        root = Path(path).expanduser().resolve(strict=True)\n        if not root.is_dir():\n            raise NotADirectoryError(str(root))\n        max_lines = max(1, max_lines)\n"
+    },
+    {
+      "id": "Dots/codeindex/search.py:46-95",
+      "path": "Dots/codeindex/search.py",
+      "start_line": 46,
+      "end_line": 95,
+      "text": "        \"\"\"\n        root = Path(path).expanduser().resolve(strict=True)\n        if not root.is_dir():\n            raise NotADirectoryError(str(root))\n        max_lines = max(1, max_lines)\n        overlap = min(max(0, overlap), max_lines - 1)\n        configuration = {\n            \"workspace\": str(root), \"embedding_id\": self._model_identity(),\n            \"dimensions\": self.embedder.dim(), \"max_lines\": max_lines, \"overlap\": overlap,\n        }\n        if configuration[\"dimensions\"] != self.store.dim:\n            raise ValueError(\"Embedder and store dimensions differ\")\n        stats = IndexStats()\n        with self.store.transaction():\n            if rebuild:\n                self.store.clear()\n            self.store.configure(configuration)\n            previous = self.store.file_records()\n            seen = set()\n            for name in walk_files(str(root)):\n                source = Path(name)\n                if source.is_symlink():\n                    continue\n                seen.add(name)\n                before = source.stat()\n                old = previous.get(name)\n                if old and old[\"mtime_ns\"] == before.st_mtime_ns and old[\"size\"] == before.st_size:\n                    stats.unchanged_files += 1\n                    continue\n                data = source.read_bytes()\n                after = source.stat()\n                if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):\n                    raise OSError(f\"File changed while indexing; retry: {source}\")\n                digest = hashlib.sha256(data).hexdigest()\n                text = data.decode(\"utf-8\", errors=\"replace\")\n                if old and old[\"digest\"] == digest:\n                    self.store.save_file(name, digest, after.st_size, after.st_mtime_ns, old[\"line_count\"])\n                    stats.unchanged_files += 1\n                    continue\n                chunks = chunk_text(name, text, max_lines=max_lines, overlap=overlap)\n                self.store.remove_file(name)\n                for start in range(0, len(chunks), 64):\n                    batch = chunks[start:start + 64]\n                    vectors = self.embedder.embed_batch([chunk.text for chunk in batch])\n                    self.store.add_chunks(batch, vectors)\n                self.store.save_file(name, digest, after.st_size, after.st_mtime_ns, len(text.splitlines()))\n                stats.indexed_files += 1\n                stats.indexed_chunks += len(chunks)\n            for name in previous.keys() - seen:\n                self.store.remove_file(name)\n"
+    },
+    {
+      "id": "Dots/codeindex/search.py:91-112",
+      "path": "Dots/codeindex/search.py",
+      "start_line": 91,
+      "end_line": 112,
+      "text": "                self.store.save_file(name, digest, after.st_size, after.st_mtime_ns, len(text.splitlines()))\n                stats.indexed_files += 1\n                stats.indexed_chunks += len(chunks)\n            for name in previous.keys() - seen:\n                self.store.remove_file(name)\n                stats.deleted_files += 1\n        self.last_index_stats = stats\n        return stats.indexed_chunks\n\n    def search(self, query: str, limit: int = 10) -> list[dict]:\n        \"\"\"Return approximate nearest code chunks without traversing source files.\"\"\"\n        if limit < 1:\n            raise ValueError(\"limit must be positive\")\n        with self.store.snapshot():\n            configuration = self.store.configuration()\n            if configuration is None:\n                if self.store.conn.execute(\"SELECT 1 FROM chunks LIMIT 1\").fetchone():\n                    raise ValueError(\"Legacy index has no model identity; run index with --rebuild.\")\n                return []\n            if configuration[\"embedding_id\"] != self._model_identity() or configuration[\"dimensions\"] != self.embedder.dim():\n                raise ValueError(\"Embedding model differs from the indexed model; rebuild or use the original model.\")\n            return self.store.search(self.embedder.embed(query), limit=limit)\n"
+    },
+    {
+      "id": "Dots/codeindex/indexer.py:1-50",
+      "path": "Dots/codeindex/indexer.py",
+      "start_line": 1,
+      "end_line": 50,
+      "text": "\"\"\"File walking and code chunking.\n\nThese helpers are pure-Python and have no third-party dependencies, so they can\nbe reused in any app that needs to enumerate and slice source files.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport os\nfrom dataclasses import dataclass\nfrom typing import Iterator, List, Optional, Set\n\n\n@dataclass\nclass Chunk:\n    \"\"\"A contiguous slice of a file.\n\n    Attributes\n    ----------\n    path:\n        Absolute or relative path to the source file.\n    start_line:\n        1-based index of the first line in the chunk.\n    end_line:\n        1-based index of the last line in the chunk (inclusive).\n    text:\n        The raw text content of the chunk.\n    \"\"\"\n\n    path: str\n    start_line: int\n    end_line: int\n    text: str\n\n\n# Directories always skipped during traversal.\nDEFAULT_EXCLUDE_DIRS: Set[str] = {\n    \".git\",\n    \".hg\",\n    \".svn\",\n    \"node_modules\",\n    \"__pycache__\",\n    \".venv\",\n    \"venv\",\n    \"env\",\n    \".tox\",\n    \".eggs\",\n    \"build\",\n    \"dist\",\n    \".idea\",\n"
+    },
+    {
+      "id": "Dots/codeindex/indexer.py:46-95",
+      "path": "Dots/codeindex/indexer.py",
+      "start_line": 46,
+      "end_line": 95,
+      "text": "    \".tox\",\n    \".eggs\",\n    \"build\",\n    \"dist\",\n    \".idea\",\n    \".vscode\",\n    \"target\",\n    \"bin\",\n    \"obj\",\n}\n\n# File extensions considered \"indexable\" by default.\nDEFAULT_INDEX_EXTS: Set[str] = {\n    \".py\",\n    \".js\",\n    \".ts\",\n    \".jsx\",\n    \".tsx\",\n    \".java\",\n    \".c\",\n    \".cpp\",\n    \".h\",\n    \".hpp\",\n    \".cs\",\n    \".go\",\n    \".rs\",\n    \".rb\",\n    \".php\",\n    \".swift\",\n    \".kt\",\n    \".scala\",\n    \".sh\",\n    \".bash\",\n    \".zsh\",\n    \".html\",\n    \".css\",\n    \".scss\",\n    \".json\",\n    \".yaml\",\n    \".yml\",\n    \".toml\",\n    \".xml\",\n    \".md\",\n    \".txt\",\n    \".sql\",\n    \".r\",\n    \".lua\",\n    \".pl\",\n    \".pm\",\n    \".tcl\",\n"
+    },
+    {
+      "id": "Dots/codeindex/indexer.py:91-140",
+      "path": "Dots/codeindex/indexer.py",
+      "start_line": 91,
+      "end_line": 140,
+      "text": "    \".r\",\n    \".lua\",\n    \".pl\",\n    \".pm\",\n    \".tcl\",\n    \".vim\",\n}\n\n\ndef walk_files(\n    root: str,\n    exclude_dirs: Optional[List[str]] = None,\n    index_exts: Optional[List[str]] = None,\n) -> Iterator[str]:\n    \"\"\"Yield file paths under ``root``, skipping excluded dirs and non-indexed files.\n\n    Parameters\n    ----------\n    root:\n        Directory to traverse. May be relative or absolute.\n    exclude_dirs:\n        Directory names to skip. Defaults to :data:`DEFAULT_EXCLUDE_DIRS`.\n    index_exts:\n        File extensions (including the dot) to include. Defaults to\n        :data:`DEFAULT_INDEX_EXTS`. Pass an empty list to index *all* files.\n\n    Yields\n    ------\n    str\n        Full path to each indexable file.\n    \"\"\"\n    exclude = set(exclude_dirs) if exclude_dirs is not None else DEFAULT_EXCLUDE_DIRS\n    exts = set(index_exts) if index_exts is not None else DEFAULT_INDEX_EXTS\n    root = os.path.abspath(root)\n\n    def walk_error(error: OSError) -> None:\n        raise error\n\n    for dirpath, dirnames, filenames in os.walk(root, onerror=walk_error):\n        # Prune excluded directories in-place so os.walk doesn't descend into them.\n        dirnames[:] = [d for d in dirnames if d not in exclude]\n        for fname in filenames:\n            ext = os.path.splitext(fname)[1].lower()\n            if ext in exts:\n                yield os.path.join(dirpath, fname)\n\n\ndef chunk_file(\n    path: str,\n    max_lines: int = 50,\n"
+    },
+    {
+      "id": "Dots/codeindex/indexer.py:136-185",
+      "path": "Dots/codeindex/indexer.py",
+      "start_line": 136,
+      "end_line": 185,
+      "text": "\n\ndef chunk_file(\n    path: str,\n    max_lines: int = 50,\n    overlap: int = 5,\n) -> List[Chunk]:\n    \"\"\"Split a file into overlapping chunks by line count.\n\n    Parameters\n    ----------\n    path:\n        Path to the file to read.\n    max_lines:\n        Maximum number of lines per chunk.\n    overlap:\n        Number of lines to carry over between consecutive chunks (provides\n        context continuity at chunk boundaries).\n\n    Returns\n    -------\n    List[Chunk]\n        A list of chunks. Returns an empty list if the file cannot be read.\n    \"\"\"\n    try:\n        with open(path, \"r\", encoding=\"utf-8\", errors=\"replace\") as f:\n            lines = f.readlines()\n    except (OSError, UnicodeDecodeError):\n        return []\n\n    return chunk_text(path, \"\".join(lines), max_lines=max_lines, overlap=overlap)\n\n\ndef chunk_text(path: str, text: str, max_lines: int = 50, overlap: int = 5) -> List[Chunk]:\n    \"\"\"Chunk an already-read file snapshot without reopening its source.\"\"\"\n    lines = text.splitlines(keepends=True)\n    if not lines:\n        return []\n\n    if max_lines <= 1:\n        max_lines = 1\n    if overlap < 0:\n        overlap = 0\n    if overlap >= max_lines:\n        overlap = max_lines - 1\n\n    chunks: List[Chunk] = []\n    start = 0\n    total = len(lines)\n    while start < total:\n"
+    },
+    {
+      "id": "Dots/codeindex/indexer.py:181-200",
+      "path": "Dots/codeindex/indexer.py",
+      "start_line": 181,
+      "end_line": 200,
+      "text": "\n    chunks: List[Chunk] = []\n    start = 0\n    total = len(lines)\n    while start < total:\n        end = min(start + max_lines, total)\n        text = \"\".join(lines[start:end])\n        chunks.append(\n            Chunk(\n                path=path,\n                start_line=start + 1,  # 1-based\n                end_line=end,\n                text=text,\n            )\n        )\n        if end == total:\n            break\n        start = end - overlap\n\n    return chunks\n"
+    },
+    {
+      "id": "Dots/codeindex/cli.py:1-50",
+      "path": "Dots/codeindex/cli.py",
+      "start_line": 1,
+      "end_line": 50,
+      "text": "\"\"\"Command-line interface for codeindex.\n\nThis is a thin wrapper around the library API. For programmatic use, import\nthe library directly::\n\n    from codeindex import Searcher, Store, ONNXEmbedder\n\nThe CLI supports three subcommands: ``index``, ``search``, and ``info``.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport argparse\nimport json\nimport sys\nfrom typing import Optional, Sequence\n\nfrom .embed import DEFAULT_MODEL, ONNXEmbedder\nfrom .search import Searcher\nfrom .storage import Store\n\n\ndef build_parser() -> argparse.ArgumentParser:\n    \"\"\"Build the argument parser for the codeindex CLI.\"\"\"\n    parser = argparse.ArgumentParser(\n        prog=\"codeindex\",\n        description=\"Modular codebase indexer with semantic search.\",\n    )\n    sub = parser.add_subparsers(dest=\"command\", required=True)\n\n    # index\n    p_index = sub.add_parser(\"index\", help=\"Index a directory of code.\")\n    p_index.add_argument(\"path\", help=\"Directory to index.\")\n    p_index.add_argument(\n        \"--db\", default=\"codeindex.db\", help=\"SQLite database path.\"\n    )\n    p_index.add_argument(\n        \"--model\",\n        default=DEFAULT_MODEL,\n        help=\"Embedding model repository with a quantized ONNX encoder.\",\n    )\n    p_index.add_argument(\n        \"--max-lines\", type=int, default=50, help=\"Max lines per chunk.\"\n    )\n    p_index.add_argument(\n        \"--overlap\", type=int, default=5, help=\"Chunk overlap in lines.\"\n    )\n    p_index.add_argument(\"--rebuild\", action=\"store_true\", help=\"Replace the index, including its model and workspace settings.\")\n\n    # search\n"
+    },
+    {
+      "id": "Dots/codeindex/cli.py:46-95",
+      "path": "Dots/codeindex/cli.py",
+      "start_line": 46,
+      "end_line": 95,
+      "text": "        \"--overlap\", type=int, default=5, help=\"Chunk overlap in lines.\"\n    )\n    p_index.add_argument(\"--rebuild\", action=\"store_true\", help=\"Replace the index, including its model and workspace settings.\")\n\n    # search\n    p_search = sub.add_parser(\"search\", help=\"Search the index.\")\n    p_search.add_argument(\"query\", help=\"Search query.\")\n    p_search.add_argument(\n        \"--db\", default=\"codeindex.db\", help=\"SQLite database path.\"\n    )\n    p_search.add_argument(\n        \"--model\",\n        default=DEFAULT_MODEL,\n        help=\"Embedding model repository with a quantized ONNX encoder.\",\n    )\n    p_search.add_argument(\n        \"--limit\", type=int, default=10, help=\"Max results.\"\n    )\n    p_search.add_argument(\"--json\", action=\"store_true\", help=\"Return full code excerpts as JSON for agents.\")\n\n    # info\n    p_info = sub.add_parser(\"info\", help=\"Show index info.\")\n    p_info.add_argument(\n        \"--db\", default=\"codeindex.db\", help=\"SQLite database path.\"\n    )\n\n    return parser\n\n\ndef main(argv: Optional[Sequence[str]] = None) -> int:\n    \"\"\"Entry point for the ``codeindex`` console script.\n\n    Returns\n    -------\n    int\n        Exit code (0 for success).\n    \"\"\"\n    parser = build_parser()\n    args = parser.parse_args(argv)\n\n    if args.command == \"info\":\n        store = Store(args.db, dim=1)\n        try:\n            cur = store.conn.cursor()\n            cur.execute(\"SELECT COUNT(*) FROM chunks\")\n            count = cur.fetchone()[0]\n            files = store.conn.execute(\"SELECT COUNT(*) FROM files\").fetchone()[0]\n            configuration = store.configuration()\n        finally:\n            store.close()\n"
+    },
+    {
+      "id": "Dots/codeindex/cli.py:91-140",
+      "path": "Dots/codeindex/cli.py",
+      "start_line": 91,
+      "end_line": 140,
+      "text": "            count = cur.fetchone()[0]\n            files = store.conn.execute(\"SELECT COUNT(*) FROM files\").fetchone()[0]\n            configuration = store.configuration()\n        finally:\n            store.close()\n        print(f\"Database: {args.db}\")\n        print(f\"Indexed chunks: {count}\")\n        print(f\"Indexed files: {files}\")\n        if configuration:\n            print(f\"Workspace: {configuration['workspace']}\")\n            print(f\"Embedding identity: {configuration['embedding_id']}\")\n        print(\"Search: persisted HNSW (approximate cosine neighbors)\")\n        return 0\n\n    if args.command == \"index\":\n        embedder = ONNXEmbedder(args.model)\n        dim = embedder.dim()\n        store = Store(args.db, dim=dim)\n        try:\n            searcher = Searcher(store, embedder)\n            n = searcher.index_path(\n                args.path, max_lines=args.max_lines, overlap=args.overlap, rebuild=args.rebuild\n            )\n        finally:\n            store.close()\n        stats = searcher.last_index_stats\n        print(f\"Indexed {n} updated chunks from {args.path} -> {args.db}\")\n        print(f\"Files: {stats.indexed_files} updated, {stats.unchanged_files} unchanged, {stats.deleted_files} removed\")\n        return 0\n\n    if args.command == \"search\":\n        embedder = ONNXEmbedder(args.model)\n        dim = embedder.dim()\n        store = Store(args.db, dim=dim)\n        try:\n            searcher = Searcher(store, embedder)\n            results = searcher.search(args.query, limit=args.limit)\n        finally:\n            store.close()\n        if args.json:\n            print(json.dumps(results, ensure_ascii=False))\n            return 0\n        if not results:\n            print(\"No results found.\")\n            return 0\n        for i, r in enumerate(results, 1):\n            print(f\"\\n--- Result {i} ({r['distance']:.4f}) ---\")\n            print(f\"  {r['path']}:{r['start_line']}-{r['end_line']}\")\n            print(f\"  {r['text'][:200]}\")\n        return 0\n"
+    },
+    {
+      "id": "Dots/codeindex/cli.py:136-147",
+      "path": "Dots/codeindex/cli.py",
+      "start_line": 136,
+      "end_line": 147,
+      "text": "        for i, r in enumerate(results, 1):\n            print(f\"\\n--- Result {i} ({r['distance']:.4f}) ---\")\n            print(f\"  {r['path']}:{r['start_line']}-{r['end_line']}\")\n            print(f\"  {r['text'][:200]}\")\n        return 0\n\n    parser.print_help()\n    return 1\n\n\nif __name__ == \"__main__\":\n    sys.exit(main())\n"
+    },
+    {
+      "id": "SlipAgent/src/slipagent/workspace.py:1-50",
+      "path": "SlipAgent/src/slipagent/workspace.py",
+      "start_line": 1,
+      "end_line": 50,
+      "text": "\"\"\"Path confinement for built-in file, navigation, search, and Git tools.\n\nThese tools funnel project paths through `Workspace.resolve`, which\nresolves symlinks and allows the project root and configured system temp directory.\nOther paths require danger mode. This is not an OS\nsandbox: shell/MCP subprocesses have process permissions, and session log\nstorage is owned separately by the harness. Danger mode lifts path confinement\nwithout changing the root used for relative paths or the process's permissions.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport os\nimport tempfile\nfrom collections.abc import Iterator\nfrom dataclasses import dataclass, field\nfrom pathlib import Path\n\n# Prune expensive generated/dependency trees during recursive search. list_dir\n# still exposes them, and an explicit search path can target their contents.\nIGNORED_DIRS = frozenset(\n    {\n        \".git\",\n        \".hg\",\n        \".svn\",\n        \".venv\",\n        \"venv\",\n        \"node_modules\",\n        \"__pycache__\",\n        \".mypy_cache\",\n        \".pytest_cache\",\n        \".ruff_cache\",\n        \".tox\",\n        \"dist\",\n        \"build\",\n        \".idea\",\n        \".vscode\",\n    }\n)\n\n\nclass WorkspaceError(Exception):\n    \"\"\"Raised when a path escapes the sandbox or cannot be resolved.\"\"\"\n\n\n@dataclass(slots=True)\nclass WorkspaceAccess:\n    \"\"\"Session-owned access mode shared by tools and retained across reloads.\"\"\"\n\n    danger: bool = False\n"
+    },
+    {
+      "id": "SlipAgent/src/slipagent/workspace.py:46-95",
+      "path": "SlipAgent/src/slipagent/workspace.py",
+      "start_line": 46,
+      "end_line": 95,
+      "text": "@dataclass(slots=True)\nclass WorkspaceAccess:\n    \"\"\"Session-owned access mode shared by tools and retained across reloads.\"\"\"\n\n    danger: bool = False\n\n\n@dataclass(frozen=True, slots=True)\nclass Workspace:\n    \"\"\"An immutable project root with an independently mutable access mode.\"\"\"\n\n    root: Path\n    access: WorkspaceAccess = field(compare=False, repr=False)\n\n    def __init__(self, root: Path | str = \".\", *, danger: bool = False) -> None:\n        resolved = Path(root).expanduser().resolve()\n        if not resolved.is_dir():\n            raise WorkspaceError(f\"workspace root is not a directory: {resolved}\")\n        object.__setattr__(self, \"root\", resolved)\n        object.__setattr__(self, \"access\", WorkspaceAccess(danger=danger))\n\n    def resolve(self, raw: str | Path) -> Path:\n        \"\"\"Resolve a model-supplied path, enforcing the current access mode.\n\n        Relative paths are anchored to the root. Absolute paths are allowed but\n        confined to the project or system temp directory unless danger mode is\n        enabled. Symlinks are followed before the access check.\n        \"\"\"\n        text = str(raw)\n        if not text.strip():\n            raise WorkspaceError(\"path must be a non-empty string\")\n\n        candidate = Path(text).expanduser()\n        if not candidate.is_absolute():\n            candidate = self.root / candidate\n\n        resolved = candidate.resolve()\n        if not self.allows(resolved):\n            raise WorkspaceError(\n                f\"path is outside the workspace: {text!r} \"\n                f\"(workspace root is {self.root})\"\n            )\n        return resolved\n\n    @property\n    def temporary_directory(self) -> Path:\n        \"\"\"The system-configured temporary directory, resolved through symlinks.\"\"\"\n        return Path(tempfile.gettempdir()).resolve()\n\n    def allows(self, path: Path) -> bool:\n"
+    },
+    {
+      "id": "SlipAgent/src/slipagent/workspace.py:91-140",
+      "path": "SlipAgent/src/slipagent/workspace.py",
+      "start_line": 91,
+      "end_line": 140,
+      "text": "    def temporary_directory(self) -> Path:\n        \"\"\"The system-configured temporary directory, resolved through symlinks.\"\"\"\n        return Path(tempfile.gettempdir()).resolve()\n\n    def allows(self, path: Path) -> bool:\n        \"\"\"Whether a resolved path is accessible under the current policy.\"\"\"\n        return (self.access.danger or self.contains(path)\n                or path.is_relative_to(self.temporary_directory))\n\n    def contains(self, path: Path) -> bool:\n        \"\"\"True when `path` is the root itself or lives beneath it.\"\"\"\n        try:\n            path.relative_to(self.root)\n        except ValueError:\n            return False\n        return True\n\n    def relative(self, path: Path) -> str:\n        \"\"\"Display form of a path, relative to the root when contained.\"\"\"\n        if self.contains(path):\n            relative = path.relative_to(self.root)\n            return \".\" if str(relative) == \".\" else relative.as_posix()\n        return str(path)\n\n    def iter_files(self, start: Path | str | None = None) -> Iterator[Path]:\n        \"\"\"Yield candidate files beneath `start`, pruning ignored directories.\n\n        Uses `os.walk` with in-place pruning so a large `.git` or `node_modules`\n        is never descended into, rather than filtering an already-complete walk.\n\n        With confinement enabled, symlinks outside allowed directories are skipped: `os.walk` does not\n        descend into symlinked directories, but it does list symlinked *files* in\n        `filenames`, and reading one would hand out content from beyond the\n        sandbox even though `resolve` refuses the same path when asked directly.\n        \"\"\"\n        base = self.resolve(start) if start is not None else self.root\n        if base.is_file():\n            yield base\n            return\n\n        for dirpath, dirnames, filenames in os.walk(base):\n            dirnames[:] = [name for name in dirnames if name not in IGNORED_DIRS]\n            current = Path(dirpath)\n            for filename in filenames:\n                candidate = current / filename\n                if candidate.is_symlink() and not self.allows(candidate.resolve()):\n                    continue\n                yield candidate\n\n    def iter_entries(self, start: Path | str | None = None) -> Iterator[tuple[Path, bool]]:\n"
+    },
+    {
+      "id": "SlipAgent/src/slipagent/workspace.py:136-163",
+      "path": "SlipAgent/src/slipagent/workspace.py",
+      "start_line": 136,
+      "end_line": 163,
+      "text": "                if candidate.is_symlink() and not self.allows(candidate.resolve()):\n                    continue\n                yield candidate\n\n    def iter_entries(self, start: Path | str | None = None) -> Iterator[tuple[Path, bool]]:\n        \"\"\"Yield `(path, is_dir)` for every entry beneath `start`, pruned.\n\n        As in `iter_files`, confinement skips entries whose symlink target lands\n        outside the project and system temp directory. Danger mode includes them.\n        \"\"\"\n        base = self.resolve(start) if start is not None else self.root\n        if not base.is_dir():\n            yield base, base.is_dir()\n            return\n\n        for dirpath, dirnames, filenames in os.walk(base):\n            dirnames[:] = [name for name in dirnames if name not in IGNORED_DIRS]\n            current = Path(dirpath)\n            for name in dirnames:\n                entry = current / name\n                if entry.is_symlink() and not self.allows(entry.resolve()):\n                    continue\n                yield entry, True\n            for name in filenames:\n                entry = current / name\n                if entry.is_symlink() and not self.allows(entry.resolve()):\n                    continue\n                yield entry, False\n"
+    },
+    {
+      "id": "SlipAgent/src/slipagent/lifecycle.py:1-50",
+      "path": "SlipAgent/src/slipagent/lifecycle.py",
+      "start_line": 1,
+      "end_line": 50,
+      "text": "\"\"\"Explicit ownership and cancellation-safe, idempotent asynchronous teardown.\n\nClosing runs in a retained task. Cancelling a waiter never cancels cleanup;\nthe waiter propagates cancellation only after owned work has been drained.\nThis module is part of the stable frame so a reload cannot replace an active\nresource's ownership bookkeeping.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport asyncio\nimport inspect\nfrom collections.abc import Callable, Coroutine\nfrom typing import Any, TypeVar\n\nT = TypeVar(\"T\")\n\n\nasync def finish_cleanup(task: asyncio.Task[T]) -> T:\n    \"\"\"Await one owned cleanup to completion even if this waiter is cancelled.\"\"\"\n    cancellation: asyncio.CancelledError | None = None\n    while not task.done():\n        try:\n            await asyncio.shield(task)\n        except asyncio.CancelledError as exc:\n            cancellation = exc\n        except BaseException:\n            break\n    if cancellation is not None:\n        try:\n            task.result()\n        except BaseException as exc:\n            raise cancellation from exc\n        raise cancellation\n    return task.result()\n\n\nclass Lifetime:\n    \"\"\"Own pending tasks and LIFO cleanups; all close callers share settlement.\"\"\"\n\n    def __init__(self, name: str) -> None:\n        self.name = name\n        self._callbacks: list[Callable[[], Any]] = []\n        self._tasks: set[asyncio.Task[Any]] = set()\n        self._closing: asyncio.Task[None] | None = None\n\n    @property\n    def active(self) -> bool:\n        return self._closing is None\n\n"
+    },
+    {
+      "id": "SlipAgent/src/slipagent/lifecycle.py:46-95",
+      "path": "SlipAgent/src/slipagent/lifecycle.py",
+      "start_line": 46,
+      "end_line": 95,
+      "text": "\n    @property\n    def active(self) -> bool:\n        return self._closing is None\n\n    def defer(self, callback: Callable[[], Any]) -> None:\n        if not self.active:\n            raise RuntimeError(f\"Lifetime {self.name} is closed\")\n        self._callbacks.append(callback)\n\n    def spawn(self, operation: Coroutine[Any, Any, T]) -> asyncio.Task[T]:\n        if not self.active:\n            operation.close()\n            raise RuntimeError(f\"Lifetime {self.name} is closed\")\n        task = asyncio.create_task(operation, name=self.name)\n        self._tasks.add(task)\n        task.add_done_callback(self._settled)\n        return task\n\n    def _settled(self, task: asyncio.Task[Any]) -> None:\n        self._tasks.discard(task)\n        if not task.cancelled() and task.exception() is not None:\n            task.get_loop().call_exception_handler({\n                \"message\": f\"Unhandled owned task failure in {self.name}\",\n                \"exception\": task.exception(), \"task\": task,\n            })\n\n    async def _close(self) -> None:\n        tasks = tuple(self._tasks)\n        for task in tasks:\n            task.cancel()\n        if tasks:\n            await asyncio.gather(*tasks, return_exceptions=True)\n        failure: BaseException | None = None\n        while self._callbacks:\n            callback = self._callbacks.pop()\n            try:\n                result = callback()\n                if inspect.isawaitable(result):\n                    await result\n            except BaseException as exc:\n                if failure is None:\n                    failure = exc\n        if failure is not None:\n            raise failure\n\n    async def aclose(self) -> None:\n        if self._closing is None:\n            self._closing = asyncio.create_task(self._close(), name=f\"close {self.name}\")\n        await finish_cleanup(self._closing)\n"
+    },
+    {
+      "id": "SlipAgent/src/slipagent/instructions.py:1-50",
+      "path": "SlipAgent/src/slipagent/instructions.py",
+      "start_line": 1,
+      "end_line": 50,
+      "text": "\"\"\"Read scoped guidance for permitted paths before model or tool activity.\"\"\"\n\nfrom __future__ import annotations\n\nfrom .prompts import load_prompt\n\nimport fnmatch\nimport os\nimport json\nfrom pathlib import Path\nfrom typing import Any\n\nfrom .workspace import Workspace, WorkspaceError\n\nINSTRUCTION_FILES = (\n    \"CLAUDE.md\", \"AGENTS.md\", \"AGENTS.override.md\", \".cursorrules\", \".clinerules\",\n    \".windsurfrules\", \".github/copilot-instructions.md\",\n)\nINSTRUCTION_DIRECTORIES = (\n    (\".cursor/rules\", \"*.mdc\"),\n    (\".claude/rules\", \"*.md\"),\n    (\".github/instructions\", \"*.instructions.md\"),\n    (\".clinerules\", \"*\"),\n    (\".windsurf/rules\", \"*.md\"),\n)\n\n\ndef _present(workspace: Workspace, relative: str) -> bool:\n    try:\n        (workspace.root / relative).lstat()\n    except FileNotFoundError:\n        return False\n    except OSError as exc:\n        raise WorkspaceError(f\"cannot inspect project instructions {relative}: {exc}\") from exc\n    return True\n\n\ndef load_project_instructions(workspace: Workspace, scope: str = \".\") -> str:\n    \"\"\"Read guidance within a scope, preserving path-labelled text.\n\n    Also used by the session instruction tracker before each working request.\n    \"\"\"\n    sources: list[str] = []\n    seen: set[Path] = set()\n    base = Path(workspace.relative(workspace.resolve(scope)))\n\n    def read(relative: str) -> None:\n        try:\n            path = workspace.resolve(relative)\n            if Path(relative).name == \".clinerules\" and path.is_dir():\n"
+    },
+    {
+      "id": "SlipAgent/src/slipagent/instructions.py:46-95",
+      "path": "SlipAgent/src/slipagent/instructions.py",
+      "start_line": 46,
+      "end_line": 95,
+      "text": "\n    def read(relative: str) -> None:\n        try:\n            path = workspace.resolve(relative)\n            if Path(relative).name == \".clinerules\" and path.is_dir():\n                return\n            if not path.is_file():\n                raise WorkspaceError(\"instruction path must be a regular file\")\n            if path in seen:\n                return\n            content = path.read_text(encoding=\"utf-8\")\n        except (OSError, UnicodeError, RuntimeError, WorkspaceError) as exc:\n            raise WorkspaceError(f\"cannot read project instructions {relative}: {exc}\") from exc\n        seen.add(path)\n        sources.append(load_prompt('instruction-file.md', path=relative, content=content))\n\n    for filename in INSTRUCTION_FILES:\n        relative = (base / filename).as_posix()\n        if _present(workspace, relative):\n            read(relative)\n\n    for directory, pattern in INSTRUCTION_DIRECTORIES:\n        relative = (base / directory).as_posix()\n        if not _present(workspace, relative):\n            continue\n        try:\n            folder = workspace.resolve(relative)\n        except (OSError, RuntimeError, WorkspaceError) as exc:\n            raise WorkspaceError(f\"cannot inspect project instructions {relative}: {exc}\") from exc\n        if not folder.is_dir():\n            if directory == \".clinerules\":\n                continue\n            raise WorkspaceError(f\"project instruction directory is not a directory: {relative}\")\n\n        def walk_error(exc: OSError) -> None:\n            raise WorkspaceError(f\"cannot discover project instructions in {relative}: {exc}\") from exc\n\n        paths = []\n        for current, _, filenames in os.walk(folder, onerror=walk_error, followlinks=False):\n            for filename in filenames:\n                if fnmatch.fnmatchcase(filename, pattern):\n                    suffix = (Path(current) / filename).relative_to(folder)\n                    paths.append((Path(relative) / suffix).as_posix())\n        for name in sorted(paths):\n            read(name)\n    return \"\\n\\n\".join(sources)\n\n\nclass ProjectInstructions:\n    \"\"\"Track visited scopes and which exact guidance reached a model request.\"\"\"\n"
+    },
+    {
+      "id": "SlipAgent/src/slipagent/instructions.py:91-140",
+      "path": "SlipAgent/src/slipagent/instructions.py",
+      "start_line": 91,
+      "end_line": 140,
+      "text": "    return \"\\n\\n\".join(sources)\n\n\nclass ProjectInstructions:\n    \"\"\"Track visited scopes and which exact guidance reached a model request.\"\"\"\n\n    def __init__(self, workspace: Workspace) -> None:\n        self.workspace = workspace\n        self.scopes: set[str] = {\".\"}\n        self.delivered: dict[str, str] = {}\n\n    def snapshot(self) -> dict[str, str]:\n        result = {\".\": load_project_instructions(self.workspace)}\n        for scope in sorted(self.scopes - {\".\"}):\n            # Retain inaccessible scopes for a later access-mode change.\n            if Path(scope).is_absolute() and not self.workspace.allows(Path(scope).resolve()):\n                continue\n            directory = self.workspace.resolve(scope)\n            if directory.exists():\n                # Scope controls applicability, while the original workspace\n                # controls confinement, including links to shared parent rules.\n                result[scope] = load_project_instructions(self.workspace, scope)\n            else:\n                result[scope] = \"\"\n        return result\n\n    def presented(self, snapshot: dict[str, str]) -> None:\n        self.delivered = dict(snapshot)\n\n    def guard(self, tool: Any, raw: str | dict[str, Any] | None) -> str | None:\n        parameter = tool.instruction_path\n        if parameter is None:\n            return None\n        try:\n            arguments = json.loads(raw) if isinstance(raw, str) else raw or {}\n        except ValueError:\n            return None  # The ordinary argument validator reports syntax errors.\n        if not isinstance(arguments, dict):\n            return None\n        relevant = {\".\"}\n        targets = (tool.instruction_targets(arguments) if hasattr(tool, \"instruction_targets\")\n                   else [arguments.get(parameter) or \".\"])\n        for value in targets:\n            if not isinstance(value, str):\n                continue\n            target = self.workspace.resolve(value)\n            directory = target if target.is_dir() else target.parent\n            while directory != self.workspace.root:\n                relevant.add(self.workspace.relative(directory))\n                if directory == directory.parent:\n"
+    },
+    {
+      "id": "SlipAgent/src/slipagent/instructions.py:136-160",
+      "path": "SlipAgent/src/slipagent/instructions.py",
+      "start_line": 136,
+      "end_line": 160,
+      "text": "            target = self.workspace.resolve(value)\n            directory = target if target.is_dir() else target.parent\n            while directory != self.workspace.root:\n                relevant.add(self.workspace.relative(directory))\n                if directory == directory.parent:\n                    break\n                directory = directory.parent\n        self.scopes.update(relevant)\n        if tool.mutates_workspace:\n            current = self.snapshot()\n            changed = [scope for scope in sorted(relevant)\n                       if current.get(scope, \"\") != self.delivered.get(scope, \"\")]\n            if changed:\n                return (load_prompt('project-instructions-changed.md', scopes=', '.join(changed)))\n        return None\n\n    @staticmethod\n    def render(snapshot: dict[str, str]) -> str:\n        sections = []\n        for scope, content in snapshot.items():\n            if content:\n                sections.append(load_prompt('instruction-scope.md', scope=scope, content=content))\n        if not sections:\n            return \"\"\n        return (load_prompt('project-instructions-current.md', scopes='\\n\\n'.join(sections)))\n"
+    },
+    {
+      "id": "SlipAgent/src/slipagent/progress.py:1-50",
+      "path": "SlipAgent/src/slipagent/progress.py",
+      "start_line": 1,
+      "end_line": 50,
+      "text": "\"\"\"Detect repeated tool batches with unchanged results, without deduplicating calls.\"\"\"\n\nfrom __future__ import annotations\n\nfrom .prompts import load_prompt\n\nimport hashlib\nimport json\nimport re\nimport copy\nfrom typing import Any\nfrom collections.abc import Sequence\n\nfrom .api import APIResponseError\nfrom .tools.base import ToolRegistry, ToolResult\nfrom .types import ToolCall, decode_json_content\nfrom .data_text import render_data\n\n\nclass LoopGuard:\n    def __init__(self) -> None:\n        self.signature: str | None = None\n        self.count = 0\n\n    def reset(self) -> None:\n        self.signature = None\n        self.count = 0\n        self.recent: list[tuple[str, int, tuple[str, ...]]] = []\n        self.recent_calls: dict[int, list[dict[str, Any]]] = {}\n\n    def observe(self, batch: Sequence[tuple[ToolCall, ToolResult]], registry: ToolRegistry,\n                step_id: int) -> tuple[str, bool]:\n        records = []\n        calls = []\n        for call, result in batch:\n            tool = registry.get(call.name)\n            if getattr(tool, \"progress_exempt\", False):\n                continue\n            if call.name == \"run_command\" and call.arguments.get(\"poll\") is True:\n                continue\n            content = result.content\n            archive = registry.services.get(\"command_archive\")\n            if archive is not None and isinstance(content, str):\n                # Log IDs vary even when stdout/stderr are unchanged. Remove\n                # only the actual archive's exact invocation-specific notice.\n                for log in reversed(list(archive.logs.values())):\n                    if log.step_id == step_id and log.call_id == call.id:\n                        content = content.removesuffix(\"\\n\" + log.notice())\n                        break\n            records.append((call.name, call.arguments, result.is_error, content))\n"
+    },
+    {
+      "id": "SlipAgent/src/slipagent/progress.py:46-95",
+      "path": "SlipAgent/src/slipagent/progress.py",
+      "start_line": 46,
+      "end_line": 95,
+      "text": "                for log in reversed(list(archive.logs.values())):\n                    if log.step_id == step_id and log.call_id == call.id:\n                        content = content.removesuffix(\"\\n\" + log.notice())\n                        break\n            records.append((call.name, call.arguments, result.is_error, content))\n            calls.append(call.to_record())\n        if not records:\n            self.reset()\n            return \"\", False\n        encoded = json.dumps(records, sort_keys=True, ensure_ascii=True).encode()\n        signature = hashlib.sha256(encoded).hexdigest()\n        if not hasattr(self, \"recent_calls\"):\n            self.recent = []  # Older generations did not retain exact calls.\n            self.recent_calls = {}\n        self.recent.append((signature, step_id, tuple(record[0] for record in records)))\n        self.recent = self.recent[-24:]\n        self.recent_calls[step_id] = copy.deepcopy(calls)\n        self.recent_calls = {step: self.recent_calls[step] for _, step, _ in self.recent}\n        self.count = self.count + 1 if signature == self.signature else 1\n        self.signature = signature\n        signatures = [item[0] for item in self.recent]\n        period = next((size for size in range(1, 7)\n                       if len(signatures) >= size * 3\n                       and signatures[-size:] == signatures[-size * 2:-size]\n                       == signatures[-size * 3:-size * 2]), 0)\n        if not period:\n            return \"\", False\n        stopping = (len(signatures) >= period * 4\n                    and signatures[-period:] == signatures[-period * 4:-period * 3])\n        names = \", \".join(dict.fromkeys(name for item in self.recent[-period:] for name in item[2]))\n        if not stopping:\n            return (\n                load_prompt('repeated-tools.md', tool_names=names,\n                            first_step=self.recent[-period * 3][1], last_step=step_id,\n                            tool_calls=render_data([\n                                {\"step\": step, \"tool_calls\": decode_json_content(self.recent_calls[step])}\n                                for _, step, _ in self.recent[-period:]\n                            ])), False,\n            )\n        return (\n            \"Stopped: the same tool batch or cycle returned unchanged results again after recovery guidance. \"\n            \"History is preserved. Give a correction or continue to try another approach.\", True,\n        )\n\n\nclass StreamLoopError(APIResponseError):\n    \"\"\"A response repeats itself; its partial calls must never execute.\"\"\"\n\n\nclass StreamLoopGuard:\n"
+    },
+    {
+      "id": "SlipAgent/src/slipagent/progress.py:91-140",
+      "path": "SlipAgent/src/slipagent/progress.py",
+      "start_line": 91,
+      "end_line": 140,
+      "text": "class StreamLoopError(APIResponseError):\n    \"\"\"A response repeats itself; its partial calls must never execute.\"\"\"\n\n\nclass StreamLoopGuard:\n    \"\"\"Detect sustained exact prose repetition independently of SSE chunk sizes.\"\"\"\n\n    def __init__(self) -> None:\n        self.buffers: dict[str, str] = {}\n        self.checked: dict[str, int] = {}\n        self.pending = \"\"\n        self.fence = \"\"\n\n    @staticmethod\n    def _prose(line: str) -> bool:\n        return not re.match(r\"^(?: {4}|\\t|\\s*(?:[|#]|[-*+]\\s|\\d+[.)]\\s|[={}\\[\\]]|`{3,}|~{3,}))\", line)\n\n    def feed(self, kind: str, text: str) -> None:\n        if kind not in {\"content\", \"reasoning\"} or not text:\n            return\n        if kind == \"content\":\n            lines = (self.pending + text).split(\"\\n\")\n            self.pending = lines.pop()\n            if len(self.pending) > 32768:\n                self.pending = self.pending[:256] + self.pending[-32512:]\n            for line in lines:\n                marker = re.match(r\"^\\s*(`{3,}|~{3,})\", line)\n                if marker:\n                    if not self.fence:\n                        self.fence = marker[1]\n                    elif marker[1][0] == self.fence[0] and len(marker[1]) >= len(self.fence):\n                        self.fence = \"\"\n                elif not self.fence and self._prose(line):\n                    self.buffers[kind] = (self.buffers.get(kind, \"\") + line + \"\\n\")[-32768:]\n        else:\n            self.buffers[kind] = (self.buffers.get(kind, \"\") + text)[-32768:]\n        self.checked[kind] = self.checked.get(kind, 0) + len(text)\n        if self.checked[kind] >= 256:\n            self.check(kind)\n            self.checked[kind] = 0\n\n    def check(self, kind: str) -> None:\n        text = self.buffers.get(kind, \"\")\n        if kind == \"content\" and not self.fence and self._prose(self.pending):\n            text += self.pending\n        text = re.sub(r\"\\s+\", \" \", text).strip()[-16384:]\n        if len(text) < 480:\n            return\n        anchor = text[-64:]\n        start = max(0, len(text) - 2112)\n"
+    },
+    {
+      "id": "SlipAgent/src/slipagent/progress.py:136-155",
+      "path": "SlipAgent/src/slipagent/progress.py",
+      "start_line": 136,
+      "end_line": 155,
+      "text": "        text = re.sub(r\"\\s+\", \" \", text).strip()[-16384:]\n        if len(text) < 480:\n            return\n        anchor = text[-64:]\n        start = max(0, len(text) - 2112)\n        end = len(text) - 64\n        while (match := text.rfind(anchor, start, end)) >= start:\n            period = len(text) - 64 - match\n            if 80 <= period <= 2048 and len(text) >= period * 6:\n                unit = text[-period:]\n                if text[-period * 6:] == unit * 6:\n                    raise StreamLoopError(\n                        f\"Stopped: sustained repetition in the model's {kind} response. \"\n                        \"No tools from this response ran; accepted history is preserved.\"\n                    )\n            end = match\n\n    def finish(self) -> None:\n        for kind in self.checked:\n            self.check(kind)\n"
+    },
+    {
+      "id": "SlipAgent/src/slipagent/tools/editing.py:1-50",
+      "path": "SlipAgent/src/slipagent/tools/editing.py",
+      "start_line": 1,
+      "end_line": 50,
+      "text": "\"\"\"Pure edit planning: validate against one original, then publish once.\n\nSimilarity is used only for error explanations. Replacement coordinates always\ncome from exact matches, with LF targets also matching CRLF or CR.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport difflib\nimport heapq\nimport re\nfrom collections.abc import Sequence\n\nMAX_DIFF_CHARS = 32_000_000\n\n\ndef edit_pattern(old: str) -> re.Pattern[str]:\n    pattern = re.escape(old)\n    if \"\\r\" not in old:\n        pattern = \"(?:\\r\\n|\\r|\\n)\".join(re.escape(part) for part in old.split(\"\\n\"))\n    return re.compile(pattern)\n\n\ndef missing_match_details(text: str, old: str, replacement: str) -> str:\n    \"\"\"Return bounded real source; never guess a replacement or another file.\"\"\"\n    notes = []\n    existing = edit_pattern(replacement).search(text) if replacement else None\n    if existing is not None:\n        line_number = text.count(\"\\n\", 0, existing.start()) + 1\n        notes.append(f\"Replacement text already exists at line {line_number}; inspect before retrying.\")\n    lines = text.splitlines()\n    anchor = max(old.splitlines(), key=len, default=\"\")[:300].strip()\n    words = set(re.findall(r\"\\w+|[^\\w\\s]\", anchor))\n    candidates = []\n    # Cheap token overlap bounds the expensive character comparisons, even for\n    # long generated files and repeated source lines.\n    for index, line in enumerate(lines):\n        sample = line[:300].strip()\n        tokens = set(re.findall(r\"\\w+|[^\\w\\s]\", sample))\n        shared = len(words & tokens)\n        if shared:\n            candidates.append((shared / max(1, len(words | tokens)), index, sample))\n    closest = heapq.nlargest(8, candidates)\n    if closest:\n        _, index, _ = max(closest, key=lambda item: difflib.SequenceMatcher(None, anchor, item[2]).ratio())\n        start, end = max(0, index - 2), min(len(lines), index + 4)\n        notes.append(\"Nearby actual source (line numbers are not part of the file):\")\n        for number in range(start, end):\n            line = lines[number]\n            notes.append(f\"{number + 1:>6}\\t{line}\")\n"
+    },
+    {
+      "id": "SlipAgent/src/slipagent/tools/editing.py:46-95",
+      "path": "SlipAgent/src/slipagent/tools/editing.py",
+      "start_line": 46,
+      "end_line": 95,
+      "text": "        start, end = max(0, index - 2), min(len(lines), index + 4)\n        notes.append(\"Nearby actual source (line numbers are not part of the file):\")\n        for number in range(start, end):\n            line = lines[number]\n            notes.append(f\"{number + 1:>6}\\t{line}\")\n    notes.append(\"Read the file and copy the exact target text including whitespace.\")\n    return \"\\n\".join(notes)\n\n\ndef apply_edits(text: str, edits: Sequence[tuple[str, str, bool]]) -> tuple[str, int, int]:\n    \"\"\"Plan non-overlapping replacements against the original file contents.\"\"\"\n    planned: list[tuple[int, int, str, int]] = []\n    for index, (old, new, replace_all) in enumerate(edits):\n        label = f\"Edit {index + 1}: \" if len(edits) > 1 else \"\"\n        if not old:\n            raise ValueError(label + \"old_string must not be empty.\")\n        matches = list(edit_pattern(old).finditer(text))\n        if not matches:\n            raise ValueError(label + \"No match for old_string.\\n\" + missing_match_details(text, old, new))\n        if len(matches) > 1 and not replace_all:\n            locations = \", \".join(str(text.count(\"\\n\", 0, match.start()) + 1) for match in matches[:5])\n            raise ValueError(label + f\"old_string matched {len(matches)} times (lines {locations}). \"\n                             \"Add surrounding context to make it unique, or pass replace_all=true for a single edit.\")\n        for match in matches:\n            newline = re.search(r\"\\r\\n|\\r|\\n\", match.group())\n            if newline is None:\n                newline = re.search(r\"\\r\\n|\\r|\\n\", text[match.start():])\n            if newline is None:\n                newline = re.search(r\"\\r\\n|\\r|\\n\", text)\n            replacement = new\n            if newline is not None and \"\\r\" not in new:\n                replacement = new.replace(\"\\n\", newline.group())\n            planned.append((match.start(), match.end(), replacement, index + 1))\n    planned.sort(key=lambda entry: entry[0])\n    for previous, current in zip(planned, planned[1:]):\n        if current[0] < previous[1]:\n            raise ValueError(f\"Edits {previous[3]} and {current[3]} overlap. Merge them into one edit.\")\n    chunks: list[str] = []\n    end = 0\n    for start, stop, replacement, _ in planned:\n        chunks.extend((text[end:start], replacement))\n        end = stop\n    chunks.append(text[end:])\n    updated = \"\".join(chunks)\n    if updated == text:\n        raise ValueError(\"The replacements produce identical content; the file already has that text.\")\n    return updated, len(planned), text.count(\"\\n\", 0, planned[0][0]) + 1\n\n\ndef edit_diff(path: str, before: str, after: str, *, limit: int | None = MAX_DIFF_CHARS) -> str:\n"
+    },
+    {
+      "id": "SlipAgent/src/slipagent/tools/editing.py:91-109",
+      "path": "SlipAgent/src/slipagent/tools/editing.py",
+      "start_line": 91,
+      "end_line": 109,
+      "text": "        raise ValueError(\"The replacements produce identical content; the file already has that text.\")\n    return updated, len(planned), text.count(\"\\n\", 0, planned[0][0]) + 1\n\n\ndef edit_diff(path: str, before: str, after: str, *, limit: int | None = MAX_DIFF_CHARS) -> str:\n    \"\"\"Bound model/UI feedback; full file contents stay available to read_file.\"\"\"\n    lines = difflib.unified_diff(before.splitlines(), after.splitlines(), fromfile=path, tofile=path, lineterm=\"\")\n    if limit is None:\n        return \"\\n\".join(lines)\n    chunks = []\n    size = 0\n    for line in lines:\n        remaining = limit - size\n        if len(line) + 1 > remaining:\n            chunks.append(line[:max(0, remaining)] + \"\\n\u2026 Diff truncated; read the file for remaining changes.\")\n            break\n        chunks.append(line)\n        size += len(line) + 1\n    return \"\\n\".join(chunks)\n"
+    },
+    {
+      "id": "SlipAgent/src/slipagent/tools/output.py:1-50",
+      "path": "SlipAgent/src/slipagent/tools/output.py",
+      "start_line": 1,
+      "end_line": 50,
+      "text": "\"\"\"Session-owned command logs with a shared disk quota and bounded text pages.\n\nCommands keep draining after quota or disk failure so logging cannot deadlock a\nchild. Earlier bytes are never evicted to make room for newer commands. Stream\noffsets count UTF-8 bytes; page limits count decoded characters. Invalid process\nbytes have already been replaced by the capture decoder before arriving here.\n\"\"\"\n\nfrom __future__ import annotations\n\nfrom ..prompts import load_prompt\n\nimport json\nimport os\nimport tempfile\nimport uuid\nfrom collections.abc import Callable, Iterator\nfrom pathlib import Path\nfrom typing import Any, BinaryIO\n\nfrom .base import Tool, ToolResult, current_invocation\n\n\nMAX_OUTPUT_CHARS = 32_000_000\n\n\nclass OutputStream:\n    def __init__(self) -> None:\n        self.path: Path | None = None\n        self.file: BinaryIO | None = None\n        self.retained_bytes = 0\n        self.lost_bytes = 0\n        self.error = \"\"\n\n\nclass CommandLog:\n    def __init__(self, archive: CommandArchive, command: str, step_id: int | None, call_id: str | None) -> None:\n        self.archive = archive\n        self.id = uuid.uuid4().hex\n        self.command = command\n        self.step_id = step_id\n        self.call_id = call_id\n        self.streams = {name: OutputStream() for name in (\"stdout\", \"stderr\")}\n        self.returncode: int | None = None\n        self.timed_out = False\n        self.finished = False\n        self.artifact_kind = \"command_output\"\n\n    def write(self, name: str, text: str) -> None:\n        stream = self.streams[name]\n"
+    },
+    {
+      "id": "SlipAgent/src/slipagent/tools/output.py:46-95",
+      "path": "SlipAgent/src/slipagent/tools/output.py",
+      "start_line": 46,
+      "end_line": 95,
+      "text": "        self.finished = False\n        self.artifact_kind = \"command_output\"\n\n    def write(self, name: str, text: str) -> None:\n        stream = self.streams[name]\n        raw = text.encode(\"utf-8\")\n        if not raw:\n            return\n        if stream.error:\n            stream.lost_bytes += len(raw)\n            return\n        remaining = max(0, self.archive.quota_bytes - self.archive.used_bytes)\n        # Never leave half a character at the retention boundary. Once bytes are\n        # lost this stream stays stopped, so a file always represents one prefix.\n        kept = raw[:remaining].decode(\"utf-8\", errors=\"ignore\").encode(\"utf-8\")\n        written = 0\n        try:\n            if kept:\n                if stream.file is None:\n                    stream.path = self.archive.directory / (self.id + \"-\" + name)\n                    fd = os.open(stream.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)\n                    stream.file = os.fdopen(fd, \"wb\", buffering=0)\n                while written < len(kept):\n                    count = stream.file.write(kept[written:])\n                    if not count:\n                        raise OSError(\"log write made no progress\")\n                    written += count\n            if len(kept) < len(raw):\n                stream.error = f\"Session log quota of {self.archive.quota_bytes} bytes reached; later bytes from this stream are not archived.\"\n        except OSError as exc:\n            stream.error = f\"Log storage failed: {exc}; later bytes from this stream are not archived.\"\n        valid_written = len(kept[:written].decode(\"utf-8\", errors=\"ignore\").encode(\"utf-8\"))\n        stream.retained_bytes += valid_written\n        self.archive.used_bytes += written\n        stream.lost_bytes += len(raw) - valid_written\n\n    def finish(self, returncode: int | None, timed_out: bool) -> None:\n        if self.finished and self.returncode == returncode and self.timed_out == timed_out:\n            return\n        self.returncode = returncode\n        self.timed_out = timed_out\n        self.finished = True\n        for stream in self.streams.values():\n            if stream.file is not None:\n                if getattr(self.archive, \"_persistent\", None) is not None:\n                    try:\n                        os.fsync(stream.file.fileno())\n                    except OSError as exc:\n                        stream.error = f\"{stream.error} Output durability could not be verified: {exc}\".strip()\n                stream.file.close()\n"
+    },
+    {
+      "id": "SlipAgent/src/slipagent/tools/output.py:91-140",
+      "path": "SlipAgent/src/slipagent/tools/output.py",
+      "start_line": 91,
+      "end_line": 140,
+      "text": "                    try:\n                        os.fsync(stream.file.fileno())\n                    except OSError as exc:\n                        stream.error = f\"{stream.error} Output durability could not be verified: {exc}\".strip()\n                stream.file.close()\n                stream.file = None\n        store = getattr(self.archive, \"artifacts\", None)\n        if store is not None and not hasattr(self, \"artifact_record\"):\n            try:\n                output = self.streams[\"stdout\"]\n                error = self.streams[\"stderr\"]\n                def chunks(path: Path | None, suffix: str = \"\") -> Iterator[str]:\n                    if path is not None:\n                        with path.open(encoding=\"utf-8\", newline=\"\") as source:\n                            while chunk := source.read(4096):\n                                yield chunk\n                    if suffix:\n                        yield suffix\n                self.artifact_record = store.save(self.command, chunks(output.path),\n                    error=chunks(error.path, \"\\n\" + \"\\n\".join(stream.error for stream in self.streams.values() if stream.error)\n                                 if any(stream.error for stream in self.streams.values()) else \"\"),\n                    kind=getattr(self, \"artifact_kind\", \"command_output\"), step_id=self.step_id, call_id=self.call_id)\n            except (OSError, UnicodeError, ValueError) as exc:\n                self.artifact_error = str(exc)\n        callback = getattr(self.archive, \"on_log\", None)\n        if callback is not None:\n            callback(self)\n\n    def metadata(self) -> dict[str, Any]:\n        return {**({\"artifacts\": [self.artifact_record]} if hasattr(self, \"artifact_record\") else {}),\n                **({\"artifact_error\": self.artifact_error} if hasattr(self, \"artifact_error\") else {}),\n                \"log_id\": self.id, \"step_id\": self.step_id, \"call_id\": self.call_id,\n                \"command\": self.command,\n                \"command_characters\": len(self.command), \"returncode\": self.returncode,\n                \"timed_out\": self.timed_out, \"finished\": self.finished,\n                \"streams\": {name: {\"retained_bytes\": stream.retained_bytes,\n                                    \"lost_bytes\": stream.lost_bytes, \"retention_error\": stream.error}\n                            for name, stream in self.streams.items()}}\n\n    def notice(self) -> str:\n        errors = \" \".join(f\"{name}: {stream.error} Lost {stream.lost_bytes} UTF-8 bytes.\"\n                          for name, stream in self.streams.items() if stream.error)\n        arguments = json.dumps({\"log_id\": self.id, \"stream\": \"stdout\"})\n        return load_prompt(\"command-output-recovery.md\", log_id=self.id, arguments=arguments,\n            retention=load_prompt(\"command-output-saved.md\" if getattr(self.archive, \"_persistent\", None) else \"command-output-temporary.md\"),\n            errors=errors).rstrip()\n\n\nclass CommandArchive:\n    \"\"\"Own files once per registry/session; reload candidates borrow this owner.\"\"\"\n"
+    },
+    {
+      "id": "SlipAgent/src/slipagent/tools/output.py:136-185",
+      "path": "SlipAgent/src/slipagent/tools/output.py",
+      "start_line": 136,
+      "end_line": 185,
+      "text": "            errors=errors).rstrip()\n\n\nclass CommandArchive:\n    \"\"\"Own files once per registry/session; reload candidates borrow this owner.\"\"\"\n\n    def __init__(self, quota_bytes: int, *, directory: Path | None = None) -> None:\n        if type(quota_bytes) is not int or quota_bytes < 1:\n            raise ValueError(\"Command archive quota must be a positive integer\")\n        self.quota_bytes = quota_bytes\n        self.used_bytes = 0\n        self.logs: dict[str, CommandLog] = {}\n        self.artifacts: Any = None\n        self._parent = directory\n        self._temporary: tempfile.TemporaryDirectory[str] | None = None\n\n    @property\n    def directory(self) -> Path:\n        persistent: Path | None = getattr(self, \"_persistent\", None)\n        if persistent is not None:\n            return persistent\n        if self._temporary is None:\n            self._temporary = tempfile.TemporaryDirectory(prefix=\"slipagent-logs-\", dir=self._parent)\n        return Path(self._temporary.name)\n\n    def use_directory(self, directory: Path, on_log: Callable[[CommandLog], None]) -> None:\n        \"\"\"Attach private durable storage; clear detaches it without deleting it.\"\"\"\n        self._persistent: Path | None = directory\n        self.on_log: Callable[[CommandLog], None] | None = on_log\n\n    def start(self, command: str, *, step_id: int | None = None, call_id: str | None = None) -> CommandLog:\n        invocation = current_invocation.get()\n        if invocation is not None and step_id is None and call_id is None:\n            step_id, call_id = invocation\n        log = CommandLog(self, command, step_id, call_id)\n        self.logs[log.id] = log\n        callback = getattr(self, \"on_log\", None)\n        if callback is not None:\n            callback(log)\n        return log\n\n    def clear(self) -> None:\n        for log in self.logs.values():\n            log.finish(log.returncode, log.timed_out)\n        if self._temporary is not None:\n            self._temporary.cleanup()\n            self._temporary = None\n        self.logs.clear()\n        self.used_bytes = 0\n        self._persistent = None\n"
+    },
+    {
+      "id": "SlipAgent/src/slipagent/tools/output.py:181-230",
+      "path": "SlipAgent/src/slipagent/tools/output.py",
+      "start_line": 181,
+      "end_line": 230,
+      "text": "            self._temporary.cleanup()\n            self._temporary = None\n        self.logs.clear()\n        self.used_bytes = 0\n        self._persistent = None\n        self.on_log = None\n\n    async def aclose(self) -> None:\n        self.clear()\n\n\nclass ReadCommandOutputTool(Tool):\n    parameter_prompts = 'tools/read-command-output-parameters.json'\n    name = \"read_command_output\"\n    progress_exempt = True  # Re-reading a log tail is deliberate polling.\n    description_prompt = 'tools/read-command-output.md'\n    description = load_prompt(description_prompt)\n    parameters = {\"type\": \"object\", \"properties\": {\n        \"log_id\": {\"type\": \"string\"}, \"step_id\": {\"type\": \"integer\", \"minimum\": 1},\n        \"call_id\": {\"type\": \"string\"}, \"stream\": {\"type\": \"string\", \"enum\": [\"stdout\", \"stderr\"]},\n        \"offset\": {\"type\": \"integer\", \"minimum\": 0,\n                   \"description\": \"\"},\n        \"limit\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": MAX_OUTPUT_CHARS,\n                  \"description\": \"\"},\n        \"tail\": {\"type\": \"boolean\", \"description\": \"\"},\n    }}\n\n    def __init__(self, archive: CommandArchive) -> None:\n        self.archive = archive\n\n    async def run(self, *, log_id: str | None = None, step_id: int | None = None,\n                  call_id: str | None = None, stream: str = \"stdout\", offset: int = 0,\n                  limit: int = MAX_OUTPUT_CHARS, tail: bool = False) -> ToolResult:\n        if log_id is None:\n            records = [log.metadata() for log in self.archive.logs.values()\n                       if (step_id is None or log.step_id == step_id) and (call_id is None or log.call_id == call_id)]\n            # Listing offsets and limits count records, not characters.\n            page = records[offset:offset + limit]\n            end = offset + len(page)\n            return ToolResult.ok({\"logs\": page, \"total_logs\": len(records),\n                                            \"offset_unit\": \"records\", \"limit_unit\": \"records\",\n                                            \"next_offset\": end if end < len(records) else None})\n        log = self.archive.logs.get(log_id)\n        if log is None:\n            return ToolResult.error(\"Unknown command log in this session. Omit log_id to list available logs.\")\n        target = log.streams[stream]\n        content = \"\"\n        start = offset\n        try:\n            if target.path is not None:\n"
+    },
+    {
+      "id": "SlipAgent/src/slipagent/tools/output.py:226-255",
+      "path": "SlipAgent/src/slipagent/tools/output.py",
+      "start_line": 226,
+      "end_line": 255,
+      "text": "        target = log.streams[stream]\n        content = \"\"\n        start = offset\n        try:\n            if target.path is not None:\n                with target.path.open(\"rb\") as file:\n                    if tail:\n                        start = max(0, target.retained_bytes - limit * 4)\n                    file.seek(start)\n                    raw = file.read(max(0, min(limit * 4, target.retained_bytes - start)))\n                    if tail:\n                        while raw and raw[0] & 0xC0 == 0x80:\n                            raw, start = raw[1:], start + 1\n                        text = raw.decode(\"utf-8\")\n                        content = text[-limit:]\n                        start += len(text[:-limit].encode(\"utf-8\"))\n                    else:\n                        # A maximum-size byte read may stop inside its final\n                        # code point. Keep that code point for the next page.\n                        import codecs\n                        content = codecs.getincrementaldecoder(\"utf-8\")().decode(raw, final=False)[:limit]\n        except (OSError, UnicodeError) as exc:\n            return ToolResult.error(f\"Cannot read log at byte offset {offset}: {exc}. Use offsets returned by previous pages.\")\n        end = start + len(content.encode(\"utf-8\"))\n        return ToolResult.ok({\"log_id\": log.id, \"step_id\": log.step_id, \"call_id\": log.call_id,\n            \"stream\": stream, \"offset\": start, \"next_offset\": end if end < target.retained_bytes else None,\n            \"offset_unit\": \"UTF-8 bytes\", \"limit_unit\": \"characters\",\n            \"retained_bytes\": target.retained_bytes, \"lost_bytes\": target.lost_bytes,\n            \"retention_error\": target.error, \"finished\": log.finished, \"returncode\": log.returncode,\n            \"timed_out\": log.timed_out, \"content\": content})\n"
+    },
+    {
+      "id": "SlipAgent/src/slipagent/clipboard.py:1-35",
+      "path": "SlipAgent/src/slipagent/clipboard.py",
+      "start_line": 1,
+      "end_line": 35,
+      "text": "\"\"\"Copy user-selected text through an installed clipboard utility or OSC 52.\"\"\"\n\nfrom __future__ import annotations\n\nimport base64\nimport os\nimport shutil\nimport subprocess\n\n\ndef copy_to_clipboard(text: str) -> bool:\n    \"\"\"Return whether a local clipboard utility accepted the text.\"\"\"\n    choices = []\n    if os.environ.get(\"WAYLAND_DISPLAY\"):\n        choices.append([\"wl-copy\"])\n    if os.environ.get(\"DISPLAY\"):\n        choices.extend([[\"xclip\", \"-selection\", \"clipboard\"], [\"xsel\", \"--clipboard\", \"--input\"]])\n    if os.name != \"nt\":\n        choices.append([\"pbcopy\"])\n    for command in choices:\n        if shutil.which(command[0]) is None:\n            continue\n        try:\n            subprocess.run(command, input=text.encode(\"utf-8\"), timeout=2, check=True,\n                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n        except (OSError, subprocess.SubprocessError):\n            continue\n        return True\n    return False\n\n\ndef clipboard_sequence(text: str) -> str:\n    \"\"\"Construct a trusted clipboard control, never accepting raw escape data.\"\"\"\n    encoded = base64.b64encode(text.encode(\"utf-8\")).decode(\"ascii\")\n    return f\"\\x1b]52;c;{encoded}\\x07\"\n"
+    }
+  ],
+  "queries": [
+    {
+      "id": "q01",
+      "category": "embedding",
+      "text": "Reuse the locally downloaded encoder files before contacting the model hosting service.",
+      "target": {
+        "path": "Dots/codeindex/embed.py",
+        "line": 74,
+        "anchor": "if all(path.is_file() for path in files.values()):"
+      },
+      "relevant": [
+        "Dots/codeindex/embed.py:46-95"
+      ]
+    },
+    {
+      "id": "q02",
+      "category": "embedding",
+      "text": "Ignore padding when averaging token representations and scale the resulting vector to unit length.",
+      "target": {
+        "path": "Dots/codeindex/embed.py",
+        "line": 138,
+        "anchor": "pooled = (hidden * mask).sum(axis=1)"
+      },
+      "relevant": [
+        "Dots/codeindex/embed.py:91-140",
+        "Dots/codeindex/embed.py:136-185"
+      ]
+    },
+    {
+      "id": "q03",
+      "category": "embedding",
+      "text": "Fingerprint the actual model weights and tokenizer so incompatible embeddings cannot share an index.",
+      "target": {
+        "path": "Dots/codeindex/embed.py",
+        "line": 112,
+        "anchor": "fingerprint.update(block)"
+      },
+      "relevant": [
+        "Dots/codeindex/embed.py:91-140"
+      ]
+    },
+    {
+      "id": "q04",
+      "category": "embedding",
+      "text": "Keep inference from consuming every processor core on the machine.",
+      "target": {
+        "path": "Dots/codeindex/embed.py",
+        "line": 103,
+        "anchor": "options.intra_op_num_threads = 2"
+      },
+      "relevant": [
+        "Dots/codeindex/embed.py:91-140"
+      ]
+    },
+    {
+      "id": "q05",
+      "category": "storage",
+      "text": "Save source records and the nearest-neighbor graph atomically, keeping the previous version if publication fails.",
+      "target": {
+        "path": "Dots/codeindex/storage.py",
+        "line": 114,
+        "anchor": "connection.commit()"
+      },
+      "relevant": [
+        "Dots/codeindex/storage.py:91-140"
+      ]
+    },
+    {
+      "id": "q06",
+      "category": "storage",
+      "text": "Notice when another process has published a new search graph and reload the cached copy.",
+      "target": {
+        "path": "Dots/codeindex/storage.py",
+        "line": 81,
+        "anchor": "if self._index is not None and self._revision == revision:"
+      },
+      "relevant": [
+        "Dots/codeindex/storage.py:46-95"
+      ]
+    },
+    {
+      "id": "q07",
+      "category": "storage",
+      "text": "Reject embeddings with the wrong size, infinite values, or zero magnitude before storing them.",
+      "target": {
+        "path": "Dots/codeindex/storage.py",
+        "line": 158,
+        "anchor": "if not np.isfinite(matrix).all()"
+      },
+      "relevant": [
+        "Dots/codeindex/storage.py:136-185"
+      ]
+    },
+    {
+      "id": "q08",
+      "category": "storage",
+      "text": "Find approximate cosine neighbors, then fetch only their matching source excerpts by identifier.",
+      "target": {
+        "path": "Dots/codeindex/storage.py",
+        "line": 205,
+        "anchor": "matches = index.search"
+      },
+      "relevant": [
+        "Dots/codeindex/storage.py:181-230"
+      ]
+    },
+    {
+      "id": "q09",
+      "category": "storage",
+      "text": "Keep the configuration and source data consistent while another writer updates the database.",
+      "target": {
+        "path": "Dots/codeindex/storage.py",
+        "line": 134,
+        "anchor": "connection.execute(\"BEGIN\")"
+      },
+      "relevant": [
+        "Dots/codeindex/storage.py:91-140"
+      ]
+    },
+    {
+      "id": "q10",
+      "category": "indexing",
+      "text": "Skip rereading and re-embedding a file whose timestamp and byte count have not changed.",
+      "target": {
+        "path": "Dots/codeindex/search.py",
+        "line": 72,
+        "anchor": "if old and old[\"mtime_ns\"] == before.st_mtime_ns"
+      },
+      "relevant": [
+        "Dots/codeindex/search.py:46-95"
+      ]
+    },
+    {
+      "id": "q11",
+      "category": "indexing",
+      "text": "Avoid recomputing embeddings when a file was touched but its contents stayed identical.",
+      "target": {
+        "path": "Dots/codeindex/search.py",
+        "line": 81,
+        "anchor": "if old and old[\"digest\"] == digest:"
+      },
+      "relevant": [
+        "Dots/codeindex/search.py:46-95"
+      ]
+    },
+    {
+      "id": "q12",
+      "category": "indexing",
+      "text": "Remove previously indexed source files that have disappeared from the workspace.",
+      "target": {
+        "path": "Dots/codeindex/search.py",
+        "line": 94,
+        "anchor": "for name in previous.keys() - seen:"
+      },
+      "relevant": [
+        "Dots/codeindex/search.py:46-95",
+        "Dots/codeindex/search.py:91-112"
+      ]
+    },
+    {
+      "id": "q13",
+      "category": "indexing",
+      "text": "Abort an update when a source file changes during the read.",
+      "target": {
+        "path": "Dots/codeindex/search.py",
+        "line": 78,
+        "anchor": "raise OSError(f\"File changed while indexing; retry: {source}\")"
+      },
+      "relevant": [
+        "Dots/codeindex/search.py:46-95"
+      ]
+    },
+    {
+      "id": "q14",
+      "category": "indexing",
+      "text": "Refuse a semantic query when the database was built using a different encoder.",
+      "target": {
+        "path": "Dots/codeindex/search.py",
+        "line": 110,
+        "anchor": "if configuration[\"embedding_id\"] != self._model_identity()"
+      },
+      "relevant": [
+        "Dots/codeindex/search.py:91-112"
+      ]
+    },
+    {
+      "id": "q15",
+      "category": "chunking",
+      "text": "Prevent recursive traversal from descending into dependency folders and build artifacts.",
+      "target": {
+        "path": "Dots/codeindex/indexer.py",
+        "line": 131,
+        "anchor": "dirnames[:] = [d for d in dirnames if d not in exclude]"
+      },
+      "relevant": [
+        "Dots/codeindex/indexer.py:91-140"
+      ]
+    },
+    {
+      "id": "q16",
+      "category": "chunking",
+      "text": "Preserve a few lines of context between adjacent source excerpts.",
+      "target": {
+        "path": "Dots/codeindex/indexer.py",
+        "line": 198,
+        "anchor": "start = end - overlap"
+      },
+      "relevant": [
+        "Dots/codeindex/indexer.py:181-200"
+      ]
+    },
+    {
+      "id": "q17",
+      "category": "cli",
+      "text": "Emit complete search excerpts as machine-readable JSON rather than shortening the displayed text.",
+      "target": {
+        "path": "Dots/codeindex/cli.py",
+        "line": 130,
+        "anchor": "if args.json:"
+      },
+      "relevant": [
+        "Dots/codeindex/cli.py:91-140"
+      ]
+    },
+    {
+      "id": "q18",
+      "category": "cli",
+      "text": "Inspect stored index metadata without initializing the embedding model.",
+      "target": {
+        "path": "Dots/codeindex/cli.py",
+        "line": 86,
+        "anchor": "if args.command == \"info\":"
+      },
+      "relevant": [
+        "Dots/codeindex/cli.py:46-95"
+      ]
+    },
+    {
+      "id": "q19",
+      "category": "workspace",
+      "text": "Resolve a supplied filename against the project root and reject paths outside the allowed area.",
+      "target": {
+        "path": "SlipAgent/src/slipagent/workspace.py",
+        "line": 83,
+        "anchor": "if not self.allows(resolved):"
+      },
+      "relevant": [
+        "SlipAgent/src/slipagent/workspace.py:46-95"
+      ]
+    },
+    {
+      "id": "q20",
+      "category": "workspace",
+      "text": "Permit access to temporary files while retaining the project boundary for other paths.",
+      "target": {
+        "path": "SlipAgent/src/slipagent/workspace.py",
+        "line": 98,
+        "anchor": "or path.is_relative_to(self.temporary_directory)"
+      },
+      "relevant": [
+        "SlipAgent/src/slipagent/workspace.py:91-140"
+      ]
+    },
+    {
+      "id": "q21",
+      "category": "workspace",
+      "text": "Check whether a path belongs to the project independently of unrestricted access mode.",
+      "target": {
+        "path": "SlipAgent/src/slipagent/workspace.py",
+        "line": 103,
+        "anchor": "            path.relative_to(self.root)"
+      },
+      "relevant": [
+        "SlipAgent/src/slipagent/workspace.py:91-140"
+      ]
+    },
+    {
+      "id": "q22",
+      "category": "workspace",
+      "text": "Skip file symlinks whose targets escape the permitted directories during traversal.",
+      "target": {
+        "path": "SlipAgent/src/slipagent/workspace.py",
+        "line": 136,
+        "anchor": "if candidate.is_symlink() and not self.allows(candidate.resolve()):"
+      },
+      "relevant": [
+        "SlipAgent/src/slipagent/workspace.py:91-140",
+        "SlipAgent/src/slipagent/workspace.py:136-163"
+      ]
+    },
+    {
+      "id": "q23",
+      "category": "cleanup",
+      "text": "Finish resource cleanup even if the task waiting for it is cancelled.",
+      "target": {
+        "path": "SlipAgent/src/slipagent/lifecycle.py",
+        "line": 24,
+        "anchor": "await asyncio.shield(task)"
+      },
+      "relevant": [
+        "SlipAgent/src/slipagent/lifecycle.py:1-50"
+      ]
+    },
+    {
+      "id": "q24",
+      "category": "cleanup",
+      "text": "Cancel and drain owned background work before running cleanup callbacks in reverse order.",
+      "target": {
+        "path": "SlipAgent/src/slipagent/lifecycle.py",
+        "line": 78,
+        "anchor": "await asyncio.gather(*tasks, return_exceptions=True)"
+      },
+      "relevant": [
+        "SlipAgent/src/slipagent/lifecycle.py:46-95"
+      ]
+    },
+    {
+      "id": "q25",
+      "category": "cleanup",
+      "text": "Make simultaneous close requests wait on the same retained teardown task.",
+      "target": {
+        "path": "SlipAgent/src/slipagent/lifecycle.py",
+        "line": 94,
+        "anchor": "self._closing = asyncio.create_task(self._close()"
+      },
+      "relevant": [
+        "SlipAgent/src/slipagent/lifecycle.py:46-95"
+      ]
+    },
+    {
+      "id": "q26",
+      "category": "instructions",
+      "text": "Discover repository guidance from several editor-specific rule folders and load it in sorted order.",
+      "target": {
+        "path": "SlipAgent/src/slipagent/instructions.py",
+        "line": 89,
+        "anchor": "for name in sorted(paths):"
+      },
+      "relevant": [
+        "SlipAgent/src/slipagent/instructions.py:46-95"
+      ]
+    },
+    {
+      "id": "q27",
+      "category": "instructions",
+      "text": "Block an edit when applicable repository guidance has changed since it was shown to the model.",
+      "target": {
+        "path": "SlipAgent/src/slipagent/instructions.py",
+        "line": 147,
+        "anchor": "if current.get(scope, \"\") != self.delivered.get(scope, \"\")"
+      },
+      "relevant": [
+        "SlipAgent/src/slipagent/instructions.py:136-160"
+      ]
+    },
+    {
+      "id": "q28",
+      "category": "instructions",
+      "text": "Remember exactly which instruction snapshot was included in a model request.",
+      "target": {
+        "path": "SlipAgent/src/slipagent/instructions.py",
+        "line": 118,
+        "anchor": "self.delivered = dict(snapshot)"
+      },
+      "relevant": [
+        "SlipAgent/src/slipagent/instructions.py:91-140"
+      ]
+    },
+    {
+      "id": "q29",
+      "category": "repetition",
+      "text": "Detect an agent cycling through the same tool results and stop after recovery guidance did not help.",
+      "target": {
+        "path": "SlipAgent/src/slipagent/progress.py",
+        "line": 73,
+        "anchor": "stopping = (len(signatures) >= period * 4"
+      },
+      "relevant": [
+        "SlipAgent/src/slipagent/progress.py:46-95"
+      ]
+    },
+    {
+      "id": "q30",
+      "category": "repetition",
+      "text": "Exclude changing command log identifiers when deciding whether tool output is unchanged.",
+      "target": {
+        "path": "SlipAgent/src/slipagent/progress.py",
+        "line": 48,
+        "anchor": "content = content.removesuffix"
+      },
+      "relevant": [
+        "SlipAgent/src/slipagent/progress.py:1-50",
+        "SlipAgent/src/slipagent/progress.py:46-95"
+      ]
+    },
+    {
+      "id": "q31",
+      "category": "repetition",
+      "text": "Detect sustained repeated prose in a streamed response while ignoring fenced source code.",
+      "target": {
+        "path": "SlipAgent/src/slipagent/progress.py",
+        "line": 123,
+        "anchor": "elif not self.fence and self._prose(line):"
+      },
+      "relevant": [
+        "SlipAgent/src/slipagent/progress.py:91-140"
+      ]
+    },
+    {
+      "id": "q32",
+      "category": "editing",
+      "text": "Match a multiline edit target regardless of whether the file uses Unix or Windows line endings.",
+      "target": {
+        "path": "SlipAgent/src/slipagent/tools/editing.py",
+        "line": 20,
+        "anchor": "pattern = \"(?:\\r\\n|\\r|\\n)\".join"
+      },
+      "relevant": [
+        "SlipAgent/src/slipagent/tools/editing.py:1-50"
+      ]
+    },
+    {
+      "id": "q33",
+      "category": "editing",
+      "text": "Refuse replacement edits that overlap in the original file.",
+      "target": {
+        "path": "SlipAgent/src/slipagent/tools/editing.py",
+        "line": 81,
+        "anchor": "if current[0] < previous[1]:"
+      },
+      "relevant": [
+        "SlipAgent/src/slipagent/tools/editing.py:46-95"
+      ]
+    },
+    {
+      "id": "q34",
+      "category": "editing",
+      "text": "Show nearby actual source when a requested replacement target cannot be found.",
+      "target": {
+        "path": "SlipAgent/src/slipagent/tools/editing.py",
+        "line": 47,
+        "anchor": "notes.append(\"Nearby actual source"
+      },
+      "relevant": [
+        "SlipAgent/src/slipagent/tools/editing.py:1-50",
+        "SlipAgent/src/slipagent/tools/editing.py:46-95"
+      ]
+    },
+    {
+      "id": "q35",
+      "category": "output",
+      "text": "Stop retaining additional command output at the session quota without splitting a UTF-8 character.",
+      "target": {
+        "path": "SlipAgent/src/slipagent/tools/output.py",
+        "line": 60,
+        "anchor": "kept = raw[:remaining].decode"
+      },
+      "relevant": [
+        "SlipAgent/src/slipagent/tools/output.py:46-95"
+      ]
+    },
+    {
+      "id": "q36",
+      "category": "output",
+      "text": "Read a tail page of a saved command stream and return byte offsets for subsequent requests.",
+      "target": {
+        "path": "SlipAgent/src/slipagent/tools/output.py",
+        "line": 241,
+        "anchor": "start += len(text[:-limit].encode(\"utf-8\"))"
+      },
+      "relevant": [
+        "SlipAgent/src/slipagent/tools/output.py:226-255"
+      ]
+    },
+    {
+      "id": "q37",
+      "category": "output",
+      "text": "Make completed command output durable before closing its file handle.",
+      "target": {
+        "path": "SlipAgent/src/slipagent/tools/output.py",
+        "line": 92,
+        "anchor": "os.fsync(stream.file.fileno())"
+      },
+      "relevant": [
+        "SlipAgent/src/slipagent/tools/output.py:46-95",
+        "SlipAgent/src/slipagent/tools/output.py:91-140"
+      ]
+    },
+    {
+      "id": "q38",
+      "category": "clipboard",
+      "text": "Try native clipboard utilities appropriate to the desktop environment.",
+      "target": {
+        "path": "SlipAgent/src/slipagent/clipboard.py",
+        "line": 17,
+        "anchor": "choices.extend([[\"xclip\""
+      },
+      "relevant": [
+        "SlipAgent/src/slipagent/clipboard.py:1-35"
+      ]
+    },
+    {
+      "id": "q39",
+      "category": "clipboard",
+      "text": "Encode copied text into a terminal clipboard escape sequence without accepting raw escape data.",
+      "target": {
+        "path": "SlipAgent/src/slipagent/clipboard.py",
+        "line": 34,
+        "anchor": "encoded = base64.b64encode"
+      },
+      "relevant": [
+        "SlipAgent/src/slipagent/clipboard.py:1-35"
+      ]
+    }
+  ]
+}

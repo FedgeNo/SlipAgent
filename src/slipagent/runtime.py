@@ -28,6 +28,10 @@ if TYPE_CHECKING:
 
 # Wire/state contracts and resource owners stay in the running frame.
 CORE_MODULES = frozenset({"", "runtime", "config", "types", "data_text", "workspace", "tools.base", "mcp", "lifecycle", "resources", "work"})
+# Native models and an indexing worker keep one generation until shutdown.
+CORE_MODULES |= frozenset({"semantic", "semantic.cpu", "semantic.embed", "semantic.indexer",
+                           "semantic.retrieval", "semantic.search", "semantic.storage",
+                           "semantic.watcher", "semantic.service"})
 POLL_INTERVAL = .5
 _CLASS_INTERNALS = frozenset({
     "__dict__", "__weakref__", "__slots__", "__module__", "__classcell__",

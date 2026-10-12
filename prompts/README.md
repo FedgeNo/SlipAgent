@@ -1,5 +1,10 @@
 # Editable Prompts
 
+For implementation changes, tool registration, reload boundaries, and verification,
+see the [harness editing guide](../docs/harness-development.md). Tool documentation
+and argument explanations are editable here; executable schemas and behavior
+remain in their Python owners.
+
 Edit these files with any text editor. SlipAgent reads them when it builds a model request or tool definition; prompt changes do not require a restart or Python edits. The `.md` resources contain Markdown instructions. JSON files contain machine-readable description mappings.
 
 SlipAgent strips leading and trailing whitespace and surrounds each rendered prompt with a newline. Interior whitespace and paragraph boundaries remain intact. Missing prompt files report their full path and must be restored.

@@ -39,7 +39,8 @@ conversation or restarting the terminal.
 [Architecture](#architecture) · [Self-Editing](#editing-the-running-harness) ·
 [Usage](#use) · [Tools](#tools) · [Development](#development) ·
 [Automation](#headless-automation-and-evaluations) ·
-[Contributor Guide](CONTRIBUTING.md) · [Internal Contracts](docs/architecture.md)
+[Contributor Guide](CONTRIBUTING.md) · [Internal Contracts](docs/architecture.md) ·
+[Harness Editing Guide](docs/harness-development.md) · [Editable Prompts](prompts/README.md)
 
 ## Quick Start
 
@@ -1375,6 +1376,28 @@ and output keep it partial by design: use `glob`, `grep`, and `read_file` for
 details. It counts against the request budget and is dropped if needed to fit
 the current input. The map does not authorize edits or replace source reads.
 
+When the map does not show where behavior lives, the model can load
+`semantic_search` through `load_tools`. It returns five complete ranked excerpts
+by default, with relative paths and line numbers. Short queries of five or six
+meaningful words work best. Ranking combines the local quantized BGE encoder
+with SQLite keyword matches and filename context; scores are relative rankings,
+not confidence estimates. Use ordinary search when results are weak, and read
+current source before editing an indexed excerpt.
+
+Semantic search starts only on its first call. It reuses locally cached model
+assets or downloads missing assets, builds a persistent index under the private
+user-data directory's `semantic/` folder, and watches changes for the rest of the
+session. Source and queries stay local. Updates coalesce save events, hash affected
+files, and reconcile metadata every 30 seconds; queued changes flush before a
+lookup. Reopening a session reuses unchanged vectors. Dependencies, hidden paths,
+symlinks, Git-ignored files, and the harness's data directory are excluded.
+The first build can take time on large projects. CPU inference uses one chunk
+per call and the physical core count, with a two-thread fallback. No model or
+indexing worker is loaded just to display the tool catalog.
+
+The [semantic retrieval benchmarks](benchmarks/semantic/README.md) retain the
+complete evaluation data and reproduction commands.
+
 Useful flags:
 
 | Flag | Effect |
@@ -1598,6 +1621,7 @@ The complete built-in tool set is:
 | `create_python_environment` | Create and select a Python venv when none is selected; repeated calls reuse the selected interpreter and never recreate existing directories. |
 | `edit_file` | Replace one exact string or an `edits` array against one original file. All matches must validate before an atomic write; returns a bounded diff and helpful match diagnostics. |
 | `grep` | Regex search across file contents, with an optional glob filter and a 120-second timeout. |
+| `semantic_search` | Deferred local search by behavior or purpose when the repository map is insufficient; returns complete indexed excerpts with paths and line numbers. |
 | `glob` | Find files and directories by name pattern. |
 | `list_dir` | List one directory, directories first. |
 | `run_command` | Run a shell command and capture output; `background=true` returns a managed job ID. |

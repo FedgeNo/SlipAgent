@@ -4,6 +4,8 @@ This guide is for people and coding agents modifying the harness. Read the
 workspace's applicable `AGENTS.md`, `CLAUDE.md`, and scoped instruction files
 first. The [README](README.md) covers running the application;
 [Internal Contracts](docs/architecture.md) explains how its parts fit together.
+The [harness editing guide](docs/harness-development.md) connects tool
+documentation, extension steps, live reload, verification, and release baselines.
 
 ## Start With the Correct Environment
 

@@ -20,6 +20,7 @@ from .output import CommandArchive, ReadCommandOutputTool
 from .python import CreatePythonEnvironmentTool
 from .discovery import LoadToolsTool
 from .http import HttpFetchTool
+from .semantic import SemanticSearchTool
 
 __all__ = [
     "AnswerTool",
@@ -38,6 +39,7 @@ __all__ = [
     "HttpFetchTool",
     "ReadFileTool",
     "RunCommandTool",
+    "SemanticSearchTool",
     "Tool",
     "ToolRegistry",
     "ToolResult",
@@ -91,6 +93,7 @@ def build_default_registry(
             *file_tools(workspace, artifacts),
             *path_tools(workspace),
             *search_tools(workspace),
+            SemanticSearchTool(workspace, services),
             *navigate_tools(workspace),
             *shell_tools(workspace, archive, services.get("command_jobs")),
             *([CommandJobsTool(services["command_jobs"])] if "command_jobs" in services else []),

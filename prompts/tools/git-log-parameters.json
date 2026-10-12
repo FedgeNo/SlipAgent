@@ -1,4 +1,5 @@
 {
     "properties/repo": "Repository directory, workspace-relative or absolute (default '.'); follows Workspace Access mode.",
-    "properties/timeout": "Timeout in seconds (default 120, max 600)."
+    "properties/timeout": "Timeout in seconds (default 120, max 600).",
+    "properties/limit": "Maximum commits to return, from 1 to 100,000; defaults to 10."
 }

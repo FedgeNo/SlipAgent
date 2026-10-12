@@ -1,0 +1,6 @@
+{
+    "properties/action": "Operation: list retained jobs, inspect status, wait for completion, or stop a job and drain its cleanup.",
+    "properties/job_id": "Managed job ID returned by run_command or action=list; required for status, wait, and stop. Jobs belong to this running process.",
+    "properties/timeout": "Maximum wait in seconds for action=wait, from 0.1 to 30; defaults to 10. Waiting does not cancel a still-running job.",
+    "properties/offset": "Zero-based job index for action=list; defaults to 0 and returns every job from that position onward."
+}

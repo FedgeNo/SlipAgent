@@ -12,6 +12,13 @@ dependencies = [
     "wcwidth>=0.9,<1",
     "tabulate>=0.9,<1",
     "tree-sitter-language-pack>=0.13,<1",
+    "usearch>=2.16,<3",
+    "onnxruntime>=1.20,<2",
+    "tokenizers>=0.20,<1",
+    "huggingface-hub>=2.2,<3",
+    "numpy>=1.26,<3",
+    "psutil>=5.9,<8",
+    "watchdog>=4,<7",
 ]
 
 [project.optional-dependencies]
@@ -46,6 +53,7 @@ include = [
     "/tests",
     "/scripts",
     "/docs",
+    "/benchmarks/semantic",
     "/README.md",
     "/CONTRIBUTING.md",
     "/pyproject.toml",
@@ -73,3 +81,7 @@ warn_unreachable = true
 [[tool.mypy.overrides]]
 module = ["tests.*"]
 disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = ["onnxruntime", "psutil", "usearch.*"]
+ignore_missing_imports = true

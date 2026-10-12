@@ -1,4 +1,8 @@
 {
+    "properties/log_id": "Retained command log ID to read. Omit to list available logs, optionally filtered by step_id and call_id.",
+    "properties/step_id": "One-based history step filter when listing logs. Use with call_id to identify one invocation's retained output.",
+    "properties/call_id": "Tool-call ID filter when listing logs; pair with step_id because call IDs are unique within a step.",
+    "properties/stream": "Retained stream to read with log_id: stdout (default) or stderr.",
     "properties/offset": "UTF-8 byte offset for stream pages; record index when listing logs. Use a supplied next_offset for a needed additional page.",
     "properties/limit": "Characters per stream read (default and maximum 32,000,000); number of records when listing logs.",
     "properties/tail": "With log_id, return the last limit characters, ignoring offset."

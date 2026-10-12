@@ -1,0 +1,7 @@
+{
+    "properties/step_id": "One-based history step to retrieve. Omit to search or list saved steps; required for selecting parts or a call_id.",
+    "properties/call_id": "Tool-call ID within the selected step. With section=all returns its observation; with tool_calls or tool_results selects that call's entries. Cannot combine with sections or other section values.",
+    "properties/section": "One original part to retrieve from step_id; defaults to all. user returns that step's new user messages. Cannot combine with sections.",
+    "properties/sections": "Nonempty array of distinct original part names to retrieve together from step_id. Cannot combine with section or call_id; returns complete parts without paging.",
+    "properties/query": "Case-insensitive text to search across complete history and summaries when step_id is omitted; an empty query lists all steps."
+}

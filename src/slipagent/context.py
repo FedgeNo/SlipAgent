@@ -539,6 +539,7 @@ class ConversationHistory:
 
 class RecallHistoryTool(Tool):
     name = "recall_history"
+    parameter_prompts = "tools/recall-history-parameters.json"
     description_prompt = 'tools/recall-history.md'
     description = load_prompt(description_prompt)
     parameters = {

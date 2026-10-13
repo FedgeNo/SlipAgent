@@ -234,7 +234,7 @@ async def test_menu_back_link_cancels_only_when_its_word_is_clicked(display):
             await task
 
 
-@pytest.mark.parametrize("action", ["save", "discard", "cancel", "save_failure"])
+@pytest.mark.parametrize("action", ["clean", "save", "discard", "cancel", "save_failure"])
 async def test_editor_unsaved_choices_preserve_or_save_as_selected(display, tmp_path, monkeypatch, action):
     from unittest.mock import AsyncMock
     path = tmp_path / "file.txt"
@@ -244,17 +244,24 @@ async def test_editor_unsaved_choices_preserve_or_save_as_selected(display, tmp_
         ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
         try:
             await ui._open_editor_now(path)
-            ui._editor_input.text = "edited\n"
+            if action != "clean":
+                ui._editor_input.text = "edited\n"
             choose = AsyncMock(return_value="save" if action == "save_failure" else action)
             monkeypatch.setattr(ui, "choose", choose)
             if action == "save_failure":
                 monkeypatch.setattr(ui._editor_panel, "save", AsyncMock(return_value=False))
             await ui._close_editor()
-            choose.assert_awaited_once_with("Unsaved Changes", [("save", "Save"), ("discard", "Don't Save"), ("cancel", "Cancel")])
+            if action == "clean":
+                choose.assert_not_awaited()
+            else:
+                choose.assert_awaited_once_with("Unsaved Changes", [("save", "Save"), ("discard", "Don't Save"), ("cancel", "Cancel")])
             assert ui._editor_active is (action in {"cancel", "save_failure"})
             assert path.read_text() == ("edited\n" if action == "save" else "original\n")
             if ui._editor_active:
                 assert ui._editor_input.text == "edited\n"
+            else:
+                assert ui._notification_text() == "Select and right-click for text options."
+                assert all("status-flash" not in part[0] for part in ui._activity())
         finally:
             ui._close_transcript()
 

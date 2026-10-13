@@ -62,6 +62,11 @@ def model_prompt_profile(model: str) -> dict[str, Any]:
         raise PromptError(f"stream_tool_identity for {model} must be delta or snapshot")
     if profile.get("stream_tool_indices", "index") not in ("index", "id"):
         raise PromptError(f"stream_tool_indices for {model} must be index or id")
+    limits = profile.get("provider_context_limits", {})
+    if not isinstance(limits, dict) or any(
+            not isinstance(provider, str) or not provider.strip()
+            or type(limit) is not int or limit <= 0 for provider, limit in limits.items()):
+        raise PromptError(f"provider_context_limits for {model} must map provider tags to positive integer token limits")
     return profile
 
 

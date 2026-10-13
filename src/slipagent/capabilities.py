@@ -117,6 +117,23 @@ class ModelCapabilities(RequestProfile):
 
 
 
+def model_context_limit(model: str, capabilities: RequestProfile | None, length: int) -> int:
+    """Apply live local caps for every OpenRouter route eligible for the request."""
+    if not isinstance(capabilities, ModelCapabilities):
+        return length
+    from .prompts import model_prompt_profile
+    limits = model_prompt_profile(model).get("provider_context_limits", {})
+    for provider in capabilities.providers:
+        limit = limits.get(provider)
+        if limit is None:
+            limit = limits.get(provider.split("/", 1)[0])
+        if limit is not None:
+            # A request must fit every route that can receive it, including
+            # upstream input limits absent from the advertised token window.
+            length = min(length, limit)
+    return length
+
+
 def _reasoning_allowed(entry: dict[str, Any]) -> bool:
     return bool({"reasoning", "reasoning_effort", "include_reasoning"}.intersection(entry.get("supported_parameters", [])))
 

@@ -5,7 +5,10 @@
     },
     "dots-studio/dots-3-note-preview:free": {
         "structured_output": false,
-        "xml_tool_calls": true
+        "xml_tool_calls": true,
+        "provider_context_limits": {
+            "atlas-cloud": 256000
+        }
     },
     "z-ai/glm-5.3": {
         "tool_channel": "embedded",

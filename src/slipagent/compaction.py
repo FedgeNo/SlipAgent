@@ -14,7 +14,7 @@ import json
 from collections.abc import Callable
 from typing import Any
 
-from .capabilities import RequestProfile
+from .capabilities import RequestProfile, model_context_limit
 from .context import SUMMARY_MAX_CHARS, CompletedStep, HistoryStep, message_tokens
 from .api import APIClient, APIResponseError, APITransportError, RETRYABLE_STATUS
 from .types import Message, Usage
@@ -86,6 +86,7 @@ class StepCompactor:
             reserve = max_tokens or 8192
             if capabilities is not None:
                 context_limit = min(capabilities.context_length, capabilities.max_prompt_tokens or capabilities.context_length)
+                context_limit = model_context_limit(model, capabilities, context_limit)
                 if max_tokens is None:
                     reserve = min(reserve, max(256, context_limit // 8))
                 reserve = min(reserve, capabilities.max_completion_tokens or reserve)

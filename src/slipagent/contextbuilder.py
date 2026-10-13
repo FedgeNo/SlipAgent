@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .budget import ContextBudget
-from .capabilities import RequestProfile
+from .capabilities import RequestProfile, model_context_limit
 from .context import ContextError, ConversationHistory, tool_history_as_text
 from .data_text import render_data
 from .mcp import MCPTool
@@ -45,6 +45,8 @@ class ContextBuilder:
         capabilities: RequestProfile | None = None, preview: bool = False,
         repair: str = "", budget_fraction: float | None = None,
     ) -> list[Message]:
+        model_profile = model_prompt_profile(self.settings.model)
+        length = model_context_limit(self.settings.model, capabilities, length)
         sections = PromptSections()
         if self.settings.planning:
             saved_plan = next(((prior.id, message.content['content'])
@@ -97,7 +99,7 @@ class ContextBuilder:
             sections.add("schema", "Reply Format",
                          load_prompt('response-native-text.md'),
                          0, owner="protocol", dynamic=False)
-        for index, filename in enumerate(model_prompt_profile(self.settings.model).get("sections", [])):
+        for index, filename in enumerate(model_profile.get("sections", [])):
             sections.add(f"model_{index}", filename, load_prompt(filename),
                          5, owner="model", dynamic=False)
         sections.add("suggestions", "Optional Suggested Next Steps", load_prompt('response-suggestions.md'),

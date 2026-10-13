@@ -109,6 +109,36 @@ must not be enabled for fragmented-ID streams. Settings are validated and read
 for each streamed request, including after model selection or prompt edits.
 Integer IDs are represented as strings for subsequent API history.
 
+## Context Limits for Individual Providers
+
+An exact model profile can reduce the local context allowance for an
+OpenRouter provider without changing its advertised capabilities:
+
+```json
+{
+    "dots-studio/dots-3-note-preview:free": {
+        "provider_context_limits": {
+            "atlas-cloud": 256000
+        }
+    }
+}
+```
+
+Limits are positive integers in tokens. Base provider tags cover their suffix
+variants, such as `atlas-cloud/fp8`; an exact variant entry takes precedence.
+If several providers are eligible to receive a request, the smallest applicable
+cap governs that request. Routes containing only other providers retain their
+normal allowance. Existing smaller model, endpoint, or user limits still apply.
+Profiles are read on every context build, including previews, recovery, and
+background step summaries, so
+changes apply without refreshing cached provider metadata. History selection
+uses the reduced budget while retaining archived originals for retrieval.
+
+Dots3-Note Preview's free AtlasCloud route defaults to 256,000 tokens after
+repeated generic HTTP 400 responses when a user message exceeded approximately
+1 MiB. This is a conservative workaround; those errors did not confirm a
+specific provider byte limit.
+
 ## Reasoning, Examples, and Completion
 
 Complete leading `<think>…</think>` blocks are separated before detecting the

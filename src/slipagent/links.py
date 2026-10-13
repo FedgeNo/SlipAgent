@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from prompt_toolkit.formatted_text import StyleAndTextTuples
+from prompt_toolkit.formatted_text.utils import split_lines
+from prompt_toolkit.application.current import get_app
+from prompt_toolkit.data_structures import Point
+from prompt_toolkit.layout.controls import FormattedTextControl, UIContent, UIControl
 from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 
 
@@ -68,3 +72,49 @@ class TaskLink(ActionLink):
 
     def invoke(self) -> None:
         self.spawn(self.operation())
+
+
+def link_key(handler: Callable[..., object]) -> object:
+    """Identify freshly rendered links by their action rather than object identity."""
+    owner = getattr(handler, "__self__", None)
+    return owner.key if isinstance(owner, ActionLink) else handler
+
+
+def keyboard_content(control: UIControl, content: UIContent) -> UIContent:
+    """Highlight only the keyboard-selected action in the focused control."""
+    selected = control.__dict__.get("_keyboard_key")
+    if selected is None or get_app().layout.current_control is not control:
+        return content
+
+    def get_line(index: int) -> StyleAndTextTuples:
+        result: StyleAndTextTuples = []
+        for fragment in content.get_line(index):
+            if len(fragment) == 3 and link_key(fragment[2]) == selected:
+                result.append((fragment[0] + " class:keyboard-focus", fragment[1], fragment[2]))
+            else:
+                result.append(fragment)
+        return result
+
+    return UIContent(get_line=get_line, line_count=content.line_count,
+                     cursor_position=content.cursor_position, menu_position=content.menu_position,
+                     show_cursor=False)
+
+
+class ActionControl(FormattedTextControl):
+    """Expose formatted mouse actions to the shared keyboard focus route."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        kwargs.update(focusable=True, show_cursor=False)
+        super().__init__(*args, **kwargs)
+
+    def create_content(self, width: int, height: int | None) -> UIContent:
+        original = super().create_content(width, height)
+        # FormattedTextControl normally strips handlers from UIContent; retain
+        # them so focus and mouse activation share the exact rendered actions.
+        lines = list(split_lines(self._get_formatted_text_cached()))
+        content = UIContent(get_line=lambda index: lines[index], line_count=len(lines),
+                            cursor_position=original.cursor_position, show_cursor=False)
+        selected = self.__dict__.get("_keyboard_point")
+        if isinstance(selected, Point):
+            content.cursor_position = selected
+        return keyboard_content(self, content)

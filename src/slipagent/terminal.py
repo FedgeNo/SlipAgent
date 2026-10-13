@@ -36,7 +36,7 @@ from wcwidth import iter_graphemes, width as display_width, wrap
 from .transcript import TranscriptFile, WrappedTranscript
 from .uiwindows import TranscriptWindow
 from .focus import FocusCoordinator, FocusTarget
-from .links import CallbackLink, TaskLink, LinkHover
+from .links import ActionControl, ActionLink, CallbackLink, TaskLink, LinkHover, keyboard_content
 from .listpanels import TouchedPanel, CallsPanel, ChoicePanel, ListActions
 from .palette import FOOTER_BACKGROUND_COLOR, MENU_BACKGROUND_COLOR, MUTED_COLOR, USER_PROMPT_STYLE
 from .markdown import THEMES, MarkdownRenderer, code_blocks, literal
@@ -73,7 +73,11 @@ class TranscriptControl(UIControl):
         return self._mouse(mouse_event) if self._mouse is not None else NotImplemented
 
     def create_content(self, width: int, height: int | None) -> UIContent:
-        return self._content(width)
+        self.__dict__["_keyboard_links"] = self._mouse is not None
+        return keyboard_content(self, self._content(width))
+
+    def is_focusable(self) -> bool:
+        return self._mouse is not None
 
 
 class WordWrapInput(Processor):
@@ -179,6 +183,7 @@ class TerminalUI:
         self.input.window.style = "class:text-area class:user"
         self.input.window.height = Dimension.exact(5)
         self.transcript = TranscriptWindow(TranscriptControl(lambda width: self._transcript_content(width)))
+        self._ensure_transcript()
         self.app: Application[None] = Application(
             layout=self._layout(), key_bindings=self._bindings(),
             full_screen=True, input=input, output=self.output,
@@ -208,6 +213,8 @@ class TerminalUI:
         self.input.window.height = body_height
         self._menu_window.height = body_height
         self._editor_panel.controls.height = body_height
+        if not isinstance(self._editor_panel.controls.content, ActionControl):
+            self._editor_panel.controls.content = ActionControl(self._editor_panel.actions)
         self._editor_panel.controls.style = "class:menu"
         self._options_panel.field.window.height = body_height
         # Attach during layout rebuilds so existing sessions gain input wrapping.
@@ -216,13 +223,13 @@ class TerminalUI:
             self.input.control.input_processors = [*processors, WordWrapInput()]
         if self._input_label == "you › ":
             self._input_label = "> "
-        activity_row = VSplit([Window(FormattedTextControl(lambda: self._activity()), height=1),
-                              Window(FormattedTextControl(self._inspect_link), height=1, width=lambda: self._right_control_width(), align=WindowAlign.RIGHT)])
+        activity_row = VSplit([Window(ActionControl(lambda: self._activity()), height=1),
+                              Window(ActionControl(self._inspect_link), height=1, width=lambda: self._right_control_width(), align=WindowAlign.RIGHT)])
         scroll_row = VSplit([
-            Window(FormattedTextControl(lambda: self._activity()), height=1,
+            Window(ActionControl(lambda: self._activity()), height=1,
                    width=lambda: max(0, (self.output.get_size().columns - 18) // 2)),
-            Window(FormattedTextControl(self._scroll_bottom_link), height=1, width=18),
-            Window(FormattedTextControl(self._inspect_link), height=1, align=WindowAlign.RIGHT),
+            Window(ActionControl(self._scroll_bottom_link), height=1, width=18),
+            Window(ActionControl(self._inspect_link), height=1, align=WindowAlign.RIGHT),
         ])
         footer = HSplit([
             DynamicContainer(lambda: scroll_row if self._show_scroll_bottom() else activity_row),
@@ -230,12 +237,12 @@ class TerminalUI:
             self._bottom_row(menu=False),
         ], height=lambda: self._footer_rows(), style="class:footer")
         menu_footer = HSplit([
-            Window(FormattedTextControl(lambda: self._activity_notice([("class:menu-title", self._menu_title)])), height=1),
+            Window(ActionControl(lambda: self._activity_notice([("class:menu-title", self._menu_title)])), height=1),
             self._menu_window,
             self._bottom_row(menu=True),
         ], height=lambda: self._footer_rows(), style="class:footer class:menu")
         setting_footer = HSplit([
-            Window(FormattedTextControl(lambda: self._activity_notice([("class:menu-title", "Folder Opener")])), height=1),
+            Window(ActionControl(lambda: self._activity_notice([("class:menu-title", "Folder Opener")])), height=1),
             self._options_panel.field,
             self._bottom_row(menu=False),
         ], height=lambda: self._footer_rows(), style="class:footer class:menu")
@@ -310,26 +317,26 @@ class TerminalUI:
 
     def _primary_panel(self) -> FocusTarget:
         return (self._editor_input if self._editor_active else self._viewer_window if self._viewer_active else
-                self.context_window if self.context_visible else self.input)
+                self.context_window if self.context_visible else self.transcript)
 
     def _inspection_focused(self) -> bool:
         return (self._inspection_visible and self.output.get_size().columns >= 60
                 and self.app.layout.current_window in (self._files_window, self._calls_window))
 
-    def _cycle_panel(self) -> None:
-        if self.output.get_size().columns >= 60:
-            self._inspection_visible = True
-        self._focus.cycle()
+    def _cycle_panel(self, direction: int = 1) -> None:
+        self._focus.travel(direction)
         self.app.invalidate()
 
     def _ensure_focus(self) -> None:
         if "_focus" not in self.__dict__:
             self._focus = FocusCoordinator(
                 lambda: self.app, self.input,
-                lambda: self._editor_input if self._editor_active else None,
+                lambda: self._editor_input if self._editor_active and self._menu_future is None and not self._options_field_active else None,
                 self._primary_panel, (self._files_window, self._calls_window),
                 lambda: self._move_inspection(0),
             )
+        # Existing focus owners also need the new modal availability predicate.
+        self._focus.editor = lambda: self._editor_input if self._editor_active and self._menu_future is None and not self._options_field_active else None
 
     def _inspection_keys(self, files: bool) -> list[Any]:
         return self._touched_panel.keys() if files else self._calls_panel.keys()
@@ -361,6 +368,29 @@ class TerminalUI:
                    style: str = "", enabled: Callable[[], bool] = lambda: True) -> StyleAndTextTuples:
         return TaskLink(label, key, self._link_hover(), operation, self.app.create_background_task,
                         style=style, enabled=enabled).fragments()
+
+    def _feed_link(self, style: str, text: str) -> ActionLink | None:
+        for token in style.split():
+            for kind in ("file", "artifact", "directory", "suggestion"):
+                prefix = f"class:{kind}-"
+                if not token.startswith(prefix):
+                    continue
+                value = self.__dict__.get(f"_{kind}_links", {}).get(int(token.removeprefix(prefix)))
+                key = ("feed", token)
+                if kind == "suggestion" and isinstance(value, str):
+                    return CallbackLink(text, key, self._link_hover(), lambda: self._submit_suggestion(value),
+                                        style=style, enabled=lambda: not self.working and self._menu_future is None)
+                operation: Callable[[], Coroutine[Any, Any, None]]
+                if kind == "file" and isinstance(value, tuple):
+                    operation = lambda: self._inspect_file(str(value[0]), line=value[1])
+                elif kind == "artifact" and isinstance(value, int):
+                    operation = lambda: self.open_artifact(value)
+                elif kind == "directory" and isinstance(value, Path) and self.__dict__.get("_folder_opener") is not None:
+                    operation = lambda: self._explore_directory(value)
+                else:
+                    continue
+                return TaskLink(text, key, self._link_hover(), operation, self.app.create_background_task, style=style)
+        return None
 
     def _inspect_link(self) -> StyleAndTextTuples:
         label = "Inspect [Ctrl+O]" if self._right_control_width() > 18 else "Inspect"
@@ -533,6 +563,9 @@ class TerminalUI:
             if "_viewer_window" in self.__dict__:
                 raise RuntimeError("Restart required: viewer ownership changed.")
             self._viewer = ViewerDeck(self._viewer_header)
+        header = self._viewer.container.children[0]
+        if isinstance(header, Window) and not isinstance(header.content, ActionControl):
+            header.content = ActionControl(self._viewer_header)
 
     @property
     def _viewer_active(self) -> bool:
@@ -696,7 +729,7 @@ class TerminalUI:
 
     def _bottom_row(self, *, menu: bool) -> VSplit:
         return VSplit([
-            Window(FormattedTextControl(lambda: self._menu_hint() if menu else ANSI("Enter: Save | Esc: Cancel") if self._options_field_active else self._status_fragments()),
+            Window(ActionControl(lambda: self._menu_hint() if menu else ANSI("Enter: Save | Esc: Cancel") if self._options_field_active else self._status_fragments()),
                    height=1, style="class:status"),
         ], height=1)
 
@@ -716,7 +749,7 @@ class TerminalUI:
                 tips = ["Ctrl+S saves; Esc closes the editor.", "PgUp/PgDn scrolls with overlap."]
             elif self._viewer_active:
                 tips = ["Scroll to inspect; Esc closes the viewer."]
-            tips.insert(1, "Ctrl + Space or mouse to get around")
+            tips.insert(1, "Tab / Shift+Tab to get around; Ctrl+Space also works in the editor.")
             if not self.working and self._input_label == "> " and self._menu_future is None and not self._viewer_active and not self._editor_active:
                 tips.append("Click Commands to browse commands.")
             if self.__dict__.get("_folder_opener") is not None:
@@ -1107,15 +1140,58 @@ class TerminalUI:
 
     def _bindings(self) -> KeyBindings:
         bindings = KeyBindings()
-        in_menu = Condition(lambda: self._menu_future is not None)
-        in_setting = Condition(lambda: self.__dict__.get("_options_field_active", False))
+        in_menu = Condition(lambda: self._menu_future is not None and self.app.layout.current_window is self._menu_window)
+        in_setting = Condition(lambda: self.__dict__.get("_options_field_active", False) and self.app.layout.current_control is self._options_panel.field.control)
         in_inspection = Condition(self._inspection_focused) & ~in_menu & ~in_setting
         in_editor = Condition(lambda: self.__dict__.get("_editor_active", False) and self.app.layout.current_control is self._editor_input.control) & ~in_menu & ~in_setting
         in_viewer = Condition(lambda: self._viewer.active and self.app.layout.current_window is self._viewer_window) & ~in_menu & ~in_editor & ~in_setting & ~in_inspection
 
-        @bindings.add("c-space", filter=~in_menu & ~in_setting)
+        in_link = Condition(lambda: self.app.layout.current_control.__dict__.get("_keyboard_key") is not None)
+        in_feed = Condition(lambda: self.app.layout.current_window is self.transcript)
+        at_feed_prompt = Condition(lambda: self.app.layout.current_control is self.input.control and
+                                  not (self._editor_active or self._viewer_active or self.context_visible))
+
+        @bindings.add("c-space")
+        @bindings.add("tab", filter=~in_editor)
+        @bindings.add("s-tab")
         def cycle_panel(event: KeyPressEvent) -> None:
-            self._cycle_panel()
+            self._cycle_panel(-1 if event.key_sequence[-1].key == Keys.BackTab else 1)
+
+        @bindings.add("enter", filter=in_link, eager=True)
+        def activate_link(event: KeyPressEvent) -> None:
+            self._focus.activate()
+
+        @bindings.add("escape", filter=in_link | in_feed, eager=True)
+        def leave_feed(event: KeyPressEvent) -> None:
+            if self._menu_future is not None:
+                self._finish_menu(None)
+            elif self._options_field_active:
+                self._options_panel.cancel()
+            else:
+                self._focus.restore_prompt()
+
+        @bindings.add(Keys.Any, filter=in_link | in_feed)
+        def ignore_feed_text(event: KeyPressEvent) -> None:
+            pass
+
+        @bindings.add("up", filter=in_feed)
+        @bindings.add("down", filter=in_feed)
+        @bindings.add("pageup", filter=in_feed | at_feed_prompt)
+        @bindings.add("pagedown", filter=in_feed | at_feed_prompt)
+        def scroll_feed(event: KeyPressEvent) -> None:
+            key = event.key_sequence[-1].key
+            rows = max(1, self.output.get_size().rows - self._footer_rows() - self._queued_prompt_height() - 1) if key in {"pageup", "pagedown"} else 1
+            self.transcript.content.__dict__.pop("_keyboard_key", None)
+            self.transcript.scroll(-rows if key in {"up", "pageup"} else rows)
+            self.app.invalidate()
+
+        @bindings.add("home", filter=in_feed)
+        @bindings.add("end", filter=in_feed)
+        def edge_feed(event: KeyPressEvent) -> None:
+            self.transcript.content.__dict__.pop("_keyboard_key", None)
+            self.transcript._following = event.key_sequence[-1].key == Keys.End
+            self.transcript.vertical_scroll = self.transcript.vertical_scroll_2 = self.transcript._pending_scroll = 0
+            self.app.invalidate()
 
         @bindings.add("up", filter=in_inspection)
         @bindings.add("down", filter=in_inspection)
@@ -1216,7 +1292,8 @@ class TerminalUI:
         def scroll_view(event: KeyPressEvent) -> None:
             key = event.key_sequence[-1].key
             rows = max(1, self.output.get_size().rows - self._footer_rows() - self._queued_prompt_height() - 1) if key in {"pageup", "pagedown"} else 1
-            self._scroll_output(-rows if key in {"up", "pageup"} else rows)
+            self._viewer_window.scroll(-rows if key in {"up", "pageup"} else rows)
+            self.app.invalidate()
 
         @bindings.add("home", filter=in_viewer)
         @bindings.add("end", filter=in_viewer)
@@ -1249,7 +1326,7 @@ class TerminalUI:
         def cancel_menu(event: KeyPressEvent) -> None:
             self._finish_menu(None)
 
-        @bindings.add("escape", filter=~in_menu & ~in_viewer & ~in_editor & ~in_setting & ~in_inspection, eager=True)
+        @bindings.add("escape", filter=~in_menu & ~in_viewer & ~in_editor & ~in_setting & ~in_inspection & ~in_link & ~in_feed, eager=True)
         def stop_now(event: KeyPressEvent) -> None:
             callback = getattr(self, "_interrupt_callback", None)
             if callback is not None:
@@ -1274,7 +1351,8 @@ class TerminalUI:
         def scroll_context(event: KeyPressEvent) -> None:
             key = event.key_sequence[-1].key
             rows = max(1, self.output.get_size().rows - self._footer_rows() - self._queued_prompt_height() - 1) if key in {"pageup", "pagedown"} else 1
-            self._scroll_output(-rows if key in {"up", "pageup"} else rows)
+            self.context_window.scroll(-rows if key in {"up", "pageup"} else rows)
+            self.app.invalidate()
 
         @bindings.add("home", filter=in_context)
         def context_top(event: KeyPressEvent) -> None:
@@ -1317,6 +1395,7 @@ class TerminalUI:
             "footer": "bg:" + FOOTER_BACKGROUND_COLOR,
             "menu": "bg:" + MENU_BACKGROUND_COLOR,
             "status-flash": "bold reverse",
+            "keyboard-focus": "bold reverse",
             "menu-title": "bold", "menu-selected": "reverse bold",
             "clickable": "underline", "hover": "reverse",
             "diff-number": MUTED_COLOR,
@@ -1867,7 +1946,7 @@ class TerminalUI:
         # Release the old per-character cache after a successful copy.
         self.__dict__.pop("_transcript", None)
         self.__dict__.pop("_wrapped_spans", None)
-        self.transcript.content = TranscriptControl(lambda width: self._transcript_content(width))
+        self.transcript.content = TranscriptControl(lambda width: self._transcript_content(width), self._select_transcript)
 
     def _transcript_content(self, width: int) -> UIContent:
         self._ensure_transcript()
@@ -1954,7 +2033,8 @@ class TerminalUI:
                         style += " class:clickable"
                         if self.__dict__.get("_hovered_control") == ("directory", directory):
                             style += " class:hover"
-                result.append((style, text))
+                link = self._feed_link(style, text)
+                result.extend(link.fragments() if link is not None else [(style, text)])
                 if trailing:
                     result.append((padding_style, trailing))
             return result

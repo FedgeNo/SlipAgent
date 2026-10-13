@@ -880,8 +880,14 @@ screen rows needed to reveal the whole selected item. Items taller than the
 viewport reveal their beginning. Resizing recalculates visibility; manual sidebar
 scrolling preserves its position until selection moves. Those policies remain distinct.
 
-`FocusCoordinator` owns clockwise traversal (Prompt, active Editor/Viewer/Context,
-visible Touched and Calls), restoration of invoking controls, and reconciliation
+`FocusCoordinator` owns one route through the prompt, active feed/editor/viewer/context,
+visible links and lists, and footer actions. Tab and Ctrl+Space follow it forward;
+Shift+Tab follows it backward, including from the editor, whose plain Tab inserts
+indentation. Lists are single stops with their own arrow navigation. Feed action
+discovery reads only viewport rows, rather than scanning historical scrollback.
+`ActionControl` retains rendered handlers for keyboard activation and focus styling;
+keyboard Enter invokes the same enabled action as a left click.
+The coordinator also owns restoration of invoking controls and reconciliation
 when resize hides the focused region. Menus and options retain their invoking
 control and restore it only while its region remains available. Save completion
 does not move focus. Navigation bindings check focus rather than visibility.

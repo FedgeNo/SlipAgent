@@ -95,10 +95,10 @@ async def test_existing_main_regions_are_reachable_at_every_width(ui, tmp_path, 
     path = tmp_path / "file"
     path.write_text("text\n")
     await terminal._editor_panel.open(path, 1)
-    if columns >= 60:
+    for _ in range(30):
         terminal._cycle_panel()
-        terminal._cycle_panel()
-    terminal._cycle_panel()
+        if terminal.app.layout.current_control is terminal.input.control:
+            break
     assert terminal.app.layout.current_control is terminal.input.control
 
 
@@ -134,8 +134,11 @@ async def test_menus_restore_invoking_focus_and_resize_cannot_hide_focus(ui):
     terminal._finish_menu(None)
     await menu
     assert terminal.app.layout.current_control is terminal.input.control
-    terminal._cycle_panel()
-    terminal._cycle_panel()
+    terminal.toggle_inspection()
+    for _ in range(30):
+        terminal._cycle_panel()
+        if terminal._inspection_focused():
+            break
     assert terminal._inspection_focused()
     size[0] = Size(rows=24, columns=40)
     with set_app(terminal.app):

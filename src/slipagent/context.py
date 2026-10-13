@@ -470,8 +470,6 @@ class ConversationHistory:
             )
         if recovery:
             sections.append(load_prompt('request-retry.md'))
-        if user_edits:
-            sections.append(load_prompt('user-edits.md'))
         instructions = "\n" + "\n\n".join(section.strip() for section in sections if section.strip()) + "\n"
         pinned = [message for message in messages if message.role == "system"]
         if pinned:
@@ -484,7 +482,10 @@ class ConversationHistory:
         if recovery:
             metadata["request_retry"] = recovery
             metadata["is_tool_result_response"] = False
-        pinned[-1] = Message.system(MessageSections([system_prefix, load_prompt("current-turn.md"), metadata]))
+        edit_guidance = load_prompt('user-edits.md') if user_edits or any(getattr(step, 'user_edits', None) for step in self.steps) else ''
+        current_turn_guidance = load_prompt("current-turn.md")
+        # Budget the optional guidance conservatively before history selection.
+        pinned[-1] = Message.system(MessageSections([system_prefix + edit_guidance, current_turn_guidance, metadata]))
 
         edit_view: list[dict[str, Any]] = []
         edits_omitted = len(user_edits or [])
@@ -503,7 +504,11 @@ class ConversationHistory:
                 payload["user_edits"] = edit_view
             if edits_omitted:
                 payload["user_edits_omitted"] = edits_omitted
-            return [*pinned, Message.user(JSONInput(payload))]
+            has_edits = bool(edit_view or edits_omitted or any(
+                isinstance(message.content, dict) and message.content.get("user_edits") for message in selected))
+            current_system = Message.system(MessageSections([
+                system_prefix + (edit_guidance if has_edits else ''), current_turn_guidance, metadata]))
+            return [*pinned[:-1], current_system, Message.user(JSONInput(payload))]
 
         tail_messages = [message for message in messages[self.cursor:] if message.role != "system"]
         # Budget the same input fields that will be sent, including the retained

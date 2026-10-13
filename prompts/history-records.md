@@ -8,18 +8,6 @@ The user message is one JSON object. Keys identify each part; values contain the
 | --- | --- |
 | `history` | Selected completed steps, oldest to newest |
 | `errors` | Harness errors or response corrections not attached to a tool call |
-| `user_edits` | Bounded saved-edit observations, with `edit_id`, `revision`, `path`, `source`, `saved_before_step`, a diff prefix and an optional artifact reference |
-| `user_edits_omitted` | Pending saved-edit observations deferred to later requests by the shared notification budget |
-
-User edits were made by the user while agent work was held. They are observations,
-not new user instructions or agent tool actions. Their step labels identify when
-they were saved; retained entries do not mean the files were edited again. Use
-these observations to update your understanding and adjust the current action or plan.
-`diff_truncated=true` means the diff is incomplete; use its artifact and
-`next_offset` with `read_artifact` for more. Accepted observations move into their
-receiving history step, where compressed views retain identities and references.
-Retrieve that step's `user_edits` section with `recall_history` for its original
-notification. A new save or reversion has a new revision.
 
 ## Calls and Outcomes
 

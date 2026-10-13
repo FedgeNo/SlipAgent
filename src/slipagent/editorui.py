@@ -18,6 +18,7 @@ from wcwidth import iter_graphemes, width as display_width
 from .editor import FileEditor, PAGE_SEGMENTS, signature
 from .editorcontrol import EditorControl, EditorWindow
 from .editorbuffer import EditorBuffer, grapheme_edge
+from .links import ActionControl
 
 
 class EditorPanel:
@@ -32,7 +33,7 @@ class EditorPanel:
                               read_only=Condition(lambda: self.busy))
         self.ensure_control()
         self.container = HSplit([Window(FormattedTextControl(self.header), height=1, style="class:status class:footer"), self.input])
-        self.controls = Window(FormattedTextControl(self.actions), height=5)
+        self.controls = Window(ActionControl(self.actions), height=5)
 
     def ensure_control(self) -> None:
         if not isinstance(self.input.buffer, EditorBuffer):

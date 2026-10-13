@@ -102,18 +102,26 @@ async def test_control_space_cycles_panels_without_changing_draft(display, tmp_p
         for number in range(30):
             ui.track_call(ToolCall(str(number), "read_file", {"path": f"file-{number}"}), 1)
         task = asyncio.create_task(ui.run())
+        async def travel_to(predicate):
+            for _ in range(60):
+                if predicate():
+                    return
+                pipe.send_text(sequence)
+                await asyncio.sleep(.03)
+            await wait_until(predicate)
         try:
             await wait_until(lambda: "Ready" in snapshot()[17])
             assert not ui._inspection_visible
-            pipe.send_text(sequence)
-            await wait_until(lambda: ui.app.layout.current_window is ui._files_window)
+            await travel_to(lambda: ui.app.layout.current_control.__dict__.get("_keyboard_key") == "inspect")
+            pipe.send_text("\r")
+            await wait_until(lambda: ui._inspection_visible)
+            await travel_to(lambda: ui.app.layout.current_window is ui._files_window)
             await wait_until(lambda: "Touched" in snapshot()[0])
             for _ in range(20):
                 pipe.send_text("\x1b[B")
             await wait_until(lambda: ui._inspection_selection(True) == "file-9")
             await wait_until(lambda: "file-9" in "\n".join(snapshot()[:8]))
-            pipe.send_text(sequence)
-            await wait_until(lambda: ui.app.layout.current_window is ui._calls_window)
+            await travel_to(lambda: ui.app.layout.current_window is ui._calls_window)
             pipe.send_text("\r")
             await wait_until(lambda: ui._viewer_active)
             assert ui.input.text == "keep draft"
@@ -124,25 +132,20 @@ async def test_control_space_cycles_panels_without_changing_draft(display, tmp_p
             pipe.send_text("\t")
             await wait_until(lambda: ui._editor_input.text.startswith("    "))
             edited = ui._editor_input.text
-            pipe.send_text(sequence)
-            await wait_until(lambda: ui.app.layout.current_window is ui._files_window)
+            await travel_to(lambda: ui.app.layout.current_window is ui._files_window)
             pipe.send_text("\x1b[B")
             await wait_until(lambda: ui._inspection_selection(True) == "file-8")
             assert ui._editor_input.text == edited
-            pipe.send_text(sequence)
-            await wait_until(lambda: ui.app.layout.current_window is ui._calls_window)
-            pipe.send_text(sequence)
-            await wait_until(lambda: ui.app.layout.current_control is ui.input.control)
+            await travel_to(lambda: ui.app.layout.current_window is ui._calls_window)
+            await travel_to(lambda: ui.app.layout.current_control is ui.input.control)
             assert ui.input.text == "keep draft"
             ui.refresh()
             assert ui.app.layout.current_control is ui.input.control
             pipe.send_text(" more")
             await wait_until(lambda: ui.input.text == " morekeep draft")
             assert ui._editor_input.text == edited
-            pipe.send_text(sequence)
-            await wait_until(lambda: ui.app.layout.current_control is ui._editor_input.control)
-            pipe.send_text(sequence)
-            await wait_until(lambda: ui._inspection_focused())
+            await travel_to(lambda: ui.app.layout.current_control is ui._editor_input.control)
+            await travel_to(lambda: ui._inspection_focused())
             ui.toggle_inspection()
             assert ui.app.layout.current_control is ui._editor_input.control
         finally:
@@ -163,7 +166,7 @@ async def test_inspection_focus_reveals_selection_and_up_stays_at_first_item(dis
             await wait_until(lambda: "Touched" in snapshot()[0])
             ui._files_window.scroll(20)
             await wait_until(lambda: "file-29" not in snapshot()[1])
-            pipe.send_text("\x00")
+            pipe.send_text("\x00\x00")
             await wait_until(lambda: ui.app.layout.current_window is ui._files_window)
             await wait_until(lambda: "file-29" in snapshot()[1])
             assert screen.buffer[1][75].reverse
@@ -2749,7 +2752,7 @@ def test_rotating_tips_do_not_flash_status(display, monkeypatch):
             original = ui._activity()
             clock[0] += 14.01
             rotated = ui._activity()
-            assert "Ctrl + Space or mouse to get around" in ui._notification_text()
+            assert "Tab / Shift+Tab to get around" in ui._notification_text()
             assert "".join(part[1] for part in rotated) != "".join(part[1] for part in original)
             assert all("status-flash" not in part[0] for part in rotated)
             ui.notify("Saved changes.")

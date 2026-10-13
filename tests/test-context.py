@@ -517,11 +517,12 @@ async def test_invalid_tool_json_retries_before_output_and_actions():
     assert tool.seen == [{"value": "accepted"}]
     assert [event.text for event in events if event.kind == "assistant_text"] == ["Accepted tool plan.", "Done."]
     assert len(client.calls) == 3
-    assert len(agent.history.steps) == 2
-    assert "PREVIOUS TOOL RESULT" in agent.history.steps[0].summary
-    assert "rejected" not in "\n".join(step.full_text() for step in agent.history.steps)
+    assert len(agent.history.steps) == 3
+    assert "PREVIOUS TOOL RESULT" in agent.history.steps[1].summary
+    assert agent.history.steps[0].request_failure["outcome"] == "rejected"
+    assert agent.history.steps[0].tool_calls == []
     assert client.calls[1]["tools"] == client.calls[0]["tools"]
-    assert context_records(client.calls[1]["messages"])[-1]["step_id"] == 1
+    assert context_records(client.calls[1]["messages"])[-1]["step_id"] == 2
 
 
 async def test_repeated_invalid_actions_respect_request_limit():
@@ -531,15 +532,17 @@ async def test_repeated_invalid_actions_respect_request_limit():
     ], include_memory=False, max_steps=3, on_event=events.append)
     assert await agent.run("inspect") == STEP_LIMIT_NOTICE
     assert len(client.calls) == 3
-    assert agent.history.steps == []
+    assert len(agent.history.steps) == 3
+    assert all(step.request_failure["outcome"] == "rejected" for step in agent.history.steps)
     assert agent.registry.get("record").seen == []
     assert not any(event.kind in {"assistant_text", "tool_start", "tool_end"} for event in events)
-    assert agent.messages[-1].content == "inspect"
+    assert [m.content for m in agent.messages if m.role == "user"] == ["inspect"]
     assert agent.usage.total_tokens == 45
     client.responses.append(completion(reply(1, "Resumed.", "User asked inspect then continue; model resumed.")))
     assert await agent.run("continue") == "Resumed."
     assert len(client.calls) == 4
-    assert agent.history.steps[0].request == "inspect\ncontinue"
+    assert agent.history.steps[0].request == "inspect"
+    assert agent.history.steps[-1].request == "continue"
 
 
 async def test_retry_keeps_previous_tool_results_and_current_user_correction():
@@ -559,14 +562,17 @@ async def test_retry_keeps_previous_tool_results_and_current_user_correction():
     for index, request in enumerate(client.calls[1:]):
         assert any(m.role == "tool" and context_body(m.content) == "EXACT TOOL RESULT" for m in unpack_context(request["messages"]))
         prompts = context_records(request["messages"])[-1]["user_prompt"]
-        assert prompts[0] == "current correction"
-        assert len(prompts) == index + 1
+        assert len(prompts) == 1
         if index:
-            assert prompts[1].startswith("Harness tool-use correction:")
-        assert context_records(request["messages"])[-1]["step_id"] == 2
+            assert prompts[0].startswith("Harness tool-use correction:")
+            assert context_records(request["messages"])[-2]["user_prompt"] == ["current correction"]
+        else:
+            assert prompts[0] == "current correction"
+        assert context_records(request["messages"])[-1]["step_id"] == 2 + index
     assert agent.history.task.sources[2] == ["current correction"]
     assert agent.registry.get("record").seen == [{"value": "v"}]
-    assert agent.history.steps[1].agent_response == "Corrected."
+    assert agent.history.steps[1].request_failure["outcome"] == "rejected"
+    assert agent.history.steps[2].agent_response == "Corrected."
 
 
 async def test_stop_during_rejected_response_prevents_retry_and_tool_calls():
@@ -581,7 +587,8 @@ async def test_stop_during_rejected_response_prevents_retry_and_tool_calls():
     agent.on_event = stop
     assert await agent.run("inspect") == STOP_NOTICE
     assert len(client.calls) == 1
-    assert agent.history.steps == []
+    assert len(agent.history.steps) == 1
+    assert agent.history.steps[0].request_failure["outcome"] == "rejected"
     assert agent.registry.get("record").seen == []
     assert not any(event.kind in {"assistant_text", "tool_start", "tool_end"} for event in events)
 
@@ -654,7 +661,8 @@ async def test_cancel_during_response_preserves_existing_summaries_and_originals
     assert not agent.running
     assert agent.history.steps[0].summary is not None
     assert "one?" in agent.history.steps[0].full_text()
-    assert agent.messages[-1].content == "three?"
+    assert agent.history.steps[-1].request == "three?"
+    assert agent.history.steps[-1].request_failure["outcome"] == "cancelled"
 
 
 async def test_cancelled_tool_batch_preserves_valid_summary_and_original():
@@ -873,8 +881,8 @@ def test_real_cli_rejects_invalid_calls_before_reply_and_readonly_batch(tmp_path
     assert "Rejected response" not in result.stdout + result.stderr
     assert len(stub.requests) == 3
     prompts = context_records(stub.requests[1]["messages"])[-1]["user_prompt"]
-    assert prompts[0] == "List the directory"
-    assert len(prompts) == 2 and prompts[1].startswith("Harness tool-use correction:")
+    assert len(prompts) == 1 and prompts[0].startswith("Harness tool-use correction:")
+    assert context_records(stub.requests[1]["messages"])[0]["user_prompt"] == ["List the directory"]
     assert "List the directory" in json.loads(stub.requests[2]["messages"][-1]["content"])["retained_user_requests"]
     assert all(not prompt.startswith("Harness tool-use correction:")
                for record in context_records(stub.requests[2]["messages"])

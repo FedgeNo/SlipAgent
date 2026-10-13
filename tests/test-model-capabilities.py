@@ -248,7 +248,8 @@ async def test_json_object_retries_before_reply_or_tool_execution():
     assert not any(event.text == "REJECTED REPLY" for event in events)
     assert [event.kind for event in events].index("retry") < [event.kind for event in events].index("tool_start")
     assert "last response was rejected" in requests[1]["messages"][0]["content"]
-    assert context_records(requests[2]["messages"])[0]["tool_results"][0]["content"] == "actual result"
+    actual = next(record for record in context_records(requests[2]["messages"]) if record["step_id"] == 2)
+    assert actual["tool_results"][0]["content"] == "actual result"
     assert all(request.get("response_format") == requests[0].get("response_format") for request in requests)
 
 

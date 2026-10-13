@@ -91,7 +91,7 @@ previews copy history/task and budget state. `RequestDriver` owns attempt-local
 retry, overflow, repair, diagnostics, and acceptance state. Its typed hooks expose
 queued input, the shared request budget, usage accounting, and stop controls.
 `RequestAccepted` and `RequestStopped` distinguish outcomes without inserting
-rejected calls into history. `ToolBatch` owns invocation provenance, ordered
+rejected calls as executable history. `ToolBatch` owns invocation provenance, ordered
 observations, checkpoint scope, and post-batch checks. Its interruption callback
 archives paired results before checkpoint cleanup and exception propagation.
 Archival and compaction scheduling remain with the conversation coordinator.
@@ -344,11 +344,34 @@ Direct metadata and isolated compaction calls retain their own client policy.
 
 No tool runs before response acceptance. Diagnostic request/attempt records
 can preserve failed partial responses, but those records do not enter working
-history or summarization. Cancellation and stream failures end the visible
+history or summarization wholesale. A separate failed-turn record does enter
+history, with explicit unexecuted status and a bounded excerpt. Cancellation and stream failures end the visible
 reasoning/reply block before a retry begins. Failed reply previews receive an
 explicit warning. Each attempt starts with a fresh decoder and renderer preview
 record; successful final reply events remain available to automation and saved
 history, while the renderer suppresses a duplicate of already streamed text.
+
+`requestfailures.py` validates failed-turn metadata and derives retry counts from
+the archived steps. `RequestDriver` invokes the coordinator's recorder through
+registry services before retrying or returning a failed attempt. The recorder
+archives a labelled harness notice with no executable calls, attaches
+`request_failure` to the completed step, persists it, and emits `step_end` with
+that attempt's usage. Each attempt receives its own global turn number and
+consumes one working request. A deterministic failure summary replaces the
+ordinary background summary call; partial model prose remains diagnostic data.
+
+Rebuilt requests carry the failed turn, consecutive and session failure counts,
+and `request-retry.md` guidance to honor user stop/no-retry instructions. Earlier
+tool results remain unacknowledged until an accepted response follows them;
+intervening failures cannot move them into a summary before the model receives
+them. At small budgets, explicit excerpts preserve both that batch and the latest
+failure. Provider overflow recovery compares the smaller view before adding new
+failure bookkeeping so an unchanged history does not trigger another request.
+
+Session journals store failed-turn metadata in `request_failure` events alongside
+the canonical notice and step summary. Resume and fork validate the outcome,
+counters, diagnostic reference, and absence of executed tools. They restore the
+metadata and any preceding unacknowledged batch; archived attempts never replay.
 
 `run_batch` executes up to four adjacent independent read tools concurrently.
 `Tool.allows_concurrency(arguments)` defaults to false; audited file reads,

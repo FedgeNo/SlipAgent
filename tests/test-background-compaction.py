@@ -155,9 +155,12 @@ async def test_rejected_response_reasoning_does_not_enter_accepted_record():
     agent = Agent(client, ToolRegistry(), "test")
     assert await agent.run("Work") == "Done"
     await agent.wait_for_compaction()
-    assert len(agent.history.steps) == 1
-    assert agent.history.steps[0].reasoning == "ACCEPTED THOUGHTS"
-    assert "REJECTED THOUGHTS" not in agent.history.steps[0].full_text()
+    assert len(agent.history.steps) == 2
+    assert agent.history.steps[0].reasoning == ""
+    assert agent.history.steps[0].request_failure["outcome"] == "rejected"
+    assert agent.history.steps[1].reasoning == "ACCEPTED THOUGHTS"
+    assert "REJECTED THOUGHTS" not in agent.history.steps[1].full_text()
+    assert len(client.summary_requests) == 1
 
 
 async def test_recall_can_select_one_or_several_original_parts():
@@ -395,5 +398,5 @@ async def test_bookkeeping_only_reply_retries_instead_of_silently_finishing():
     events = []
     agent = Agent(client, ToolRegistry(), "test", on_event=events.append)
     assert await agent.run("Work") == "Done"
-    assert len(agent.history.steps) == 1 and len(client.main_requests) == 2
+    assert len(agent.history.steps) == 2 and len(client.main_requests) == 2
     assert any(event.kind == "retry" for event in events)

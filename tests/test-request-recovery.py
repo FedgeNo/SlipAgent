@@ -60,10 +60,14 @@ async def test_partial_tool_stream_retries_once_without_replaying_thoughts_or_to
         await agent.wait_for_compaction()
         await agent.registry.aclose()
     assert len(requests) == 3
-    assert requests[0] == requests[1]
+    from data_text_reader import request_input, current_input
+    assert current_input(requests[1]["messages"])["request_retry"]["consecutive_failures"] == 1
+    failed = request_input(requests[1]["messages"])["history"][-1]
+    assert failed["request_failure"]["tools_executed"] is False
+    assert failed["agent_response"] is None
     assert tool.seen == [{"value": "once"}]
     assert not any(event.kind == "retry" for event in events)
-    assert all("abandoned thought" not in json.dumps(request) for request in requests)
+    assert "abandoned thought" in failed["request_failure"]["response_excerpt"]
     assert all("abandoned thought" not in (content_text(message.content)) for message in agent.messages)
 
 
@@ -129,7 +133,8 @@ async def test_repetitive_stream_closes_without_retrying_or_executing_partial_ca
         await agent.registry.aclose()
     assert len(requests) == 1 and len(seen) < 50 and closed
     assert not tool.seen
-    assert len(agent.messages) == 1
+    assert len(agent.messages) == 2
+    assert agent.history.steps[0].request_failure["outcome"] == "loop_stopped"
 
 
 @pytest.mark.parametrize("status, retries, steps, expected", [(503, 2, 20, 3), (503, 8, 2, 2), (402, 2, 20, 1)])

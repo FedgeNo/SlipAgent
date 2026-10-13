@@ -87,7 +87,11 @@ class RequestDriver:
         transport_retries = 0
         budget_fraction = self.budget.fraction
         repair = ""
+        start_next_step = False
         while True:
+            if start_next_step:
+                self.hooks.emit(AgentEvent(kind="step_start", step=step))
+                start_next_step = False
             if self.hooks.has_pending():
                 context = await self.hooks.context(repair, budget_fraction)
             self.hooks.reserve()
@@ -110,6 +114,15 @@ class RequestDriver:
                     if diagnostics.error and self.registry.context_notes.get("request_diagnostics") != diagnostics.error:
                         self.registry.context_notes["request_diagnostics"] = diagnostics.error
                         self.hooks.emit(AgentEvent(kind="warning", text=f"Request diagnostics: {diagnostics.error}"))
+            def record_failure(outcome: str, detail: str, response: str, usage: Usage) -> None:
+                nonlocal step, run_step, step_usage, start_next_step
+                recorder = self.registry.services["request_failure_recorder"]
+                step = recorder({"outcome": outcome, "error": detail,
+                                 "response_excerpt": response[:16000],
+                                 "diagnostic_attempt": diagnostic_id}, usage)
+                run_step += 1
+                step_usage = Usage()
+                start_next_step = True
             def request_sent(request: dict[str, Any]) -> None:
                 nonlocal request_body, diagnostic_id
                 request_body = request
@@ -172,20 +185,27 @@ class RequestDriver:
                 finish_attempt("loop_stopped", detail=str(exc), response=exc.partial_response, usage=exc.usage)
                 end_preview(failed=True)
                 self.hooks.emit(AgentEvent(kind="warning", step=step, text=str(exc)))
+                record_failure("loop_stopped", str(exc), exc.partial_response, exc.usage)
                 return RequestStopped(str(exc), loop_stopped=True)
             except APIContextError as exc:
+                self.hooks.account(exc.usage)
                 finish_attempt("context_overflow", detail=str(exc))
                 end_preview(failed=True)
-                if self.hooks.stop_requested():
-                    return RequestStopped(self.hooks.stop_notice(step))
-                if overflows >= 2:
-                    raise
-                overflows += 1
-                budget_fraction *= .65
-                smaller = await self.hooks.context(repair, budget_fraction)
+                try:
+                    if self.hooks.stop_requested():
+                        return RequestStopped(self.hooks.stop_notice(step))
+                    if overflows >= 2:
+                        raise
+                    overflows += 1
+                    budget_fraction *= .65
+                    # Compare before adding failure bookkeeping: a new turn ID
+                    # and error record do not establish that history shrank.
+                    smaller = await self.hooks.context(repair, budget_fraction)
+                finally:
+                    record_failure("context_overflow", str(exc), exc.partial_response or exc.body or "", exc.usage)
                 if [m.to_api() for m in smaller] == [m.to_api() for m in context]:
                     raise ContextError("The provider rejected the current input even without removable history. Originals are preserved; shorten the input or select a larger-context model.")
-                context = smaller
+                context = await self.hooks.context(repair, budget_fraction)
                 self.budget.fraction = budget_fraction
                 self.hooks.emit(AgentEvent(kind="retry", step=step, text=f"Provider context limit reached; retrying with less history ({overflows}/2). Originals are preserved."))
                 continue
@@ -194,6 +214,7 @@ class RequestDriver:
                 step_usage = step_usage + exc.usage
                 finish_attempt("request_error", detail=str(exc), response=exc.partial_response or exc.body or "", usage=exc.usage)
                 end_preview(failed=True)
+                record_failure("request_error", str(exc), exc.partial_response or exc.body or "", exc.usage)
                 if self.hooks.stop_requested():
                     return RequestStopped(self.hooks.stop_notice(step))
                 transient = isinstance(exc, APITransportError) or exc.status_code in RETRYABLE_STATUS
@@ -209,10 +230,13 @@ class RequestDriver:
                 if not retry:
                     raise
                 transport_retries += 1
+                context = await self.hooks.context(repair, budget_fraction)
                 continue
             except BaseException as exc:
                 finish_attempt("cancelled" if isinstance(exc, asyncio.CancelledError) else "request_error", detail=str(exc))
                 end_preview(failed=True)
+                if isinstance(exc, asyncio.CancelledError):
+                    record_failure("cancelled", "Request cancelled before acceptance.", preview.text, Usage())
                 raise
             attempts += 1
             self.budget.observe(request_body, completion.usage.prompt_tokens)
@@ -239,6 +263,7 @@ class RequestDriver:
                                response=json.dumps(completion.message.to_api(), ensure_ascii=False), usage=completion.usage)
                 end_preview(failed=True)
                 self.hooks.emit(AgentEvent(kind="warning", step=step, text=str(exc)))
+                record_failure("loop_stopped", str(exc), exc.partial_response, completion.usage)
                 return RequestStopped(str(exc), loop_stopped=True)
             except ResponseFormatError as exc:
                 finish_attempt("rejected", detail=str(exc), response=completion.response_excerpt or json.dumps(completion.message.to_api(), ensure_ascii=False), usage=completion.usage)
@@ -258,6 +283,9 @@ class RequestDriver:
                         self.hooks.emit(AgentEvent(kind="assistant_delta", step=step, text=remaining))
                 break
             end_preview(failed=True)
+            record_failure("rejected", rejection,
+                           completion.response_excerpt or json.dumps(completion.message.to_api(), ensure_ascii=False),
+                           completion.usage)
             if self.hooks.stop_requested():
                 return RequestStopped(self.hooks.stop_notice(step))
             if self.hooks.exhausted():

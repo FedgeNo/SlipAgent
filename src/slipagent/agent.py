@@ -293,6 +293,33 @@ class Agent:
     def _account_usage(self, usage: Usage) -> None:
         self.usage = self.usage + usage
 
+    def _record_request_failure(self, failure: dict[str, Any], usage: Usage) -> int:
+        from .requestfailures import failure_summary, retry_state, validate_failure
+
+        self.history.sync(self.messages)
+        previous = retry_state(self.history.steps)
+        total = sum(getattr(step, "request_failure", None) is not None for step in self.history.steps)
+        failure = {**failure, "request_number": self._requests,
+                   "consecutive_failures": previous["consecutive_failures"] + 1 if previous else 1,
+                   "total_failed_attempts": total + 1, "tools_executed": False}
+        validate_failure(failure)
+        summary = failure_summary(failure)
+        # A labelled harness notice keeps the failure legible even if a crash
+        # leaves its following step-metadata event incomplete. It is not model prose.
+        self.messages.append(Message.assistant(summary))
+        self.history.sync(self.messages)
+        failed = self.history.steps[-1]
+        setattr(failed, "request_failure", failure)
+        failed.summary = summary
+        failed.results_summarized = True
+        if isinstance(failed, CompletedStep):
+            failed.reasoning_summary = ""
+            failed.compaction_status = "complete"
+            failed.observed = False
+        self._persist()
+        self._emit(AgentEvent(kind="step_end", step=failed.id, usage=usage))
+        return failed.id + 1
+
     def _reserve_request(self) -> None:
         if self._requests >= self.max_steps:
             raise ContextStepLimit
@@ -487,7 +514,7 @@ class Agent:
 
     async def _step(self, step: int) -> str | None:
         """One response and its complete tool batch; behavior reloads between steps."""
-        run_step = step
+        run_step = self._requests + 1
         # Run budgets restart; invocation identity follows the archived conversation.
         step = len(self.history.steps) + 1
         self._notify_jobs()
@@ -508,12 +535,14 @@ class Agent:
         native_tools = self._uses_native_tools(capabilities)
         from .requests import RequestDriver, RequestHooks, RequestSettings, RequestStopped
 
+        self.registry.services["request_failure_recorder"] = self._record_request_failure
+
         driver = RequestDriver(
             self.client, self.registry, self._budget(),
             RequestSettings(self.model, self.temperature, self.max_tokens, self.session_id),
             RequestHooks(
                 context=lambda repair, fraction: self._queued_context(
-                    specs, step, repair=repair, budget_fraction=fraction),
+                    specs, len(self.history.steps) + 1, repair=repair, budget_fraction=fraction),
                 reserve=self._reserve_request, exhausted=lambda: self._requests >= self.max_steps,
                 has_pending=lambda: bool(self.pending), delivered=self._queued_messages_sent,
                 account=self._account_usage, persist=self._persist, emit=self._emit,
@@ -522,6 +551,7 @@ class Agent:
             ),
         )
         outcome = await driver.run(context, visible_specs, step, run_step, capabilities, native_tools)
+        step = len(self.history.steps) + 1
         if isinstance(outcome, RequestStopped):
             if outcome.loop_stopped:
                 self.stopped = True

@@ -95,7 +95,8 @@ async def test_provider_overflow_retries_smaller_history_without_losing_original
         assert len(json.dumps(router.requests[0])) < len(json.dumps(rejected[0]))
         assert "current request" in json.dumps(router.requests[0])
         assert agent.messages[:len(originals)] == originals
-        assert len(agent.history.steps) == 10
+        assert len(agent.history.steps) == 11
+        assert agent.history.steps[9].request_failure["outcome"] == "context_overflow"
         assert agent._budget().fraction == .65
 
 
@@ -112,4 +113,5 @@ async def test_unshrinkable_overflow_is_not_sent_twice():
         with pytest.raises(Exception, match="without removable history"):
             await agent.run("keep this exact prompt")
         assert len(rejected) == 1
-        assert agent.messages[-1].content == "keep this exact prompt"
+        assert [m.content for m in agent.messages if m.role == "user"] == ["keep this exact prompt"]
+        assert agent.history.steps[-1].request_failure["outcome"] == "context_overflow"

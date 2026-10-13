@@ -256,10 +256,14 @@ class CompletedStep(HistoryStep):
         self.observed = not self.has_results
 
     def parts(self) -> dict[str, Any]:
-        return {"prompt": self.user_prompt, "response": self.agent_response,
+        parts = {"prompt": self.user_prompt, "response": self.agent_response,
                 "reasoning": getattr(self, "reasoning", ""),
                 "tool_calls": [call.to_record() for call in self.tool_calls],
                 "tool_results": [{"call_id": result.tool_call_id, "content": result.content} for result in self.tool_results]}
+        failure = getattr(self, "request_failure", None)
+        if failure is not None:
+            parts.update(response=None, request_failure=failure)
+        return parts
 
     def compaction_input(self) -> dict[str, Any]:
         parts = self.parts()
@@ -276,7 +280,25 @@ class CompletedStep(HistoryStep):
         return load_prompt("summary-unavailable.md", status=self.compaction_status)
 
     def context_messages(self, *, compressed: bool = False) -> list[Message]:
-        return super().context_messages(compressed=compressed)
+        part = super().context_messages(compressed=compressed)
+        failure = getattr(self, "request_failure", None)
+        if failure is not None:
+            record = dict(part[0].content)
+            record["request_failure"] = ({key: value for key, value in failure.items() if key != "response_excerpt"}
+                                         if compressed else failure)
+            if not compressed:
+                record["agent_response"] = None
+            return [record_message(record)]
+        return part
+
+    def excerpt_context_messages(self, budget: int) -> list[Message] | None:
+        part = super().excerpt_context_messages(budget)
+        failure = getattr(self, "request_failure", None)
+        if part is not None and failure is not None:
+            record = dict(part[0].content)
+            record["request_failure"] = {key: value for key, value in failure.items() if key != "response_excerpt"}
+            return [record_message(record)]
+        return part
 
 
 Summarizer = Callable[[str], Awaitable[str]]
@@ -393,6 +415,8 @@ class ConversationHistory:
         Oversized new observations use explicit excerpts as a last resort.
         """
         self.sync(messages)
+        from .requestfailures import retry_state
+        recovery = retry_state(self.steps)
         has_new_user_input = any(message.role == "user" for message in messages[self.cursor:])
         continuing_tools = not has_new_user_input and bool(self.steps and self.steps[-1].has_results)
         def tokens(part: list[Message]) -> int:
@@ -417,6 +441,8 @@ class ConversationHistory:
             sections.append(
                 load_prompt('user-request.md', step_id=self.task.current_prompt_step, input_guidance=input_guidance)
             )
+        if recovery:
+            sections.append(load_prompt('request-retry.md'))
         instructions = "\n" + "\n\n".join(section.strip() for section in sections if section.strip()) + "\n"
         pinned = [message for message in messages if message.role == "system"]
         if pinned:
@@ -424,8 +450,11 @@ class ConversationHistory:
         else:
             pinned = [Message.system("\n" + instructions)]
         system_prefix = (pinned[-1].content or "").rstrip() + "\n\n"
-        metadata = {"step_id": len(self.steps) + 1,
+        metadata: dict[str, Any] = {"step_id": len(self.steps) + 1,
                     "is_tool_result_response": not any(message.role == "user" for message in messages[self.cursor:])}
+        if recovery:
+            metadata["request_retry"] = recovery
+            metadata["is_tool_result_response"] = False
         pinned[-1] = Message.system(MessageSections([system_prefix, load_prompt("current-turn.md"), metadata]))
 
         def assemble(selected: list[Message]) -> list[Message]:
@@ -475,10 +504,18 @@ class ConversationHistory:
                     part = [record_message(record)]
             return part
 
-        pending = bool(self.steps and self.steps[-1].has_results and not (
+        pending = bool(self.steps and (self.steps[-1].has_results or recovery is not None) and not (
             self.steps[-1].observed if isinstance(self.steps[-1], CompletedStep) else self.steps[-1].results_summarized))
         # A continuation still needs its active user prompt even at tiny budgets.
         required_last = pending or bool(self.steps and not tail_messages)
+        unseen_results: int | None = None
+        if recovery:
+            previous = len(self.steps) - recovery["consecutive_failures"] - 1
+            if previous >= 0:
+                batch = self.steps[previous]
+                if batch.has_results and not (batch.observed if isinstance(batch, CompletedStep) else batch.results_summarized):
+                    unseen_results = previous
+        required_start = unseen_results if unseen_results is not None else len(self.steps) - int(required_last)
         from .historymerge import historical_records
         narratives = historical_records(self.steps)
         parts: dict[tuple[int, bool], list[Message]] = {}
@@ -502,6 +539,8 @@ class ConversationHistory:
         # keep_steps remains accepted for older callers; the retained posts,
         # rather than an absolute call count, determine the full-history share.
         for start in range(len(self.steps) + 1):
+            if start > required_start:
+                break
             count = len(self.steps) - start
             if required_last and not count:
                 break
@@ -515,7 +554,7 @@ class ConversationHistory:
             for index in range(start, len(self.steps)):
                 if index < boundary and self.steps[index].id in covered:
                     continue
-                part, cost = supplied(index, index < boundary)
+                part, cost = supplied(index, index < boundary and index != unseen_results)
                 selected.append((self.steps[index].id, part, cost))
             selected.sort(key=lambda entry: entry[0])
             while True:
@@ -534,17 +573,28 @@ class ConversationHistory:
                 # Preserve narratives while reducing the individual-post window.
                 # Once only the required latest post remains, oldest narratives
                 # can leave the view too. Their archives remain untouched.
-                if count <= int(required_last) and selected and selected[0][0] < start + 1:
+                if start == required_start and selected and selected[0][0] < start + 1:
                     selected.pop(0)
                     continue
                 break
         if required_last:
-            excerpt_budget = available - tail_tokens
+            failure_context: list[Message] = []
+            excerpt_index = len(self.steps) - 1
+            if unseen_results is not None:
+                # A failed response cannot acknowledge the preceding batch.
+                # Keep that batch and the latest failure even at tiny budgets.
+                failure_context = self.steps[-1].context_messages()
+                record = dict(failure_context[0].content)
+                record["request_failure"] = {key: value for key, value in record["request_failure"].items()
+                                             if key != "response_excerpt"}
+                failure_context = [record_message(record)]
+                excerpt_index = unseen_results
+            excerpt_budget = available - tail_tokens - tokens(failure_context)
             while excerpt_budget > 0:
-                excerpt = self.steps[-1].excerpt_context_messages(int(excerpt_budget / token_scale))
+                excerpt = self.steps[excerpt_index].excerpt_context_messages(int(excerpt_budget / token_scale))
                 if excerpt is None:
                     break
-                candidate = assemble(excerpt)
+                candidate = assemble(excerpt + failure_context)
                 cost = tokens(candidate)
                 if tokens(candidate) <= rendered_limit:
                     return candidate

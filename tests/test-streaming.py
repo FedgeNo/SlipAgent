@@ -262,7 +262,8 @@ async def test_three_invalid_actions_stop_without_spending_the_200_request_budge
     with pytest.raises(ContextError, match="3 consecutive"):
         await agent.run("work")
     assert len(client.calls) == 3 and tool.seen == []
-    assert agent.history.steps == []
+    assert len(agent.history.steps) == 3
+    assert all(step.request_failure['outcome'] == 'rejected' for step in agent.history.steps)
 
 
 @pytest.mark.parametrize("envelope", [False, True])
@@ -305,15 +306,18 @@ async def test_invalid_stream_reports_red_error_and_restarts_before_running_tool
     assert "Rejected plan." in sink.getvalue()
     assert "Response preview was not accepted" in sink.getvalue()
     assert sink.getvalue().index("Response rejected") < sink.getvalue().index("Accepted response.")
-    assert len(agent.history.steps) == 1
-    assert "Rejected plan" not in agent.history.steps[0].full_text()
+    assert len(agent.history.steps) == 2
+    assert agent.history.steps[0].record()['response'] is None
+    assert "Rejected plan" in agent.history.steps[0].request_failure['response_excerpt']
+    assert "Rejected plan" not in agent.history.steps[1].full_text()
     first = current_input(requests[0]["messages"])
     retry = current_input(requests[1]["messages"])
     corrections = retry.pop("user_prompt")
-    assert corrections[0] == first.pop("user_prompt")[0] == "work"
-    assert len(corrections) == 2 and corrections[1].startswith("Harness tool-use correction:")
-    assert "No tools from it were executed" in corrections[1]
-    assert retry == first
+    assert first.pop("user_prompt") == ["work"]
+    assert len(corrections) == 1 and corrections[0].startswith("Harness tool-use correction:")
+    assert "No tools from it were executed" in corrections[0]
+    assert retry.pop('request_retry')['consecutive_failures'] == 1
+    assert retry['step_id'] == first['step_id'] + 1
     assert tool.seen == []
 
 
@@ -354,7 +358,8 @@ async def test_interrupted_response_preview_is_marked_and_retry_is_not_duplicate
     assert len(requests) == 2 and tool.seen == []
     assert sink.getvalue().count("Same reply.") == 2
     assert sink.getvalue().count("Response preview was not accepted") == 1
-    assert len(agent.history.steps) == 1
+    assert len(agent.history.steps) == 2
+    assert agent.history.steps[0].request_failure['tools_executed'] is False
     assert [event.text for event in events if event.kind == "assistant_text"] == ["Same reply."]
 
 

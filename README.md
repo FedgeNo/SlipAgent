@@ -1224,8 +1224,22 @@ working-request limit. Streamed thoughts and provisional reply text remain visib
 failed reply previews are marked as unaccepted.
 
 Interrupted streams, overloads inside streamed/JSON responses, and transient HTTP failures receive three silent retries. If failures continue, SlipAgent displays the error and a countdown while retrying with increasing delays. It gives up before scheduling an interval longer than **60 seconds**; a server `Retry-After` beyond that limit also stops recovery. The minute is an interval limit, not a total request deadline. Permanent authentication, credit, and request errors are not retried. Every working attempt counts against `--max-steps`, with no nested retry loop. `/stop` and Esc interrupt waits. Each attempt starts fresh:
-partial tool arguments and rejected replies never execute or enter accepted history.
+partial tool arguments and rejected replies never execute or enter history as accepted actions.
 Authentication, credit, and permanent request failures remain errors.
+
+Every failed working request is preserved as a numbered history turn, including
+provider/transport errors, explicit context overflows, rejected responses,
+repetition stops and cancellations. Its `request_failure` record preserves the
+error, a bounded rejected/partial-response excerpt, the diagnostic attempt number,
+and consecutive/session failure counts. It explicitly marks that no tools from
+the attempt executed. Failures receive a deterministic summary rather than an
+extra model call. Full excerpts remain retrievable through `recall_history`.
+Retry requests rebuild their context with those failed turns and `request_retry`
+metadata identifying the failure count and turn IDs. Guidance tells the model
+to honor instructions to stop or not retry rather than treat each attempt as the
+first. The request budget still counts every attempt; recovery waits remain
+cancellable. Failed-turn records and counts survive resume and fork, and reset
+clears them. Raw request/response diagnostic files remain separate.
 
 `/requests` lists the latest 20 attempts; `/requests 3` displays attempt 3's
 final request body, outcome, and complete response/error details. Complete provider

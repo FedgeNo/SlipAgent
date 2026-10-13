@@ -191,8 +191,10 @@ valid recovery using disposable package copies when modifying this machinery.
   delivered merely because a file tool discovered it during the same batch.
 - Parallel tool safety is opt-in per argument set. Preserve exclusive barriers,
   ordered observations, journal-before-dispatch, and cancellation cleanup.
-- Keep failed attempts in request diagnostics, outside accepted history. Working
-  retries share the step budget and remain interruptible during backoff.
+- Store failed working requests as numbered turns with explicit unexecuted
+  status, bounded diagnostic excerpts, and consecutive/session failure counts.
+  Preserve full request diagnostics separately. Retries share the step budget,
+  rebuild context with the failure, and remain interruptible during backoff.
 - Background jobs and optional language servers belong to session services.
   Never install a server implicitly or relaunch an archived job on resume.
 - Normalize alternate response formats before validation. Keep native tool IDs,

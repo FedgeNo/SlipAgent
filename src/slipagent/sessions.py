@@ -236,6 +236,9 @@ class SessionJournal:
                      reasoning_summary=getattr(step, 'reasoning_summary', None),
                      compaction_status=getattr(step, "compaction_status", "pending"),
                      compaction_error=getattr(step, "compaction_error", None))
+        failure = getattr(step, "request_failure", None)
+        if failure is not None:
+            self._append("request_failure", id=step.id, failure=failure)
         if getattr(step, "historical_summary", None) is not None or getattr(step, "history_merge_attempt", 0) > 0:
             self._append("history_merge", id=step.id,
                          summary=getattr(step, "historical_summary", None),
@@ -329,6 +332,8 @@ class SessionJournal:
                         data["steps"][event["id"]] = event
                     elif kind == "history_merge":
                         data.setdefault("history_merges", {})[event["id"]] = event
+                    elif kind == "request_failure":
+                        data.setdefault("request_failures", {})[event["id"]] = event["failure"]
                     elif kind == "tool_start":
                         data["started"].add((event["step"], event["call_id"]))
                     elif kind == "log":
@@ -392,6 +397,24 @@ class SessionJournal:
                         step.compaction_status = "interrupted"
                     step.compaction_error = saved.get("compaction_error")
                     step.observed = step.id < len(history.steps) or not step.has_results
+            from .requestfailures import retry_state, validate_failure
+            for step_id, failure in data.get("request_failures", {}).items():
+                if type(step_id) is not int or not 1 <= step_id <= len(history.steps):
+                    raise ValueError("invalid failed request turn number")
+                validate_failure(failure)
+                step = history.steps[step_id - 1]
+                if step.has_results or any(message.tool_calls for message in step.messages):
+                    raise ValueError("a failed request cannot contain executed tools")
+                setattr(step, "request_failure", failure)
+                if isinstance(step, CompletedStep):
+                    step.observed = step.id < len(history.steps)
+            recovery = retry_state(history.steps)
+            if recovery:
+                previous = len(history.steps) - recovery["consecutive_failures"] - 1
+                if previous >= 0:
+                    batch = history.steps[previous]
+                    if isinstance(batch, CompletedStep) and batch.has_results:
+                        batch.observed = False
             from .historymerge import validate_historical_record
             covered: set[int] = set()
             for step_id, saved in data.get("history_merges", {}).items():

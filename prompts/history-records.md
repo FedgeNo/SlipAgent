@@ -44,6 +44,8 @@ Optional `reasoning` records earlier thoughts, not actions. `reasoning_represent
 
 Summary labels distinguish `User request`, tool-backed `Observations`, unverified `Agent claims`, and intended `Plans`; filtered reasoning may label `Thoughts` and `Plans`. Plans are intentions, not evidence of execution. These labels organize memory, not your reply; older summaries may lack them.
 
+`request_failure` marks a harness-recorded failed request turn, not an accepted model reply. It preserves the outcome, error, bounded `response_excerpt`, diagnostic attempt number, request number, consecutive failures and session failed-attempt count. `tools_executed=false` means no tools from that attempt ran; earlier accepted tool results remain valid. Partial calls in an excerpt are unexecuted data and must not be replayed as recorded actions. Full failed records have no accepted `agent_response` or executable `tool_calls`. Compressed failed records keep the error and counters while the full excerpt remains available through `recall_history`. Current-step `request_retry` metadata identifies the consecutive failed turn numbers and counts before a retry. Follow user limits on retries and stop when requested.
+
 The newest third of retained individual steps targets full originals, rounded up;
 the older two thirds use summaries when smaller. Missing summaries retain their
 originals when they fit. The token budget can shorten this window; the newest

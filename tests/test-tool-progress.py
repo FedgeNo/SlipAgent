@@ -176,7 +176,8 @@ async def test_repetitive_completed_response_does_not_execute_its_tools():
     agent = Agent(StubClient([response]), ToolRegistry([tool]), "test")
     assert "sustained repetition" in await agent.run("inspect")
     assert agent.stopped and tool.seen == []
-    assert len(agent.messages) == 1
+    assert len(agent.history.steps) == 1
+    assert agent.history.steps[0].request_failure["outcome"] == "loop_stopped"
     await agent.registry.aclose()
 
 

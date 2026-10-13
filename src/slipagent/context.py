@@ -41,8 +41,6 @@ from .records import linked_tool_results, record_message, step_record
 from .data_text import JSONInput, MessageSections, render_data
 
 DEFAULT_CONTEXT_LENGTH = 1_000_000
-MIN_FULL_STEPS = 5
-MAX_CONTEXT_SUMMARIES = 100
 HISTORY_PART_NAMES = ("prompt", "response", "reasoning", "tool_calls", "tool_results")
 
 def __getattr__(name: str) -> str:
@@ -458,11 +456,6 @@ class ConversationHistory:
         tail_tokens = tokens(tail)
         if tail_tokens + 256 >= available:
             raise ContextError("Current input and instructions exceed the context budget. Shorten the input or reference a file; conversation history is preserved.")
-        boundary = max(0, len(self.steps) - max(MIN_FULL_STEPS, keep_steps))
-        initial_boundary = boundary
-        memory_start = max(0, boundary - MAX_CONTEXT_SUMMARIES)
-        # Older originals remain archived indefinitely. Materialize only the
-        # recent window and the bounded older candidates needed by this request.
         def context_part(index: int, *, compressed: bool = False,
                          include_summary: bool = True) -> list[Message]:
             step = self.steps[index]
@@ -482,59 +475,81 @@ class ConversationHistory:
                     part = [record_message(record)]
             return part
 
-        parts = [context_part(index) for index in range(boundary, len(self.steps))]
-        sizes = [tokens(part) for part in parts]
         pending = bool(self.steps and self.steps[-1].has_results and not (
             self.steps[-1].observed if isinstance(self.steps[-1], CompletedStep) else self.steps[-1].results_summarized))
         # A continuation still needs its active user prompt even at tiny budgets.
         required_last = pending or bool(self.steps and not tail_messages)
-        max_boundary = len(self.steps) - int(required_last)
-        older_parts: dict[int, list[Message]] = {}
+        from .historymerge import historical_records
+        narratives = historical_records(self.steps)
+        parts: dict[tuple[int, bool], list[Message]] = {}
+        costs: dict[tuple[int, bool], int] = {}
 
-        def older_context(start: int, end: int) -> list[Message]:
-            result: list[Message] = []
-            for index in range(start, end):
-                if index not in older_parts:
-                    original = parts[index - initial_boundary] if index >= initial_boundary else context_part(index)
-                    compressed = context_part(index, compressed=True)
-                    # Choose the base representation before attaching analysis;
-                    # budget the combined record actually sent below.
+        def supplied(index: int, compressed: bool) -> tuple[list[Message], int]:
+            key = (index, compressed)
+            if key not in parts:
+                original = context_part(index)
+                chosen = original
+                # An unavailable summary is not memory. Retain the original
+                # rather than replacing evidence with a failure notice.
+                if compressed and self.steps[index].summary is not None:
+                    compact = context_part(index, compressed=True)
                     raw = context_part(index, include_summary=False)
-                    older_parts[index] = compressed if tokens(compressed) < tokens(raw) else original
-                result.extend(older_parts[index])
-            return result
+                    if tokens(compact) < tokens(raw):
+                        chosen = compact
+                parts[key], costs[key] = chosen, tokens(chosen)
+            return parts[key], costs[key]
 
-        while True:
-            memory_start = max(memory_start, boundary - MAX_CONTEXT_SUMMARIES)
-            older = older_context(memory_start, boundary)
-            offset = boundary - initial_boundary
-            full = [message for part in parts[offset:] for message in part]
-            budget = available - tokens(older) - tail_tokens
-            if sum(sizes[offset:]) <= budget:
-                candidate = assemble(older + full)
+        # keep_steps remains accepted for older callers; the retained posts,
+        # rather than an absolute call count, determine the full-history share.
+        for start in range(len(self.steps) + 1):
+            count = len(self.steps) - start
+            if required_last and not count:
+                break
+            boundary = len(self.steps) - (count + 2) // 3
+            merged = [record for record in narratives if record["step_ids"][-1] <= boundary]
+            covered = {step_id for record in merged for step_id in record["step_ids"]}
+            selected: list[tuple[int, list[Message], int]] = [
+                (record["step_id"], [record_message(record)], tokens([record_message(record)]))
+                for record in merged
+            ]
+            for index in range(start, len(self.steps)):
+                if index < boundary and self.steps[index].id in covered:
+                    continue
+                part, cost = supplied(index, index < boundary)
+                selected.append((self.steps[index].id, part, cost))
+            selected.sort(key=lambda entry: entry[0])
+            while True:
+                chosen = [message for _, part, _ in selected for message in part]
+                if sum(cost for _, _, cost in selected) + tail_tokens <= available:
+                    candidate = assemble(chosen)
+                    if tokens(candidate) <= rendered_limit:
+                        return candidate
+                if count == 1 and not pending and self.steps[-1].summary is not None:
+                    compact, compact_cost = supplied(len(self.steps) - 1, True)
+                    prefix = [entry for entry in selected if entry[0] != len(self.steps)]
+                    if sum(entry[2] for entry in prefix) + compact_cost + tail_tokens <= available:
+                        candidate = assemble([message for _, part, _ in prefix for message in part] + compact)
+                        if tokens(candidate) <= rendered_limit:
+                            return candidate
+                # Preserve narratives while reducing the individual-post window.
+                # Once only the required latest post remains, oldest narratives
+                # can leave the view too. Their archives remain untouched.
+                if count <= int(required_last) and selected and selected[0][0] < start + 1:
+                    selected.pop(0)
+                    continue
+                break
+        if required_last:
+            excerpt_budget = available - tail_tokens
+            while excerpt_budget > 0:
+                excerpt = self.steps[-1].excerpt_context_messages(int(excerpt_budget / token_scale))
+                if excerpt is None:
+                    break
+                candidate = assemble(excerpt)
+                cost = tokens(candidate)
                 if tokens(candidate) <= rendered_limit:
                     return candidate
-            # Drop older records before shortening the full window. Start from
-            # the normal boundaries on every request so records return when a
-            # large step ages out; omission never changes the stored history.
-            if memory_start < boundary:
-                memory_start += 1
-                continue
-            if boundary < max_boundary:
-                boundary += 1
-                continue
-            if required_last:
-                excerpt_budget = budget
-                while excerpt_budget > 0:
-                    excerpt = self.steps[-1].excerpt_context_messages(int(excerpt_budget / token_scale))
-                    if excerpt is None:
-                        break
-                    candidate = assemble(older + excerpt)
-                    cost = tokens(candidate)
-                    if cost <= rendered_limit:
-                        return candidate
-                    excerpt_budget -= max(1, cost - rendered_limit)
-            raise ContextError("Current input and latest tool results exceed the context budget even without older history; originals and summaries are preserved.")
+                excerpt_budget -= max(1, cost - rendered_limit)
+        raise ContextError("Current input and latest tool results exceed the context budget even without older history; originals and summaries are preserved.")
 
 
 class RecallHistoryTool(Tool):

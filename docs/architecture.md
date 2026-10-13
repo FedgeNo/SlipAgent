@@ -121,7 +121,7 @@ Context construction proceeds in this order:
    Loaded instruction-file contents and original conversation text stay intact.
    The input uses system instructions followed by one JSON user-input object. The inspector
    displays the final body rather than reconstructing it separately.
-3. Up to 100 older records precede the recent full window. Each retained step
+3. Economical older records precede the recent full window. Each retained step
    occupies one object. Full records contain originals plus available compressed
    analysis. Older records use a summary if its estimated cost is lower than
    the original representation before adding analysis. The budget includes all
@@ -134,9 +134,12 @@ Context construction proceeds in this order:
    `data_text.py`; the HTTP client then encodes the provider transport envelope.
    Nested objects are never pre-serialized. Literal rendering remains available
    for system data sections, compression input, and archive retrieval.
-   The full window targets 50 calls by default, with a floor of 5 on the requested
-   window size. Under model context pressure, selection drops the oldest older
-   records first, then reduces the full window oldest-first, below 5 if necessary.
+   The newest third of the retained individual-post window targets full originals,
+   rounded up. Older posts use economical summaries; unavailable summaries retain
+   originals when space permits. Under context pressure, the oldest individual
+   post leaves the candidate and the ratio is recalculated. There is no fixed
+   older-record count limit. Historical narratives accompany this window and
+   replace only their explicitly listed older source records without duplication.
    Boundaries and representation caches belong to one view: later requests can
    restore omitted records as large calls age into smaller summaries. There is
    no persistent omission marker. `--context-tokens` can cap total working context.
@@ -188,7 +191,8 @@ The selected model's context/prompt limits constrain the whole request. The
 budget reserves output, system instructions, tool definitions, response schema,
 and a 15% estimation margin before fitting history. Text estimates use UTF-8
 size, not a model tokenizer. History uses the remaining model allowance;
-`--context-steps` controls its target full-call count, not a separate token budget.
+`--context-steps` is retained as a deprecated compatibility option; the newest
+third of retained individual posts determines the full-call target.
 Selection preflight uses a copy of history/task selection state so an incompatible
 model cannot mutate the active conversation merely by being considered.
 
@@ -449,6 +453,28 @@ performed by the compactor. It does not emit context-inspector or reasoning
 stream events. Its reported usage contributes to session totals, independently
 of primary step accounting. It uses temperature 0.2 where supported, and the
 frozen profile's reasoning/routing settings even after model reselection.
+
+`historymerge.py` schedules a separate narrative over original first-pass
+summaries. It requires 20 completed turns since the last attempt, 20 ready and
+unmerged source turns outside the newest third, and 12,000 estimated source
+tokens. A frozen bounded batch must fit the selected provider/model context.
+Only one merge runs at a time. Failed attempts do not retry until 20 further
+turns have completed. Small turns need not cross the size threshold for many
+more turns. One response contains only a narrative `summary`, capped at 12,000
+characters and required to cost less than the source summaries plus metadata.
+It is a cross-turn account, not a list of per-step recaps. Its prompt preserves
+attribution, uncertainty, source turn citations and exact retrieval identifiers.
+
+The last source `CompletedStep` owns a `historical_summary` record. The record
+retains `step_ids` and `sources` (turn IDs, call IDs, names and artifact references)
+copied by the harness, independent of generated prose. The most recent step
+stores `history_merge_attempt` before dispatch; journal `history_merge` events
+persist both fields. Resume validates IDs, metadata shape and non-overlap before
+restoring them; fork retains the records and spacing markers. These optional
+attributes initialize lazily on existing mutable completed-step objects, so no
+stable dataclass layout changes. The existing compactor owns all merge tasks,
+generation guards, usage callbacks and reset/shutdown cancellation. No working
+tools run during merging. Originals and individual summaries are never rewritten.
 
 Reset increments the compactor generation and cancels all jobs. Late transport
 results cannot publish summaries, errors, or usage into a new session. Shutdown

@@ -37,8 +37,8 @@ async def test_routine_context_keeps_post_counters_only_in_system_messages():
                 '"current_prompt_step":', '"origin_step":', '"source_steps":'):
         assert key not in wire
     records = context_records(view)
-    assert sum(record["representation"] == "compressed" for record in records) == 3
-    assert sum(record["representation"] == "full" for record in records[:-1]) == 5
+    assert sum(record["representation"] == "compressed" for record in records) == 5
+    assert sum(record["representation"] == "full" for record in records[:-1]) == 3
     assert "Agent Response (Full):" not in wire
     assert history.task.current_prompt_step == 9
 
@@ -83,7 +83,7 @@ def test_prompt_sections_use_plain_labels_without_rewriting_their_content():
 
 
 @pytest.mark.parametrize("context_length", [9000, 1_000_000])
-async def test_counting_backwards_recovers_ids_after_both_history_limits(context_length):
+async def test_counting_backwards_recovers_ids_after_percentage_selection(context_length):
     history = ConversationHistory()
     messages = []
     for index in range(1, 161):
@@ -95,7 +95,7 @@ async def test_counting_backwards_recovers_ids_after_both_history_limits(context
     view = await history.view(messages, [], keep_steps=50, context_length=context_length, max_output=1000)
     wire = "\n".join(content_text(message.content) for message in view if message.role != "system")
     records = [json.dumps(record) for record in context_records(view) if record["record_type"] == "history_step"]
-    assert 0 < len(records) <= 150
+    assert 0 < len(records) <= 160
     current = context_records(view)[-1]["step_id"]
     recall = RecallHistoryTool(history)
     for distance, record in enumerate(reversed(records), 1):

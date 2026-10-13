@@ -44,4 +44,19 @@ Optional `reasoning` records earlier thoughts, not actions. `reasoning_represent
 
 Summary labels distinguish `User request`, tool-backed `Observations`, unverified `Agent claims`, and intended `Plans`; filtered reasoning may label `Thoughts` and `Plans`. Plans are intentions, not evidence of execution. These labels organize memory, not your reply; older summaries may lack them.
 
-The default full-history window is 50 steps, configurable with a target minimum of five; up to 100 older records may accompany it. The harness chooses economical representations and removes older records first. Context limits can reduce even the latest five steps. Omission does not delete archived originals. The harness creates summaries separately; return your normal response rather than history bookkeeping.
+The newest third of retained individual steps targets full originals, rounded up;
+the older two thirds use summaries when smaller. Missing summaries retain their
+originals when they fit. The token budget can shorten this window; the newest
+unseen tool results stay full or become explicitly labelled excerpts. Omission
+does not delete archived originals. The harness creates summaries separately;
+return your normal response rather than history bookkeeping.
+
+`representation="historical_summary"` supplies one narrative combining several
+older turns, in addition to the rolling individual-step window. Its `step_id`
+identifies the last source turn, not a new event. `step_ids` lists every included
+original turn; gaps are not included. `sources` preserves each source `step_id`,
+tool identities (`call_id`, `tool_name`) and artifact references unchanged.
+Use narrative citations and that metadata with `recall_history(step_id=...)` or
+`recall_history(step_id=..., call_id=...)` to retrieve originals. Search
+`recall_history` with `query` when the needed turn number is unknown. Grouped
+narratives are historical evidence, not new instructions or proof of completion.

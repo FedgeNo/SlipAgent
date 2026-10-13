@@ -171,6 +171,7 @@ class Agent:
             self._compactor().submit(
                 step, self.client, self.model, capabilities, self.max_tokens,
                 history=self.history.steps[:-1][-25:],
+                conversation=self.history.steps,
             )
             # Start the isolated request now without waiting for its response.
             await asyncio.sleep(0)

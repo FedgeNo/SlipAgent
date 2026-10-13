@@ -55,6 +55,7 @@ The `z-ai/glm-5.3` profile uses `models/glm-5.3.md`, embedded calls, and XML com
 | `system-history.md` | Input authority and use of historical evidence |
 | `current-turn.md` | Current-step metadata in the system prompt |
 | `background-summary-prompt.md` | Background compression of completed steps |
+| `historical-summary-prompt.md` | Occasional narrative merging of older first-pass summaries, with original turn citations and retrieval metadata |
 | `working-plan.md`, `working-plan-record.md`, `working-plan-empty.md` | Persistent plan guidance and last successful update step, subordinate to user instructions |
 | `json-tools.md`, `native-tools.md`, `response-*.md` | Response formats and tool-calling protocols |
 | `history-records.md`, `history-excerpt.md`, `summary-unavailable.md` | History interpretation and retrieval |
@@ -84,7 +85,7 @@ Other templates containing `${name}` receive runtime values at those positions. 
 
 Argument description files are JSON objects. Edit the text values while keeping the keys and valid JSON syntax. Argument names, types, limits, and executable tool behavior remain defined in Python.
 
-Markdown organizes instructions; it does not change their required outputs. Background compression returns an unfenced JSON object with `summary` and `reasoning_summary` string fields. Structured replies and tool arguments follow their schemas. Runtime error messages, validation rules, and observed results remain application behavior rather than editable policy.
+Markdown organizes instructions; it does not change their required outputs. Per-step background compression returns an unfenced JSON object with `summary` and `reasoning_summary` string fields. Historical merging returns only a `summary` string; the harness preserves source identities separately. Structured replies and tool arguments follow their schemas. Runtime error messages, validation rules, and observed results remain application behavior rather than editable policy.
 
 Project `AGENTS.md` files and instructions supplied by MCP servers come from those projects and servers. They are loaded separately.
 

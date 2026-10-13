@@ -2066,7 +2066,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-tokens", type=int, default=None,
                         help="Cap on completion tokens per response.")
     parser.add_argument("--context-steps", type=int, default=None,
-                        help="Recent model calls supplied in full (default: 50, minimum: 5 when context permits).")
+                        help="Deprecated compatibility option; history now targets the newest third of retained posts in full.")
     parser.add_argument("--python", default=None,
                         help="Project Python interpreter path, overriding .slipagent/project.json and venv discovery.")
     parser.add_argument("--provider", choices=list(PROVIDERS), help="API provider (or set SLIPAGENT_PROVIDER).")

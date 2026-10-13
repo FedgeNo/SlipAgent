@@ -50,9 +50,9 @@ async def test_compressed_records_are_separate_objects_without_original_fields()
     messages.append(Message.user("Current task"))
     view = await history.view(messages, [], keep_steps=1, context_length=1_000_000, max_output=8192)
     records = context_records(view)
-    assert records[:2] == [{"record_type": "history_step", "representation": "compressed", "step_id": i, "compressed_summary": f"Summary {i}"}
-                           for i in (1, 2)]
-    assert [record["agent_response"] for record in records[2:-1]] == [f"Answer {i} " * 100 for i in range(3, 8)]
+    assert records[:4] == [{"record_type": "history_step", "representation": "compressed", "step_id": i, "compressed_summary": f"Summary {i}"}
+                           for i in range(1, 5)]
+    assert [record["agent_response"] for record in records[4:-1]] == [f"Answer {i} " * 100 for i in range(5, 8)]
     assert records[-1]["record_type"] == "current_step"
     assert records[-1]["user_prompt"] == ["Current task"]
 

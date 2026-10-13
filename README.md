@@ -1299,18 +1299,37 @@ Each background compression attempt has a 20-minute timeout instead of the norma
 
 Each working request identifies the source step of the active requests in system guidance; their exact text belongs in the structured user-input object. Steps after tool batches explicitly explain that control returned automatically without a new user instruction: assess results against that goal and return an answer without tools when it is fulfilled. This guidance is assembled for the outgoing request only; it is not saved in conversation history or background summaries. Historical requests provide background rather than independently requesting more work.
 
-The default recent window is **50 model calls**, with a minimum target of **5**
-even if `--context-steps` is set lower. History uses the model's context allowance,
-subject to an explicit `--context-tokens` cap, after reserving space
-for instructions, tools, output, and estimation headroom. At most the **100 newest
-older records** accompany the full window. If the request is too large, the oldest
-of those records are omitted first, then the oldest calls in the full window.
-Even the five-call minimum can shrink to whatever fits the model allowance.
+The newest **one third** of retained individual posts targets full originals,
+rounded up; the older **two thirds** use economical summaries. Missing summaries
+retain originals rather than failure notices when space permits. History uses
+the model's context allowance, subject to `--context-tokens`, after reserving
+instructions, tools, output and estimation headroom. The oldest individual posts
+leave the view as needed, recalculating the split at each window size. There is
+no fixed 100-summary cap. `--context-steps` remains accepted for compatibility
+but no longer controls selection. Newly returned tool results reach the working
+model intact, or as explicit excerpts if even the latest batch cannot fit.
 
-Selection starts fresh on every request. As a large call ages out and its smaller
-summary takes its place, previously omitted older history can return within the
-100-record limit. Original records remain retrievable even when omitted. Project
-instructions and the retained user prompt stay pinned outside this rolling window.
+Selection starts fresh on every request, so omitted records can return as large
+posts age into summaries. Originals remain retrievable even when omitted.
+Project instructions and the retained user prompt stay pinned outside the window.
+
+Older summaries can also become **one historical narrative across many turns**.
+A separate background call requires at least **20 completed turns since the last
+merge attempt**, at least **20 eligible older summaries**, and at least **12,000
+estimated tokens** of source summaries and metadata. Small ordinary turns can
+therefore go much longer between merges. Only one merge runs at a time; a failed
+attempt also waits at least 20 turns before another call. Per-step summarization
+continues independently as described below.
+
+Each narrative is built from the original individual summaries, never a previous
+merged narrative. It combines related work rather than recapping every step.
+The prompt requires source turn citations, and the harness preserves the full
+source turn list, call IDs, tool names and artifact references separately.
+`recall_history` can retrieve exact turns or search the full archive when a turn
+number is unknown. Narratives accompany the rolling window without duplicating
+their individual source summaries. Merge results and attempt spacing persist
+across resume and fork; reset cancels pending work. Invalid or non-shrinking
+narratives leave the original summaries intact.
 
 **One separate background request starts after each complete tool batch returns**,
 or immediately after a reply without tools. It receives that step's prompt,
@@ -1420,7 +1439,7 @@ Useful flags:
 | `-w, --workspace` | Project root and default path boundary. |
 | `--danger` | Disable workspace path confinement at startup, including unattended one-shot tasks; no confirmation prompt. |
 | `--max-steps` | Cap working model requests per run, including response retries (default 200); background summaries are separate. |
-| `--context-steps` | Target recent model calls supplied in full (default 50, minimum 5 when context permits). |
+| `--context-steps` | Deprecated compatibility option; selection now targets the newest third of retained posts in full. |
 | `--context-tokens` | Optional total working-context cap, including output reserve; at least 4096, bounded by endpoint limits. Archived originals are preserved. |
 | `--reasoning-history-steps` | Archived thoughts from 0–25 recent steps (default 25); 0 supplies outcomes without archived thoughts. Does not disable current-turn reasoning. |
 | `--raw-reasoning-history` | Use original thoughts instead of filtered thoughts for controlled comparisons. Compression still runs. |

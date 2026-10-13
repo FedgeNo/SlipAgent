@@ -33,7 +33,8 @@ class StepCompactor:
 
     def submit(self, step: CompletedStep, client: APIClient, model: str,
                capabilities: RequestProfile | None, max_tokens: int | None, *,
-               history: list[HistoryStep] | None = None) -> None:
+               history: list[HistoryStep] | None = None,
+               conversation: list[HistoryStep] | None = None) -> None:
         source = copy.deepcopy(step.compaction_input())
         source['history'] = copy.deepcopy([prior.context_messages(compressed=prior.summary is not None)[0].content
                                           for prior in (history or [])[-25:] if prior.id < step.id])
@@ -42,6 +43,9 @@ class StepCompactor:
         job = asyncio.create_task(self._compact(step, source, client, model, capabilities, max_tokens, generation))
         self.jobs.add(job)
         job.add_done_callback(self.jobs.discard)
+        if conversation is not None:
+            from .historymerge import schedule_history_merge
+            schedule_history_merge(self, conversation, client, model, capabilities, max_tokens)
 
     async def _compact(self, step: CompletedStep, source: dict[str, Any], client: APIClient, model: str,
                        capabilities: RequestProfile | None, max_tokens: int | None, generation: int) -> None:

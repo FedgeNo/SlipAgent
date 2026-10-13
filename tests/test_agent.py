@@ -55,7 +55,7 @@ def unpack_context(messages):
             result.append(message)
             continue
         result.extend(Message.user(text) for text in record.get("user_prompt", []))
-        if record["representation"] == "compressed":
+        if record["representation"] in {"compressed", "historical_summary"}:
             result.append(Message.assistant(record["compressed_summary"]))
         elif record["representation"] == "excerpt":
             result.append(Message.assistant(json.dumps(record, ensure_ascii=False)))

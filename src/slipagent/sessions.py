@@ -236,6 +236,10 @@ class SessionJournal:
                      reasoning_summary=getattr(step, 'reasoning_summary', None),
                      compaction_status=getattr(step, "compaction_status", "pending"),
                      compaction_error=getattr(step, "compaction_error", None))
+        if getattr(step, "historical_summary", None) is not None or getattr(step, "history_merge_attempt", 0) > 0:
+            self._append("history_merge", id=step.id,
+                         summary=getattr(step, "historical_summary", None),
+                         attempted_at=getattr(step, "history_merge_attempt", 0))
 
     def tool_started(self, step_id: int, call_id: str) -> None:
         self._append("tool_start", step=step_id, call_id=call_id)
@@ -323,6 +327,8 @@ class SessionJournal:
                         data["state"] = event
                     elif kind == "step":
                         data["steps"][event["id"]] = event
+                    elif kind == "history_merge":
+                        data.setdefault("history_merges", {})[event["id"]] = event
                     elif kind == "tool_start":
                         data["started"].add((event["step"], event["call_id"]))
                     elif kind == "log":
@@ -386,6 +392,23 @@ class SessionJournal:
                         step.compaction_status = "interrupted"
                     step.compaction_error = saved.get("compaction_error")
                     step.observed = step.id < len(history.steps) or not step.has_results
+            from .historymerge import validate_historical_record
+            covered: set[int] = set()
+            for step_id, saved in data.get("history_merges", {}).items():
+                if type(step_id) is not int or not 1 <= step_id <= len(history.steps):
+                    raise ValueError("invalid historical summary anchor")
+                attempted = saved.get("attempted_at", 0)
+                if type(attempted) is not int or attempted not in (0, step_id):
+                    raise ValueError("invalid historical merge attempt")
+                step = history.steps[step_id - 1]
+                setattr(step, "history_merge_attempt", attempted)
+                record = saved.get("summary")
+                if record is not None:
+                    validate_historical_record(record, step_id, len(history.steps))
+                    if covered.intersection(record["step_ids"]):
+                        raise ValueError("overlapping historical summaries")
+                    covered.update(record["step_ids"])
+                    setattr(step, "historical_summary", record)
             data["history"] = history
             data["usage"] = Usage.from_api(data["state"]["usage"])
             return data

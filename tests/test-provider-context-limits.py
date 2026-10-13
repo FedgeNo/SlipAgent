@@ -107,7 +107,7 @@ async def test_large_read_history_is_reduced_while_archived_originals_survive():
     registry = ToolRegistry()
     agent = Agent(StubClient([]), registry, MODEL, context_steps=50)
     agent.messages = [Message.system('Pinned guidance.')]
-    payload = 'source_code = value + 1; ' * 2000
+    payload = 'source_code = value + 1; ' * 7000
     for step in range(24):
         agent.messages.extend([Message.user('Read more.'),
                                Message.assistant('Reading.', [ToolCall(str(step), 'read_file', {'path': f'file-{step}.py'})]),

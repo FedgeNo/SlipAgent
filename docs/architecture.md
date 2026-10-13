@@ -1082,10 +1082,22 @@ to the model along with the active generation number.
   batch, drains managed background jobs, and waits while editing is active.
   The reload frame is busy until the editor closes. Cancellation drains an
   in-progress save before releasing its resources. Read-only viewers bypass
-  this gate. Saved user diffs enter the raw `user_edits` input field and journal
-  state, with their originating step labels; they are not fabricated user
-  messages or tool calls. An editing session replaces its own cumulative diff
-  on each save, while separate editing sessions retain separate observations.
+  this gate. Each changed save archives its full cumulative diff and creates a
+  distinct revision, including reversions. `editdelivery.py` projects pending
+  revisions into a jointly budgeted `user_edits` input field with bounded diff
+  prefixes and artifact references; deferred observations remain pending.
+  Previews and failed requests do not acknowledge revisions. `requests.py`
+  captures the exact projection on acceptance; the agent journals the accepted
+  message and delivery receipt before acknowledging matching pending revisions
+  or executing tools. Receipt replay reconciles a torn pending-state update.
+  Delivered observations belong to that completed step's retrievable parts and
+  compaction input; compressed history and merged narratives retain artifact
+  references. They remain user observations, not fabricated user messages or
+  tool calls. Separate editing sessions retain separate observations. A failed
+  archive retains the full diff privately and leaves truncated delivery pending.
+  `read_artifact` streams validation of the stored JSON while retaining only the
+  requested character page. Record listings and command metadata are bounded;
+  `next_offset` identifies the next character or record position.
   `options.py` owns the selector and isolated folder-command field;
   `uipreferences.py` preserves unrelated entries in the existing preferences
   file. Folder commands receive literal argument lists without a shell.

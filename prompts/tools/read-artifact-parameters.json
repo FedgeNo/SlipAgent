@@ -1,3 +1,6 @@
 {
-    "properties/record_id": "Numeric inspection-record reference from history. Omit to list available records in this session."
+    "properties/record_id": "Numeric inspection-record reference from history. Omit to list available records in this session.",
+    "properties/field": "Record string to page: output (default), error, or command. Ignored when listing records.",
+    "properties/offset": "Starting decoded-character offset for a record, or record offset for listing. Start at 0; follow next_offset.",
+    "properties/limit": "Maximum characters per record page (default 4000, maximum 12000), or records per listing page (default 20, maximum 100)."
 }

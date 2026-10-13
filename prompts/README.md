@@ -57,6 +57,7 @@ The `z-ai/glm-5.3` profile uses `models/glm-5.3.md`, embedded calls, and XML com
 | `background-summary-prompt.md` | Background compression of completed steps |
 | `historical-summary-prompt.md` | Occasional narrative merging of older first-pass summaries, with original turn citations and retrieval metadata |
 | `request-retry.md` | Failed-turn interpretation, retry counts, and respect for user stop/retry instructions |
+| `user-edits.md` | Bounded saved-edit notifications, revision acknowledgement and full-diff retrieval |
 | `working-plan.md`, `working-plan-record.md`, `working-plan-empty.md` | Persistent plan guidance and last successful update step, subordinate to user instructions |
 | `json-tools.md`, `native-tools.md`, `response-*.md` | Response formats and tool-calling protocols |
 | `history-records.md`, `history-excerpt.md`, `summary-unavailable.md` | History interpretation and retrieval |

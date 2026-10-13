@@ -89,7 +89,7 @@ def schedule_history_merge(owner: StepCompactor, steps: list[HistoryStep], clien
         metadata = {"step_id": step.id,
                     "tool_calls": [{"call_id": call["call_id"], "tool_name": call["tool_name"]}
                                    for call in original["tool_calls"]],
-                    "artifacts": original.get("artifacts", [])}
+                    "artifacts": step.context_messages(compressed=True)[0].content.get("artifacts", [])}
         source["steps"].append({**metadata, "compressed_summary": step.summary})
         if message_tokens([system, Message.user(source)]) + reserve > int(limit * .85):
             source["steps"].pop()

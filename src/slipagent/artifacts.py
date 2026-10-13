@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 import shutil
 import tempfile
@@ -15,6 +16,27 @@ from collections.abc import Iterator
 from .prompts import load_prompt
 from .tools.base import Tool, ToolResult, current_invocation
 from .tools.blocking import run_blocking
+
+MAX_ARTIFACT_PAGE_CHARS = 12_000
+
+
+class ArtifactFieldPage(io.TextIOBase):
+    """Collect one decoded string slice while validating the enclosing record."""
+
+    def __init__(self, offset: int, limit: int, expected: str | None = None) -> None:
+        self.offset, self.limit, self.expected = offset, limit, expected
+        self.characters = 0
+        self.pieces: list[str] = []
+
+    def write(self, text: str) -> int:
+        start = self.characters
+        self.characters += len(text)
+        if self.expected is not None and self.expected[start:self.characters] != text:
+            raise ValueError("Inspection-record metadata mismatch.")
+        left, right = max(start, self.offset), min(self.characters, self.offset + self.limit)
+        if right > left:
+            self.pieces.append(text[left - start:right - start])
+        return len(text)
 
 
 class ArtifactStore:
@@ -135,6 +157,47 @@ class ArtifactStore:
             raise OSError("Inspection record was replaced by a symbolic link.")
         return path
 
+    def read_page(self, record_id: int, field: str, offset: int, limit: int) -> dict[str, Any]:
+        from .inspection import JSONRecordReader
+        from typing import TextIO, cast
+
+        path = self.record_path(record_id)
+        record = self.records[record_id]
+        fields = {}
+        for key in ("command", "output", "error", "call_id", "step_id", "kind"):
+            expected = None
+            if key in {"command", "call_id", "step_id", "kind"}:
+                expected = record[key] if isinstance(record[key], str) else json.dumps(record[key])
+            fields[key] = ArtifactFieldPage(offset if key == field else 0, limit if key == field else 0, expected)
+        with path.open(encoding="utf-8", newline="") as source:
+            string_fields = JSONRecordReader(source).fields({key: cast(TextIO, target) for key, target in fields.items()})
+        for key in ("command", "call_id", "step_id", "kind"):
+            expected = fields[key].expected
+            if (string_fields[key] != isinstance(record[key], str)
+                    or expected is None or fields[key].characters != len(expected)):
+                raise ValueError("Inspection-record metadata mismatch.")
+        selected = fields[field]
+        text = "".join(selected.pieces)
+        next_offset = offset + len(text)
+        return {**self._page_metadata(record), field: text, "field": field, "offset": offset,
+                "next_offset": next_offset if next_offset < selected.characters else None,
+                "eof": next_offset >= selected.characters, "total_characters": selected.characters,
+                "offset_unit": "characters"}
+
+    @staticmethod
+    def _page_metadata(record: dict[str, Any]) -> dict[str, Any]:
+        return {**record, "command": record["command"][:500],
+                "command_truncated": len(record["command"]) > 500}
+
+    def listing_page(self, offset: int, limit: int) -> dict[str, Any]:
+        from itertools import islice
+
+        records = [self._page_metadata(record) for record in islice(self.records.values(), offset, offset + limit)]
+        next_offset = offset + len(records)
+        total = len(self.records)
+        return {"records": records, "offset": offset, "next_offset": next_offset if next_offset < total else None,
+                "eof": next_offset >= total, "total_records": total, "offset_unit": "records"}
+
     def references(self, step_id: int, call_id: str) -> list[dict[str, Any]]:
         return [dict(record) for record in self.records.values()
                 if record["step_id"] == step_id and record["call_id"] == call_id]
@@ -157,15 +220,25 @@ class ReadArtifactTool(Tool):
     description_prompt = "tools/read-artifact.md"
     description = load_prompt(description_prompt)
     progress_exempt = True
-    parameters = {"type": "object", "properties": {"record_id": {"type": "integer", "minimum": 1, "description": ""}}}
+    parameters = {"type": "object", "properties": {
+        "record_id": {"type": "integer", "minimum": 1, "description": ""},
+        "field": {"type": "string", "enum": ["output", "error", "command"], "description": ""},
+        "offset": {"type": "integer", "minimum": 0, "description": ""},
+        "limit": {"type": "integer", "minimum": 1, "maximum": MAX_ARTIFACT_PAGE_CHARS, "description": ""}}}
 
     def __init__(self, store: ArtifactStore) -> None:
         self.store = store
 
-    async def run(self, record_id: int | None = None) -> ToolResult:
+    async def run(self, record_id: int | None = None, *, field: str = "output",
+                  offset: int = 0, limit: int | None = None) -> ToolResult:
         try:
+            if field not in {"output", "error", "command"} or type(offset) is not int or offset < 0:
+                raise ValueError("Use output, error, or command and a nonnegative character/record offset.")
+            if limit is not None and (type(limit) is not int or limit < 1):
+                raise ValueError("limit must be a positive integer")
             if record_id is None:
-                return ToolResult.ok({"records": list(self.store.records.values())})
-            return ToolResult.ok(await run_blocking(self.store.read, record_id))
+                return ToolResult.ok(self.store.listing_page(offset, min(limit or 20, 100)))
+            return ToolResult.ok(await run_blocking(self.store.read_page, record_id, field, offset,
+                                                     min(limit or 4000, MAX_ARTIFACT_PAGE_CHARS)))
         except (OSError, ValueError, UnicodeError) as exc:
             return ToolResult.error(str(exc))

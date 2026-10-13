@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
+import uuid
 from typing import TYPE_CHECKING, Any
 
 from .work import WorkCoordinator
@@ -59,13 +61,23 @@ class UserEdits(WorkCoordinator):
     def record(self, path: Path, diff: str, edit_id: str = "") -> None:
         edits = self.session.registry.context_notes.setdefault("user_edits", {})
         key = edit_id or str(path)
-        if not diff:
-            edits.pop(key, None)
+        previous = edits.get(key)
+        if not diff and previous is None:
             self.session.agent._persist()
             return
-        entry: dict[str, Any] = {"path": str(path), "diff": diff, "source": "user",
-                                 "saved_before_step": len(self.session.agent.history.steps) + 1}
+        digest = hashlib.sha256(diff.encode("utf-8")).hexdigest()
         store = self.session.registry.resources.artifacts
+        if (previous is not None and previous["path"] == str(path)
+                and previous.get("diff_digest", hashlib.sha256(previous.get("diff", "").encode("utf-8")).hexdigest()) == digest
+                and (store is None or "artifact" in previous)):
+            return
+        from .editdelivery import EDIT_PREVIEW_CHARS
+        entry: dict[str, Any] = {"path": str(path), "diff_preview": diff[:EDIT_PREVIEW_CHARS],
+                                 "diff_characters": len(diff), "diff_digest": digest,
+                                 "revision": uuid.uuid4().hex, "source": "user", "delivered": False,
+                                 "saved_before_step": len(self.session.agent.history.steps) + 1}
+        if not diff:
+            entry["reverted_to_editor_baseline"] = True
         if store is not None:
             try:
                 record = store.save(f"User edited {path}", diff, kind="diff", call_id="user-edit", step_id=len(self.session.agent.history.steps) + 1)
@@ -74,6 +86,8 @@ class UserEdits(WorkCoordinator):
             except (OSError, ValueError) as exc:
                 self.terminal.notify("Edit saved; diff archive failed.")
                 self.terminal.write(f"Could not archive user edit: {exc}")
+        if "artifact" not in entry:
+            entry["diff"] = diff  # Preserve full data until archival can succeed.
         edits[key] = entry
         self.terminal._touched_items[str(path)] = "user edited"
         self.session.agent._persist()

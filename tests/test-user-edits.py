@@ -91,7 +91,7 @@ async def test_saved_user_edit_survives_resume_and_is_distinct_from_user_message
     assert payload["user_edits"][0]["source"] == "user"
     assert "+user" in payload["user_edits"][0]["diff"]
     edits.record(path, "", "edit1")
-    assert not agent.registry.context_notes["user_edits"]
+    assert agent.registry.context_notes["user_edits"]["edit1"]["reverted_to_editor_baseline"]
 
 
 async def test_cancelling_held_agent_does_not_wait_again_in_final_boundary(tmp_path):

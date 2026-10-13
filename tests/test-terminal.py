@@ -426,19 +426,20 @@ async def test_repeated_wrap_toggles_and_saves_preserve_long_lines_and_diff(
                 ui._finish_menu("done")
                 await menu
                 assert panel.input.text == previous_text
-                recorded = agent._persist.call_count
+                ui.notify("")
                 pipe.send_text("\x13")
-                await wait_until(lambda: agent._persist.call_count > recorded and not panel.busy)
+                await wait_until(lambda: ui.__dict__.get("_notification") == "File saved." and not panel.busy)
                 assert path.read_bytes() == expected.encode()
                 entries = registry.context_notes["user_edits"]
                 if edit:
                     entry = entries[panel.file.edit_id]
-                    diff = entry["diff"]
+                    diff = store.read(entry["artifact"]["record_id"])["output"]
                     removed = [line[1:] for line in diff.splitlines() if line.startswith("-") and not line.startswith("---")]
                     added = [line[1:] for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++")]
                     assert removed == [original.splitlines()[0]]
                     assert added == [expected.splitlines()[0]]
-                    assert store.read(entry["artifact"]["record_id"])["output"] == diff
+                    assert diff.startswith(entry["diff_preview"])
+                    assert entry["diff_characters"] == len(diff)
                 else:
                     assert not entries
                     assert not store.records

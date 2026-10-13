@@ -235,7 +235,8 @@ class SessionJournal:
         self._append("step", id=step.id, summary=step.summary,
                      reasoning_summary=getattr(step, 'reasoning_summary', None),
                      compaction_status=getattr(step, "compaction_status", "pending"),
-                     compaction_error=getattr(step, "compaction_error", None))
+                     compaction_error=getattr(step, "compaction_error", None),
+                     user_edits=getattr(step, "user_edits", None))
         failure = getattr(step, "request_failure", None)
         if failure is not None:
             self._append("request_failure", id=step.id, failure=failure)
@@ -246,6 +247,10 @@ class SessionJournal:
 
     def tool_started(self, step_id: int, call_id: str) -> None:
         self._append("tool_start", step=step_id, call_id=call_id)
+
+    def edits_delivered(self, step_id: int, edits: list[dict[str, Any]]) -> None:
+        """Persist accepted edit observations before their step's tools start."""
+        self._append("user_edits", id=step_id, edits=edits)
 
     def log(self, log: CommandLog) -> None:
         self._append("log", metadata={**log.metadata(), "command": log.command})
@@ -334,6 +339,8 @@ class SessionJournal:
                         data.setdefault("history_merges", {})[event["id"]] = event
                     elif kind == "request_failure":
                         data.setdefault("request_failures", {})[event["id"]] = event["failure"]
+                    elif kind == "user_edits":
+                        data.setdefault("delivered_user_edits", {})[event["id"]] = event["edits"]
                     elif kind == "tool_start":
                         data["started"].add((event["step"], event["call_id"]))
                     elif kind == "log":
@@ -397,6 +404,17 @@ class SessionJournal:
                         step.compaction_status = "interrupted"
                     step.compaction_error = saved.get("compaction_error")
                     step.observed = step.id < len(history.steps) or not step.has_results
+            from .editdelivery import acknowledge, validate_notifications
+            delivered_edits = dict(data.get("delivered_user_edits", {}))
+            for step_id, saved in data["steps"].items():
+                if saved.get("user_edits") is not None:
+                    delivered_edits[step_id] = saved["user_edits"]
+            for step_id, edits in delivered_edits.items():
+                if type(step_id) is not int or not 1 <= step_id <= len(history.steps):
+                    raise ValueError("Invalid saved-edit delivery turn")
+                validate_notifications(edits)
+                setattr(history.steps[step_id - 1], "user_edits", edits)
+                acknowledge(data["state"].get("user_edits", {}), edits)
             from .requestfailures import retry_state, validate_failure
             for step_id, failure in data.get("request_failures", {}).items():
                 if type(step_id) is not int or not 1 <= step_id <= len(history.steps):

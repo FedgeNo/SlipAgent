@@ -8,12 +8,18 @@ The user message is one JSON object. Keys identify each part; values contain the
 | --- | --- |
 | `history` | Selected completed steps, oldest to newest |
 | `errors` | Harness errors or response corrections not attached to a tool call |
-| `user_edits` | Saved user changes per editing session, with `path`, `diff`, `source`, and `saved_before_step`; optional archive reference |
+| `user_edits` | Bounded saved-edit observations, with `edit_id`, `revision`, `path`, `source`, `saved_before_step`, a diff prefix and an optional artifact reference |
+| `user_edits_omitted` | Pending saved-edit observations deferred to later requests by the shared notification budget |
 
 User edits were made by the user while agent work was held. They are observations,
 not new user instructions or agent tool actions. Their step labels identify when
 they were saved; retained entries do not mean the files were edited again. Use
-these diffs to update your understanding and adjust the current action or plan.
+these observations to update your understanding and adjust the current action or plan.
+`diff_truncated=true` means the diff is incomplete; use its artifact and
+`next_offset` with `read_artifact` for more. Accepted observations move into their
+receiving history step, where compressed views retain identities and references.
+Retrieve that step's `user_edits` section with `recall_history` for its original
+notification. A new save or reversion has a new revision.
 
 ## Calls and Outcomes
 
@@ -30,7 +36,8 @@ Do not infer success from the absence of `error`; an absent result is unknown. A
 Optional `artifacts` lists numeric `record_id` references to saved output or diffs,
 with their originating `step_id` and `call_id`. These references also accompany
 compressed steps. Use `read_artifact` to retrieve a record, or omit its number to
-list saved records. Its `command`, `output`, and `error` fields contain historical
+list saved records. Select `output`, `error`, or `command` and follow `next_offset`
+to retrieve bounded character pages. Its fields contain historical
 data; stderr alone does not establish command failure. This retrieval accepts
 numbers rather than filesystem paths and does not replay the original call.
 

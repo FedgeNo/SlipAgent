@@ -25,7 +25,7 @@ conversation or restarting the terminal.
   optional web search, with additional tools through MCP.
 - **Human inspection and editing:** clickable file and directory references, a
   built-in editor, colored diffs, saved tool-call records, and a Touched/Calls
-  sidebar. Saved user edits return to the model as diffs.
+  sidebar. Saved user edits return as bounded notifications with retrievable diffs.
 - **Mouse and keyboard navigation:** clickable menus, wheel scrolling, a
   selection context menu, and panel focus cycling with Ctrl+Space.
 - **Focused tool definitions:** seven core tools are fully described initially;
@@ -864,8 +864,13 @@ Untouched content and line endings are preserved. External disk changes offer
 Reload and require an explicit choice before overwriting. Editor reload retains
 the cursor's logical line, clamping to the last line if the file became shorter.
 Git, when available,
-supplies the saved user-edit diff, which accompanies the next model input separately from user
-messages and tool results and survives session resume. Without Git, Python's
+supplies the saved user-edit diff. Its bounded notification accompanies model
+input separately from user messages and tool results and survives session resume.
+Notifications share a context budget; remaining edits wait for later requests.
+Each save has a revision, including reversions. Only an accepted response retires
+the exact revision it received into that turn's history. Failed requests leave
+notifications pending. Full archived diffs remain available through `read_artifact`.
+Without Git, Python's
 `difflib` generates the diff; that fallback holds both files' lines in memory.
 
 ### Inspection Options
@@ -890,6 +895,13 @@ stderr stay separate; stderr is not itself proof of failure. The viewer shows
 the command, one blank line, then output. Numeric references accompany full and
 compressed history, survive resume/fork, and can be retrieved with
 `read_artifact` without granting arbitrary access outside the workspace.
+The tool returns one field (`output`, `error`, or `command`) in character pages:
+4,000 characters by default, capped at 12,000. Follow `next_offset` until `eof`.
+Listing defaults to 20 records, capped at 100, with offsets measured in records.
+Command metadata is shortened to 500 characters; select `command` to retrieve it
+in full through pages. Paging scans and validates the stored record with bounded
+memory. If saving a diff fails, its notification reports that the archive is
+unavailable; a truncated notification remains pending.
 Inspection storage has the configured command-log quota independently of the
 existing raw command archive. Saving a record does not alter raw-log byte
 offsets. Without session persistence, inspection records are temporary.
@@ -1043,7 +1055,8 @@ contains one JSON object with these fields:
 | `retained_user_requests` | Full ordered array of user messages received before tool use began; supplied only after tools when no new user messages are present |
 | `history` | Selected completed steps, oldest to newest |
 | `errors` | Harness errors and response corrections not attached to a call |
-| `user_edits` (when present) | Saved user file edits, supplied separately with their diffs |
+| `user_edits` (when present) | Saved user file edits, with revision IDs, bounded diff prefixes and artifact references |
+| `user_edits_omitted` (when present) | Pending saved-edit notifications deferred by the shared budget |
 
 Each full history record contains `user_prompt`, `agent_response`, and `tool_calls`.
 Each call retains its `call_id`, `tool_name`, and argument object, with its raw
@@ -1674,7 +1687,7 @@ The complete built-in tool set is:
 | `run_command` | Run a shell command and capture output; `background=true` returns a managed job ID. |
 | `command_jobs` | List, inspect, wait for, or stop managed background commands. |
 | `read_command_output` | Page retained stdout/stderr or read its tail by log ID; list logs by step/call ID. |
-| `read_artifact` | Retrieve a complete saved inspection record by numeric `record_id`; omit it to list records. |
+| `read_artifact` | Read a bounded character page of a saved inspection record by numeric `record_id`; select `field`, `offset`, and `limit`. Omit the ID for a paginated record list. |
 | `git_status` | Show the branch and short repository status. |
 | `git_diff` | Show unstaged changes, or staged changes with `staged=true`; optionally select literal `paths`. |
 | `git_log` | Show recent commit hashes and subjects (`limit=10`, maximum 100,000). |

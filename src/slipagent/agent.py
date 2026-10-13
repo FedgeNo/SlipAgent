@@ -165,6 +165,9 @@ class Agent:
         self.history.sync(self.messages)
         step = self.history.steps[-1]
         if isinstance(step, CompletedStep):
+            edits = self.registry.services.get("step_user_edits", {}).pop(step.id, None)
+            if edits:
+                step.user_edits = edits
             self._persist()
             if self.registry.services.get("interrupt_requested"):
                 return  # Preserve interrupted results without starting new work.
@@ -214,6 +217,8 @@ class Agent:
         self.registry.context_notes.pop("background_commands", None)
         self.registry.context_notes.pop("request_diagnostics", None)
         self.registry.context_notes.pop("user_edits", None)
+        self.registry.services.pop("step_user_edits", None)
+        self.registry.services.pop("accepted_user_edits", None)
         journal = self.registry.resources.journal
         if journal is not None and new_session:
             journal.begin(self)
@@ -324,6 +329,21 @@ class Agent:
         if self._requests >= self.max_steps:
             raise ContextStepLimit
         self._requests += 1
+
+    def _record_edit_delivery(self, step: int, edits: list[dict[str, Any]]) -> None:
+        from .editdelivery import acknowledge
+
+        if not edits:
+            return
+        # Save the accepted reply before the receipt, and the receipt before
+        # retiring pending revisions or dispatching any accepted tools.
+        self._persist()
+        journal = self.registry.resources.journal
+        if journal is not None:
+            journal.edits_delivered(step, edits)
+        self.registry.services.setdefault("step_user_edits", {})[step] = edits
+        acknowledge(self.registry.context_notes.get("user_edits", {}), edits)
+        self._persist()
 
     async def _context_view(self, specs: list[ToolSpec], step: int, *,
                             capabilities: RequestProfile | None = None, preview: bool = False,
@@ -581,8 +601,9 @@ class Agent:
         message.reasoning = completion.message.reasoning
         message.reasoning_details = completion.message.reasoning_details
         message.reasoning_model = self.model
+        self.messages.append(message)
+        self._record_edit_delivery(step, self.registry.services.pop("accepted_user_edits", []))
         if not record.calls:
-            self.messages.append(message)
             await self._archive_step(capabilities)
             if not self.pending and not self.stop_requested:
                 for suggestion in getattr(record, "suggestions", []):
@@ -594,7 +615,6 @@ class Agent:
             # it queued for the next step rather than dropping it.
             return text
 
-        self.messages.append(message)
         self._persist()
 
         from .toolbatch import ToolBatch

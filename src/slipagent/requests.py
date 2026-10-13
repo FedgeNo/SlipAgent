@@ -77,6 +77,7 @@ class RequestDriver:
         self, context: list[Message], specs: list[ToolSpec], step: int, run_step: int,
         capabilities: RequestProfile | None, native_tools: bool,
     ) -> RequestAccepted | RequestStopped:
+        self.registry.services.pop("accepted_user_edits", None)
         extra_body: dict[str, Any] = {}
         response_format = model_response_format(self.settings.model, capabilities, native_tools=native_tools)
         if response_format is not None:
@@ -271,6 +272,8 @@ class RequestDriver:
                 rejected_excerpt = exc.excerpt
             else:
                 finish_attempt("accepted", response=json.dumps(completion.message.to_api(), ensure_ascii=False), usage=completion.usage)
+                from .editdelivery import notifications
+                self.registry.services["accepted_user_edits"] = notifications(context)
                 accepted_text = record.text.strip()
                 if preview.text and not accepted_text.startswith(preview.text):
                     end_preview()

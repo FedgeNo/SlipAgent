@@ -41,7 +41,7 @@ from .records import linked_tool_results, record_message, step_record
 from .data_text import JSONInput, MessageSections, render_data
 
 DEFAULT_CONTEXT_LENGTH = 1_000_000
-HISTORY_PART_NAMES = ("prompt", "response", "reasoning", "tool_calls", "tool_results")
+HISTORY_PART_NAMES = ("prompt", "response", "reasoning", "tool_calls", "tool_results", "user_edits")
 
 def __getattr__(name: str) -> str:
     resources = {"JSON_TOOL_INSTRUCTIONS": "json-tools.md", "NATIVE_TOOL_INSTRUCTIONS": "native-tools.md",
@@ -242,6 +242,8 @@ class CompletedStep(HistoryStep):
     this response; compaction keeps factual memory and filtered thoughts separate.
     """
 
+    user_edits: list[dict[str, Any]]
+
     def __init__(self, step_id: int, request: str, messages: list[Message]) -> None:
         super().__init__(step_id, request, messages)
         self.user_prompt = request
@@ -263,13 +265,18 @@ class CompletedStep(HistoryStep):
         failure = getattr(self, "request_failure", None)
         if failure is not None:
             parts.update(response=None, request_failure=failure)
+        if getattr(self, "user_edits", None):
+            parts["user_edits"] = self.user_edits
         return parts
 
     def compaction_input(self) -> dict[str, Any]:
         parts = self.parts()
-        return {"user_prompt": parts["prompt"],
-                           "agent_response": parts["response"], "tool_calls": parts["tool_calls"],
+        source = {"user_prompt": parts["prompt"],
+                "agent_response": parts["response"], "tool_calls": parts["tool_calls"],
                 "tool_results": parts["tool_results"], "reasoning": parts["reasoning"]}
+        if "user_edits" in parts:
+            source["user_edits"] = parts["user_edits"]
+        return source
 
     def record(self) -> dict[str, Any]:
         return {"step": self.id, **self.parts()}
@@ -281,6 +288,14 @@ class CompletedStep(HistoryStep):
 
     def context_messages(self, *, compressed: bool = False) -> list[Message]:
         part = super().context_messages(compressed=compressed)
+        edits = getattr(self, "user_edits", None)
+        if edits:
+            record = dict(part[0].content)
+            record["user_edits"] = [{key: value for key, value in edit.items() if not compressed or key != "diff"}
+                                    for edit in edits]
+            record["artifacts"] = [*record.get("artifacts", []),
+                                   *(edit["artifact"] for edit in edits if "artifact" in edit)]
+            part = [record_message(record)]
         failure = getattr(self, "request_failure", None)
         if failure is not None:
             record = dict(part[0].content)
@@ -292,12 +307,24 @@ class CompletedStep(HistoryStep):
         return part
 
     def excerpt_context_messages(self, budget: int) -> list[Message] | None:
-        part = super().excerpt_context_messages(budget)
+        metadata: dict[str, Any] = {}
+        edits = getattr(self, "user_edits", None)
+        if edits:
+            metadata["user_edits"] = [{key: value for key, value in edit.items() if key != "diff"}
+                                      for edit in edits]
+            metadata["artifacts"] = [edit["artifact"] for edit in edits if "artifact" in edit]
         failure = getattr(self, "request_failure", None)
-        if part is not None and failure is not None:
+        if failure is not None:
+            metadata["request_failure"] = {key: value for key, value in failure.items() if key != "response_excerpt"}
+        overhead = message_tokens([record_message(metadata)]) if metadata else 0
+        part = super().excerpt_context_messages(budget - overhead)
+        if part is not None and metadata:
             record = dict(part[0].content)
-            record["request_failure"] = {key: value for key, value in failure.items() if key != "response_excerpt"}
-            return [record_message(record)]
+            references = [*record.get("artifacts", []), *metadata.pop("artifacts", [])]
+            record.update(metadata)
+            if references:
+                record["artifacts"] = references
+            part = [record_message(record)]
         return part
 
 
@@ -443,6 +470,8 @@ class ConversationHistory:
             )
         if recovery:
             sections.append(load_prompt('request-retry.md'))
+        if user_edits:
+            sections.append(load_prompt('user-edits.md'))
         instructions = "\n" + "\n\n".join(section.strip() for section in sections if section.strip()) + "\n"
         pinned = [message for message in messages if message.role == "system"]
         if pinned:
@@ -457,18 +486,23 @@ class ConversationHistory:
             metadata["is_tool_result_response"] = False
         pinned[-1] = Message.system(MessageSections([system_prefix, load_prompt("current-turn.md"), metadata]))
 
+        edit_view: list[dict[str, Any]] = []
+        edits_omitted = len(user_edits or [])
+
         def assemble(selected: list[Message]) -> list[Message]:
             # Only the request projection changes; archives retain their roles.
             user_text = [message.content for message in tail_messages if message.role == "user"]
             source_step = self.task.current_prompt_step
-            payload = {
+            payload: dict[str, Any] = {
                 "user_messages": user_text,
                 "retained_user_requests": self.task.sources[source_step] if source_step is not None and continuing_tools else [],
                 "history": [linked_tool_results(message.content) for message in selected],
                 "errors": [user_corrections] if user_corrections.strip() else [],
             }
-            if user_edits:
-                payload["user_edits"] = user_edits
+            if edit_view:
+                payload["user_edits"] = edit_view
+            if edits_omitted:
+                payload["user_edits_omitted"] = edits_omitted
             return [*pinned, Message.user(JSONInput(payload))]
 
         tail_messages = [message for message in messages[self.cursor:] if message.role != "system"]
@@ -485,6 +519,12 @@ class ConversationHistory:
         tail_tokens = tokens(tail)
         if tail_tokens + 256 >= available:
             raise ContextError("Current input and instructions exceed the context budget. Shorten the input or reference a file; conversation history is preserved.")
+        if user_edits:
+            from .editdelivery import bounded_notifications
+            edit_budget = min(2048, max(256, int(available * .2)), available - tail_tokens - 256)
+            edit_view, edits_omitted = bounded_notifications(user_edits, edit_budget,
+                lambda edits, omitted: tokens([Message.user(JSONInput({"user_edits": edits, "user_edits_omitted": omitted}))]))
+            tail_tokens = tokens([assemble([])[-1]])
         def context_part(index: int, *, compressed: bool = False,
                          include_summary: bool = True) -> list[Message]:
             step = self.steps[index]
@@ -662,6 +702,7 @@ class RecallHistoryTool(Tool):
             if section in HISTORY_PART_NAMES or sections is not None:
                 original = step if isinstance(step, CompletedStep) else CompletedStep(step.id, step.request, step.messages)
                 parts = original.parts()
+                parts.setdefault("user_edits", [])
                 if call_id is not None:
                     key = "id" if section == "tool_calls" else "call_id"
                     parts[section] = [value for value in parts[section] if value[key] == call_id]

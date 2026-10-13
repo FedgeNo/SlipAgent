@@ -146,7 +146,8 @@ class ContextBuilder:
             query = next((m.content or "" for m in reversed(self.messages) if m.role == "user"), "")
             repository_map = await self.registry.resources.repository_map.snapshot(query, min(128_000, int(length * budget_fraction * .03 * 3)))
         view_options: dict[str, Any] = dict(
-            user_edits=list(self.registry.context_notes.get("user_edits", {}).values()),
+            user_edits=[{**entry, "edit_id": key} for key, entry in self.registry.context_notes.get("user_edits", {}).items()
+                        if not entry.get("delivered")],
             user_corrections="\n\n".join(part.strip() for part in (
                 self.registry.context_notes.get("progress", ""), repair,
             ) if part.strip()),

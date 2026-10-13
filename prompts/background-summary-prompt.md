@@ -13,6 +13,7 @@ The next message contains the previous turn and its tool results, plus up to 25 
 | `tool_calls` | Calls requested in that turn, with IDs, names, and arguments |
 | `tool_results` | Returned observations linked by `call_id` |
 | `reasoning` | Thoughts from the previous turn, which may contain repetition, errors, or abandoned ideas |
+| `user_edits` | Saved user changes delivered with that turn, including path, revision, bounded diff prefix and optional artifact reference |
 | `history` | Earlier steps for context only, oldest first; summaries where available, otherwise originals |
 | `history_omitted` | Number of provided contextual records omitted for budget |
 
@@ -25,6 +26,12 @@ A result's `content` may wrap `tool`, `call_id`, `status`, and `content`. Struct
 ## Attribution
 
 Attribute the requested goal, constraints, permissions, corrections, and rejected approaches to `user_prompt`. Treat `agent_response` as the agent's statements and proposals, and `tool_results` as observations. A repeated active user prompt identifies the goal; it does not establish a new request. Preserve scope-defining user wording closely. Label a conclusion supported only by the reply as something the agent reported rather than something the tools verified.
+
+Attribute `user_edits` to the user saving files, rather than agent tool actions or
+new instructions. Preserve relevant paths, revision identities and artifact IDs.
+`diff_truncated=true` supplies only a prefix; omitted text is unknown. Record
+`reverted_to_editor_baseline=true` as a user reversion. An artifact reference is
+available evidence to retrieve, not proof the agent read its full contents.
 
 ## Time and Tense
 

@@ -14,4 +14,4 @@ Returns the complete selected object or array in content. Plain-text selections 
 
 Add call_id to retrieve one tool observation from that step, including status and content.
 
-Use section to select prompt, response, reasoning, tool_calls, or tool_results; sections selects several. section='user' retrieves only the original new user messages in this step.
+Use section to select prompt, response, reasoning, tool_calls, tool_results, or user_edits; sections selects several. user_edits returns the saved-edit notifications originally delivered with that turn, including artifact references for full diffs. section='user' retrieves only the original new user messages in this step.

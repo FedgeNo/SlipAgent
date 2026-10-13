@@ -1079,9 +1079,11 @@ and from assistant replies reused as context, without rewriting saved originals.
 Quoted or fenced examples, user input, tool arguments and file content remain intact.
 
 The prompt stays live while the agent works. All waiting prompts join the next
-model request together, after the current tool batch finishes. Each has a queued
-label that disappears from the interactive transcript when its request is sent.
-If context preparation fails or `/stop` prevents that request, the label stays.
+model request together, after the current tool batch finishes. Their previews
+stay just above the bottom controls until their request is sent. Each
+preview occupies one line, with an ellipsis when it is too long. On submission,
+the full prompts enter the feed in arrival order before that request's output.
+If context preparation fails or `/stop` prevents that request, the previews stay.
 Blank lines separate submitted prompts from the surrounding transcript.
 Each model reply starts with a blank line, including replies preceded only by
 tool output. Its following tool calls and results stay together until the next

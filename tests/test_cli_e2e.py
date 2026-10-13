@@ -904,8 +904,8 @@ def test_prompt_and_status_never_share_a_line_with_output(project_dir: Path) -> 
         assert line.lstrip().startswith(">") or "Free: " in line, line
 
 
-def test_mid_turn_input_is_queued_and_labelled(project_dir: Path) -> None:
-    """Text typed while the agent works is accepted, and visibly queued."""
+def test_mid_turn_input_reaches_model_without_queue_label(project_dir: Path) -> None:
+    """Text typed while the agent works reaches the model without a queue notice."""
     with StubOpenRouter(
         [tool_step("list_dir", {}), text_step("done"), text_step("also done")]
     ) as stub:
@@ -915,12 +915,11 @@ def test_mid_turn_input_is_queued_and_labelled(project_dir: Path) -> None:
 
     assert proc.returncode == 0, proc.stderr
     assert "also do this" in proc.stderr
-    assert "queued" in proc.stderr
+    assert "(queued — the agent is still working)" not in proc.stderr
     lines = proc.stderr.splitlines()
     submitted = lines.index("> also do this")
     assert lines[submitted - 1] == ""
-    assert "queued" in lines[submitted + 1]
-    assert lines[submitted + 2] == ""
+    assert lines[submitted + 1] == ""
     # It must have reached the model as ordinary user input.
     users = [prompt for record in context_records(stub.requests[-1]["messages"]) for prompt in record.get("user_prompt", [])]
     assert "also do this" in users
@@ -1086,7 +1085,7 @@ def test_followup_during_final_response_is_answered(project_dir: Path) -> None:
         def read_output():
             for line in proc.stderr:
                 output.append(line)
-                if "(queued" in line:
+                if line.strip() == "> followup task":
                     queued.set()
         reader = threading.Thread(target=read_output, daemon=True)
         reader.start()

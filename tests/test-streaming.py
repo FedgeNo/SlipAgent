@@ -406,7 +406,7 @@ def test_queued_prompt_interrupts_stream_without_appending_tokens_to_the_prompt(
     renderer.handle(AgentEvent(kind="assistant_delta", text="Continuing."))
     renderer.handle(AgentEvent(kind="stream_end"))
     assert sink.getvalue().splitlines() == [
-        "", "Working.", "", "> correction", "  (queued — the agent is still working)", "", "Continuing.",
+        "", "Working.", "", "> correction", "", "Continuing.",
     ]
 
 

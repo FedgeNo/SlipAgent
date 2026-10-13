@@ -1065,6 +1065,8 @@ def test_artifact_links_keep_tools_together_and_separate_following_output(displa
                 renderer.emit(text)
             else:
                 renderer.handle(AgentEvent(following, text=text))
+                if following == "user_message":
+                    renderer.handle(AgentEvent("user_message_sent", text=text))
             content = ui._transcript_content(100)
             lines = ["".join(text for _, text, *_ in content.get_line(y)) for y in range(content.line_count)]
             last = lines.index("    View Output — Record 2")
@@ -1597,7 +1599,7 @@ async def test_ctrl_c_has_no_application_binding_or_exit_action(display, working
 
 @pytest.mark.parametrize("columns", [18, 100])
 @pytest.mark.parametrize("paint_first", [False, True])
-def test_queued_notice_disappears_without_reformatting_history(display, monkeypatch, columns, paint_first):
+def test_accepted_queued_prompts_append_without_reformatting_history(display, monkeypatch, columns, paint_first):
     from slipagent.transcript import WrappedTranscript
     sink, _, output, _, _ = display
     ui = TerminalUI(lambda width: "status", sink, output=output)
@@ -1625,23 +1627,24 @@ def test_queued_notice_disappears_without_reformatting_history(display, monkeypa
     renderer.handle(AgentEvent(kind="user_message_sent", text="same"))
     content = ui._transcript_content(columns)
     if paint_first:
-        assert not examined
+        assert not any("Old transcript" in text or "Working output" in text for text in examined)
         assert content.get_line(ui.transcript.vertical_scroll) == old_row
         assert not ui.transcript._following
     text = "\n".join("".join(part[1] for part in content.get_line(i)) for i in range(content.line_count))
-    assert text.count("queued") == 2  # User's literal text and the remaining identical prompt's notice.
-    assert text.count("> same") == 2
+    assert text.count("queued") == 1  # Only the user's literal text contains this word.
+    assert text.count("> same") == 1
     assert ui.input.text == "unfinished draft"
     # Resize/reload rebuild from the updated originals; notices cannot return.
     ui.refresh()
     content = ui._transcript_content(100)
     text = "\n".join("".join(part[1] for part in content.get_line(i)) for i in range(content.line_count))
-    assert text.count("(queued — the agent is still working)") == 2
+    assert text.count("(queued — the agent is still working)") == 1
     assert literal in text
     renderer.handle(AgentEvent(kind="user_message_sent", text="same"))
     content = ui._transcript_content(100)
     text = "\n".join("".join(part[1] for part in content.get_line(i)) for i in range(content.line_count))
     assert text.count("(queued — the agent is still working)") == 1
+    assert text.count("> same") == 2
     assert ui._flow.prompt_at(content.line_count - 1) is not None
     renderer.emit("The new answer")
     content = ui._transcript_content(100)
@@ -2419,6 +2422,7 @@ async def test_latest_user_prompt_stays_pinned_until_next_prompt_reaches_top(dis
             await wait_until(lambda: "> The next task" in "\n".join(snapshot()[1:17]))
             assert snapshot()[0].rstrip() == "> Keep the original task visible"
             assert "> The next task" in "\n".join(snapshot()[:17])
+            renderer.handle(AgentEvent(kind="user_message_sent", text="The next task"))
             ui.write("\n".join(f"next result {i}" for i in range(50)))
             await wait_until(lambda: snapshot()[0].rstrip() == "> The next task")
             assert "next result 49" in "\n".join(snapshot()[1:17])
@@ -2691,7 +2695,9 @@ async def test_restored_transcript_replaces_output_and_scrolls_to_end(display):
             assert screen.buffer[0][0].fg == "ffffff"
             await renderer.restore_transcript(messages, ["Queued correction"])
             await wait_until(lambda: "> Queued correction" in "\n".join(snapshot()[:17]))
-            assert "queued" in "\n".join(snapshot()[:17])
+            assert "> Queued correction" in snapshot()[16]
+            assert "Queued correction" not in "\n".join(ui._raw_output)
+            assert "queued" not in "\n".join(snapshot()[:17])
         finally:
             ui.close()
             await task

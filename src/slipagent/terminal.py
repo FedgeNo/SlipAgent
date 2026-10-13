@@ -200,6 +200,7 @@ class TerminalUI:
         self._ensure_viewer()
         self._ensure_inspection()
         self._ensure_focus()
+        self._ensure_queued_prompts()
         if not isinstance(self.input.window, InputWindow):
             self.input.window = InputWindow(self.input.control)
             self.input.window.style = "class:text-area class:user"
@@ -248,11 +249,15 @@ class TerminalUI:
             top=0, left=0, right=0, height=self._pinned_prompt_height,
             content=Window(TranscriptControl(self._pinned_prompt_content)),
         )])
-        transcript = DynamicContainer(lambda: pinned_transcript if self.output.get_size().rows > self._footer_rows() + 1 else self.transcript)
+        transcript = DynamicContainer(lambda: pinned_transcript if self.output.get_size().rows > self._footer_rows() + self._queued_prompt_height() + 1 else self.transcript)
         return Layout(HSplit([
             VSplit([DynamicContainer(lambda: self._editor_container if self._editor_active else self._viewer_container if self._viewer_active else
                                      context if self.context_visible else transcript),
                     ConditionalContainer(self._inspection_panel, Condition(lambda: self._inspection_visible and self.output.get_size().columns >= 60))]),
+            ConditionalContainer(Window(TranscriptControl(self._queued_prompt_content),
+                                        height=self._queued_prompt_height, dont_extend_height=True,
+                                        style="class:user"),
+                                 Condition(lambda: self._queued_prompt_height() > 0)),
             DynamicContainer(lambda: menu_footer if self._menu_future is not None else setting_footer if self._options_field_active else footer),
         ]), focused_element=self._menu_window if self._menu_future is not None else self._options_panel.field if self._options_field_active else self._editor_input if self._editor_active else
             self._viewer_window if self._viewer_active else self.input)
@@ -1006,7 +1011,7 @@ class TerminalUI:
         if self._pinned_prompt is None:
             return 0
         # One header row, leaving at least one transcript row above the footer.
-        available = max(0, size.rows - self._footer_rows() - 1)
+        available = max(0, size.rows - self._footer_rows() - self._queued_prompt_height() - 1)
         return min(1, available)
 
     def _pinned_prompt_content(self, width: int) -> UIContent:
@@ -1201,7 +1206,7 @@ class TerminalUI:
         @bindings.add("pagedown", filter=in_viewer)
         def scroll_view(event: KeyPressEvent) -> None:
             key = event.key_sequence[-1].key
-            rows = max(1, self.output.get_size().rows - self._footer_rows() - 1) if key in {"pageup", "pagedown"} else 1
+            rows = max(1, self.output.get_size().rows - self._footer_rows() - self._queued_prompt_height() - 1) if key in {"pageup", "pagedown"} else 1
             self._scroll_output(-rows if key in {"up", "pageup"} else rows)
 
         @bindings.add("home", filter=in_viewer)
@@ -1258,7 +1263,7 @@ class TerminalUI:
         @bindings.add("pagedown", filter=in_context)
         def scroll_context(event: KeyPressEvent) -> None:
             key = event.key_sequence[-1].key
-            rows = max(1, self.output.get_size().rows - self._footer_rows() - 1) if key in {"pageup", "pagedown"} else 1
+            rows = max(1, self.output.get_size().rows - self._footer_rows() - self._queued_prompt_height() - 1) if key in {"pageup", "pagedown"} else 1
             self._scroll_output(-rows if key in {"up", "pageup"} else rows)
 
         @bindings.add("home", filter=in_context)
@@ -1320,6 +1325,7 @@ class TerminalUI:
         bindings = self._bindings()
         style = self._style()
         self._ensure_transcript()
+        self._migrate_queued_notices()
         self.app.layout = layout
         self.app.key_bindings = bindings
         self.app.style = style
@@ -1344,7 +1350,7 @@ class TerminalUI:
                 if self._menu_future is not None:
                     self._move_menu(-1 if event.event_type == MouseEventType.SCROLL_UP else 1)
                     return None
-                if self._editor_active and event.position.y < size.rows - self._footer_rows() and self._menu_future is None:
+                if self._editor_active and event.position.y < size.rows - self._footer_rows() - self._queued_prompt_height() and self._menu_future is None:
                     if not (self._inspection_visible and size.columns >= 60 and event.position.x >= size.columns - size.columns // 4):
                         self._editor_panel.move_cursor(-3 if event.event_type == MouseEventType.SCROLL_UP else 3)
                         app.invalidate()
@@ -1357,7 +1363,7 @@ class TerminalUI:
                         window.scroll(-3 if event.event_type == MouseEventType.SCROLL_UP else 3)
                     app.invalidate()
                     return None
-                if self.__dict__.get("_inspection_visible") and size.columns >= 60 and event.position.x >= size.columns - size.columns // 4 and event.position.y < size.rows - self._footer_rows() and self._menu_future is None:
+                if self.__dict__.get("_inspection_visible") and size.columns >= 60 and event.position.x >= size.columns - size.columns // 4 and event.position.y < size.rows - self._footer_rows() - self._queued_prompt_height() and self._menu_future is None:
                     screen = app.renderer._last_screen
                     if screen is not None:
                         for pane in (self._files_window, self._calls_window):
@@ -1529,6 +1535,7 @@ class TerminalUI:
     def clear_transcript(self) -> None:
         """Replace display storage while retaining the input draft and application."""
         self._ensure_transcript()
+        self.clear_queued_prompts()
         archive = TranscriptFile()
         self._close_transcript()
         self._raw_output = archive
@@ -1546,7 +1553,6 @@ class TerminalUI:
         self._markdown_finals.clear()
         self._selection_start = self._selection_end = None
         self._selection_dragging = False
-        self.forget_queued_notices()
         self._flow = None
         self._wrapped_columns = self._wrapped_count = self._line_count = 0
         self._pinned_prompt = None
@@ -1747,42 +1753,75 @@ class TerminalUI:
             pieces.append(row.selected(start.x if index == start.y else 0, end.x if index == end.y else None))
         return "".join(pieces)
 
-    def write_queued_notice(self, text: str, prompt: str) -> None:
-        """Append a removable full line immediately after a user's prompt."""
-        self._ensure_transcript()
-        self._queued_notices[len(self._raw_output)] = prompt
-        self.write_chunk(text + "\n")
-
-    def forget_queued_notices(self) -> None:
-        """Detach old queue receipts when resetting or replacing a session."""
-        self._queued_notices: dict[int, str] = {}
-        self._notice_rows: dict[int, tuple[int, int]] = {}
-
-    def queued_prompt_sent(self, prompt: str) -> None:
-        self._ensure_transcript()
-        index = next((i for i, text in self._queued_notices.items() if text == prompt), None)
-        if index is None:
+    def _ensure_queued_prompts(self) -> None:
+        """Initialize waiting state without changing the retained transcript."""
+        if "_queued_prompts" in self.__dict__:
             return
-        del self._queued_notices[index]
-        self._raw_output.clear_record(index)
-        span = self._notice_rows.pop(index, None)
-        if span is not None and self._flow is not None:
-            start, stop = span
-            count = stop - start
-            self._flow.remove_rows(start, stop)
-            self._notice_rows = {i: (left - count, right - count) if left >= stop else (left, right)
-                                 for i, (left, right) in self._notice_rows.items()}
-            self.transcript.vertical_scroll -= min(count, max(0, self.transcript.vertical_scroll - start))
-            self._line_count -= count
+        notices = self.__dict__.get("_queued_notices", {})
+        self._queued_prompts: list[str] = list(notices.values())
+
+    def _migrate_queued_notices(self) -> None:
+        """Move legacy entries only after fallible presentation builds succeed."""
+        self._ensure_queued_prompts()
+        self._ensure_transcript()
+        notices = self.__dict__.pop("_queued_notices", {})
+        for index in notices:
+            # The previous renderer wrote the prompt and its notice as adjacent
+            # records. Empty both without changing other records' identities.
+            self._raw_output.clear_record(index - 1)
+            self._raw_output.clear_record(index)
+        self.__dict__.pop("_notice_rows", None)
+        if notices:
+            self._wrapped_columns = 0
             self._pinned_prompt = None
+
+    def queue_prompt(self, prompt: str) -> None:
+        self._ensure_queued_prompts()
+        self._queued_prompts.append(prompt)
         self.app.invalidate()
+
+    def clear_queued_prompts(self) -> None:
+        self._migrate_queued_notices()
+        self._queued_prompts.clear()
+        self.app.invalidate()
+
+    def queued_prompt_sent(self, prompt: str) -> bool:
+        """Acknowledge the first matching arrival, including identical prompts."""
+        self._ensure_queued_prompts()
+        if prompt not in self._queued_prompts:
+            return False
+        self._queued_prompts.remove(prompt)
+        self.app.invalidate()
+        return True
+
+    def _queued_prompt_height(self) -> int:
+        self._ensure_queued_prompts()
+        available = max(0, self.output.get_size().rows - self._footer_rows() - 1)
+        return min(len(self._queued_prompts), available)
+
+    def _queued_prompt_content(self, width: int) -> UIContent:
+        height = self._queued_prompt_height()
+        prompts = self._queued_prompts[-height:] if height else []
+
+        def get_line(index: int) -> StyleAndTextTuples:
+            if not 0 <= index < len(prompts) or width <= 0:
+                return []
+            text = "> " + " ".join(literal(prompts[index]).splitlines())
+            if display_width(text) > width:
+                prefix = ""
+                for cluster in iter_graphemes(text):
+                    if display_width(prefix + cluster) > width - 1:
+                        break
+                    prefix += cluster
+                text = prefix.rstrip() + "…"
+            return [("class:user", text)]
+
+        return UIContent(get_line=get_line, line_count=height, show_cursor=False)
 
     def _ensure_transcript(self) -> None:
         """Migrate pre-file-buffer sessions once, without rebuilding the frame."""
         # Older running sessions have no explicit wrap alignment metadata.
         self.__dict__.setdefault("_continuation_indents", {})
-        self.__dict__.setdefault("_queued_notices", {})
-        self.__dict__.setdefault("_notice_rows", {})
         # Existing highlighted selections are inactive after adopting this fix.
         self.__dict__.setdefault("_selection_dragging", False)
         # Explicit migration adds Markdown metadata without treating historical ANSI as Markdown.
@@ -1829,14 +1868,12 @@ class TerminalUI:
             self._flow = WrappedTranscript(columns, theme=self._markdown_theme,
                                            color=self.app.color_depth != ColorDepth.DEPTH_1_BIT,
                                            source=self._markdown_source)
-            self._notice_rows.clear()
             self._selection_start = self._selection_end = None
             self._selection_dragging = False
             self._wrapped_count = 0
             self._wrapped_columns = columns
         flow = self._flow
         for index in range(self._wrapped_count, len(self._raw_output)):
-            start = len(flow.rows)
             if index in self._markdown_chunks:
                 flow.append_markdown(self._raw_output[index], first=index in self._block_starts,
                                      final=index in self._markdown_finals)
@@ -1847,8 +1884,6 @@ class TerminalUI:
                                         (f" class:file-{index}" if index in self.__dict__.get("_file_links", {}) else "") +
                                         (f" class:artifact-{index}" if index in self.__dict__.get("_artifact_links", {}) else "") +
                                         (f" class:suggestion-{index}" if index in self.__dict__.get("_suggestion_links", {}) else ""))
-            if index in self._queued_notices:
-                self._notice_rows[index] = (start, len(flow.rows))
         self._wrapped_count = len(self._raw_output)
         preview = flow.content_rows()
         complete = len(flow.rows)

@@ -388,11 +388,14 @@ Before submitting a request, the agent includes every waiting prompt together,
 including arrivals during context preparation. Drained messages retain a delivery
 receipt keyed by their archive index until the request is sent; merely draining
 the queue, preparing context, or reaching `/stop` cannot acknowledge them. These
-indices are journaled so unsent prompts retain their queued labels on resume.
-Submission emits one receipt per prompt. The terminal removes that prompt's
-separate notice chunk and indexed display rows without reformatting surrounding
-history, then adjusts scroll and pinned-prompt indices. Identical queued prompts
-are acknowledged in arrival order. Plain stdout remains an append-only log.
+indices are journaled so unsent prompts remain pending on resume.
+Submission emits one receipt per prompt. The terminal holds waiting prompts in
+a separate area immediately above the bottom controls, with one clipped line
+per prompt and no queue notice. Receipts remove matching previews in arrival
+order, including identical prompts, and append the full user text to the feed
+before the submitted request's output. Queuing alone does not interrupt streamed
+prose or reformat transcript history. Reload migrates older unsent feed entries
+into the waiting area. Plain stdout remains an append-only log.
 
 Synchronous file reads, edits, writes, listings, glob scans, and instruction
 preflight checks run in owned worker threads. The terminal event loop remains

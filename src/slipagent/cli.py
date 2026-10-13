@@ -280,16 +280,13 @@ class Renderer:
 
     def user_prompt(self, text: str, *, queued: bool = False) -> None:
         """Separate each submitted prompt from the surrounding transcript."""
+        if queued and self.terminal is not None:
+            self.terminal.queue_prompt(text)
+            return
         self._finish_stream()
         self.__dict__.pop("_suggestion_step", None)
         self._begin_block()
         block = self.style.user(f"> {text}")
-        if queued and self.terminal is not None:
-            self._write(block + "\n", user_prompt=True)
-            self.terminal.write_queued_notice(self.style.dim("  (queued — the agent is still working)"), text)
-            return
-        if queued:
-            block += "\n" + self.style.dim("  (queued — the agent is still working)")
         self._write(f"{block}\n", user_prompt=True)
 
     def clear_prompt(self) -> None:
@@ -474,18 +471,16 @@ class Renderer:
                 self.terminal.write_suggestion(event.text)
 
         elif event.kind == "user_message":
-            # Mid-step input the user typed while the agent was working. It is
-            # echoed rather than the live prompt, because the prompt they are
-            # typing into is still on screen holding the text they just sent.
+            # Waiting input stays outside the feed until its request is sent.
             self.user_prompt(event.text, queued=True)
 
         elif event.kind == "user_message_sent":
-            if self.terminal is not None:
-                self.terminal.queued_prompt_sent(event.text)
+            if self.terminal is not None and self.terminal.queued_prompt_sent(event.text):
+                self.user_prompt(event.text)
 
         elif event.kind == "user_queue_reset":
             if self.terminal is not None:
-                self.terminal.forget_queued_notices()
+                self.terminal.clear_queued_prompts()
 
         elif event.kind == "tool_start" and event.tool_call is not None:
             self._tool_streamed = False

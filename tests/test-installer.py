@@ -233,3 +233,151 @@ def test_manifest_detection_and_unknown_baseline(monkeypatch, manifest):
         assert changes == [] and problem is None
     else:
         assert changes == ["src/a.py"] and "unknown baseline" in problem
+
+
+@pytest.mark.parametrize("phase", ["copy", "dependencies", "verification", "launcher", "metadata"])
+@pytest.mark.parametrize("windows", [False, True])
+def test_failed_updates_restore_source_dependencies_and_activation(tmp_path, monkeypatch, phase, windows):
+    import subprocess
+    import os
+
+    root, checkout, bin_dir = tmp_path / "installed", tmp_path / "download", tmp_path / "bin"
+    source = root / "source"
+    environment = source / ".venv"
+    executables = environment / ("Scripts" if windows else "bin")
+    executables.mkdir(parents=True)
+    (source / "src").mkdir()
+    application = source / "src/app.py"
+    application.write_text("previous application")
+    (source / ".git").mkdir()
+    (source / ".git/HEAD").write_text("previous branch")
+    dependency = environment / "dependency"
+    dependency.write_text("previous dependency")
+    executable = executables / ("python.exe" if windows else "python")
+    executable.write_text("previous interpreter")
+    entry = executables / ("slipagent.exe" if windows else "slipagent")
+    entry.write_text("previous entry point")
+    (root / ".slipagent-managed").write_text("managed fixture")
+    metadata = root / "installation.json"
+    metadata.write_text('{"previous": true}')
+    baseline = root / "installed-file-hashes.json"
+    baseline.write_text('{"previous": "hash"}')
+    current = root / "current"
+    if not windows:
+        current.symlink_to(source)
+    bin_dir.mkdir()
+    launcher = bin_dir / ("slipagent.exe" if windows else "slipagent")
+    launcher.symlink_to(entry)
+    (checkout / "src").mkdir(parents=True)
+    (checkout / "src/app.py").write_text("candidate application")
+    monkeypatch.setattr(installer.shutil, "which", lambda name: "fixture-uv")
+    def run(arguments, **options):
+        dependency.write_text("candidate dependency")
+        entry.write_text("candidate entry point")
+        if ((phase == "dependencies" and "install" in arguments)
+                or (phase == "verification" and "--help" in arguments)):
+            raise subprocess.CalledProcessError(1, arguments)
+    monkeypatch.setattr(installer.subprocess, "run", run)
+    original_copy = installer.copy_source
+    def copy(*arguments):
+        original_copy(*arguments)
+        if phase == "copy":
+            raise OSError("copy failed")
+    monkeypatch.setattr(installer, "copy_source", copy)
+    original_launcher = installer.replace_launcher
+    def replace(*arguments, **options):
+        original_launcher(*arguments, **options)
+        if phase == "launcher":
+            raise OSError("launcher failed")
+    monkeypatch.setattr(installer, "replace_launcher", replace)
+    original_replace = os.replace
+    failed = False
+    def publish(before, after, *arguments, **options):
+        nonlocal failed
+        if phase == "metadata" and Path(after) == metadata and not failed:
+            failed = True
+            raise OSError("metadata failed")
+        return original_replace(before, after, *arguments, **options)
+    monkeypatch.setattr(installer.os, "replace", publish)
+    with pytest.raises((OSError, subprocess.CalledProcessError)):
+        installer.install(checkout, root, bin_dir, windows=windows, dev=False, python="fixture")
+    assert application.read_text() == "previous application"
+    assert dependency.read_text() == "previous dependency"
+    assert entry.read_text() == "previous entry point"
+    assert executable.read_text() == "previous interpreter"
+    assert (source / ".git/HEAD").read_text() == "previous branch"
+    assert metadata.read_text() == '{"previous": true}'
+    assert baseline.read_text() == '{"previous": "hash"}'
+    assert launcher.is_symlink() and launcher.resolve() == entry
+    if not windows:
+        assert current.is_symlink() and current.resolve() == source
+    assert not list(tmp_path.glob(".installed-update-*"))
+
+
+def test_failed_in_place_dependency_update_restores_environment(tmp_path, monkeypatch):
+    import subprocess
+    root = tmp_path / "installed"
+    source = root / "source"
+    dependency = source / ".venv/lib/dependency"
+    dependency.parent.mkdir(parents=True)
+    dependency.write_text("old dependency")
+    (root / ".slipagent-managed").write_text("managed fixture")
+    monkeypatch.setattr(installer.shutil, "which", lambda name: "fixture-uv")
+    def failed(arguments, **options):
+        dependency.write_text("broken dependency")
+        raise subprocess.CalledProcessError(1, arguments)
+    monkeypatch.setattr(installer.subprocess, "run", failed)
+    with pytest.raises(subprocess.CalledProcessError):
+        installer.install(source, root, tmp_path / "bin", windows=False, dev=False, python="fixture")
+    assert dependency.read_text() == "old dependency"
+
+
+def test_failed_fresh_install_cleans_pending_files_and_can_be_retried(tmp_path, monkeypatch):
+    import os
+    root, checkout = tmp_path / "installed", tmp_path / "download"
+    (checkout / "src").mkdir(parents=True)
+    (checkout / "src/app.py").write_text("candidate")
+    monkeypatch.setattr(installer.shutil, "which", lambda name: "fixture-uv")
+    monkeypatch.setattr(installer.subprocess, "run", lambda *arguments, **options: None)
+    original_replace = os.replace
+    failed = False
+    def publish(before, after, *arguments, **options):
+        nonlocal failed
+        if Path(after) == root / "installation.json" and not failed:
+            failed = True
+            raise OSError("activation failed")
+        return original_replace(before, after, *arguments, **options)
+    monkeypatch.setattr(installer.os, "replace", publish)
+    with pytest.raises(OSError, match="activation failed"):
+        installer.install(checkout, root, tmp_path / "bin", windows=False, dev=False, python="fixture")
+    assert not (root / "source").exists()
+    assert not list(root.glob("installation.*.json"))
+    installer.install(checkout, root, tmp_path / "bin", windows=False, dev=False, python="fixture")
+    assert (root / "installation.json").is_file()
+
+
+def test_failed_rollback_retains_recoverable_backup(tmp_path, monkeypatch):
+    import os
+    import subprocess
+    root, checkout = tmp_path / "installed", tmp_path / "download"
+    source = root / "source"
+    (source / "src").mkdir(parents=True)
+    (source / "src/app.py").write_text("previous application")
+    (root / ".slipagent-managed").write_text("managed fixture")
+    (checkout / "src").mkdir(parents=True)
+    (checkout / "src/app.py").write_text("candidate")
+    monkeypatch.setattr(installer.shutil, "which", lambda name: "fixture-uv")
+    def failed(*arguments, **options):
+        raise subprocess.CalledProcessError(1, ["fixture"])
+    monkeypatch.setattr(installer.subprocess, "run", failed)
+    original_replace = os.replace
+    def cannot_restore(before, after, *arguments, **options):
+        if Path(after) == source:
+            raise OSError("rollback rejected")
+        return original_replace(before, after, *arguments, **options)
+    monkeypatch.setattr(installer.os, "replace", cannot_restore)
+    with pytest.raises(RuntimeError, match="Remaining backups"):
+        installer.install(checkout, root, tmp_path / "bin", windows=False, dev=False, python="fixture")
+    backups = list(tmp_path.glob(".installed-update-*"))
+    assert len(backups) == 1
+    assert (backups[0] / "0/src/app.py").read_text() == "previous application"

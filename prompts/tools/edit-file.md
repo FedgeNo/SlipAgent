@@ -20,6 +20,9 @@ Choose either `edits` or the single `old_string`/`new_string` pair, never both.
 
 ## Failure and Review
 
+The original must be a regular UTF-8 file no larger than 32 MB. Pipes, devices,
+sockets and unsafe path changes are rejected before reading or modifying them.
+
 A matching or validation failure applies no edits; nearby source is diagnostic evidence, not an applied fuzzy match. A later storage or checkpoint error may report an already-written file; inspect that result before retrying.
 
 Use diffs already supplied in history to assess earlier edits. An edit requested now is not yet verified.

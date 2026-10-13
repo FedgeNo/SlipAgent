@@ -17,6 +17,7 @@ from wcwidth import iter_graphemes, width as display_width
 
 from .editor import FileEditor, PAGE_SEGMENTS, signature
 from .editorcontrol import EditorControl, EditorWindow
+from .editorbuffer import EditorBuffer, grapheme_edge
 
 
 class EditorPanel:
@@ -34,6 +35,9 @@ class EditorPanel:
         self.controls = Window(FormattedTextControl(self.actions), height=5)
 
     def ensure_control(self) -> None:
+        if not isinstance(self.input.buffer, EditorBuffer):
+            self.input.buffer = EditorBuffer(self, self.input.buffer)
+            self.input.control.buffer = self.input.buffer
         if hasattr(self, "container"):
             header = self.container.children[0]
             if isinstance(header, Window):
@@ -111,6 +115,8 @@ class EditorPanel:
                 loaded.close()
                 raise
             self.file = file
+            if isinstance(self.input.buffer, EditorBuffer):
+                self.input.buffer.clear_document_history()
             self.saved_pages = {}
             self.page = file.original.line_index(line) // PAGE_SEGMENTS
             self.input.buffer.reset(document=Document(file.page_text(self.page)))
@@ -182,15 +188,45 @@ class EditorPanel:
         position = buffer.cursor_position
         if direction < 0 and position == 0:
             if self.change_page(-1):
-                buffer.cursor_position = max(0, len(buffer.text) - 1)
-        elif direction > 0 and position >= len(buffer.text) - int(buffer.text.endswith("\n")):
-            offset = max(0, position - len(buffer.text) + 1)
+                buffer.cursor_position = grapheme_edge(buffer.text, len(buffer.text), -1)
+        elif direction > 0 and grapheme_edge(buffer.text, position, 1) == len(buffer.text):
+            at_boundary = position == len(buffer.text)
             if self.change_page(1):
-                buffer.cursor_position = min(offset, len(buffer.text))
+                buffer.cursor_position = grapheme_edge(buffer.text, 0, 1) if at_boundary else 0
             else:
-                buffer.cursor_position = min(position + 1, len(buffer.text))
+                buffer.cursor_position = len(buffer.text)
         else:
-            buffer.cursor_position = max(0, min(len(buffer.text), position + direction))
+            buffer.cursor_position = grapheme_edge(buffer.text, position, direction)
+        self.terminal.app.invalidate()
+
+    def delete_grapheme(self, direction: int) -> None:
+        if self.busy or self.file is None or getattr(self, "read_only", False):
+            return
+        buffer = self.input.buffer
+        buffer.save_to_undo_stack()
+        if buffer.selection_state is not None:
+            buffer.cut_selection()
+            return
+        position = buffer.cursor_position
+        boundary = grapheme_edge(buffer.text, len(buffer.text), -1) if buffer.text.endswith("\n") else len(buffer.text)
+        if direction < 0 and position == 0 and self.page > 0:
+            previous = self.file.page_text(self.page - 1)
+            edge = grapheme_edge(previous, len(previous), -1)
+            first, separator, rest = buffer.text.partition("\n")
+            self.file.set_page(self.page - 1, previous[:edge] + first + separator)
+            buffer.document = Document(rest, 0)
+            self.change_page(-1)
+            buffer.cursor_position = edge
+        elif direction > 0 and self.page + 1 < self.file.page_count and position >= boundary:
+            following = self.file.page_text(self.page + 1)
+            first, separator, rest = following.partition("\n")
+            edge = grapheme_edge(following, 0, 1) if position == len(buffer.text) else 0
+            self.file.set_page(self.page + 1, rest)
+            buffer.document = Document(buffer.text[:position] + (first + separator)[edge:], position)
+        elif direction < 0:
+            buffer.delete_before_cursor(position - grapheme_edge(buffer.text, position, -1))
+        else:
+            buffer.delete(grapheme_edge(buffer.text, position, 1) - position)
         self.terminal.app.invalidate()
 
     def move_screen(self, direction: int) -> None:
@@ -262,7 +298,6 @@ class EditorPanel:
         finally:
             self.saving_task = None
             self.busy = False
-            self.terminal._focus.focus(self.input)
             self.terminal.app.invalidate()
 
     async def reload(self) -> None:
@@ -310,6 +345,8 @@ class EditorPanel:
         if self.file is not None:
             self.file.close()
             self.file = None
+        if isinstance(self.input.buffer, EditorBuffer):
+            self.input.buffer.clear_document_history()
         self.terminal._editor_active = False
 
     async def shutdown(self) -> None:

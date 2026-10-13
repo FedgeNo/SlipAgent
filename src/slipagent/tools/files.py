@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from ..artifacts import ArtifactStore
 
 from ..workspace import Workspace, WorkspaceError
+from ..fileio import read_regular
 from .base import Tool, ToolResult
 from .blocking import run_blocking
 from .editing import MAX_DIFF_CHARS, apply_edits, edit_diff
@@ -32,6 +33,8 @@ def _atomic_write(workspace: Workspace, target: Path, content: str) -> None:
 
     encoded = content.encode("utf-8")
     target = workspace.resolve(target)
+    if target.exists() and not stat.S_ISREG(target.stat().st_mode):
+        raise OSError("Destination is not a regular file.")
     checkpoints = current_checkpoint.get()
     entry = checkpoints.prepare(target, encoded) if checkpoints is not None else None
     try:
@@ -71,6 +74,8 @@ def _atomic_write_bytes(workspace: Workspace, target: Path, encoded: bytes) -> N
                 output.flush()
                 os.fsync(output.fileno())
             if target.exists():
+                if not stat.S_ISREG(target.stat().st_mode):
+                    raise OSError("Destination is not a regular file.")
                 os.chmod(temporary, stat.S_IMODE(target.stat().st_mode))
             workspace.resolve(target)
             os.replace(temporary, target)
@@ -171,8 +176,7 @@ class ReadFileTool(Tool):
         try:
             size = target.stat().st_size
             if size <= MAX_READ_BYTES:
-                with target.open("rb") as file:
-                    data = file.read(MAX_READ_BYTES + 1)
+                data = read_regular(target, MAX_READ_BYTES)
                 size = len(data)
             if size > MAX_READ_BYTES:
                 return ToolResult.error(
@@ -252,10 +256,11 @@ class WriteFileTool(Tool):
         before: str | None = ""
         if existed and self.__dict__.get("artifacts") is not None:
             try:
-                with target.open(encoding="utf-8", newline="") as source:
-                    before = source.read()
-            except (OSError, UnicodeError):
+                before = read_regular(target, MAX_READ_BYTES).decode("utf-8")
+            except UnicodeError:
                 before = None
+            except OSError as exc:
+                return ToolResult.error(f"Could not read existing file: {exc}")
         try:
             _atomic_write(self.workspace, target, content)
         except (OSError, UnicodeError) as exc:
@@ -351,8 +356,7 @@ class EditFileTool(Tool):
             return ToolResult.error(f"{self.workspace.relative(target)} is a directory.")
 
         try:
-            with target.open(encoding="utf-8", newline="") as source:
-                text = source.read()
+            text = read_regular(target, MAX_READ_BYTES).decode("utf-8")
         except UnicodeDecodeError:
             return ToolResult.error(
                 f"{self.workspace.relative(target)} is not UTF-8 text."

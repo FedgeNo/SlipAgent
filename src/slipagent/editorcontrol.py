@@ -12,7 +12,9 @@ from prompt_toolkit.formatted_text.utils import fragment_list_to_text
 from prompt_toolkit.layout import Window
 from prompt_toolkit.layout.controls import BufferControl, UIContent
 from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
-from prompt_toolkit.utils import get_cwidth
+from wcwidth import iter_graphemes, width as display_width
+
+from .editorbuffer import grapheme_edge
 
 
 def visual_offsets(content: UIContent, width: int, wrapped: bool) -> list[int]:
@@ -30,7 +32,7 @@ class EditorWindow(Window):
         offsets = visual_offsets(ui_content, width, True)
         cursor = ui_content.cursor_position
         line = fragment_list_to_text(ui_content.get_line(cursor.y))
-        cursor_row = offsets[cursor.y] + get_cwidth(line[:cursor.x]) // width
+        cursor_row = offsets[cursor.y] + display_width(line[:cursor.x]) // width
         top = offsets[min(self.vertical_scroll, ui_content.line_count - 1)] + self.vertical_scroll_2
         if cursor_row < top:
             top = cursor_row
@@ -104,7 +106,7 @@ class EditorControl(BufferControl):
         offsets = visual_offsets(content, width, wrapped)
         cursor = content.cursor_position
         line = fragment_list_to_text(content.get_line(cursor.y))
-        display_column = get_cwidth(line[:cursor.x])
+        display_column = display_width(line[:cursor.x])
         column = self.buffer.preferred_column
         if column is None:
             column = display_column % width if wrapped else display_column
@@ -115,12 +117,12 @@ class EditorControl(BufferControl):
         text = fragment_list_to_text(content.get_line(row))[:-1]
         index = 0
         used = 0
-        for character in text:
-            size = get_cwidth(character)
+        for cluster in iter_graphemes(text):
+            size = display_width(cluster)
             if used + size > desired_column:
                 break
             used += size
-            index += 1
+            index += len(cluster)
         local_row = row - self.prefix
         if local_row < 0:
             changed = self.panel.change_page(-1)
@@ -140,8 +142,13 @@ class EditorControl(BufferControl):
             return None
         row = mouse_event.position.y - self.prefix
         if 0 <= row < self.active_rows:
-            return super().mouse_handler(MouseEvent(Point(mouse_event.position.x, row),
-                                                    mouse_event.event_type, mouse_event.button, mouse_event.modifiers))
+            result = super().mouse_handler(MouseEvent(Point(mouse_event.position.x, row),
+                                                      mouse_event.event_type, mouse_event.button, mouse_event.modifiers))
+            position = self.buffer.cursor_position
+            edge = grapheme_edge(self.buffer.text, position, -1)
+            if position not in (0, grapheme_edge(self.buffer.text, edge, 1)):
+                self.buffer.cursor_position = edge
+            return result
         if mouse_event.event_type == MouseEventType.MOUSE_DOWN:
             target = self.panel.page - 1 if row < 0 else self.panel.page + 1
             target_row = mouse_event.position.y if row < 0 else row - self.active_rows

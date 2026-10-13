@@ -1,7 +1,9 @@
 """Whole-step summaries and filtered thoughts, queued after complete tool batches.
 
-Each background job freezes its step, model, and
-request profile and up to 25 preceding steps as context. It never executes tools.
+One worker summarizes immutable completed steps in order. A bounded ready queue
+holds references; deferred steps retain request metadata on their originals.
+The worker materializes one request at a time, using its captured model/profile
+and up to 25 preceding steps as context. It never executes tools.
 Reset cancels jobs and invalidates late results. The registry owns this service
 so it survives behavior reloads and closes before the shared API client.
 """
@@ -11,6 +13,8 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+from collections import deque
+from itertools import chain
 from collections.abc import Callable
 from typing import Any
 
@@ -22,6 +26,22 @@ from .prompts import load_prompt
 
 COMPACTION_TIMEOUT = 20 * 60
 COMPACTION_RETRIES = 5
+COMPACTION_QUEUE_SIZE = 32
+
+
+def _frozen_step(step: HistoryStep) -> HistoryStep:
+    """Share immutable text while freezing message and metadata bindings."""
+    messages = getattr(step, "_compaction_messages", None)
+    if messages is None:
+        messages = [copy.copy(message) for message in step.messages]
+        if isinstance(step, CompletedStep):
+            step.__dict__["_compaction_messages"] = messages
+    frozen = copy.copy(step)
+    frozen.messages = messages
+    if isinstance(frozen, CompletedStep):
+        frozen.__dict__.pop("_compaction_request", None)
+        frozen.tool_results = [message for message in messages if message.role == "tool"]
+    return frozen
 
 class StepCompactor:
     def __init__(self, on_usage: Callable[[Usage], None], on_error: Callable[[str], None]) -> None:
@@ -35,17 +55,59 @@ class StepCompactor:
                capabilities: RequestProfile | None, max_tokens: int | None, *,
                history: list[HistoryStep] | None = None,
                conversation: list[HistoryStep] | None = None) -> None:
-        source = copy.deepcopy(step.compaction_input())
-        source['history'] = copy.deepcopy([prior.context_messages(compressed=prior.summary is not None)[0].content
-                                          for prior in (history or [])[-25:] if prior.id < step.id])
-        source['history_omitted'] = 0
+        # Deferred work stays on the already-retained original step. Only the
+        # active request materializes text; the ready queue holds bounded refs.
+        step.__dict__["_compaction_request"] = (client, model, capabilities, max_tokens,
+                                               tuple(_frozen_step(prior) for prior in (history or [])[-25:]),
+                                               conversation, _frozen_step(step))
+        queue = self.__dict__.setdefault("_ready", deque())
+        if conversation is not None:
+            self.__dict__["_conversation"] = conversation
+        else:
+            self.__dict__.setdefault("_standalone_steps", []).append(step)
+        if len(queue) < COMPACTION_QUEUE_SIZE:
+            queue.append(step)
+        else:
+            step.compaction_status = "deferred"
         generation = self.generation
-        job = asyncio.create_task(self._compact(step, source, client, model, capabilities, max_tokens, generation))
-        self.jobs.add(job)
-        job.add_done_callback(self.jobs.discard)
+        name = f"slipagent-step-compactor-{generation}"
+        if not any(job.get_name() == name and not job.done() for job in self.jobs):
+            previous = tuple(job for job in self.jobs if not job.done())
+            job = asyncio.create_task(self._drain(generation, previous), name=name)
+            self.jobs.add(job)
+            job.add_done_callback(self.jobs.discard)
         if conversation is not None:
             from .historymerge import schedule_history_merge
             schedule_history_merge(self, conversation, client, model, capabilities, max_tokens)
+
+    async def _drain(self, generation: int, previous: tuple[asyncio.Task[None], ...]) -> None:
+        if previous:
+            await asyncio.gather(*previous, return_exceptions=True)
+        queue = self.__dict__["_ready"]
+        while generation == self.generation:
+            if not queue:
+                for step in chain(self.__dict__.get("_conversation", []), self.__dict__.get("_standalone_steps", [])):
+                    if getattr(step, "_compaction_request", None) is not None:
+                        queue.append(step)
+                        if len(queue) == COMPACTION_QUEUE_SIZE:
+                            break
+            if not queue:
+                self.__dict__.pop("_standalone_steps", None)
+                return
+            step = queue.popleft()
+            request = step.__dict__.pop("_compaction_request", None)
+            if request is None:
+                continue
+            client, model, capabilities, max_tokens, history, conversation, frozen = request
+            source = copy.deepcopy(frozen.compaction_input())
+            source['history'] = copy.deepcopy([prior.context_messages(compressed=prior.summary is not None)[0].content
+                                              for prior in history if prior.id < step.id])
+            source['history_omitted'] = 0
+            step.compaction_status = "pending"
+            await self._compact(step, source, client, model, capabilities, max_tokens, generation)
+            if conversation is not None and generation == self.generation:
+                from .historymerge import schedule_history_merge
+                schedule_history_merge(self, conversation, client, model, capabilities, max_tokens)
 
     async def _compact(self, step: CompletedStep, source: dict[str, Any], client: APIClient, model: str,
                        capabilities: RequestProfile | None, max_tokens: int | None, generation: int) -> None:
@@ -142,6 +204,14 @@ class StepCompactor:
 
     def reset(self) -> None:
         self.generation += 1
+        for step in chain(self.__dict__.get("_ready", []), self.__dict__.get("_conversation", []),
+                          self.__dict__.get("_standalone_steps", [])):
+            if getattr(step, "_compaction_request", None) is not None:
+                delattr(step, "_compaction_request")
+                step.compaction_status = "cancelled"
+        self.__dict__.pop("_ready", None)
+        self.__dict__.pop("_conversation", None)
+        self.__dict__.pop("_standalone_steps", None)
         for job in tuple(self.jobs):
             job.cancel()
 

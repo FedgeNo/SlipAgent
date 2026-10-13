@@ -94,6 +94,12 @@ is `~/.local/lib/slipagent/source`; the executable on PATH points into that
 checkout's virtual environment. Installing from a downloaded archive does not
 create Git history if the download has no `.git` directory.
 
+Managed updates back up source, the virtual environment, activation metadata and
+the launcher before changing them. A failed copy, dependency installation,
+verification or activation restores those components. Backup failures stop the
+update before replacement. If rollback itself fails, the installer retains the
+backup directory and reports its location. Private user configuration is preserved.
+
 ### Running From a Development Checkout
 
 For development directly in this checkout instead of a managed installation, use the existing project environment or create one if none exists:
@@ -810,10 +816,16 @@ Click a file to edit it, or a call
 to inspect its decoded arguments and result as labelled fields with literal text
 and line breaks. The mouse wheel scrolls the section under
 the pointer. **Ctrl+Space** opens the inspection panel and cycles clockwise through
-**Prompt → Editor → Touched → Calls → Prompt**, skipping the editor when closed.
+**Prompt → active Editor/Viewer/Context → Touched → Calls → Prompt**, skipping
+closed main views and sidebars that cannot fit. At narrow widths, cycling still
+moves between the prompt and the active main view.
 Use **Up/Down** to select an entry and **Enter** to open it.
 Plain **Tab** retains its text-entry behavior. Terminals narrower than 60 columns
 temporarily hide the panel.
+Hidden panels cannot retain keyboard focus. Viewer and context navigation keys
+apply when that region owns focus; prompt editing keeps its normal shortcuts.
+Closing a menu restores its invoking region if it remains visible. A completed
+background save preserves any focus choice made while it ran.
 
 ### Read-Only Output and Diff Viewers
 
@@ -863,6 +875,12 @@ the editor holds the agent.
 Untouched content and line endings are preserved. External disk changes offer
 Reload and require an explicit choice before overwriting. Editor reload retains
 the cursor's logical line, clamping to the last line if the file became shorter.
+Undo/Redo spans storage pages, navigation, wrapping and saves. Reloading or
+closing the document starts a new undo history. Undo checkpoints and changed
+page versions stay in private temporary storage. Backspace and Delete operate
+across page boundaries, and cursor movement, selections and deletion preserve
+complete Unicode graphemes without normalizing file contents.
+
 Git, when available,
 supplies the saved user-edit diff. Its bounded notification accompanies model
 input separately from user messages and tool results and survives session resume.
@@ -1372,6 +1390,10 @@ The summarizer uses the model and endpoint profile selected for that step and
 returns a JSON object with separate factual `summary` and filtered
 `reasoning_summary` strings, each limited to 6,000 characters. Short steps
 should get short summaries. The working model continues without waiting.
+One worker runs first-pass summaries, with at most 32 ready references. Further
+steps wait on their retained originals and enter the ready queue as it drains.
+Only the active request copies its payload; deferred summaries keep their model
+and endpoint profile. An occasional historical merge can run alongside it.
 
 Unseen tool results reach the next working request even if their summary has
 already finished. An oversized new batch uses JSON excerpt records with separate
@@ -1708,6 +1730,7 @@ model's context budget. Explicitly requested ranges still select only those rang
 | Data | Limit |
 | --- | --- |
 | Text files read or searched; navigation source files | 32 MB per file |
+| Built-in file reads and exact-edit input | 32 MB; regular UTF-8 files only |
 | Command stdout/stderr, saved-output reads, edit diffs | 32 million characters per stream or result |
 | History recall | Complete selected object, without character paging |
 | Grep | 100,000 matches with complete lines |

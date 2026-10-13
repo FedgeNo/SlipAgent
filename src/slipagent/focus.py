@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.layout import Layout, Window
+from prompt_toolkit.layout.layout import walk
 from prompt_toolkit.layout.controls import UIControl
 from prompt_toolkit.widgets import TextArea
 
@@ -41,18 +42,47 @@ class FocusCoordinator:
 
     def cycle(self) -> None:
         panels: list[FocusTarget] = [self.prompt]
-        editor = self.editor()
-        if editor is not None:
-            panels.append(editor)
-        panels.extend(self.sidebars)
+        primary = self.primary()
+        if primary is not self.prompt:
+            panels.append(primary)
+        if self.app().output.get_size().columns >= 60:
+            panels.extend(self.sidebars)
         current = self.app().layout.current_control
         index = next((i for i, panel in enumerate(panels) if self.control(panel) is current), -1)
         self.focus(panels[(index + 1) % len(panels)])
 
+    def restore(self, previous: UIControl) -> None:
+        """Restore an invoking control only while its region is available."""
+        if previous is self.prompt.control:
+            self.focus(self.prompt)
+            return
+        for target in (self.primary(), *self.sidebars):
+            if self.control(target) is previous and self.visible(target):
+                self.focus(target)
+                return
+        self.restore_primary()
+
+    def visible(self, target: FocusTarget) -> bool:
+        if target in self.sidebars and self.app().output.get_size().columns < 60:
+            return False
+        control = self.control(target)
+        return any(isinstance(window, Window) and window.content is control
+                   for window in walk(self.app().layout.container, skip_hidden=True))
+
+    def reconcile(self) -> None:
+        current = self.app().layout.current_control
+        if current in (window.content for window in self.sidebars):
+            window = next(window for window in self.sidebars if window.content is current)
+            if not self.visible(window):
+                self.restore_primary()
+
     def preserve(self, layout: Layout, previous: UIControl) -> None:
         """Keep accessible sidebar or draft focus when rebuilding presentation."""
         if previous in (window.content for window in self.sidebars):
-            if previous in layout.find_all_controls():
+            if any(isinstance(window, Window) and window.content is previous
+                   for window in walk(layout.container, skip_hidden=True)) and self.app().output.get_size().columns >= 60:
                 layout.focus(previous)
+            else:
+                self.restore_primary()
         elif previous is self.prompt.control and self.prompt_active:
             layout.focus(self.prompt)

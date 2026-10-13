@@ -7,10 +7,13 @@ import re
 import struct
 import tempfile
 import asyncio
+import io
 from collections.abc import Iterator, Sequence, Callable
 from pathlib import Path
 from threading import RLock
 from typing import Any, TextIO, overload
+from wcwidth import iter_graphemes, grapheme_boundary_before
+from .fileio import open_regular
 
 CHUNK_SIZE = 4096
 _OFFSET = struct.Struct("QQ")
@@ -60,6 +63,18 @@ class IndexedText(Sequence[str]):
             part = self.text.readline(CHUNK_SIZE)
             if not part:
                 break
+            if not part.endswith("\n"):
+                combined = part
+                while True:
+                    following = self.text.read(CHUNK_SIZE)
+                    combined += following
+                    start = int(grapheme_boundary_before(combined, len(part)))
+                    end = start + len(next(iter_graphemes(combined, start=start)))
+                    if not following or end < len(combined):
+                        break
+                part = combined[:end]
+                self.text.seek(offset)
+                self.text.read(len(part))
             if start_of_line:
                 self.logical.write(_LINE.pack(self._count))
                 self.logical_count += 1
@@ -75,7 +90,7 @@ class IndexedText(Sequence[str]):
     def from_path(cls, path: Path) -> IndexedText:
         result = cls()
         try:
-            with path.open(encoding="utf-8") as source:
+            with io.TextIOWrapper(open_regular(path.resolve()), encoding="utf-8") as source:
                 while chunk := source.read(CHUNK_SIZE):
                     result.text.write(chunk)
             return result.finish()

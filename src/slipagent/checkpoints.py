@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .workspace import Workspace, WorkspaceError
+from .fileio import read_regular
 
 current_checkpoint: ContextVar[FileCheckpoints | None] = ContextVar("slipagent_checkpoint", default=None)
 FileState = tuple[bytes | None, int | None]
@@ -120,7 +121,7 @@ class FileCheckpoints:
             metadata = target.stat()
             if not stat.S_ISREG(metadata.st_mode):
                 raise CheckpointError("File checkpoint requires a regular file.")
-            original = target.read_bytes()
+            original = read_regular(target)
             before, mode = _hash(original), stat.S_IMODE(metadata.st_mode)
             blob = self.directory / "blobs" / before
             if not blob.exists():
@@ -150,7 +151,7 @@ class FileCheckpoints:
         if entry is not None:
             target = Path(entry["path"])
             try:
-                actual = _hash(target.read_bytes()) if target.exists() else None
+                actual = _hash(read_regular(target)) if target.exists() else None
                 entry["status"] = "failed" if actual == entry["before"] else "pending"
             except OSError:
                 entry["status"] = "pending"
@@ -217,7 +218,7 @@ class FileCheckpoints:
                         metadata = target.stat()
                         if not stat.S_ISREG(metadata.st_mode):
                             raise CheckpointError(f"Not a regular file: {target}. No files restored.")
-                        originals[target] = target.read_bytes(), stat.S_IMODE(metadata.st_mode)
+                        originals[target] = read_regular(target), stat.S_IMODE(metadata.st_mode)
                     else:
                         originals[target] = None, None
                     planned[target] = originals[target]
@@ -232,7 +233,7 @@ class FileCheckpoints:
                 if before is not None:
                     if not isinstance(before, str) or len(before) != 64 or any(c not in "0123456789abcdef" for c in before):
                         raise CheckpointError("Invalid checkpoint backup hash. No files restored.")
-                    restored = (self.directory / "blobs" / before).read_bytes()
+                    restored = read_regular((self.directory / "blobs" / before).resolve(strict=True))
                     if _hash(restored) != before:
                         raise CheckpointError("Checkpoint backup is damaged. No files restored.")
                     planned[target] = restored, entry["mode"]
@@ -250,7 +251,7 @@ class FileCheckpoints:
                 if planned[target] == originals[target]:
                     continue
                 # Recheck each target immediately before changing it.
-                current = target.read_bytes() if target.exists() else None
+                current = read_regular(target) if target.exists() else None
                 current_mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else None
                 if (current != originals[target][0] or current_mode != originals[target][1]
                         or self.workspace.resolve(target) != target):

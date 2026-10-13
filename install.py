@@ -15,6 +15,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 from collections.abc import Mapping
@@ -235,6 +236,59 @@ def copy_source(checkout: Path, destination: Path) -> None:
 def install(checkout: Path, root: Path, bin_dir: Path, *, windows: bool, dev: bool, python: str, data_dir: Path | None = None) -> Path:
     launcher = bin_dir / ("slipagent.exe" if windows else "slipagent")
     prepare_launcher(launcher, root, windows=windows)
+    if root.exists() and any(root.iterdir()) and not (root / ".slipagent-managed").is_file():
+        raise ValueError(f"Installation directory is not an existing managed installation or empty: {root}")
+    root.mkdir(parents=True, exist_ok=True)
+    source = root / "source"
+    # The environment stays at its permanent path because entry points and
+    # editable installs contain that path. Back up dependencies along with code.
+    if source.is_symlink() or (source / ".venv").is_symlink():
+        raise ValueError("Managed source and virtual-environment directories must not be symbolic links.")
+    application = source if checkout.resolve() != source.resolve() else source / ".venv"
+    paths = [application, root / "installed-file-hashes.json", root / "installation.json",
+             root / "current", launcher]
+    if (root / ".slipagent-managed").exists():
+        paths.append(root / ".slipagent-managed")
+    directory = Path(tempfile.mkdtemp(prefix="." + root.name + "-update-", dir=root.parent))
+    retain_backup = False
+    try:
+        backups = []
+        for index, target in enumerate(paths):
+            saved = directory / str(index)
+            existed = target.exists() or target.is_symlink()
+            if target.is_symlink():
+                saved.symlink_to(os.readlink(target), target_is_directory=target.is_dir())
+            elif target.is_dir():
+                shutil.copytree(target, saved, symlinks=True)
+            elif existed:
+                shutil.copy2(target, saved)
+            backups.append((target, saved, existed))
+        try:
+            return _install_candidate(checkout, root, bin_dir, windows=windows, dev=dev,
+                                      python=python, data_dir=data_dir)
+        except BaseException:
+            try:
+                for target, saved, existed in backups:
+                    if target.is_symlink() or target.is_file():
+                        target.unlink()
+                    elif target.exists():
+                        shutil.rmtree(target)
+                    if existed:
+                        os.replace(saved, target)
+            except BaseException as recovery:
+                # Keep recoverable backups if the filesystem rejects rollback.
+                retain_backup = True
+                raise RuntimeError(f"Update and rollback failed. Remaining backups: {directory}: {recovery}") from recovery
+            print("Installation failed; pre-install application, environment, launcher and metadata restored.", file=sys.stderr)
+            raise
+    finally:
+        if not retain_backup:
+            shutil.rmtree(directory)
+
+
+def _install_candidate(checkout: Path, root: Path, bin_dir: Path, *, windows: bool, dev: bool, python: str, data_dir: Path | None = None) -> Path:
+    launcher = bin_dir / ("slipagent.exe" if windows else "slipagent")
+    prepare_launcher(launcher, root, windows=windows)
     marker = root / ".slipagent-managed"
     if root.exists() and any(root.iterdir()) and not marker.is_file():
         raise ValueError(f"Installation directory is not an existing managed installation or empty: {root}")
@@ -248,6 +302,7 @@ def install(checkout: Path, root: Path, bin_dir: Path, *, windows: bool, dev: bo
     source = root / "source"
     replacing_source = checkout.resolve() != source.resolve()
     activated = False
+    pending_paths: list[Path] = []
     try:
         if replacing_source:
             if source.exists():
@@ -270,6 +325,7 @@ def install(checkout: Path, root: Path, bin_dir: Path, *, windows: bool, dev: bo
                        stdout=subprocess.DEVNULL, env={**os.environ, "SLIPAGENT_NO_DOTENV": "1"})
         if replacing_source:
             pending_hashes = root / ("hashes." + uuid.uuid4().hex + ".json")
+            pending_paths.append(pending_hashes)
             pending_hashes.write_text(json.dumps(source_hashes(source), indent=2) + "\n", encoding="utf-8")
             os.replace(pending_hashes, root / "installed-file-hashes.json")
         # Preserve installed settings independently of source updates.
@@ -285,18 +341,22 @@ def install(checkout: Path, root: Path, bin_dir: Path, *, windows: bool, dev: bo
         activated = True
         metadata = {"source": str(source), "python": str(executable), "launcher": str(launcher), "checkout": str(source)}
         pending = root / ("installation." + uuid.uuid4().hex + ".json")
+        pending_paths.append(pending)
         pending.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
         os.replace(pending, root / "installation.json")
         if not windows:
             pending_link = root / ("current." + uuid.uuid4().hex)
+            pending_paths.append(pending_link)
             pending_link.symlink_to(source, target_is_directory=True)
             os.replace(pending_link, current)
         print(f"Installed source: {source}")
         print(f"Launcher: {launcher}")
         return launcher
     finally:
+        for pending_path in pending_paths:
+            pending_path.unlink(missing_ok=True)
         if not activated:
-            print("Installation did not activate. The permanent checkout and existing launcher have been retained.", file=sys.stderr)
+            print("Installation did not activate; restoring the previous installation.", file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -342,7 +402,7 @@ def main(argv: list[str] | None = None) -> int:
             update_posix_path(bin_dir, home)
         print(f"Ready: {launcher.name} --help")
         return 0
-    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
         print(f"Installation failed: {exc}", file=sys.stderr)
         print("If Python cannot create a virtual environment, install your OS's Python venv support or uv and retry.", file=sys.stderr)
         return 1

@@ -16,4 +16,4 @@ Omit `offset` and `limit` to read the whole file. With `offset` alone, read thro
 
 ## Limitations
 
-Files must be UTF-8 text and no larger than 32 MB (32,000,000 bytes). The model's context budget still applies to the combined results; oversized history may be excerpted, with originals retained for retrieval.
+Files must be regular UTF-8 text files no larger than 32 MB (32,000,000 bytes). Pipes, devices and sockets are rejected. The model's context budget still applies to the combined results; oversized history may be excerpted, with originals retained for retrieval.

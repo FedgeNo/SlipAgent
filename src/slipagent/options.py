@@ -39,6 +39,7 @@ class OptionsPanel:
             self.field_future.set_result(None)
 
     async def command(self) -> str | None:
+        previous = self.terminal.app.layout.current_control
         self.field.buffer.set_document(Document(self.values.get("folder_opener", "")))
         self.field_future = asyncio.get_running_loop().create_future()
         self.terminal._options_field_active = True
@@ -50,13 +51,14 @@ class OptionsPanel:
         finally:
             self.field_future = None
             self.terminal._options_field_active = False
-            self.terminal._focus.restore_primary()
+            self.terminal._focus.restore(previous)
             self.terminal.app.invalidate()
 
     async def show(self) -> None:
         if self.active or self.terminal._menu_future is not None:
             return
         self.active = True
+        previous = self.terminal.app.layout.current_control
         try:
             while True:
                 action = await self.terminal.choose("Inspection Options", [
@@ -96,5 +98,5 @@ class OptionsPanel:
                     self.terminal.write(str(exc))
         finally:
             self.active = False
-            self.terminal._focus.restore_primary()
+            self.terminal._focus.restore(previous)
             self.terminal.app.invalidate()

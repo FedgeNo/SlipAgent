@@ -300,24 +300,25 @@ class TerminalUI:
 
     def toggle_inspection(self) -> None:
         self._ensure_inspection()
+        focused = self._inspection_focused()
         self._inspection_visible = not self._inspection_visible
-        if not self._inspection_visible and self._inspection_focused():
+        if not self._inspection_visible and focused:
             self._focus.restore_primary()
         if self._inspection_visible and self.output.get_size().columns < 60:
             self.notify("Widen terminal to show Inspect.")
         self.app.invalidate()
 
     def _primary_panel(self) -> FocusTarget:
-        return self._editor_input if self._editor_active else self._viewer_window if self._viewer_active else self.input
+        return (self._editor_input if self._editor_active else self._viewer_window if self._viewer_active else
+                self.context_window if self.context_visible else self.input)
 
     def _inspection_focused(self) -> bool:
-        return self.app.layout.current_window in (self._files_window, self._calls_window)
+        return (self._inspection_visible and self.output.get_size().columns >= 60
+                and self.app.layout.current_window in (self._files_window, self._calls_window))
 
     def _cycle_panel(self) -> None:
-        if self.output.get_size().columns < 60:
-            self.notify("Widen terminal to show Inspect.")
-            return
-        self._inspection_visible = True
+        if self.output.get_size().columns >= 60:
+            self._inspection_visible = True
         self._focus.cycle()
         self.app.invalidate()
 
@@ -796,6 +797,7 @@ class TerminalUI:
             raise RuntimeError("A menu is already open.")
         if not options or self._eof:
             return None
+        previous = self.app.layout.current_control
         future: asyncio.Future[str | None] = asyncio.get_running_loop().create_future()
         self._menu_future = future
         self._menu_title = title
@@ -810,7 +812,7 @@ class TerminalUI:
         finally:
             self._menu_future = None
             self._menu_options = []
-            self._focus.restore_primary()
+            self._focus.restore(previous)
             self.app.invalidate()
 
     def _move_menu(self, rows: int) -> None:
@@ -1052,7 +1054,7 @@ class TerminalUI:
         self._context_blocks: list[tuple[str, str]] = [("", "No model request has been sent yet.")]
         self._context_columns = 0
         self._context_fragments: StyleAndTextTuples = []
-        self.context_window = TranscriptWindow(FormattedTextControl(lambda: self._formatted_context()))
+        self.context_window = TranscriptWindow(FormattedTextControl(lambda: self._formatted_context(), focusable=True))
         self.context_window._following = False
 
     def set_context(self, request: str) -> None:
@@ -1109,7 +1111,7 @@ class TerminalUI:
         in_setting = Condition(lambda: self.__dict__.get("_options_field_active", False))
         in_inspection = Condition(self._inspection_focused) & ~in_menu & ~in_setting
         in_editor = Condition(lambda: self.__dict__.get("_editor_active", False) and self.app.layout.current_control is self._editor_input.control) & ~in_menu & ~in_setting
-        in_viewer = Condition(lambda: self._viewer.active) & ~in_menu & ~in_editor & ~in_setting & ~in_inspection
+        in_viewer = Condition(lambda: self._viewer.active and self.app.layout.current_window is self._viewer_window) & ~in_menu & ~in_editor & ~in_setting & ~in_inspection
 
         @bindings.add("c-space", filter=~in_menu & ~in_setting)
         def cycle_panel(event: KeyPressEvent) -> None:
@@ -1157,6 +1159,13 @@ class TerminalUI:
         @bindings.add("c-s", filter=in_editor)
         def save_editor(event: KeyPressEvent) -> None:
             self.app.create_background_task(self._save_editor())
+
+        @bindings.add("backspace", filter=in_editor)
+        @bindings.add("delete", filter=in_editor)
+        def delete_editor(event: KeyPressEvent) -> None:
+            direction = -1 if event.key_sequence[-1].key == Keys.Backspace else 1
+            for _ in range(event.arg):
+                self._editor_panel.delete_grapheme(direction)
 
         @bindings.add("escape", filter=in_editor, eager=True)
         def close_editor(event: KeyPressEvent) -> None:
@@ -1253,9 +1262,10 @@ class TerminalUI:
         @bindings.add("c-\\", filter=~in_menu & ~in_viewer & ~in_editor & ~in_setting)
         def toggle_context(event: KeyPressEvent) -> None:
             self.context_visible = not self.context_visible
+            self._focus.focus(self.context_window if self.context_visible else self.input)
             self.app.invalidate()
 
-        in_context = Condition(lambda: self.context_visible) & ~in_menu & ~in_viewer & ~in_editor & ~in_setting & ~in_inspection
+        in_context = Condition(lambda: self.context_visible and self.app.layout.current_window is self.context_window) & ~in_menu & ~in_viewer & ~in_editor & ~in_setting & ~in_inspection
 
         @bindings.add("up", filter=in_context)
         @bindings.add("down", filter=in_context)
@@ -1520,6 +1530,7 @@ class TerminalUI:
 
     def _update_title(self) -> None:
         """Refresh the title animation and schedule open-file change checks."""
+        self._focus.reconcile()
         self._viewer.tick(self.app.create_background_task, self.app.invalidate)
         frame = PULSE_FRAMES[int(time.monotonic() * 4) % len(PULSE_FRAMES)]
         self._activity_frame = frame

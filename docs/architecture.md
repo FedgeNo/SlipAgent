@@ -450,11 +450,18 @@ and separate `reasoning_summary` fields. Canonical messages retain their origina
 order and native call/result structure. Continuation records retain the active
 request without registering it as new user input.
 
+`fileio.py` opens canonical regular-file paths through nonblocking descriptors
+and validates the opened file type. POSIX directory traversal refuses substituted
+symlinks. File tools, checkpoint reads, editor loading and indexed viewers share
+that reader. Built-in text reads and exact-edit inputs keep the 32 MB bound.
+
 After archiving a complete batch, `Agent._archive_step` submits it to
-`StepCompactor`, a registry-owned service. It freezes the original prompt,
-response, tool calls, results and thoughts, up to 25 preceding completed steps,
-the selected model, and its capabilities. Every job starts asynchronously;
-the working loop does not wait. A reply without tools also gets one job. The
+`StepCompactor`, a registry-owned service. One worker processes a ready queue of
+at most 32 original-step references. Further steps retain deferred request
+metadata on their originals and refill the queue as it drains. Only the active
+request copies its immutable original prompt, response, calls, results, thoughts,
+and up to 25 earlier steps. The model and capabilities are captured on submission.
+The working loop does not wait. A reply without tools is scheduled the same way. The
 compaction request contains exactly two messages: summarization instructions
 and a structured record separating the completed step's fields from contextual
 `history`, rendered as labelled literal text at the API boundary.
@@ -873,8 +880,12 @@ screen rows needed to reveal the whole selected item. Items taller than the
 viewport reveal their beginning. Resizing recalculates visibility; manual sidebar
 scrolling preserves its position until selection moves. Those policies remain distinct.
 
-`FocusCoordinator` owns clockwise traversal (Prompt, open Editor, Touched,
-Calls) and primary-panel restoration. Editor and options operations use that
+`FocusCoordinator` owns clockwise traversal (Prompt, active Editor/Viewer/Context,
+visible Touched and Calls), restoration of invoking controls, and reconciliation
+when resize hides the focused region. Menus and options retain their invoking
+control and restore it only while its region remains available. Save completion
+does not move focus. Navigation bindings check focus rather than visibility.
+Editor and options operations use that
 owner rather than choosing focus destinations independently. Focus never
 changes the editor's hold on agent activity. `ActionLink` supplies common hover
 and left-click behavior; `CallbackLink` invokes synchronous actions and
@@ -1077,7 +1088,13 @@ to the model along with the active generation number.
   sections around the editable buffer and translates mouse coordinates back to
   their section. Its window scrolls by displayed rows, preserving the cursor's
   screen edge across wrapped lines and section boundaries. `editorui.py` owns the editable buffer,
-  navigation, save/reload choices, and unsaved-change handling. `useredits.py`
+  navigation, save/reload choices, and unsaved-change handling. `editorbuffer.py`
+  keeps document undo/redo checkpoints on private disk, referring to immutable
+  changed-page versions. Navigation and saves preserve them; close and reload
+  start a new history. Boundary Backspace/Delete join logical lines across
+  storage pages. Cursor, selection and deletion use complete graphemes;
+  indexed segments also end at grapheme boundaries without normalizing bytes.
+  `useredits.py`
   owns the session gate: the existing agent boundary finishes the complete tool
   batch, drains managed background jobs, and waits while editing is active.
   The reload frame is busy until the editor closes. Cancellation drains an

@@ -9,10 +9,12 @@ import stat
 import subprocess
 import tempfile
 import uuid
+import io
 from pathlib import Path
 from collections.abc import Iterator
 
 from .inspection import IndexedText, CHUNK_SIZE
+from .fileio import open_regular
 
 PAGE_SEGMENTS = 32
 
@@ -42,7 +44,7 @@ class FileEditor:
         self.overlay = tempfile.TemporaryDirectory(prefix="slipagent-editor-")
         self.pages: dict[int, Path] = {}
         try:
-            with self.path.open(encoding="utf-8", newline="") as source:
+            with io.TextIOWrapper(open_regular(self.path), encoding="utf-8", newline="") as source:
                 while text := source.read(CHUNK_SIZE):
                     if "\x00" in text:
                         raise ValueError("Binary files cannot be edited as text")
@@ -73,21 +75,21 @@ class FileEditor:
         return "".join(self._original_chunks(page))
 
     def set_page(self, page: int, text: str) -> None:
-        if text == "".join(self._original_chunks(page)):
-            previous = self.pages.pop(page, None)
-            if previous is not None:
-                previous.unlink()
+        if text == self.page_text(page):
             return
-        snapshot = Path(self.overlay.name) / str(page)
+        if text == "".join(self._original_chunks(page)):
+            self.pages.pop(page, None)
+            return
         descriptor, name = tempfile.mkstemp(dir=self.overlay.name)
         temporary = Path(name)
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as target:
                 target.write(text)
-            temporary.replace(snapshot)
-            self.pages[page] = snapshot
+            # Versions remain immutable while undo records reference them.
+            self.pages[page] = temporary
         finally:
-            temporary.unlink(missing_ok=True)
+            if self.pages.get(page) != temporary:
+                temporary.unlink(missing_ok=True)
 
     def chunks(self) -> Iterator[str]:
         for page in range(self.page_count):

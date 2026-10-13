@@ -412,6 +412,17 @@ class Renderer:
         elif error and (not previous or seconds % 10 == 0):
             self.emit(self.style.dim(f"  Retrying in {seconds}s."), separate=False)
 
+    def _tool_heading(self, call: ToolCall) -> None:
+        self.emit(self.style.magenta(f"  ⚙ {call.brief()}"), block=self._model_block, tool=True)
+        if self.terminal is not None:
+            path = call.arguments.get("path")
+            if path is None and call.name == "list_dir":
+                path = "."
+            if isinstance(path, str):
+                self.terminal.write_directory_reference(path)
+                offset = call.arguments.get("offset", 1)
+                self.terminal.write_file_reference(path, line=offset if isinstance(offset, int) and offset > 0 else 1)
+
     def handle(self, event: AgentEvent) -> None:
         if event.kind == "context":
             self.__dict__["_reply_preview"] = []
@@ -482,15 +493,10 @@ class Renderer:
                 self.terminal.track_call(event.tool_call, event.step)
             if event.tool_call.name == "answer":
                 return
-            self.emit(self.style.magenta(f"  ⚙ {event.tool_call.brief()}"), block=self._model_block, tool=True)
-            if self.terminal is not None:
-                path = event.tool_call.arguments.get("path")
-                if path is None and event.tool_call.name == "list_dir":
-                    path = "."
-                if isinstance(path, str):
-                    self.terminal.write_directory_reference(path)
-                    offset = event.tool_call.arguments.get("offset", 1)
-                    self.terminal.write_file_reference(path, line=offset if isinstance(offset, int) and offset > 0 else 1)
+            # Calls tracks running searches immediately. Their transcript heading
+            # waits for the result so concurrent calls cannot split the file list.
+            if self.terminal is None or event.tool_call.name != "grep":
+                self._tool_heading(event.tool_call)
 
         elif event.kind == "tool_output":
             if self.terminal is not None:
@@ -506,6 +512,8 @@ class Renderer:
             result = event.result
             if result is None:
                 return
+            if self.terminal is not None and event.tool_call is not None and event.tool_call.name == "grep":
+                self._tool_heading(event.tool_call)
             if self.terminal is not None and event.tool_call is not None:
                 self.terminal.finish_call(event.tool_call, event.step, result.content, result.is_error)
             if self.terminal is not None and event.tool_call is not None and event.tool_call.name in COMMAND_OUTPUT_TOOLS:

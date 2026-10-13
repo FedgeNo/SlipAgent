@@ -24,6 +24,8 @@ COMPRESSED_FIELDS = (
     "agent_response_compressed",
 )
 XML_CALL_TAGS = ("<function_calls>", "<tool_calls>")
+TOOL_MARKERS = ("[TOOL_CALLS]", "<｜tool▁calls▁begin｜>")
+CALL_OPENING = re.compile(r"<(tool_call|function_call|function_calls|tool_calls)(?=[\s>])")
 
 
 class ResponseFormatError(ValueError):
@@ -128,19 +130,35 @@ def combine_calls(*sources: list[ToolCall]) -> list[ToolCall]:
 
 def _detect_response(text: str, tools: list[ToolSpec], *, xml_tool_calls: bool = False) -> AgentResponse:
     text = text.removeprefix("\ufeff")
+    # Reasoning is not an executable carrier. Only a complete leading block
+    # can be separated from the answer; unfinished thoughts remain terminal.
+    original = text
+    thought_body = text.lstrip()
+    while thought_body.startswith("<think>") and not text.startswith(("    ", "\t")):
+        _, closing, following = thought_body.partition("</think>")
+        if not closing or not following.strip():
+            return AgentResponse(original, [])
+        text = following.lstrip("\r\n")
+        thought_body = text.lstrip()
     candidate = text.strip().removeprefix("\ufeff").strip()
     if xml_tool_calls:
         xml_fence = re.fullmatch(r"```xml[ \t]*\r?\n(.*)\r?\n```", candidate, re.DOTALL | re.IGNORECASE)
         if xml_fence:
             candidate = xml_fence[1].strip()
-            if candidate.startswith(XML_CALL_TAGS + ("<tool_call>", "<function_call>")):
+            if CALL_OPENING.match(candidate):
                 return AgentResponse("", _tagged_calls(candidate, tools))
     fence = re.fullmatch(r"```(?:json)?[ \t]*\r?\n(.*)\r?\n```", candidate, re.DOTALL | re.IGNORECASE)
     if fence:
         candidate = fence[1].strip()
+    if candidate.startswith(TOOL_MARKERS) and (fence or not text.startswith(("    ", "\t"))):
+        return AgentResponse("", _marker_calls(candidate))
+    if candidate.startswith("[") and _json_call_start(candidate) and (fence or not text.startswith(("    ", "\t"))):
+        return AgentResponse("", normalize_calls(_decode(candidate)))
     # Decode envelopes before inspecting tags, so code strings stay inert.
-    if candidate.startswith("{") or re.match(r"```(?:json)?[ \t]*\r?\n\s*\{", candidate, re.IGNORECASE):
+    if (candidate.startswith("{") and (fence or not text.startswith(("    ", "\t")))) or re.match(r"```(?:json)?[ \t]*\r?\n\s*\{", candidate, re.IGNORECASE):
         value, tagged = _response_object(candidate, tools=tools, xml_tool_calls=xml_tool_calls)
+        if _call_value(value):
+            return AgentResponse("", combine_calls(normalize_calls(value), tagged))
         if isinstance(value, dict):
             if set(value) & {"response", "tool_calls", "function_call", *COMPRESSED_FIELDS}:
                 allowed = {"response", "tool_calls", "function_call", "suggestions", *COMPRESSED_FIELDS}
@@ -160,8 +178,8 @@ def _detect_response(text: str, tools: list[ToolSpec], *, xml_tool_calls: bool =
                     legacy = _legacy_response(legacy_value, bool(value.get(COMPRESSED_FIELDS[0])), [], [])
                     return AgentResponse(legacy.text, legacy.calls, suggestions)
                 reply = value.get("response", "")
-                if xml_tool_calls and isinstance(reply, str):
-                    embedded = _detect_response(reply, tools, xml_tool_calls=True)
+                if isinstance(reply, str) and (xml_tool_calls or reply.lstrip().startswith(TOOL_MARKERS)):
+                    embedded = _detect_response(reply, tools, xml_tool_calls=xml_tool_calls)
                     reply = embedded.text
                     tagged = combine_calls(tagged, embedded.calls)
                 calls = combine_calls(normalize_calls(value.get("tool_calls")),
@@ -171,7 +189,11 @@ def _detect_response(text: str, tools: list[ToolSpec], *, xml_tool_calls: bool =
     if not fence:
         offset = 0
         in_fence = ""
+        literal_until = 0
         for line in text.splitlines(keepends=True):
+            if offset < literal_until:
+                offset += len(line)
+                continue
             stripped = line.lstrip(" \t")
             marker = re.match(r"(`{3,}|~{3,})", stripped)
             if marker:
@@ -179,11 +201,111 @@ def _detect_response(text: str, tools: list[ToolSpec], *, xml_tool_calls: bool =
                     in_fence = marker[1]
                 elif marker[1][0] == in_fence[0] and len(marker[1]) >= len(in_fence):
                     in_fence = ""
-            elif (not in_fence and len(line) - len(stripped) < 4 and "\t" not in line[:len(line) - len(stripped)]
-                  and stripped.startswith(("<tool_call>", "<function_call>") + (XML_CALL_TAGS if xml_tool_calls else ()))):
-                return AgentResponse(text[:offset].rstrip(), _tagged_calls(text[offset:], tools))
+            elif not in_fence and len(line) - len(stripped) < 4 and "\t" not in line[:len(line) - len(stripped)]:
+                prefix = text[:offset].rstrip()
+                # Explicit example labels protect unfenced examples as well.
+                if re.search(r"(?im)^.*\b(?:example|sample|illustration)s?[^\n]*:\s*$", prefix):
+                    return AgentResponse(text, [])
+                opening = CALL_OPENING.match(stripped)
+                if opening and (xml_tool_calls or opening[1] in {"tool_call", "function_call"}):
+                    return AgentResponse(prefix, _tagged_calls(text[offset:], tools))
+                if stripped.startswith(TOOL_MARKERS):
+                    return AgentResponse(prefix, _marker_calls(text[offset:].strip()))
+                if offset and stripped.startswith(("{", "[")) and _json_call_start(text[offset:].strip()):
+                    embedded = _detect_response(text[offset:], tools, xml_tool_calls=xml_tool_calls)
+                    reply = "\n".join(part for part in (prefix, embedded.text) if part)
+                    return AgentResponse(reply, embedded.calls, embedded.suggestions)
+                if stripped.startswith(("{", "[")):
+                    # A literal JSON value is one block. Never inspect its
+                    # nested objects or arrays as independent executable calls.
+                    tail = text[offset:].lstrip()
+                    try:
+                        _, end = json.JSONDecoder().raw_decode(tail)
+                    except (ValueError, RecursionError):
+                        pass
+                    else:
+                        literal_until = len(text) - len(tail) + end
             offset += len(line)
     return AgentResponse(text, [])
+
+
+def _call_value(value: Any) -> bool:
+    """Require explicit call fields before treating bare JSON as actions."""
+    if isinstance(value, list):
+        return any(_call_value(item) for item in value)
+    if not isinstance(value, dict):
+        return False
+    if set(value) - {"id", "type", "index", "metadata", "function", "name", "arguments", "input", "parameters"}:
+        return False
+    function = value.get("function", value)
+    return (isinstance(function, dict) and "name" in function
+            and any(key in function for key in ("arguments", "input", "parameters")))
+
+
+def _json_call_start(text: str) -> bool:
+    try:
+        value, _ = json.JSONDecoder().raw_decode(text)
+    except (ValueError, RecursionError):
+        # Recognize broken explicit carriers so an intended call cannot silently
+        # become a final reply. Strict decoding still owns the diagnostic.
+        return bool(re.match(r'(?:\[\s*)?\{\s*"(?:response|tool_calls|function_call|name|function)"\s*:', text))
+    return _call_value(value) or isinstance(value, dict) and bool(set(value) & {"response", "tool_calls", "function_call"})
+
+
+def _marker_calls(text: str) -> list[ToolCall]:
+    """Decode documented Mistral and DeepSeek V3.1 tool markers exactly.
+
+    JSON boundaries are decoded before control tokens so markers inside code
+    strings remain arguments. No names, parameters, or missing ends are guessed.
+    """
+    remaining = text.strip()
+    raw: list[dict[str, Any]] = []
+    decoder = json.JSONDecoder()
+    while remaining:
+        if remaining.startswith("[TOOL_CALLS]"):
+            body = remaining[len("[TOOL_CALLS]"):].lstrip()
+            name = None
+            if not body.startswith("["):
+                name, separator, body = body.partition("[ARGS]")
+                if not separator or not name.strip() or re.search(r"\s", name.strip()):
+                    raise ResponseFormatError("Expected a tool name and [ARGS] after [TOOL_CALLS].")
+                body = body.lstrip()
+            try:
+                _, end = decoder.raw_decode(body)
+            except (ValueError, RecursionError):
+                _decode(body)
+                raise ResponseFormatError("Expected complete JSON after tool markers.")
+            value = _decode(body[:end])
+            raw.extend(call.to_record() for call in normalize_calls(value if name is None else {"name": name.strip(), "arguments": value}))
+            remaining = body[end:].strip()
+            if remaining == "</s>":
+                remaining = ""
+        elif remaining.startswith("<｜tool▁calls▁begin｜>"):
+            remaining = remaining[len("<｜tool▁calls▁begin｜>"):].lstrip()
+            while remaining.startswith("<｜tool▁call▁begin｜>"):
+                body = remaining[len("<｜tool▁call▁begin｜>"):]
+                name, separator, body = body.partition("<｜tool▁sep｜>")
+                if not separator:
+                    raise ResponseFormatError("Missing DeepSeek tool separator.")
+                body = body.lstrip()
+                try:
+                    _, end = decoder.raw_decode(body)
+                except (ValueError, RecursionError):
+                    _decode(body)
+                    raise ResponseFormatError("Expected complete DeepSeek tool arguments.")
+                raw.append({"name": name.strip(), "arguments": _decode(body[:end])})
+                remaining = body[end:].lstrip()
+                if not remaining.startswith("<｜tool▁call▁end｜>"):
+                    raise ResponseFormatError("Missing DeepSeek tool-call end marker.")
+                remaining = remaining[len("<｜tool▁call▁end｜>"):].lstrip()
+            if not remaining.startswith("<｜tool▁calls▁end｜>"):
+                raise ResponseFormatError("Missing DeepSeek tool-batch end marker.")
+            remaining = remaining[len("<｜tool▁calls▁end｜>"):].strip()
+            if remaining == "<｜end▁of▁sentence｜>":
+                remaining = ""
+        else:
+            raise ResponseFormatError("Unexpected text after tool markers; return one complete call batch.")
+    return normalize_calls(raw)
 
 
 def _tagged_calls(text: str, tools: list[ToolSpec]) -> list[ToolCall]:
@@ -191,16 +313,18 @@ def _tagged_calls(text: str, tools: list[ToolSpec]) -> list[ToolCall]:
     raw: list[dict[str, Any]] = []
     decoder = json.JSONDecoder(object_pairs_hook=_object, parse_constant=_constant)
     while remaining:
-        xml_tag = next((tag for tag in XML_CALL_TAGS if remaining.startswith(tag)), None)
-        if xml_tag is not None:
-            closing_tag = "</" + xml_tag[1:]
-            block, closing, remaining = remaining.partition(closing_tag)
-            if not closing:
-                raise ResponseFormatError(f"Missing closing {closing_tag}.")
-            raw.extend(_xml_calls(block + closing, tools))
+        xml_opening = CALL_OPENING.match(remaining)
+        opening_end = remaining.find(">")
+        if xml_opening and (xml_opening[1] in {"function_calls", "tool_calls"}
+                            or re.match(r"\s*<invoke(?=[\s>])", remaining[opening_end + 1:])):
+            xml_closing = re.search(r"</" + xml_opening[1] + r"\s*>", remaining)
+            if not xml_closing:
+                raise ResponseFormatError(f"Missing closing </{xml_opening[1]}>.")
+            raw.extend(_xml_calls(remaining[:xml_closing.end()], tools))
+            remaining = remaining[xml_closing.end():]
             remaining = remaining.lstrip()
             continue
-        opening = re.match(r"<(tool_call|function_call)>\s*", remaining)
+        opening = re.match(r"<(tool_call|function_call)(?:\s+[^<>]*)?>\s*", remaining)
         if opening is None:
             raise ResponseFormatError("Expected a complete tagged tool call without trailing prose.")
         remaining = remaining[opening.end():]
@@ -232,11 +356,11 @@ def _tagged_calls(text: str, tools: list[ToolSpec]) -> list[ToolCall]:
             if not remaining.startswith("```"):
                 raise ResponseFormatError("Missing closing code fence in tagged call.")
             remaining = remaining[3:].lstrip()
-        closing = f"</{opening[1]}>"
-        if remaining.startswith(closing):
-            remaining = remaining[len(closing):].lstrip()
-        elif remaining and not remaining.startswith(("<tool_call>", "<function_call>")):
-            raise ResponseFormatError(f"Missing closing {closing}.")
+        closing_match = re.match(r"</" + opening[1] + r"\s*>", remaining)
+        if closing_match:
+            remaining = remaining[closing_match.end():].lstrip()
+        elif remaining and not CALL_OPENING.match(remaining):
+            raise ResponseFormatError(f"Missing closing </{opening[1]}>.")
     return normalize_calls(raw)
 
 
@@ -253,9 +377,11 @@ def _xml_calls(text: str, tools: list[ToolSpec]) -> list[dict[str, Any]]:
     except ElementTree.ParseError as exc:
         raise ResponseFormatError(f"Invalid tool-call XML: {exc}") from exc
     calls = []
+    if root.tag in {"tool_call", "function_call"} and len(root) != 1:
+        raise ResponseFormatError("Expected exactly one invoke in a singular tool-call wrapper.")
     for element in root:
         invoke = element
-        if root.tag == "tool_calls":
+        if root.tag == "tool_calls" and element.tag == "call":
             if element.tag != "call" or len(element) != 1 or (element.text or "").strip():
                 raise ResponseFormatError("Expected each call in tool_calls to contain exactly one invoke element.")
             invoke = element[0]
@@ -485,7 +611,8 @@ def _response_object(text: str, *, tools: list[ToolSpec] | None = None, xml_tool
     record: Any = None
     calls: list[ToolCall] = []
     while remaining:
-        if xml_tool_calls and remaining.startswith(XML_CALL_TAGS):
+        xml_opening = CALL_OPENING.match(remaining)
+        if xml_tool_calls and xml_opening:
             calls.extend(_tagged_calls(remaining, tools or []))
             remaining = ""
             break

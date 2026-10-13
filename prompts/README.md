@@ -33,6 +33,8 @@ System instructions and tool definitions remain separate from the user-input JSO
 
 `structured_output: false` omits the API `response_format` parameter for that model. Native-tool models receive plain Markdown reply instructions and keep their API tools. Embedded-tool models still receive JSON call instructions, with local validation before execution. Set `structured_output` to `true`, or omit it, to use the endpoint's normal formatting capabilities; this does not enable unsupported formats. The setting must be a JSON boolean and is reread when building requests, including after model switches.
 
+The [response format compatibility guide](../docs/response-formats.md) documents bare JSON calls, prose prefixes, leading reasoning blocks, XML variations, and Mistral/DeepSeek markers. These formats share normal tool validation; accepted replies without calls still end the turn.
+
 For example, to disable structured reply formatting for one exact model:
 
 ```json

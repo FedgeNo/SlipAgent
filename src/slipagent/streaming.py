@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from .contextlegacy import LEGACY_RESPONSE_HEADINGS
-from .protocol import XML_CALL_TAGS
+from .protocol import CALL_OPENING, TOOL_MARKERS, XML_CALL_TAGS
 
 
 class ResponseStream:
@@ -36,6 +36,20 @@ class ResponseStream:
             candidate = self._prefix.lstrip(" \t\r\n\ufeff")
             if not candidate:
                 return ""
+            if "<think>".startswith(candidate):
+                return ""
+            while candidate.startswith("<think>"):
+                _, closing, following = candidate.partition("</think>")
+                if not closing:
+                    return ""
+                candidate = following.lstrip()
+                self._prefix = candidate
+                if not candidate or "<think>".startswith(candidate):
+                    return ""
+            if candidate.startswith("["):
+                self._mode = "buffer"
+                self._prefix = ""
+                return ""
             if candidate.startswith("`"):
                 if self._xml and re.match(r"```xml[ \t]*\r?\n", candidate, re.IGNORECASE):
                     self._mode = "buffer"
@@ -45,6 +59,10 @@ class ResponseStream:
                 if opening:
                     body = candidate[opening.end():].lstrip()
                     if not body:
+                        return ""
+                    if body.startswith("["):
+                        self._mode = "buffer"
+                        self._prefix = ""
                         return ""
                     if body.startswith("{"):
                         candidate = body
@@ -201,10 +219,12 @@ class _VisibleTextStream:
         tags = ("<tool_call>", "<function_call>") + XML_CALL_TAGS if self._tagged else ()
         leading = self._line[:len(self._line) - len(self._line.lstrip(" \t"))]
         if len(leading) < 4 and "\t" not in leading:
-            if any(stripped.startswith(tag) for tag in tags):
+            if (any(stripped.startswith(marker) for marker in TOOL_MARKERS)
+                    or self._tagged and CALL_OPENING.match(stripped)
+                    or self._tagged and stripped.startswith(("{", "["))):
                 self._stopped = True
                 return "skip"
-            if not final and any(tag.startswith(stripped) for tag in tags):
+            if not final and any(tag.startswith(stripped) for tag in (*tags, *TOOL_MARKERS)):
                 return "hold"
         markers = (*LEGACY_RESPONSE_HEADINGS, "[Harness context metadata]", "Previous step's current summary:")
         if stripped.startswith("Previous step's current summary:"):

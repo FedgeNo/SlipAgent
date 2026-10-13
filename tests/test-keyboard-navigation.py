@@ -345,3 +345,18 @@ async def test_resize_and_disappearing_links_restore_visible_focus(ui):
     render(terminal)
     assert any(window.content is terminal.app.layout.current_control
                for window, _, _, _ in terminal._focus.stops())
+
+
+@pytest.mark.parametrize("columns,inspection,expected_width", [(100, False, 100), (100, True, 75), (59, True, 59)])
+async def test_queued_preview_stops_at_visible_inspection_boundary(ui, columns, inspection, expected_width):
+    terminal, sizes = ui
+    sizes[0] = Size(rows=24, columns=columns)
+    if inspection:
+        terminal.toggle_inspection()
+    terminal.queue_prompt("queued message " * 30)
+    render(terminal)
+    screen = terminal.app.renderer._last_screen
+    row = sizes[0].rows - terminal._footer_rows() - 1
+    text = "".join(screen.data_buffer[row][column].char for column in range(columns))
+    assert text[:expected_width].rstrip().endswith("…")
+    assert not text[expected_width:].strip()

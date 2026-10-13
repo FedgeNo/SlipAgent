@@ -1122,7 +1122,8 @@ Quoted or fenced examples, user input, tool arguments and file content remain in
 The prompt stays live while the agent works. All waiting prompts join the next
 model request together, after the current tool batch finishes. Their previews
 stay just above the bottom controls until their request is sent. Each
-preview occupies one line, with an ellipsis when it is too long. On submission,
+preview occupies one line within the main pane, stopping at the visible
+inspection sidebar and adding an ellipsis when it is too long. On submission,
 the full prompts enter the feed in arrival order before that request's output.
 If context preparation fails or `/stop` prevents that request, the previews stay.
 Blank lines separate submitted prompts from the surrounding transcript.

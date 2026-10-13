@@ -391,7 +391,8 @@ the queue, preparing context, or reaching `/stop` cannot acknowledge them. These
 indices are journaled so unsent prompts remain pending on resume.
 Submission emits one receipt per prompt. The terminal holds waiting prompts in
 a separate area immediately above the bottom controls, with one clipped line
-per prompt and no queue notice. Receipts remove matching previews in arrival
+per prompt and no queue notice. Its width follows the main pane when the
+inspection sidebar is visible. Receipts remove matching previews in arrival
 order, including identical prompts, and append the full user text to the feed
 before the submitted request's output. Queuing alone does not interrupt streamed
 prose or reformat transcript history. Reload migrates older unsent feed entries

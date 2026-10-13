@@ -257,13 +257,16 @@ class TerminalUI:
             content=Window(TranscriptControl(self._pinned_prompt_content)),
         )])
         transcript = DynamicContainer(lambda: pinned_transcript if self.output.get_size().rows > self._footer_rows() + self._queued_prompt_height() + 1 else self.transcript)
+        inspection_visible = Condition(lambda: self._inspection_visible and self.output.get_size().columns >= 60)
         return Layout(HSplit([
             VSplit([DynamicContainer(lambda: self._editor_container if self._editor_active else self._viewer_container if self._viewer_active else
                                      context if self.context_visible else transcript),
-                    ConditionalContainer(self._inspection_panel, Condition(lambda: self._inspection_visible and self.output.get_size().columns >= 60))]),
-            ConditionalContainer(Window(TranscriptControl(self._queued_prompt_content),
+                    ConditionalContainer(self._inspection_panel, inspection_visible)]),
+            ConditionalContainer(VSplit([Window(TranscriptControl(self._queued_prompt_content),
                                         height=self._queued_prompt_height, dont_extend_height=True,
                                         style="class:user"),
+                                         ConditionalContainer(Window(width=self._inspection_panel.width, style="class:menu"), inspection_visible)],
+                                        height=self._queued_prompt_height),
                                  Condition(lambda: self._queued_prompt_height() > 0)),
             DynamicContainer(lambda: menu_footer if self._menu_future is not None else setting_footer if self._options_field_active else footer),
         ]), focused_element=self._menu_window if self._menu_future is not None else self._options_panel.field if self._options_field_active else self._editor_input if self._editor_active else

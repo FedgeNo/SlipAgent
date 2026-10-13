@@ -16,6 +16,7 @@ from typing import Any
 from .capabilities import RequestProfile
 from .types import ToolCall, ToolSpec
 from .prompts import load_prompt, model_prompt_profile
+from .toolcompat import compatible_json, schema_arguments, tool_name
 
 RECORD_MAX_CHARS = 6000
 COMPRESSED_FIELDS = (
@@ -24,8 +25,9 @@ COMPRESSED_FIELDS = (
     "agent_response_compressed",
 )
 XML_CALL_TAGS = ("<function_calls>", "<tool_calls>")
-TOOL_MARKERS = ("[TOOL_CALLS]", "<｜tool▁calls▁begin｜>")
+TOOL_MARKERS = ("[TOOL_CALLS]", "<｜tool▁calls▁begin｜>", "<|tool_calls_section_begin|>")
 CALL_OPENING = re.compile(r"<(tool_call|function_call|function_calls|tool_calls)(?=[\s>])")
+FUNCTION_OPENING = "<function="
 
 
 class ResponseFormatError(ValueError):
@@ -93,7 +95,15 @@ def parse_agent_response(text: str, native_calls: list[ToolCall], *, native_tool
     Tool schemas describe XML argument types, never a model's response format.
     """
     result = _detect_response(text, tools or [], xml_tool_calls=xml_tool_calls)
-    result.calls = combine_calls(normalize_calls([call.to_record() for call in native_calls]), result.calls)
+    available = {tool.name: tool for tool in tools or []}
+    def compatible(calls: list[ToolCall]) -> list[ToolCall]:
+        converted = []
+        for call in calls:
+            name = tool_name(call.name, list(available))
+            arguments = schema_arguments(call.arguments, available[name].parameters) if name in available else call.arguments
+            converted.append(ToolCall(call.id, name, arguments))
+        return converted
+    result.calls = combine_calls(compatible(normalize_calls([call.to_record() for call in native_calls])), compatible(result.calls))
     if not isinstance(result.text, str):
         raise ResponseFormatError("response must be a string.")
     if not result.text.strip() and not result.calls:
@@ -133,6 +143,10 @@ def _detect_response(text: str, tools: list[ToolSpec], *, xml_tool_calls: bool =
     # Reasoning is not an executable carrier. Only a complete leading block
     # can be separated from the answer; unfinished thoughts remain terminal.
     original = text
+    if text.lstrip().startswith("</think>") and not text.startswith(("    ", "\t")):
+        text = text.lstrip()[len("</think>"):].lstrip("\r\n")
+        if not text.strip():
+            return AgentResponse(original, [])
     thought_body = text.lstrip()
     while thought_body.startswith("<think>") and not text.startswith(("    ", "\t")):
         _, closing, following = thought_body.partition("</think>")
@@ -185,6 +199,8 @@ def _detect_response(text: str, tools: list[ToolSpec], *, xml_tool_calls: bool =
                 calls = combine_calls(normalize_calls(value.get("tool_calls")),
                                       normalize_calls(value.get("function_call")), tagged)
                 return AgentResponse(reply, calls, suggestions)
+            if not tagged:
+                return AgentResponse(text, [])
     # Markdown examples are not call carriers. Only top-level tags are parsed.
     if not fence:
         offset = 0
@@ -207,6 +223,15 @@ def _detect_response(text: str, tools: list[ToolSpec], *, xml_tool_calls: bool =
                 if re.search(r"(?im)^.*\b(?:example|sample|illustration)s?[^\n]*:\s*$", prefix):
                     return AgentResponse(text, [])
                 opening = CALL_OPENING.match(stripped)
+                if stripped.startswith(FUNCTION_OPENING):
+                    functions = []
+                    remaining = text[offset:].strip()
+                    while remaining.startswith(FUNCTION_OPENING):
+                        call, remaining = _qwen_call(remaining, tools)
+                        functions.append(call)
+                    if remaining:
+                        raise ResponseFormatError("Unexpected text after function calls.")
+                    return AgentResponse(prefix, normalize_calls(functions))
                 if opening and (xml_tool_calls or opening[1] in {"tool_call", "function_call"}):
                     return AgentResponse(prefix, _tagged_calls(text[offset:], tools))
                 if stripped.startswith(TOOL_MARKERS):
@@ -220,7 +245,7 @@ def _detect_response(text: str, tools: list[ToolSpec], *, xml_tool_calls: bool =
                     # nested objects or arrays as independent executable calls.
                     tail = text[offset:].lstrip()
                     try:
-                        _, end = json.JSONDecoder().raw_decode(tail)
+                        _, end = _json_prefix(tail)
                     except (ValueError, RecursionError):
                         pass
                     else:
@@ -242,9 +267,43 @@ def _call_value(value: Any) -> bool:
             and any(key in function for key in ("arguments", "input", "parameters")))
 
 
+def _json_prefix(text: str) -> tuple[Any, int]:
+    """Locate a complete JSON structure in original text before encoding repairs."""
+    try:
+        return json.JSONDecoder(object_pairs_hook=_object, parse_constant=_constant).raw_decode(text)
+    except json.JSONDecodeError:
+        pass
+    quoted = False
+    escaped = False
+    stack: list[str] = []
+    if not text.startswith(('{', '[', '"')):
+        raise ResponseFormatError("Expected JSON arguments.")
+    for index, char in enumerate(text):
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+                if text.startswith('"') and not stack:
+                    return _decode(text[:index + 1]), index + 1
+        elif char == '"':
+            quoted = True
+        elif char in "[{":
+            stack.append(char)
+        elif char in "]}":
+            if not stack or stack.pop() != (
+                    "[" if char == "]" else "{"):
+                break
+            if not stack:
+                return _decode(text[:index + 1]), index + 1
+    raise ResponseFormatError("Expected a complete JSON object or array.")
+
+
 def _json_call_start(text: str) -> bool:
     try:
-        value, _ = json.JSONDecoder().raw_decode(text)
+        value, _ = _json_prefix(text)
     except (ValueError, RecursionError):
         # Recognize broken explicit carriers so an intended call cannot silently
         # become a final reply. Strict decoding still owns the diagnostic.
@@ -253,14 +312,13 @@ def _json_call_start(text: str) -> bool:
 
 
 def _marker_calls(text: str) -> list[ToolCall]:
-    """Decode documented Mistral and DeepSeek V3.1 tool markers exactly.
+    """Decode documented Mistral, DeepSeek V3.1, and Kimi tool markers.
 
     JSON boundaries are decoded before control tokens so markers inside code
     strings remain arguments. No names, parameters, or missing ends are guessed.
     """
     remaining = text.strip()
     raw: list[dict[str, Any]] = []
-    decoder = json.JSONDecoder()
     while remaining:
         if remaining.startswith("[TOOL_CALLS]"):
             body = remaining[len("[TOOL_CALLS]"):].lstrip()
@@ -271,7 +329,7 @@ def _marker_calls(text: str) -> list[ToolCall]:
                     raise ResponseFormatError("Expected a tool name and [ARGS] after [TOOL_CALLS].")
                 body = body.lstrip()
             try:
-                _, end = decoder.raw_decode(body)
+                _, end = _json_prefix(body)
             except (ValueError, RecursionError):
                 _decode(body)
                 raise ResponseFormatError("Expected complete JSON after tool markers.")
@@ -289,7 +347,7 @@ def _marker_calls(text: str) -> list[ToolCall]:
                     raise ResponseFormatError("Missing DeepSeek tool separator.")
                 body = body.lstrip()
                 try:
-                    _, end = decoder.raw_decode(body)
+                    _, end = _json_prefix(body)
                 except (ValueError, RecursionError):
                     _decode(body)
                     raise ResponseFormatError("Expected complete DeepSeek tool arguments.")
@@ -303,6 +361,26 @@ def _marker_calls(text: str) -> list[ToolCall]:
             remaining = remaining[len("<｜tool▁calls▁end｜>"):].strip()
             if remaining == "<｜end▁of▁sentence｜>":
                 remaining = ""
+        elif remaining.startswith("<|tool_calls_section_begin|>"):
+            remaining = remaining[len("<|tool_calls_section_begin|>"):].lstrip()
+            while remaining.startswith("<|tool_call_begin|>"):
+                body = remaining[len("<|tool_call_begin|>"):]
+                identity, separator, body = body.partition("<|tool_call_argument_begin|>")
+                match = re.fullmatch(r"functions\.([^\s<>:]+):([0-9]+)", identity.strip())
+                if not separator or match is None:
+                    raise ResponseFormatError("Expected a Kimi function identity and argument marker.")
+                body = body.lstrip()
+                value, end = _json_prefix(body)
+                remaining = body[end:].lstrip()
+                if remaining.startswith("<|tool_call_argument_end|>"):
+                    remaining = remaining[len("<|tool_call_argument_end|>"):].lstrip()
+                if not remaining.startswith("<|tool_call_end|>"):
+                    raise ResponseFormatError("Missing Kimi tool-call end marker.")
+                remaining = remaining[len("<|tool_call_end|>"):].lstrip()
+                raw.append({"name": match[1], "arguments": value})
+            if not remaining.startswith("<|tool_calls_section_end|>"):
+                raise ResponseFormatError("Missing Kimi tool-batch end marker.")
+            remaining = remaining[len("<|tool_calls_section_end|>"):].strip()
         else:
             raise ResponseFormatError("Unexpected text after tool markers; return one complete call batch.")
     return normalize_calls(raw)
@@ -311,7 +389,6 @@ def _marker_calls(text: str) -> list[ToolCall]:
 def _tagged_calls(text: str, tools: list[ToolSpec]) -> list[ToolCall]:
     remaining = text.strip()
     raw: list[dict[str, Any]] = []
-    decoder = json.JSONDecoder(object_pairs_hook=_object, parse_constant=_constant)
     while remaining:
         xml_opening = CALL_OPENING.match(remaining)
         opening_end = remaining.find(">")
@@ -346,7 +423,7 @@ def _tagged_calls(text: str, tools: list[ToolSpec]) -> list[ToolCall]:
             raw.append(call)
         else:
             try:
-                _, end = decoder.raw_decode(remaining)
+                _, end = _json_prefix(remaining)
             except (ValueError, RecursionError) as exc:
                 raise ResponseFormatError("Expected complete JSON inside tool-call tags.") from exc
             calls = normalize_calls(_decode(remaining[:end]))
@@ -390,6 +467,8 @@ def _xml_calls(text: str, tools: list[ToolSpec]) -> list[dict[str, Any]]:
         if invoke.tag != "invoke":
             raise ResponseFormatError(f"Expected an invoke element in {root.tag}.")
         name = invoke.get("name")
+        if isinstance(name, str):
+            name = tool_name(name, [tool.name for tool in tools])
         properties: dict[str, Any] = next((tool.parameters.get("properties", {}) for tool in tools if tool.name == name), {})
         arguments = {}
         for parameter in invoke:
@@ -413,19 +492,24 @@ def _qwen_call(text: str, tools: list[ToolSpec]) -> tuple[dict[str, Any], str]:
     function = re.match(r"<function=([^<>\s]+)>\s*", text)
     if function is None:
         raise ResponseFormatError("Invalid Qwen3-Coder function tag.")
-    name = function[1]
+    name = tool_name(function[1], [tool.name for tool in tools])
     properties: dict[str, Any] = next((tool.parameters.get("properties", {}) for tool in tools if tool.name == name), {})
     remaining = text[function.end():]
     arguments: dict[str, Any] = {}
     while remaining and not remaining.startswith(("</function>", "</tool_call>", "</function_call>", "<tool_call>", "<function_call>")):
-        parameter = re.match(r"<parameter=([^<>\s]+)>", remaining)
+        parameter = re.match(r"<parameter=([^<>\s=]+)>", remaining)
+        malformed = re.match(r"<parameter=([A-Za-z0-9_]+)=([^<]*)</parameter>", remaining)
+        if parameter is None and malformed is not None:
+            remaining = '<parameter=' + malformed[1] + '>' + malformed[2] + remaining[malformed.end(2):]
+            parameter = re.match(r"<parameter=([^<>\s=]+)>", remaining)
         if parameter is None or parameter[1] in arguments:
             raise ResponseFormatError("Invalid or duplicate Qwen3-Coder parameter.")
         value, closing, remaining = remaining[parameter.end():].partition("</parameter>")
         if not closing:
-            boundary = re.search(r"</(?:function|tool_call|function_call)>|<(?:tool_call|function_call)>", value)
-            remaining = value[boundary.start():] if boundary else ""
-            value = value[:boundary.start()] if boundary else value
+            # The legacy answer carrier ends in literal display text. Preserve
+            # its trailing-tag tolerance without extending it to executable tools.
+            if name != "answer" or parameter[1] != "text":
+                raise ResponseFormatError("Missing Qwen3-Coder parameter closing tag.")
         # Qwen's framing adds one newline at each edge; preserve code whitespace.
         value = value[2:] if value.startswith("\r\n") else value.removeprefix("\n")
         value = value[:-2] if value.endswith("\r\n") else value.removesuffix("\n")
@@ -433,7 +517,11 @@ def _qwen_call(text: str, tools: list[ToolSpec]) -> tuple[dict[str, Any], str]:
         kind = schema.get("type", "string")
         arguments[parameter[1]] = value if kind == "string" or isinstance(kind, list) and "string" in kind else _decode(value)
         remaining = remaining.lstrip()
-    return {"name": name, "arguments": arguments}, remaining.removeprefix("</function>").lstrip()
+    if not remaining.startswith("</function>"):
+        if name == "answer" and set(arguments) == {"text"} and not remaining:
+            return {"name": name, "arguments": arguments}, ""
+        raise ResponseFormatError("Missing Qwen3-Coder function closing tag.")
+    return {"name": name, "arguments": arguments}, remaining[len("</function>"):].lstrip()
 
 
 def response_format(has_previous_results: bool, *, native_tools: bool = False) -> dict[str, Any]:
@@ -496,7 +584,13 @@ def _constant(value: str) -> Any:
 
 def _decode(text: str) -> Any:
     try:
-        value = json.loads(text, object_pairs_hook=_object, parse_constant=_constant)
+        try:
+            value = json.loads(text, object_pairs_hook=_object, parse_constant=_constant)
+        except json.JSONDecodeError as original_error:
+            try:
+                value = json.loads(compatible_json(text), object_pairs_hook=_object, parse_constant=_constant)
+            except json.JSONDecodeError:
+                raise original_error
         pending = [value]
         while pending:
             item = pending.pop()
@@ -530,8 +624,8 @@ def normalize_calls(raw: Any) -> list[ToolCall]:
     """Normalize explicit calls, never infer actions from natural-language text.
 
     Native OpenAI calls, the historical flat envelope, and tool_use blocks share
-    one acceptance boundary. Argument strings are decoded exactly; repairing
-    truncated JSON or guessing quotes could change code, paths, or commands.
+    one acceptance boundary. Complete argument objects tolerate encoding noise;
+    truncated structures and guessed quotes could change code, paths, or commands.
     """
     if raw is None:
         return []
@@ -558,6 +652,8 @@ def normalize_calls(raw: Any) -> list[ToolCall]:
                           if source.get(key) is not None), {})
         try:
             arguments = _decode(arguments) if isinstance(arguments, str) and arguments.strip() else arguments
+            if isinstance(arguments, str) and arguments.lstrip().startswith("{"):
+                arguments = _decode(arguments)
             if arguments is None or isinstance(arguments, str) and not arguments.strip():
                 arguments = {}
             if not isinstance(arguments, dict):
@@ -567,6 +663,8 @@ def normalize_calls(raw: Any) -> list[ToolCall]:
         except ResponseFormatError as exc:
             raise ResponseFormatError(f"tool_calls[{index}].arguments: {exc}", excerpt=exc.excerpt) from exc
         call_id = item.get("id")
+        if type(call_id) is int:
+            call_id = str(call_id)
         if not isinstance(call_id, str) or not call_id.strip() or call_id in ids:
             call_id = "call_" + uuid.uuid4().hex
         _decode(json.dumps(call_id, ensure_ascii=True))
@@ -607,7 +705,6 @@ def _response_object(text: str, *, tools: list[ToolSpec] | None = None, xml_tool
     fence = re.fullmatch(r"```(?:json)?\s*\n(.*)\n```", remaining, re.DOTALL | re.IGNORECASE)
     if fence:
         remaining = fence[1].strip()
-    decoder = json.JSONDecoder(object_pairs_hook=_object, parse_constant=_constant)
     record: Any = None
     calls: list[ToolCall] = []
     while remaining:
@@ -627,7 +724,7 @@ def _response_object(text: str, *, tools: list[ToolSpec] | None = None, xml_tool
         if block_fence:
             remaining = remaining[block_fence.end():].lstrip()
         try:
-            _, end = decoder.raw_decode(remaining)
+            _, end = _json_prefix(remaining)
         except (ValueError, RecursionError):
             # Use the shared decoder for a bounded, precise diagnostic.
             _decode(remaining)

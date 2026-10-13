@@ -58,6 +58,10 @@ def model_prompt_profile(model: str) -> dict[str, Any]:
         raise PromptError(f"xml_tool_calls for {model} must be a boolean")
     if not isinstance(profile.get("structured_output", True), bool):
         raise PromptError(f"structured_output for {model} must be a boolean")
+    if profile.get("stream_tool_identity", "delta") not in ("delta", "snapshot"):
+        raise PromptError(f"stream_tool_identity for {model} must be delta or snapshot")
+    if profile.get("stream_tool_indices", "index") not in ("index", "id"):
+        raise PromptError(f"stream_tool_indices for {model} must be index or id")
     return profile
 
 

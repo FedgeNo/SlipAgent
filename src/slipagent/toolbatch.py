@@ -8,7 +8,7 @@ from .activity import command_output
 from .batching import run_batch
 from .checkpoints import FileCheckpoints, current_checkpoint
 from .checks import check_edit_batch
-from .tools.base import ToolRegistry, ToolResult, current_invocation
+from .tools.base import ToolRegistry, ToolResult, current_invocation, validate_arguments, _binds_arguments
 from .types import Message, ToolCall
 
 from .events import AgentEvent
@@ -75,6 +75,19 @@ class ToolBatch:
                      "Only call tools whose full definitions are supplied in the current request. "
                      "For deferred catalog tools, call load_tools in a separate response and wait for the "
                      "next request before using them. Tools excluded by session restrictions cannot be loaded.")
+            for call in calls:
+                self.emit(AgentEvent(kind="tool_start", step=self.step, tool_call=call))
+                self.commit_call(call, ToolResult.error(error))
+            return self.results
+        problems = []
+        for call in calls:
+            tool = self.registry.get(call.name)
+            problem = (validate_arguments(tool.parameters, call.arguments, allow_unknown=not tool.strict_arguments)
+                       or _binds_arguments(tool.run, call.arguments)) if tool is not None else "unknown tool"
+            if problem:
+                problems.append(f"{call.name}: {problem}")
+        if problems:
+            error = "No tools were executed. The entire batch was rejected because of invalid arguments: " + "; ".join(problems)
             for call in calls:
                 self.emit(AgentEvent(kind="tool_start", step=self.step, tool_call=call))
                 self.commit_call(call, ToolResult.error(error))

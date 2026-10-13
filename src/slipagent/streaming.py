@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from .contextlegacy import LEGACY_RESPONSE_HEADINGS
-from .protocol import CALL_OPENING, TOOL_MARKERS, XML_CALL_TAGS
+from .protocol import CALL_OPENING, FUNCTION_OPENING, TOOL_MARKERS, XML_CALL_TAGS
 
 
 class ResponseStream:
@@ -38,6 +38,13 @@ class ResponseStream:
                 return ""
             if "<think>".startswith(candidate):
                 return ""
+            if "</think>".startswith(candidate):
+                return ""
+            if candidate.startswith("</think>"):
+                candidate = candidate[len("</think>"):].lstrip()
+                self._prefix = candidate
+                if not candidate:
+                    return ""
             while candidate.startswith("<think>"):
                 _, closing, following = candidate.partition("</think>")
                 if not closing:
@@ -216,11 +223,11 @@ class _VisibleTextStream:
             return "pass"
         if self._fenced:
             return "pass"
-        tags = ("<tool_call>", "<function_call>") + XML_CALL_TAGS if self._tagged else ()
+        tags = ("<tool_call>", "<function_call>", FUNCTION_OPENING) + XML_CALL_TAGS if self._tagged else ()
         leading = self._line[:len(self._line) - len(self._line.lstrip(" \t"))]
         if len(leading) < 4 and "\t" not in leading:
             if (any(stripped.startswith(marker) for marker in TOOL_MARKERS)
-                    or self._tagged and CALL_OPENING.match(stripped)
+                    or self._tagged and (CALL_OPENING.match(stripped) or stripped.startswith(FUNCTION_OPENING))
                     or self._tagged and stripped.startswith(("{", "["))):
                 self._stopped = True
                 return "skip"

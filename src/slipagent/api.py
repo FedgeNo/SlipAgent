@@ -24,6 +24,7 @@ import httpx
 from .types import Completion, KeyInfo, Message, ModelInfo, ToolSpec, Usage
 from .capabilities import RequestProfile
 from .protocol import ResponseFormatError, normalize_calls, combine_calls
+from .prompts import model_prompt_profile
 
 DEFAULT_TIMEOUT = 180.0
 DEFAULT_MAX_RETRIES = 3
@@ -273,7 +274,12 @@ class APIClient:
                             exc.partial_response = json.dumps(wire, ensure_ascii=False)
                             raise
                         return completion
-                    state = _StreamCompletion(on_delta)
+                    profile = model_prompt_profile(payload["model"])
+                    identity_mode = profile.get("stream_tool_identity", "delta")
+                    if "stream_tool_identity" not in profile and self.provider == "nvidia" and "minimax" in payload["model"].lower():
+                        identity_mode = "snapshot"
+                    state = _StreamCompletion(on_delta, identity_mode=identity_mode,
+                                              index_mode=profile.get("stream_tool_indices", "index"))
                     async for line in response.aiter_lines():
                         if line.startswith("data:"):
                             data.append(line[5:].lstrip(" "))
@@ -483,8 +489,11 @@ def _reasoning_text(delta: dict[str, Any]) -> list[str]:
 class _StreamCompletion:
     """Assemble text, indexed tool fragments, and final usage from SSE events."""
 
-    def __init__(self, on_delta: Callable[[str, str], None]) -> None:
+    def __init__(self, on_delta: Callable[[str, str], None], *, identity_mode: str = "delta", index_mode: str = "index") -> None:
         self.on_delta = on_delta
+        self.identity_mode = identity_mode
+        self.index_mode = index_mode
+        self.active_slots: dict[int, int] = {}
         self.content = ""
         self.calls: dict[int, dict[str, Any]] = {}
         self.model = ""
@@ -542,6 +551,10 @@ class _StreamCompletion:
             for choice in raw.get("choices") or []:
                 if choice.get("index", 0) != 0:
                     continue
+                if self.finish_reason is not None:
+                    # Usage may follow the completed choice, but late deltas
+                    # cannot reopen its reply or introduce additional tools.
+                    continue
                 if choice.get("finish_reason"):
                     self.finish_reason = choice["finish_reason"]
                     if self.finish_reason == "error":
@@ -567,7 +580,17 @@ class _StreamCompletion:
                 if isinstance(fragments, dict):
                     fragments = [fragments]
                 for position, fragment in enumerate(fragments):
+                    if type(fragment.get("id")) is int:
+                        fragment = {**fragment, "id": str(fragment["id"])}
                     index = fragment.get("index")
+                    if self.index_mode == "id":
+                        raw_index = index if type(index) is int and index >= 0 else position
+                        identifier = fragment.get("id")
+                        if identifier:
+                            matching = next((i for i, c in self.calls.items() if c["id"] == identifier), None)
+                            slot = matching if matching is not None else max(self.calls, default=-1) + 1
+                            self.active_slots[raw_index] = slot
+                        index = self.active_slots.get(raw_index, raw_index)
                     if type(index) is not int or index < 0:
                         # IDs identify interleaved calls; otherwise use their
                         # position in the delta, including single-call streams.
@@ -580,14 +603,18 @@ class _StreamCompletion:
                             index = max(self.calls) + 1
                     call = self.calls.setdefault(index, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
                     identifier = fragment.get("id")
-                    if isinstance(identifier, str) and identifier != call["id"]:
-                        call["id"] += identifier
+                    if isinstance(identifier, str) and identifier and identifier != call["id"]:
+                        if call["id"] and self.identity_mode == "snapshot":
+                            raise ValueError("Conflicting streamed tool-call IDs at one index")
+                        call["id"] = identifier if self.identity_mode == "snapshot" or self.index_mode == "id" else call["id"] + identifier
                     function = fragment.get("function")
                     if not isinstance(function, dict):
                         function = fragment
                     name = function.get("name") or fragment.get("name")
-                    if isinstance(name, str):
-                        call["function"]["name"] += name
+                    if isinstance(name, str) and name:
+                        if call["function"]["name"] and self.identity_mode == "snapshot" and name != call["function"]["name"]:
+                            raise ValueError("Conflicting streamed tool names at one index")
+                        call["function"]["name"] = name if self.identity_mode == "snapshot" else call["function"]["name"] + name
                     arguments = next((source[field] for source in (function, fragment)
                                       for field in ("arguments", "input", "parameters")
                                       if source.get(field) is not None), None)
@@ -602,7 +629,12 @@ class _StreamCompletion:
                     if not isinstance(legacy, dict):
                         raise ValueError("function_call must be an object")
                     for field in ("name", "arguments"):
-                        self.function_call[field] = self.function_call.get(field, "") + (legacy.get(field) or "")
+                        value = legacy.get(field) or ""
+                        if value:
+                            previous = self.function_call.get(field, "")
+                            if field == "name" and self.identity_mode == "snapshot" and previous and value != previous:
+                                raise ValueError("Conflicting streamed legacy tool names")
+                            self.function_call[field] = value if field == "name" and self.identity_mode == "snapshot" else self.function_call.get(field, "") + value
         except (ValueError, TypeError, AttributeError, OverflowError) as exc:
             raise APIResponseError(f"Malformed API provider stream: {exc}") from exc
 

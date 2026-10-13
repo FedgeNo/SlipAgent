@@ -12,6 +12,8 @@ from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.key_binding.key_processor import KeyPress
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.output.vt100 import Vt100_Output
+from prompt_toolkit.data_structures import Point
+from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 
 from slipagent.links import ActionControl
 from slipagent.terminal import TerminalUI, SuggestedPrompt
@@ -48,6 +50,18 @@ def selected(ui):
     return ui.app.layout.current_control, ui.app.layout.current_control.__dict__.get("_keyboard_key")
 
 
+def click(ui, window, x=0, y=0):
+    render(ui)
+    position = ui.app.renderer._last_screen.visible_windows_to_write_positions[window]
+    point = Point(position.xpos + x, position.ypos + y)
+    ui._route_mouse_wheel(ui.app)
+    with set_app(ui.app):
+        for kind in (MouseEventType.MOUSE_DOWN, MouseEventType.MOUSE_UP):
+            ui.app.renderer.mouse_handlers.mouse_handlers[point.y][point.x](
+                MouseEvent(point, kind, MouseButton.LEFT, frozenset()))
+    render(ui)
+
+
 def reach(ui, predicate, key=Keys.Tab):
     for _ in range(60):
         if predicate():
@@ -56,7 +70,7 @@ def reach(ui, predicate, key=Keys.Tab):
     pytest.fail("Keyboard route did not reach the requested visible target")
 
 
-@pytest.mark.parametrize("key", [Keys.Tab, Keys.ControlSpace])
+@pytest.mark.parametrize("key", [Keys.Tab, Keys.BackTab])
 async def test_route_reaches_feed_links_lists_and_footer_actions(ui, tmp_path, key):
     terminal, _ = ui
     path = tmp_path / "example.py"
@@ -89,15 +103,15 @@ async def test_route_reaches_feed_links_lists_and_footer_actions(ui, tmp_path, k
     assert terminal.input.text == ""
 
 
-async def test_shift_tab_reverses_route_and_enter_submits_suggestion(ui):
+async def test_shift_tab_advances_focus_and_enter_submits_suggestion(ui):
     terminal, _ = ui
     terminal.input.text = "keep this draft"
     terminal.write_suggestion("Explain these changes")
     render(terminal)
     before = selected(terminal)
-    press(terminal, Keys.Tab)
     press(terminal, Keys.BackTab)
-    assert selected(terminal) == before
+    assert selected(terminal) != before
+    assert terminal.app.layout.current_window is terminal.transcript
     reach(terminal, lambda: selected(terminal)[1] == ("feed", "class:suggestion-0"))
     content = terminal.transcript.content.create_content(100, 20)
     with set_app(terminal.app):
@@ -107,6 +121,58 @@ async def test_shift_tab_reverses_route_and_enter_submits_suggestion(ui):
     message = await asyncio.wait_for(terminal.read_line(), 1)
     assert isinstance(message, SuggestedPrompt) and message == "Explain these changes"
     assert terminal.input.text == "keep this draft"
+
+
+async def test_click_prompt_focuses_and_places_cursor_on_the_first_click(ui):
+    terminal, _ = ui
+    terminal.input.text = "abcdefgh"
+    terminal.toggle_inspection()
+    terminal._focus.focus(terminal._files_window)
+    click(terminal, terminal.input.window, x=5)
+    assert terminal.app.layout.current_control is terminal.input.control
+    assert terminal.input.buffer.cursor_position == 3
+    press(terminal, "X")
+    assert terminal.input.text == "abcXdefgh"
+
+
+@pytest.mark.parametrize("files", [True, False])
+async def test_click_list_title_focuses_that_list_for_arrows(ui, files):
+    terminal, _ = ui
+    for number in range(3):
+        terminal.track_call(ToolCall(str(number), "read_file", {"path": f"file-{number}"}), 1)
+    terminal.toggle_inspection()
+    window = terminal._files_window if files else terminal._calls_window
+    group = terminal._inspection_panel.children[0 if files else 2]
+    before = terminal._inspection_selection(files)
+    click(terminal, group.children[0], x=5)
+    assert terminal.app.layout.current_window is window
+    press(terminal, Keys.Down)
+    assert terminal._inspection_selection(files) != before
+    assert not terminal._editor_active and not terminal._viewer_active
+
+
+@pytest.mark.parametrize("view", ["feed", "viewer", "context", "editor"])
+async def test_click_main_area_focuses_it(ui, tmp_path, view):
+    terminal, _ = ui
+    if view == "feed":
+        terminal.write("Feed text")
+        window = terminal.transcript
+    elif view == "viewer":
+        terminal.open_viewer("Output", "Text")
+        window = terminal._viewer_window
+    elif view == "context":
+        terminal.set_context(json.dumps({"messages": [{"role": "user", "content": "Text"}]}))
+        terminal.context_visible = True
+        window = terminal.context_window
+    else:
+        path = tmp_path / "example.py"
+        path.write_text("Text")
+        await terminal._open_editor_now(path)
+        window = terminal._editor_input.window
+    terminal.toggle_inspection()
+    terminal._focus.focus(terminal._files_window)
+    click(terminal, window, x=1)
+    assert terminal.app.layout.current_window is window
 
 
 @pytest.mark.parametrize("kind", ["file", "directory", "artifact"])
@@ -184,10 +250,10 @@ async def test_editor_tab_indents_but_other_traversal_keys_leave_editor(ui, tmp_
     press(terminal, Keys.BackTab)
     assert terminal.app.layout.current_control is not terminal._editor_input.control
     reach(terminal, lambda: terminal.app.layout.current_control is terminal._editor_input.control,
-          Keys.ControlSpace)
-    press(terminal, Keys.ControlSpace)
+          Keys.BackTab)
+    press(terminal, Keys.BackTab)
     assert terminal.app.layout.current_control is not terminal._editor_input.control
-    reach(terminal, lambda: selected(terminal)[1] == ("editor-action", "Save File [Ctrl+S]"))
+    reach(terminal, lambda: selected(terminal)[1] == ("editor-action", "Save File [Ctrl+S]"), Keys.BackTab)
     press(terminal, Keys.Enter)
     for _ in range(100):
         if path.read_text() == text:

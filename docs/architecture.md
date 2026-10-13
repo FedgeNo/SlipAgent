@@ -881,12 +881,15 @@ viewport reveal their beginning. Resizing recalculates visibility; manual sideba
 scrolling preserves its position until selection moves. Those policies remain distinct.
 
 `FocusCoordinator` owns one route through the prompt, active feed/editor/viewer/context,
-visible links and lists, and footer actions. Tab and Ctrl+Space follow it forward;
-Shift+Tab follows it backward, including from the editor, whose plain Tab inserts
+visible links and lists, and footer actions. Tab and Shift+Tab follow it forward;
+Shift+Tab also works from the editor, whose plain Tab inserts
 indentation. Lists are single stops with their own arrow navigation. Feed action
 discovery reads only viewport rows, rather than scanning historical scrollback.
 `ActionControl` retains rendered handlers for keyboard activation and focus styling;
 keyboard Enter invokes the same enabled action as a left click.
+Mouse presses use the same focus owner before native mouse dispatch, so input
+controls also position their cursor on the first click. Panel titles target
+their panel bodies; list-title focus reveals the selected item without opening it.
 The coordinator also owns restoration of invoking controls and reconciliation
 when resize hides the focused region. Menus and options retain their invoking
 control and restore it only while its region remains available. Save completion

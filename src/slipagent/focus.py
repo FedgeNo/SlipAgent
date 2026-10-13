@@ -47,6 +47,47 @@ class FocusCoordinator:
     def restore_primary(self) -> None:
         self.focus(self.primary())
 
+    @staticmethod
+    def header(control: UIControl, target: Callable[[], FocusTarget], *, style: str = "") -> Window:
+        """Associate a non-editable title with its focusable panel body."""
+        window = Window(control, height=1, style=style)
+        window.__dict__["_focus_target"] = target
+        return window
+
+    def click(self, point: Point) -> None:
+        """Focus before dispatch so native input handlers also place the cursor."""
+        screen = self.app().renderer._last_screen
+        if screen is None:
+            return
+        for window, position in reversed(list(screen.visible_windows_to_write_positions.items())):
+            if not (position.xpos <= point.x < position.xpos + position.width and
+                    position.ypos <= point.y < position.ypos + position.height):
+                continue
+            target = window.__dict__.get("_focus_target")
+            panel = target() if target is not None else window
+            control = self.control(panel)
+            if not control.is_focusable():
+                continue
+            self.focus(self.prompt if control is self.prompt.control else panel)
+            control.__dict__.pop("_keyboard_key", None)
+            control.__dict__.pop("_keyboard_point", None)
+            if isinstance(control, ActionControl):
+                info = window.render_info
+                source = info.visible_line_to_row_col.get(point.y - position.ypos) if info is not None else None
+                if source is not None and info is not None:
+                    column = source[1]
+                    cells = 0
+                    for fragment in info.ui_content.get_line(source[0]):
+                        end = cells + max(0, display_width(fragment[1]))
+                        if cells <= point.x - position.xpos < end and len(fragment) == 3:
+                            control.__dict__["_keyboard_key"] = link_key(fragment[2])
+                            control.__dict__["_keyboard_point"] = Point(column, source[0])
+                            break
+                        column += len(fragment[1])
+                        cells = end
+            self.app().invalidate()
+            return
+
     def restore_prompt(self) -> None:
         if any(window.content is self.prompt.control for window, _, _, _ in self.stops()):
             self.focus(self.prompt)

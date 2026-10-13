@@ -237,17 +237,17 @@ class TerminalUI:
             self._bottom_row(menu=False),
         ], height=lambda: self._footer_rows(), style="class:footer")
         menu_footer = HSplit([
-            Window(ActionControl(lambda: self._activity_notice([("class:menu-title", self._menu_title)])), height=1),
+            FocusCoordinator.header(ActionControl(lambda: self._activity_notice([("class:menu-title", self._menu_title)])), lambda: self._menu_window),
             self._menu_window,
             self._bottom_row(menu=True),
         ], height=lambda: self._footer_rows(), style="class:footer class:menu")
         setting_footer = HSplit([
-            Window(ActionControl(lambda: self._activity_notice([("class:menu-title", "Folder Opener")])), height=1),
+            FocusCoordinator.header(ActionControl(lambda: self._activity_notice([("class:menu-title", "Folder Opener")])), lambda: self._options_panel.field),
             self._options_panel.field,
             self._bottom_row(menu=False),
         ], height=lambda: self._footer_rows(), style="class:footer class:menu")
         context = HSplit([
-            Window(FormattedTextControl("Context — latest model request | Ctrl+\\: close"), height=1, style="class:status"),
+            FocusCoordinator.header(FormattedTextControl("Context — latest model request | Ctrl+\\: close"), lambda: self.context_window, style="class:status"),
             self.context_window,
         ])
         # Overlay the prompt so switching between prompts of different heights
@@ -273,6 +273,9 @@ class TerminalUI:
         if "_inspection_visible" in self.__dict__:
             if "_touched_items" not in self.__dict__:
                 self.__dict__["_touched_items"] = self.__dict__.pop("_touched_files", {})
+            for group, target in ((0, self._files_window), (2, self._calls_window)):
+                header = self._inspection_panel.children[group].get_children()[0]
+                header.__dict__["_focus_target"] = lambda target=target: target
             return
         self._inspection_visible = False
         self._touched_items: dict[str, str] = {}
@@ -297,11 +300,11 @@ class TerminalUI:
         )
         self._files_window: TranscriptWindow = self._touched_panel.window
         self._calls_window: TranscriptWindow = self._calls_panel.window
-        self._inspection_panel = HSplit([
-            HSplit([Window(FormattedTextControl("Touched"), height=1, style="class:menu-title"),
+        self._inspection_panel: HSplit = HSplit([
+            HSplit([FocusCoordinator.header(FormattedTextControl("Touched"), lambda: self._files_window, style="class:menu-title"),
                     self._files_window]),
             Window(height=1),
-            HSplit([Window(FormattedTextControl("Calls"), height=1, style="class:menu-title"),
+            HSplit([FocusCoordinator.header(FormattedTextControl("Calls"), lambda: self._calls_window, style="class:menu-title"),
                     self._calls_window]),
         ], width=lambda: Dimension.exact(max(1, self.output.get_size().columns // 4)), style="class:menu")
 
@@ -566,6 +569,7 @@ class TerminalUI:
         header = self._viewer.container.children[0]
         if isinstance(header, Window) and not isinstance(header.content, ActionControl):
             header.content = ActionControl(self._viewer_header)
+        header.__dict__["_focus_target"] = lambda: self._viewer_window
 
     @property
     def _viewer_active(self) -> bool:
@@ -749,7 +753,7 @@ class TerminalUI:
                 tips = ["Ctrl+S saves; Esc closes the editor.", "PgUp/PgDn scrolls with overlap."]
             elif self._viewer_active:
                 tips = ["Scroll to inspect; Esc closes the viewer."]
-            tips.insert(1, "Tab / Shift+Tab to get around; Ctrl+Space also works in the editor.")
+            tips.insert(1, "Shift+Tab selects the next control, including from the editor.")
             if not self.working and self._input_label == "> " and self._menu_future is None and not self._viewer_active and not self._editor_active:
                 tips.append("Click Commands to browse commands.")
             if self.__dict__.get("_folder_opener") is not None:
@@ -1151,11 +1155,10 @@ class TerminalUI:
         at_feed_prompt = Condition(lambda: self.app.layout.current_control is self.input.control and
                                   not (self._editor_active or self._viewer_active or self.context_visible))
 
-        @bindings.add("c-space")
         @bindings.add("tab", filter=~in_editor)
         @bindings.add("s-tab")
         def cycle_panel(event: KeyPressEvent) -> None:
-            self._cycle_panel(-1 if event.key_sequence[-1].key == Keys.BackTab else 1)
+            self._cycle_panel()
 
         @bindings.add("enter", filter=in_link, eager=True)
         def activate_link(event: KeyPressEvent) -> None:
@@ -1434,6 +1437,8 @@ class TerminalUI:
                 self.__dict__["_hovered_control"] = None
             if event.event_type == MouseEventType.MOUSE_DOWN:
                 self._selection_dragging = False
+                if event.button == MouseButton.LEFT:
+                    self._focus.click(event.position)
             if event.event_type in (MouseEventType.SCROLL_UP, MouseEventType.SCROLL_DOWN):
                 size = self.output.get_size()
                 if self._menu_future is not None:
@@ -1465,8 +1470,6 @@ class TerminalUI:
                 self._scroll_output(-3 if event.event_type == MouseEventType.SCROLL_UP else 3)
                 app.invalidate()
                 return None
-            if self._menu_future is not None and event.event_type not in (MouseEventType.MOUSE_UP, MouseEventType.MOUSE_MOVE):
-                return None  # Keep focus on the menu until selection/cancellation.
             try:
                 screen = app.renderer._last_screen
                 if screen is not None:
@@ -1504,8 +1507,7 @@ class TerminalUI:
                 if previous_hover != self.__dict__.get("_hovered_control"):
                     app.invalidate()
 
-        # Wheel events target the input under the pointer, active menu, or output. Clicks retain
-        # their normal behavior in the input field when no menu is open.
+        # Wheels preserve drafts; clicks retain native handling after focus.
         handlers = MouseHandlers()
         size = self.output.get_size()
         handlers.set_mouse_handler_for_range(0, size.columns, 0, size.rows, mouse_handler)

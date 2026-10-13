@@ -93,8 +93,8 @@ def test_calls_with_reused_ids_keep_artifacts_in_their_own_step(display, tmp_pat
             ui.close()
 
 
-async def test_control_space_cycles_panels_without_changing_draft(display, tmp_path):
-    sequence = "\x00"
+async def test_shift_tab_cycles_panels_without_changing_draft(display, tmp_path):
+    sequence = "\x1b[Z"
     sink, _, output, _, snapshot = display
     with create_pipe_input() as pipe:
         ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
@@ -166,11 +166,11 @@ async def test_inspection_focus_reveals_selection_and_up_stays_at_first_item(dis
             await wait_until(lambda: "Touched" in snapshot()[0])
             ui._files_window.scroll(20)
             await wait_until(lambda: "file-29" not in snapshot()[1])
-            pipe.send_text("\x00\x00")
+            pipe.send_text("\t\t")
             await wait_until(lambda: ui.app.layout.current_window is ui._files_window)
             await wait_until(lambda: "file-29" in snapshot()[1])
             assert screen.buffer[1][75].reverse
-            pipe.send_text("\x00")
+            pipe.send_text("\t")
             await wait_until(lambda: ui.app.layout.current_window is ui._calls_window)
             pipe.send_text("\x1b[B" * 20 + "\x1b[A" * 40)
             await wait_until(lambda: ui._inspection_selection(False) == (1, "29"))
@@ -2752,7 +2752,7 @@ def test_rotating_tips_do_not_flash_status(display, monkeypatch):
             original = ui._activity()
             clock[0] += 14.01
             rotated = ui._activity()
-            assert "Tab / Shift+Tab to get around" in ui._notification_text()
+            assert "Shift+Tab selects the next control" in ui._notification_text()
             assert "".join(part[1] for part in rotated) != "".join(part[1] for part in original)
             assert all("status-flash" not in part[0] for part in rotated)
             ui.notify("Saved changes.")

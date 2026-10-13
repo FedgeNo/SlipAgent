@@ -19,6 +19,7 @@ from .editor import FileEditor, PAGE_SEGMENTS, signature
 from .editorcontrol import EditorControl, EditorWindow
 from .editorbuffer import EditorBuffer, grapheme_edge
 from .links import ActionControl
+from .focus import FocusCoordinator
 
 
 class EditorPanel:
@@ -32,7 +33,7 @@ class EditorPanel:
         self.input = TextArea(multiline=True, wrap_lines=True,
                               read_only=Condition(lambda: self.busy))
         self.ensure_control()
-        self.container = HSplit([Window(FormattedTextControl(self.header), height=1, style="class:status class:footer"), self.input])
+        self.container = HSplit([FocusCoordinator.header(FormattedTextControl(self.header), lambda: self.input, style="class:status class:footer"), self.input])
         self.controls = Window(ActionControl(self.actions), height=5)
 
     def ensure_control(self) -> None:
@@ -43,6 +44,7 @@ class EditorPanel:
             header = self.container.children[0]
             if isinstance(header, Window):
                 header.style = "class:status class:footer"
+                header.__dict__["_focus_target"] = lambda: self.input
         if not isinstance(self.input.control, EditorControl):
             self.input.control = EditorControl(self, self.input.control)
             self.input.window.content = self.input.control

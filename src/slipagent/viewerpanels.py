@@ -9,13 +9,14 @@ from collections.abc import Callable, Coroutine
 from pathlib import Path
 from typing import Any
 
-from prompt_toolkit.layout import HSplit, Window
+from prompt_toolkit.layout import HSplit
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 
 from .inspection import IndexedText
 from .uiwindows import TranscriptWindow
 from .viewers import DiffViewControl, TextViewControl
 from .links import ActionControl
+from .focus import FocusCoordinator
 
 FileSignature = tuple[int, int, int, int, int]
 
@@ -77,7 +78,7 @@ class ViewerDeck:
         self.window = TranscriptWindow(self.panel.control)
         self.window._following = False
         self.container = HSplit([
-            Window(ActionControl(header), height=1, style="class:status"), self.window,
+            FocusCoordinator.header(ActionControl(header), lambda: self.window, style="class:status"), self.window,
         ])
 
     def next_request(self) -> int:

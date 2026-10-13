@@ -186,7 +186,7 @@
   "src/slipagent/diagnostics.py": "27d4553efb2b50ac963fd633946d97bf291e52d2f1ad624e3e0c22318a97643f",
   "src/slipagent/editor.py": "15157b3b06a05db5566c58501791a81bac8adfc596243d68270bd9d740591bcd",
   "src/slipagent/editorcontrol.py": "05016a2b992a0154a2818802bb96f367e4ce295e6ad6173b46a9a1ff7f642d03",
-  "src/slipagent/editorui.py": "9b19bebfaf3c0676e23687f8bbec5d5b3432827fd6dd91bd8d22f1a1e7ba9a9f",
+  "src/slipagent/editorui.py": "b1a08c17c02f2bc754a8fdc60017de06b40996f2dcaa098dafabcc375ca058ee",
   "src/slipagent/environment.py": "dc9c206d970c0b04a230600102678c36012fddb32f4c9c2fd8a97c5a19e529cd",
   "src/slipagent/events.py": "2140901a722d3e251b3f746842533d6ea0d0ea119d33bb909b2a114a076b7767",
   "src/slipagent/explorer.py": "e96948755d610556d64b20c124de9105632d7d3ec68978306497dcf20b4a1c1b",

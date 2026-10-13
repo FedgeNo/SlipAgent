@@ -302,8 +302,6 @@ class EditorPanel:
         coordinator = self.terminal.__dict__.get("_user_edits")
         if release and coordinator is not None:
             coordinator.close()
-        if release:
-            self.terminal.notify("Editor closed.")
         self.terminal.app.invalidate()
         return True
 

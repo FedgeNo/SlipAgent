@@ -405,6 +405,9 @@ class SessionJournal:
                     stream = metadata["streams"][name]
                     if any(type(stream[field]) is not int or stream[field] < 0 for field in ("retained_bytes", "lost_bytes")) or not isinstance(stream["retention_error"], str):
                         raise ValueError("invalid command stream metadata")
+                    if "payload" in stream and (not isinstance(stream["payload"], str)
+                            or stream["payload"] != "" and re.fullmatch(r"[0-9a-f]{64}", stream["payload"]) is None):
+                        raise ValueError("invalid shared command payload ID")
             task = TaskMemory(start_message=data["state"]["task_start"])
             history = ConversationHistory(task=task)
             history.sync(data["messages"])
@@ -577,8 +580,19 @@ class SessionJournal:
                     source = self.directory / (data["id"] + "-logs") / (log_id + "-" + name)
                     target.lost_bytes, target.error = details["lost_bytes"], details["retention_error"]
                     try:
-                        if source.exists():
-                            destination = archive.directory / source.name
+                        payload = details.get("payload")
+                        store = archive.artifacts
+                        saved = store.records.get(log.artifact_record["record_id"]) if store is not None and hasattr(log, "artifact_record") else None
+                        if payload is None and saved is not None and saved.get("format_version") == 2:
+                            payload = saved["payloads"]["output" if name == "stdout" else "error"]["sha256"]
+                        if payload is not None:
+                            if store is None:
+                                raise OSError("Shared output store is unavailable")
+                            from .payloads import payload_path
+                            source = payload_path(store.directory, payload) if payload else None
+                            target.__dict__["payload"] = payload
+                        if source is not None and source.exists():
+                            destination = source if payload is not None else archive.directory / source.name
                             if source != destination:
                                 shutil.copyfile(source, destination)
                             destination.chmod(0o600)
@@ -597,7 +611,9 @@ class SessionJournal:
                         target.error += " Command interrupted; complete output and exit status are unknown."
                     log.streams[name] = target
                 archive.logs[log.id] = log
+                log.consolidate()
                 self.log(log)
+                log.remove_legacy_output()
         agent.registry.context_notes["resume"] = (
             load_prompt('session-resume.md', session_id=data['id'], torn_notice=load_prompt('session-torn-entry.md') if data['torn'] else '')
         )

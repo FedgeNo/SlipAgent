@@ -14,11 +14,12 @@ import json
 import os
 import tempfile
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, BinaryIO
 
 from .base import Tool, ToolResult, current_invocation
+from ..fileio import open_regular
 
 
 MAX_OUTPUT_CHARS = 32_000_000
@@ -100,27 +101,80 @@ class CommandLog:
                         stream.error = f"{stream.error} Output durability could not be verified: {exc}".strip()
                 stream.file.close()
                 stream.file = None
-        store = getattr(self.archive, "artifacts", None)
-        if store is not None and not hasattr(self, "artifact_record"):
-            try:
-                output = self.streams["stdout"]
-                error = self.streams["stderr"]
-                def chunks(path: Path | None, suffix: str = "") -> Iterator[str]:
-                    if path is not None:
-                        with path.open(encoding="utf-8", newline="") as source:
-                            while chunk := source.read(4096):
-                                yield chunk
-                    if suffix:
-                        yield suffix
-                self.artifact_record = store.save(self.command, chunks(output.path),
-                    error=chunks(error.path, "\n" + "\n".join(stream.error for stream in self.streams.values() if stream.error)
-                                 if any(stream.error for stream in self.streams.values()) else ""),
-                    kind=getattr(self, "artifact_kind", "command_output"), step_id=self.step_id, call_id=self.call_id)
-            except (OSError, UnicodeError, ValueError) as exc:
-                self.artifact_error = str(exc)
+        self.consolidate()
         callback = getattr(self.archive, "on_log", None)
         if callback is not None:
             callback(self)
+        self.remove_legacy_output()
+
+    def consolidate(self) -> None:
+        """Publish shared payloads before changing journal paths or deleting copies."""
+        from ..payloads import payload_path, stream_payload, sync_directory
+
+        store = getattr(self.archive, "artifacts", None)
+        if store is None:
+            return
+        previous = getattr(self, "artifact_record", None)
+        if previous is not None:
+            previous = store.records.get(previous["record_id"])
+            if previous is None:
+                self.artifact_error = "Saved inspection record is missing; command streams were retained"
+                return
+        try:
+            if previous is not None and previous.get("format_version") == 2:
+                for descriptor in previous["payloads"].values():
+                    stream_payload(store.directory, descriptor, None)
+                if (store.directory / "payloads").exists():
+                    sync_directory(store.directory / "payloads")
+                sync_directory(store.directory)
+                record = previous
+            else:
+                suffix = "\n" + "\n".join(stream.error for stream in self.streams.values() if stream.error) if any(
+                    stream.error for stream in self.streams.values()) else ""
+                record = store.save_command(self.command, {name: stream.path for name, stream in self.streams.items()},
+                    kind=previous["kind"] if previous else getattr(self, "artifact_kind", "command_output"),
+                    step_id=self.step_id, call_id=self.call_id, error_suffix=suffix,
+                    replace_id=previous["record_id"] if previous else None)
+            legacy_record = store.legacy_command_copy(record)
+            obsolete = self.__dict__.setdefault("_obsolete_output", [])
+            # A crash after the journal barrier may leave legacy files even
+            # though restored stream paths already point at shared payloads.
+            leftovers = {name: self.archive.directory / (self.id + "-" + name)
+                         for name, stream in self.streams.items()
+                         if (self.archive.directory / (self.id + "-" + name)).exists()
+                         and self.archive.directory / (self.id + "-" + name) != stream.path}
+            if leftovers:
+                store._compare_command(record["record_id"], self.command,
+                    {name: leftovers.get(name, stream.path) for name, stream in self.streams.items()},
+                    record["kind"], self.step_id, self.call_id, record["error_suffix"])
+                obsolete.extend(leftovers.values())
+            for name, field in (("stdout", "output"), ("stderr", "error")):
+                stream = self.streams[name]
+                digest = record["payloads"][field]["sha256"]
+                destination = payload_path(store.directory, digest) if digest else None
+                if stream.path is not None and stream.path != destination:
+                    obsolete.append(stream.path)
+                stream.path = destination
+                stream.__dict__["payload"] = digest
+            if previous is not None and previous["filename"] != record["filename"]:
+                obsolete.append(store.directory / previous["filename"])
+            elif legacy_record is not None:
+                obsolete.append(legacy_record)
+            self.artifact_record = record
+            self.__dict__.pop("artifact_error", None)
+        except (OSError, UnicodeError, ValueError) as exc:
+            self.artifact_error = f"Output consolidation deferred: {exc}"
+
+    def remove_legacy_output(self) -> None:
+        """Only the durable journal callback makes old raw files disposable."""
+        remaining = []
+        for path in self.__dict__.get("_obsolete_output", []):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                remaining.append(path)
+                self.artifact_error = f"Shared output saved; could not remove old copy: {exc}"
+        self.__dict__["_obsolete_output"] = remaining
 
     def metadata(self) -> dict[str, Any]:
         return {**({"artifacts": [self.artifact_record]} if hasattr(self, "artifact_record") else {}),
@@ -131,11 +185,14 @@ class CommandLog:
                 "timed_out": self.timed_out, "finished": self.finished,
                 "streams": {name: {"retained_bytes": stream.retained_bytes,
                                     "lost_bytes": stream.lost_bytes, "retention_error": stream.error}
+                                   | ({"payload": stream.__dict__["payload"]} if "payload" in stream.__dict__ else {})
                             for name, stream in self.streams.items()}}
 
     def notice(self) -> str:
         errors = " ".join(f"{name}: {stream.error} Lost {stream.lost_bytes} UTF-8 bytes."
                           for name, stream in self.streams.items() if stream.error)
+        if hasattr(self, "artifact_error"):
+            errors = " ".join(part for part in (errors, self.artifact_error) if part)
         arguments = json.dumps({"log_id": self.id, "stream": "stdout"})
         return load_prompt("command-output-recovery.md", log_id=self.id, arguments=arguments,
             retention=load_prompt("command-output-saved.md" if getattr(self.archive, "_persistent", None) else "command-output-temporary.md"),
@@ -234,7 +291,7 @@ class ReadCommandOutputTool(Tool):
         start = offset
         try:
             if target.path is not None:
-                with target.path.open("rb") as file:
+                with open_regular(target.path) as file:
                     if tail:
                         start = max(0, target.retained_bytes - limit * 4)
                     file.seek(start)

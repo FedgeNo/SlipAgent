@@ -682,6 +682,38 @@ independent of that display buffer. The renderer escapes terminal controls and
 does not duplicate successful streamed output at completion. Reload occurs only
 after the batch; callbacks finish within their invocation.
 
+## Shared Command Payload Format
+
+Live logs retain private append-only stream files. After closure, `payloads.py`
+copies each retained UTF-8 stream through a bounded decoder and SHA-256 digest
+into the artifact store's `payloads/<digest>` directory. Existing identical
+payloads are verified and reused. No original stream is removed during staging.
+
+Version-two artifact headers use `<record_id>.v2.json`; their flat JSON contains
+`format_version: 2`, output/error digest strings and a literal retention-error
+suffix. The index records each payload's digest, byte count and character count.
+`record_fields` validates the header against the index, streams verified payloads
+to the existing bounded page/snapshot writers, and appends the error suffix.
+Version-one inline JSON records retain their reader. Unknown versions, invalid
+digests, symlinks, mismatches and corrupt payloads are errors, not fallbacks.
+
+`CommandLog.consolidate` publishes the payloads, header and index before changing
+its stream paths. The existing journal callback then persists stream `payload`
+identifiers before `remove_legacy_output` removes redundant raw files. Version
+two uses file fsync and, on POSIX, directory fsync before that barrier. Failures
+after index publication preserve its referenced payloads and the old files.
+Failures before publication roll back newly unreferenced payloads. Recovery
+validates leftover headers and copies before retrying migration or cleanup.
+
+Resume/fork resolves journal payload IDs through the session artifact directory;
+old journal events can also resolve the current artifact index after an interrupted
+migration. Legacy output is compared incrementally before conversion, retaining
+record IDs and provenance. Fork copies the artifact directory once, so shared
+streams do not get a second log-directory copy and do not depend on parent files.
+Command quotas count retained bytes; inspection quotas charge header plus logical
+payload bytes per record. Shared physical storage is not the sum of those counters.
+Non-command artifacts and conversation journals retain their existing formats.
+
 ## Background Command Ownership
 
 `run_command(background=True)` creates a `CommandLog` with the initiating

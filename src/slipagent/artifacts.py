@@ -59,7 +59,7 @@ class ArtifactStore:
     def use_directory(self, directory: Path, *, source: Path | None = None) -> None:
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         if source is not None and source.exists() and source != directory:
-            shutil.copytree(source, directory, dirs_exist_ok=True)
+            shutil.copytree(source, directory, dirs_exist_ok=True, symlinks=True)
         records = []
         index = directory / "index.json"
         if index.exists():
@@ -67,7 +67,10 @@ class ArtifactStore:
         restored = {}
         for record in records:
             identifier = record["record_id"]
-            if type(identifier) is not int or identifier < 1 or record["filename"] != f"{identifier}.json":
+            version = record.get("format_version", 1)
+            suffix = ".json" if version == 1 else ".v2.json"
+            if (type(version) is not int or version not in (1, 2) or type(identifier) is not int
+                    or identifier < 1 or record["filename"] != f"{identifier}{suffix}"):
                 raise ValueError("Invalid inspection-record index")
             restored[identifier] = record
         self._directory = directory
@@ -80,17 +83,26 @@ class ArtifactStore:
             return self._save(command, content, kind=kind, step_id=step_id, call_id=call_id, error=error)
 
     def _save(self, command: str, content: str | Iterator[str], *, kind: str, step_id: int | None,
-              call_id: str | None, error: str | Iterator[str]) -> dict[str, Any]:
+              call_id: str | None, error: str | Iterator[str], payloads: dict[str, Any] | None = None,
+              error_suffix: str = "", replace_id: int | None = None) -> dict[str, Any]:
         invocation = current_invocation.get()
         if invocation is not None and step_id is None and call_id is None:
             step_id, call_id = invocation
-        identifier = time.time_ns() // 1000
+        identifier = replace_id if replace_id is not None else time.time_ns() // 1000
+        old = self.records.get(replace_id) if replace_id is not None else None
+        payload_bytes = sum(item["bytes"] for item in payloads.values()) if payloads is not None else 0
+        baseline = self.used_bytes - (old["bytes"] if old else 0) + payload_bytes
         while True:
-            path = self.directory / f"{identifier}.json"
+            if replace_id is None and identifier in self.records:
+                identifier += 1
+                continue
+            path = self.directory / f"{identifier}{'.v2' if payloads is not None else ''}.json"
             try:
                 fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 break
             except FileExistsError:
+                if replace_id is not None:
+                    raise OSError("Inspection migration destination already exists; original record was retained")
                 identifier += 1
         size = 0
         try:
@@ -98,13 +110,16 @@ class ArtifactStore:
                 def write(text: str) -> None:
                     nonlocal size
                     encoded = text.encode("utf-8")
-                    if self.used_bytes + size + len(encoded) > self.quota_bytes:
+                    if baseline + size + len(encoded) > self.quota_bytes:
                         raise OSError("Inspection-record storage quota reached; record was not saved.")
                     target.write(encoded)
                     size += len(encoded)
                 write("{")
-                for n, (key, value) in enumerate({"command": command, "output": content, "error": error,
-                                                 "call_id": call_id, "step_id": step_id, "kind": kind}.items()):
+                values = {"command": command, "output": content, "error": error,
+                          "call_id": call_id, "step_id": step_id, "kind": kind}
+                if payloads is not None:
+                    values.update(format_version=2, error_suffix=error_suffix)
+                for n, (key, value) in enumerate(values.items()):
                     write(("," if n else "") + "\n  " + json.dumps(key) + ": ")
                     if value is None or isinstance(value, int):
                         write(json.dumps(value))
@@ -122,25 +137,133 @@ class ArtifactStore:
             raise
         record = {"record_id": identifier, "filename": path.name, "kind": kind,
                   "command": command, "step_id": step_id, "call_id": call_id,
-                  "bytes": size}
+                  "bytes": size + payload_bytes}
+        if payloads is not None:
+            record.update(format_version=2, payloads=payloads, error_suffix=error_suffix, record_bytes=size)
         proposed = {**self.records, identifier: record}
         fd, name = tempfile.mkstemp(prefix=".index-", dir=self.directory)
+        published = False
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as index_target:
                 json.dump(list(proposed.values()), index_target, ensure_ascii=False)
                 index_target.flush()
                 os.fsync(index_target.fileno())
             os.replace(name, self.directory / "index.json")
+            published = True
+            self.records = proposed
+            self.used_bytes = baseline + size
+            if payloads is not None:
+                from .payloads import sync_directory
+                sync_directory(self.directory)
+        except BaseException:
+            if not published:
+                path.unlink(missing_ok=True)
+            raise
         finally:
             if os.path.exists(name):
                 os.unlink(name)
-        self.records = proposed
-        self.used_bytes += size
         return dict(record)
+
+    def save_command(self, command: str, streams: dict[str, Path | None], *, kind: str,
+                     step_id: int | None, call_id: str | None, error_suffix: str,
+                     replace_id: int | None = None) -> dict[str, Any]:
+        from .payloads import copy_payload, payload_path
+
+        with self._lock:
+            if replace_id is not None:
+                self._compare_command(replace_id, command, streams, kind, step_id, call_id, error_suffix)
+            created = []
+            payloads = {}
+            try:
+                for field, name in (("output", "stdout"), ("error", "stderr")):
+                    descriptor, new = copy_payload(self.directory, streams[name])
+                    payloads[field] = descriptor
+                    if new:
+                        created.append(payload_path(self.directory, descriptor["sha256"]))
+                if replace_id is not None:
+                    orphan = self.directory / f"{replace_id}.v2.json"
+                    if orphan.exists():
+                        expected = {**self.records[replace_id], "format_version": 2,
+                                    "payloads": payloads, "error_suffix": error_suffix}
+                        self._compare_command(replace_id, command, streams, kind, step_id, call_id, error_suffix,
+                                              record_override=expected, path_override=orphan)
+                        orphan.unlink()
+                return self._save(command, payloads["output"]["sha256"], kind=kind, step_id=step_id,
+                                  call_id=call_id, error=payloads["error"]["sha256"], payloads=payloads,
+                                  error_suffix=error_suffix, replace_id=replace_id)
+            except BaseException:
+                for path in created:
+                    if not any(item.get("sha256") == path.name for record in self.records.values()
+                               for item in record.get("payloads", {}).values()):
+                        path.unlink(missing_ok=True)
+                raise
+
+    def _compare_command(self, record_id: int, command: str, streams: dict[str, Path | None],
+                         kind: str, step_id: int | None, call_id: str | None, error_suffix: str, *,
+                         record_override: dict[str, Any] | None = None, path_override: Path | None = None) -> None:
+        from contextlib import ExitStack
+        from .fileio import open_regular
+        from .payloads import record_fields
+        from typing import TextIO, cast
+
+        class CompareField(io.TextIOBase):
+            def __init__(self, source: Any, suffix: str = "") -> None:
+                self.source = source
+                self.suffix = io.StringIO(suffix)
+
+            def write(self, text: str) -> int:
+                expected = self.source.read(len(text))
+                expected += self.suffix.read(len(text) - len(expected))
+                if text != expected:
+                    raise ValueError("Legacy inspection record differs from command log; both copies were retained")
+                return len(text)
+
+            def complete(self) -> None:
+                if self.source.read(1) or self.suffix.read(1):
+                    raise ValueError("Legacy inspection record is shorter than command log; both copies were retained")
+
+        record = self.records[record_id] if record_override is None else record_override
+        if any(record[key] != value for key, value in dict(command=command, kind=kind, step_id=step_id, call_id=call_id).items()):
+            raise ValueError("Legacy command provenance mismatch; both copies were retained")
+        with ExitStack() as stack:
+            targets = {}
+            for field, name in (("output", "stdout"), ("error", "stderr")):
+                path = streams[name]
+                source = (stack.enter_context(io.TextIOWrapper(open_regular(path), encoding="utf-8", newline=""))
+                          if path is not None else io.StringIO())
+                targets[field] = CompareField(source, error_suffix if field == "error" else "")
+            for field in ("command", "kind", "step_id", "call_id"):
+                expected = record[field] if isinstance(record[field], str) else json.dumps(record[field])
+                targets[field] = CompareField(io.StringIO(expected))
+            path = self.record_path(record_id) if path_override is None else path_override
+            types = record_fields(path, record, {key: cast(TextIO, value) for key, value in targets.items()})
+            for field in ("command", "kind", "step_id", "call_id"):
+                if types[field] != isinstance(record[field], str):
+                    raise ValueError("Legacy command metadata type mismatch")
+            for target in targets.values():
+                target.complete()
+
+    def legacy_command_copy(self, record: dict[str, Any]) -> Path | None:
+        """Recover cleanup after the version-two index committed before a crash."""
+        from .payloads import payload_path
+        old = self.directory / f"{record['record_id']}.json"
+        if not old.exists():
+            return None
+        streams = {name: payload_path(self.directory, record["payloads"][field]["sha256"])
+                   if record["payloads"][field]["sha256"] else None
+                   for name, field in (("stdout", "output"), ("stderr", "error"))}
+        self._compare_command(record["record_id"], record["command"], streams, record["kind"], record["step_id"],
+                              record["call_id"], record["error_suffix"],
+                              record_override={**record, "format_version": 1}, path_override=old)
+        return old
 
     def read(self, record_id: int) -> dict[str, Any]:
         path = self.record_path(record_id)
         record = self.records[record_id]
+        if record.get("format_version") == 2:
+            import sys
+            return {**record, "output": self.read_page(record_id, "output", 0, sys.maxsize)["output"],
+                    "error": self.read_page(record_id, "error", 0, sys.maxsize)["error"]}
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict) or set(data) != {"command", "output", "error", "call_id", "step_id", "kind"} or any(
             not isinstance(data[key], str) for key in ("command", "output", "error", "kind")
@@ -158,7 +281,7 @@ class ArtifactStore:
         return path
 
     def read_page(self, record_id: int, field: str, offset: int, limit: int) -> dict[str, Any]:
-        from .inspection import JSONRecordReader
+        from .payloads import record_fields
         from typing import TextIO, cast
 
         path = self.record_path(record_id)
@@ -169,8 +292,7 @@ class ArtifactStore:
             if key in {"command", "call_id", "step_id", "kind"}:
                 expected = record[key] if isinstance(record[key], str) else json.dumps(record[key])
             fields[key] = ArtifactFieldPage(offset if key == field else 0, limit if key == field else 0, expected)
-        with path.open(encoding="utf-8", newline="") as source:
-            string_fields = JSONRecordReader(source).fields({key: cast(TextIO, target) for key, target in fields.items()})
+        string_fields = record_fields(path, record, {key: cast(TextIO, target) for key, target in fields.items()})
         for key in ("command", "call_id", "step_id", "kind"):
             expected = fields[key].expected
             if (string_fields[key] != isinstance(record[key], str)

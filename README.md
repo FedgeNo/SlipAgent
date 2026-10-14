@@ -922,6 +922,23 @@ row above the prompt. Click it to resume following the latest output.
 
 ### Durable Inspection Records
 
+Completed command logs and inspection views share immutable UTF-8 payload files
+within each session. Version-two inspection records reference those payloads;
+log byte offsets, inspection character offsets, record IDs, and history links
+remain unchanged. Identical payloads within a session share one stored file.
+Live commands still append to their own streams until completion.
+
+Older JSON inspection records remain readable. On resume or fork, command-linked
+legacy records migrate only after their decoded output, errors, and provenance
+match the retained logs. New payloads and the replacement index are made durable
+before the journal records their paths; redundant copies are removed afterward.
+Mismatches and storage failures retain the original copies and report deferred
+consolidation in log metadata. Forks carry their own payload files and remain
+readable after the parent is deleted. This migration does not rewrite conversation
+history or combine the two existing quota limits: command retention and inspection
+admission still account for their logical bytes independently. Physical disk use
+is smaller than the sum of those accounting totals.
+
 With session persistence, inspection records live beside the session journal in
 its `-artifacts` directory. Microsecond timestamp filenames contain JSON with
 `command`, `output`, `error`, `call_id`, `step_id`, and `kind`. Command stdout and
@@ -936,8 +953,8 @@ Command metadata is shortened to 500 characters; select `command` to retrieve it
 in full through pages. Paging scans and validates the stored record with bounded
 memory. If saving a diff fails, its notification reports that the archive is
 unavailable; a truncated notification remains pending.
-Inspection storage has the configured command-log quota independently of the
-existing raw command archive. Saving a record does not alter raw-log byte
+Inspection storage has the configured command-log quota independently of
+command retention accounting. Saving a record does not alter raw-log byte
 offsets. Without session persistence, inspection records are temporary.
 
 Open a saved diff and select **Comment on Diff** to attach it to your prompt.

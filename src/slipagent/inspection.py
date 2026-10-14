@@ -277,7 +277,7 @@ class JSONRecordReader:
                     raise ValueError("Expected integer or null step ID.")
                 for part in self.string():
                     targets[key].write(part)
-            elif key in {"step_id", "call_id"}:
+            elif key in {"step_id", "call_id", "format_version"}:
                 string_fields[key] = False
                 token = ""
                 while self.peek() and self.peek() not in ",} \r\n\t":
@@ -285,7 +285,7 @@ class JSONRecordReader:
                     if len(token) > 32:
                         raise ValueError("Invalid inspection-record metadata.")
                 parsed = json.loads(token)
-                if parsed is not None and (key != "step_id" or type(parsed) is not int):
+                if parsed is not None and (key not in {"step_id", "format_version"} or type(parsed) is not int):
                     raise ValueError("Invalid inspection-record metadata.")
                 targets[key].write(token)
             else:
@@ -305,14 +305,14 @@ class JSONRecordReader:
 def artifact_snapshot(path: Path, metadata: dict[str, Any]) -> IndexedText:
     from contextlib import ExitStack
     import shutil
+    from .payloads import record_fields
 
     result = IndexedText()
     try:
         with ExitStack() as stack:
             fields: dict[str, TextIO] = {key: stack.enter_context(tempfile.TemporaryFile(mode="w+", encoding="utf-8", newline="", errors="surrogatepass"))
                       for key in ("command", "output", "error", "call_id", "step_id", "kind")}
-            with path.open(encoding="utf-8") as source:
-                string_fields = JSONRecordReader(source).fields(fields)
+            string_fields = record_fields(path, metadata, fields)
             for key in ("command", "call_id", "step_id", "kind"):
                 fields[key].seek(0)
                 expected = metadata[key]

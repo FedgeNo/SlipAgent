@@ -182,6 +182,49 @@ async def test_inspection_focus_reveals_selection_and_up_stays_at_first_item(dis
             await task
 
 
+@pytest.mark.parametrize("inspect", [False, True])
+async def test_user_prompt_background_fills_feed_without_copy_padding(display, inspect):
+    from prompt_toolkit.data_structures import Point
+
+    sink, size, output, screen, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        renderer = Renderer(Style(True), sink, False)
+        renderer.terminal = ui
+        prompt = "wide 界 words " * 12 + "\n\nFinal prompt line"
+        renderer.user_prompt(prompt)
+        ui.write("ordinary output")
+        if inspect:
+            ui.toggle_inspection()
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: any("ordinary output" in line for line in snapshot()))
+            for columns in (100, 80):
+                size[0] = Size(rows=24, columns=columns)
+                screen.resize(lines=24, columns=columns)
+                ui.app.invalidate()
+                width = columns - columns // 4 if inspect else columns
+                await wait_until(lambda: ui._wrapped_columns == width)
+                await asyncio.sleep(.05)
+                lines = snapshot()
+                first = next(i for i, line in enumerate(lines) if "> wide" in line)
+                last = next(i for i, line in enumerate(lines) if "Final prompt line" in line)
+                for row in range(first, last + 1):
+                    assert all(screen.buffer[row][x].bg == "004000" for x in range(width)), row
+                    if inspect:
+                        assert screen.buffer[row][columns - 1].bg != "004000"
+                ordinary = next(i for i, line in enumerate(lines) if "ordinary output" in line)
+                assert screen.buffer[ordinary][width - 1].bg == "default"
+                content = ui._transcript_content(width)
+                ui._selection_start = Point(0, first)
+                ui._selection_end = Point(width - 1, content.line_count - 1)
+                assert ui.selected_text() == "> " + prompt + "\nordinary output"
+                ui._selection_start = ui._selection_end = None
+        finally:
+            ui.close()
+            await task
+
+
 async def test_footer_background_separates_controls_from_feed(display):
     sink, _, output, screen, snapshot = display
     with create_pipe_input() as pipe:
@@ -2483,7 +2526,7 @@ async def test_pinned_prompt_follows_scrollback_in_both_directions(display):
             async def scroll_to(text, offset=0):
                 content = ui.transcript.content.create_content(size[0].columns, 17)
                 row = next(i for i in range(content.line_count)
-                           if "".join(part[1] for part in content.get_line(i)) == text) + offset
+                           if "".join(part[1] for part in content.get_line(i)).rstrip() == text) + offset
                 ui._scroll_output(row - ui.transcript.vertical_scroll)
                 await wait_until(lambda: ui.transcript.vertical_scroll == row)
 

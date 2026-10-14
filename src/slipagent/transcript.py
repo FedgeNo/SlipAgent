@@ -287,6 +287,8 @@ class WrappedTranscript:
             style = self._pending[start][0] if start < len(self._pending) else ""
             row: StyleAndTextTuples = [(style, indent)] if indent and line.startswith(indent) else []
             row.extend(self._pending[start:start + len(body)])
+            if not row and "bg:" + USER_BACKGROUND_COLOR in style.split():
+                row.append((style, ""))
             rows.append(compact_fragments(row))
             position = start + len(body)
         return rows, starts
@@ -360,6 +362,8 @@ class WrappedTranscript:
             style += extra_style
             for char in value:
                 if char == "\n":
+                    if not self._pending and "bg:" + USER_BACKGROUND_COLOR in style.split():
+                        self._pending.append((style, ""))
                     self._settle(final=True, newline=True)
                     line_number += 1
                     self._override_indent(indents.get(line_number))

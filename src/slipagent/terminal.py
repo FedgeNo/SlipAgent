@@ -38,7 +38,7 @@ from .uiwindows import TranscriptWindow
 from .focus import FocusCoordinator, FocusTarget
 from .links import ActionControl, ActionLink, CallbackLink, TaskLink, LinkHover, keyboard_content
 from .listpanels import TouchedPanel, CallsPanel, ChoicePanel, ListActions
-from .palette import FOOTER_BACKGROUND_COLOR, MENU_BACKGROUND_COLOR, MUTED_COLOR, USER_PROMPT_STYLE
+from .palette import FOOTER_BACKGROUND_COLOR, MENU_BACKGROUND_COLOR, MUTED_COLOR, USER_BACKGROUND_COLOR, USER_PROMPT_STYLE
 from .markdown import THEMES, MarkdownRenderer, code_blocks, literal
 from .clipboard import clipboard_sequence, copy_to_clipboard
 from .explorer import folder_opener, open_folder
@@ -261,7 +261,7 @@ class TerminalUI:
         # does not move the scroll position and select a different prompt again.
         pinned_transcript = FloatContainer(self.transcript, floats=[Float(
             top=0, left=0, right=0, height=self._pinned_prompt_height,
-            content=Window(TranscriptControl(self._pinned_prompt_content)),
+            content=Window(TranscriptControl(self._pinned_prompt_content), style="class:user"),
         )])
         transcript = DynamicContainer(lambda: pinned_transcript if self.output.get_size().rows > self._footer_rows() + self._queued_prompt_height() + 1 else self.transcript)
         inspection_visible = Condition(lambda: self._inspection_visible and self.output.get_size().columns >= 60)
@@ -1106,12 +1106,12 @@ class TerminalUI:
         height = self._pinned_prompt_height(width)
         source = self._transcript_content(width)
         start, end = self._pinned_prompt or (0, 0)
-        text = fragment_list_to_text(source.get_line(start)) if height else ""
+        text = fragment_list_to_text(source.get_line(start)).rstrip() if height else ""
         if height and end > start + 1:
             # Reuse bounded, already wrapped rows instead of rereading a long
             # prompt. A first word can wrap onto its own row after the > marker.
             if text.strip() == ">":
-                text += " " + fragment_list_to_text(source.get_line(start + 1)).lstrip()
+                text += " " + fragment_list_to_text(source.get_line(start + 1)).strip()
             prefix = ""
             cells = 0
             for cluster in iter_graphemes(text):
@@ -2050,7 +2050,7 @@ class TerminalUI:
 
         def get_line(index: int) -> StyleAndTextTuples:
             if index < complete:
-                fragments = flow.get_row(index)
+                fragments = fill_prompt(flow.get_row(index))
                 bounds = self._selection_bounds()
                 if bounds is not None:
                     start, end = bounds
@@ -2067,7 +2067,14 @@ class TerminalUI:
                         return highlighted
                 return decorate_links(fragments)
             offset = index - complete
-            return decorate_links(preview[offset]) if offset < len(preview) else []
+            return decorate_links(fill_prompt(preview[offset])) if offset < len(preview) else []
+
+        def fill_prompt(fragments: StyleAndTextTuples) -> StyleAndTextTuples:
+            if any("bg:" + USER_BACKGROUND_COLOR in style.split() for style, *_ in fragments):
+                # Display-only padding keeps archived text and copy offsets intact.
+                remaining = max(0, columns - display_width(fragment_list_to_text(fragments)))
+                return [*fragments, (USER_PROMPT_STYLE, " " * remaining)]
+            return fragments
 
         def decorate_links(fragments: StyleAndTextTuples) -> StyleAndTextTuples:
             result: StyleAndTextTuples = []

@@ -231,6 +231,19 @@ class SessionJournal:
             self.step(step)
         self.step_count = len(agent.history.steps)
 
+    def discard_input(self, agent: Agent, index: int | None, pending_index: int | None) -> None:
+        from .inputqueue import discarded_state
+
+        self.record(agent)
+        assert self.state is not None
+        state = discarded_state(self.state, index, pending_index)
+        self._append("discard_input", index=index, pending_index=pending_index)
+        self.state = state
+        if index is not None:
+            self.cursor -= 1
+            messages = agent.messages[:index] + agent.messages[index + 1:]
+            self.last_message = copy.deepcopy(self._message(messages[-1])) if messages else None
+
     def step(self, step: Any) -> None:
         self._append("step", id=step.id, summary=step.summary,
                      reasoning_summary=getattr(step, 'reasoning_summary', None),
@@ -333,6 +346,15 @@ class SessionJournal:
                         data["messages"][event["index"]] = event["message"]
                     elif kind == "state":
                         data["state"] = event
+                    elif kind == "discard_input":
+                        from .inputqueue import discarded_state
+
+                        removed = event["index"]
+                        data["state"] = discarded_state(data["state"], removed, event["pending_index"])
+                        if removed is not None:
+                            if not 0 <= removed < len(data["messages"]) or data["messages"][removed]["role"] != "user":
+                                raise ValueError("invalid unsent message discard")
+                            del data["messages"][removed]
                     elif kind == "step":
                         data["steps"][event["id"]] = event
                     elif kind == "history_merge":

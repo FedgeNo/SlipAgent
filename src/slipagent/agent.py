@@ -34,6 +34,7 @@ from .capabilities import RequestProfile
 from .tools.base import ToolRegistry, ToolResult
 from .types import Message, ToolCall, ToolSpec, Usage
 from .toolbatch import tool_message as _tool_message
+from .inputqueue import input_queue
 
 def build_system_prompt(workspace: str, *, project_instructions: str = "") -> str:
     """Render the default system prompt for a given workspace root."""
@@ -196,6 +197,7 @@ class Agent:
         self.usage = Usage()
         self.pending.clear()
         self.queued_messages.clear()
+        self.registry.services.pop("input_queue", None)
         self._emit(AgentEvent(kind="user_queue_reset"))
         self.stop_requested = False
         self.stopped = False
@@ -403,7 +405,10 @@ class Agent:
         """
         message = text.strip()
         if message:
+            queue = input_queue(self)
+            queue.snapshot()
             self.pending.append(message)
+            queue.appended(message)
             self._persist()
             self._emit(AgentEvent(kind="user_message", text=message))
 
@@ -429,6 +434,7 @@ class Agent:
         return queued
 
     def _queued_messages_sent(self) -> None:
+        input_queue(self).sent(len(self.queued_messages))
         delivered = list(self.queued_messages.values())
         self.queued_messages.clear()
         if delivered:
@@ -442,8 +448,11 @@ class Agent:
         # so every message waiting at submission joins the same request.
         while True:
             self._drain_pending()
+            queue = input_queue(self)
+            signature = queue.signature()
             context = await self._context_view(specs, step, repair=repair, budget_fraction=budget_fraction)
-            if not self.pending:
+            if not self.pending and signature == queue.signature():
+                queue.prepared = signature
                 return context
 
     def _emit(self, event: AgentEvent) -> None:
@@ -564,7 +573,7 @@ class Agent:
                 context=lambda repair, fraction: self._queued_context(
                     specs, len(self.history.steps) + 1, repair=repair, budget_fraction=fraction),
                 reserve=self._reserve_request, exhausted=lambda: self._requests >= self.max_steps,
-                has_pending=lambda: bool(self.pending), delivered=self._queued_messages_sent,
+                has_pending=lambda: bool(self.pending) or input_queue(self).changed(), delivered=self._queued_messages_sent,
                 account=self._account_usage, persist=self._persist, emit=self._emit,
                 stop_event=self._stop_event, stop_requested=lambda: self.stop_requested,
                 stop_notice=self._stop_notice,

@@ -20,6 +20,7 @@ EventKind = Literal[
     "user_message",
     "user_message_sent",
     "user_queue_reset",
+    "user_queue_changed",
     "tool_start",
     "tool_output",
     "tool_end",

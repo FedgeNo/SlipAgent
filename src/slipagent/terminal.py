@@ -1880,6 +1880,11 @@ class TerminalUI:
         self._queued_prompts.clear()
         self.app.invalidate()
 
+    def set_queued_prompts(self, prompts: list[str]) -> None:
+        self._ensure_queued_prompts()
+        self._queued_prompts[:] = prompts
+        self.app.invalidate()
+
     def queued_prompt_sent(self, prompt: str) -> bool:
         """Acknowledge the first matching arrival, including identical prompts."""
         self._ensure_queued_prompts()

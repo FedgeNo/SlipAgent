@@ -482,6 +482,10 @@ class Renderer:
             if self.terminal is not None:
                 self.terminal.clear_queued_prompts()
 
+        elif event.kind == "user_queue_changed":
+            if self.terminal is not None:
+                self.terminal.set_queued_prompts(json.loads(event.text))
+
         elif event.kind == "tool_start" and event.tool_call is not None:
             self._tool_streamed = False
             if self.terminal is not None:

@@ -389,6 +389,13 @@ including arrivals during context preparation. Drained messages retain a deliver
 receipt keyed by their archive index until the request is sent; merely draining
 the queue, preparing context, or reaching `/stop` cannot acknowledge them. These
 indices are journaled so unsent prompts remain pending on resume.
+`InputQueue` gives unsent messages transient identities for `/queue` inspection
+and selective discard, including duplicates and messages already drained into
+the conversation. Submitted messages cannot be discarded. Queue signatures
+invalidate a prepared request when input changes before submission. A single
+`discard_input` journal event removes the unsent entry and adjusts queue/task
+indices atomically; accepted steps and their compaction metadata retain their
+identities. Resume reconstructs original task sources without discarded input.
 Submission emits one receipt per prompt. The terminal holds waiting prompts in
 a separate area immediately above the bottom controls, with one clipped line
 per prompt and no queue notice. Its width follows the main pane when the

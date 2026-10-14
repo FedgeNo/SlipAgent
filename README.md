@@ -728,6 +728,9 @@ In the REPL:
 | `/key <sk-or-v1-...>` | Use a specific key for this session |
 | `/cost` | Session token usage and spend |
 | `/task` | Show retained original user prompts and their source steps |
+| `/queue` | Inspect pending user messages and choose one to view or discard |
+| `/queue <number>` | View a pending message in full |
+| `/queue discard <number>` | Discard one unsent message, retaining accepted history and the active task |
 | `/task new` | Make the next prompt a new task, retaining previous history and command logs |
 | `/rename <name>` | Save this conversation's name and set its terminal title to `{name} \| SlipAgent` |
 | `/sessions` | List saved sessions for this project's path |
@@ -1128,6 +1131,14 @@ preview occupies one line within the main pane, stopping at the visible
 inspection sidebar and adding an ellipsis when it is too long. On submission,
 the full prompts enter the feed in arrival order before that request's output.
 If context preparation fails or `/stop` prevents that request, the previews stay.
+Use `/queue` to inspect pending messages and select one to view in full or discard.
+In plain output it lists the complete messages; `/queue <number>` views one and
+`/queue discard <number>` removes one. Numbers refer to the current queue order.
+The interactive chooser retains each message's identity while open: if that
+message has already been submitted, discarding it changes nothing. Duplicate
+messages can be discarded individually. Discards are saved with the session and
+preserve accepted history, command logs, and the current task. `/task new` remains
+blocked while any unsent user input is pending.
 Blank lines separate submitted prompts from the surrounding transcript.
 Each model reply starts with a blank line, including replies preceded only by
 tool output. Its following tool calls and results stay together until the next

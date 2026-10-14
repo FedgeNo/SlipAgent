@@ -454,6 +454,74 @@ class CostCommand(Command):
         return None
 
 
+class QueueCommand(Command):
+    name = 'queue'
+    help = (
+        CommandHelp('/queue', 'inspect pending messages and choose one to view or discard', '/queue'),
+        CommandHelp('/queue <number>', 'view one pending message in full', '/queue '),
+        CommandHelp('/queue discard <number>', 'discard one unsent message; preserve history and task', '/queue discard '),
+    )
+
+    def background(self, argument: str) -> bool:
+        return True
+
+    async def run(self, context: CommandContext, argument: str) -> bool | None:
+        from .inputqueue import input_queue
+
+        session, style, out = context.session, context.style, context.out
+        terminal = session.renderer.terminal
+        queue = input_queue(session.agent)
+        entries = queue.snapshot()
+        parts = argument.split()
+        discard = len(parts) == 2 and parts[0] == 'discard'
+        number = parts[-1] if parts else ''
+        if parts and (not (discard or len(parts) == 1) or not number.isascii() or not number.isdecimal()):
+            print(style.red('  usage: /queue [<number>|discard <number>]'), file=out)
+            return False
+        if not entries:
+            print('  no pending user messages.', file=out)
+            return False
+        if parts:
+            try:
+                position = int(number) - 1
+            except ValueError:
+                print(style.red('  no pending message with that number; use /queue to list them.'), file=out)
+                return False
+            if not 0 <= position < len(entries):
+                print(style.red('  no pending message with that number; use /queue to list them.'), file=out)
+                return False
+            identifier, text = entries[position]
+        elif terminal is None:
+            for position, (_, text) in enumerate(entries, 1):
+                print(f'  {position}. {text}', file=out)
+            print('  /queue <number> to view; /queue discard <number> to discard.', file=out)
+            return False
+        else:
+            selected = await terminal.choose('Pending Messages', [
+                (identifier, f'{position}. {text}') for position, (identifier, text) in enumerate(entries, 1)
+            ])
+            if selected is None:
+                return False
+            identifier, text = next(entry for entry in entries if entry[0] == selected)
+            action = await terminal.choose('Pending Message', [('view', 'View Full Message'), ('discard', 'Discard Message')])
+            if action is None:
+                return False
+            discard = action == 'discard'
+        if discard:
+            try:
+                removed = queue.discard(identifier)
+            except SessionError as exc:
+                print(style.red(f'  {exc}'), file=out)
+                return False
+            notice = '  pending message discarded.' if removed else '  message is no longer pending; nothing discarded.'
+            print(notice, file=out)
+        elif terminal is not None:
+            terminal.open_viewer('Pending Message', text)
+        else:
+            print(text, file=out)
+        return False
+
+
 class TaskCommand(Command):
     def replaces_task(self, argument: str) -> bool:
         return argument == "new"
@@ -471,8 +539,8 @@ class TaskCommand(Command):
     async def run(self, context: CommandContext, argument: str) -> bool | None:
         session, style, out = context.session, context.style, context.out
         if argument == "new":
-            if session.agent.pending:
-                print(style.red("  queued input is still pending; resume or /reset before starting another task."), file=out)
+            if session.agent.pending or session.agent.queued_messages:
+                print(style.red("  queued input is still pending; resume or use /queue to discard it before starting another task."), file=out)
             else:
                 session.agent.history.task = TaskMemory(start_message=len(session.agent.messages))
                 print("  next prompt starts a new task; previous history and command logs remain available.", file=out)
@@ -859,6 +927,7 @@ COMMANDS: tuple[Command, ...] = (
     TemperatureCommand(),
     KeyCommand(),
     CostCommand(),
+    QueueCommand(),
     TaskCommand(),
     RenameCommand(),
     SessionsCommand(),

@@ -45,9 +45,6 @@ class UserEdits(WorkCoordinator):
             path, line = self.pending
             self.pending = None
             try:
-                jobs = self.session.registry.resources.jobs
-                if jobs is not None:
-                    await jobs.stop_all()
                 await self.terminal._open_editor_now(path, line=line)
             except BaseException:
                 self.close()

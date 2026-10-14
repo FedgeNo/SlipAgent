@@ -13,7 +13,7 @@ from test_agent import StubClient, RecordingTool, completion
 from slipagent.types import ToolCall
 
 
-async def test_edit_request_waits_for_batch_boundary_and_stops_background_jobs(tmp_path):
+async def test_edit_request_waits_for_batch_boundary_and_preserves_background_jobs(tmp_path):
     terminal = SimpleNamespace(_editor_active=False, notify=Mock())
     async def opened(path, *, line):
         terminal._editor_active = True
@@ -26,7 +26,7 @@ async def test_edit_request_waits_for_batch_boundary_and_stops_background_jobs(t
     terminal._open_editor_now.assert_not_awaited()
     boundary = asyncio.create_task(edits.boundary())
     await asyncio.sleep(.02)
-    jobs.stop_all.assert_awaited_once()
+    jobs.stop_all.assert_not_awaited()
     terminal._open_editor_now.assert_awaited_once_with(tmp_path / "a", line=12)
     assert not boundary.done()
     edits.close()

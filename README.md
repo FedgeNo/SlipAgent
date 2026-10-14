@@ -852,8 +852,10 @@ in the feed. No editing or saving is enabled in these viewers.
 ### Built-In Text Editor
 
 File links open the built-in editor at the linked line. An active agent finishes
-its current tool batch first; managed background commands are stopped, and further
-agent work waits until the editor closes. While queued, the animated status reads
+its current tool batch first. While the editor is open, the agent makes no new
+working-model requests or tool calls, including read-only tools. Existing managed
+background commands and history compression continue independently. Agent work
+resumes when the editor closes. While queued, the animated status reads
 **Opening editor after this turn**, with a **Cancel Opening Editor** link beside
 it in place of the status notice. Cancelling releases the queued editor hold so
 the agent continues working. Read-only viewers open immediately while the

@@ -1106,7 +1106,10 @@ to the model along with the active generation number.
   indexed segments also end at grapheme boundaries without normalizing bytes.
   `useredits.py`
   owns the session gate: the existing agent boundary finishes the complete tool
-  batch, drains managed background jobs, and waits while editing is active.
+  batch and waits while editing is active. No new working-model requests or tool
+  calls run during the hold, including read-only calls. Existing managed jobs
+  and isolated history compression continue independently; opening an editor
+  does not stop those jobs. Closing it releases the gate for subsequent batches.
   The reload frame is busy until the editor closes. Cancellation drains an
   in-progress save before releasing its resources. Read-only viewers bypass
   this gate. Each changed save archives its full cumulative diff and creates a

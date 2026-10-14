@@ -12,6 +12,7 @@ from typing import Any
 from .lifecycle import Lifetime, finish_cleanup
 from .tools.base import Tool, ToolResult
 from .tools.output import CommandLog
+from .monitoring import CommandMonitors
 
 
 class CommandJob:
@@ -32,6 +33,13 @@ class CommandJobs:
         self.jobs: dict[str, CommandJob] = {}
         self.lifetime = Lifetime("background commands")
         self.on_completion: Callable[[], None] | None = None
+
+    @property
+    def monitors(self) -> CommandMonitors:
+        # Explicit lazy migration for session owners retained across reloads.
+        if "_monitors" not in self.__dict__:
+            self._monitors = CommandMonitors(self)
+        return self._monitors
 
     @property
     def active(self) -> bool:
@@ -89,6 +97,7 @@ class CommandJobs:
     def clear(self) -> None:
         if self.active:
             raise ValueError("Stop background commands before clearing the session")
+        self.monitors.clear()
         self.jobs.clear()
 
     def completions(self) -> list[dict[str, Any]]:
@@ -101,7 +110,10 @@ class CommandJobs:
 
     async def aclose(self) -> None:
         self.on_completion = None
-        await self.lifetime.aclose()
+        try:
+            await self.lifetime.aclose()
+        finally:
+            self.monitors.clear()
 
 
 class CommandJobsTool(Tool):

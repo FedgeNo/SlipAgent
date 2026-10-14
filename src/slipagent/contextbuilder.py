@@ -134,6 +134,19 @@ class ContextBuilder:
         if references:
             sections.add("diff_comments", "Current Diff Comments", load_prompt("diff-comment.md",
                          references=json.dumps(references, ensure_ascii=False, indent=2)), 46, owner="user")
+        jobs = self.registry.resources.jobs
+        if "monitor_command" in available_names and jobs is not None:
+            monitors = jobs.monitors.snapshots()
+            if not monitors:
+                sections.add("monitor_setup", "Command Monitoring Setup", load_prompt("monitor-setup.md"), 47)
+            active = [monitor for monitor in monitors if monitor["state"] == "active"]
+            ready = [monitor for monitor in monitors if monitor["state"] == "ready"]
+            if active:
+                sections.add("monitor_active", "Active Command Monitors", load_prompt("monitor-active.md",
+                             monitors=render_data(active)), 48)
+            if ready:
+                sections.add("monitor_results", "Command Monitor Results", load_prompt("monitor-results.md",
+                             monitors=render_data(ready)), 49)
         state_notes = {key: value for key, value in self.registry.context_notes.items() if key != "user_edits"}
         if state_notes:
             sections.add("state", "Current Harness State", load_prompt('harness-state.md', state=render_data(state_notes)), 50)

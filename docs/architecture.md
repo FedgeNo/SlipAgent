@@ -702,6 +702,38 @@ archive; direct `Agent.reset` rejects an active job. Shutdown also drains them.
 Resume restores logs but never reconnects or relaunches a process; its recovery
 note makes that uncertainty explicit.
 
+## Command Event Subscriptions
+
+`CommandJobs.monitors` explicitly migrates a retained job owner to a lazy
+`CommandMonitors` instance. `monitor_command` borrows that owner across reloads.
+It records `current_invocation` as the initialization turn/call, replays a bounded
+retained tail without yielding, then attaches a live callback to `CommandLog.write`.
+The callback runs after retention accounting, including when quotas discard bytes;
+matching live text and reporting storage loss are separate concerns. Literal
+matching retains at most a pattern-sized suffix per stream. It never executes
+regular expressions or joins stdout and stderr.
+
+Each subscription owns deadline and coalescing timer handles. A callback on the
+existing job task observes completion even for a job launched before the feature
+was loaded. Cancel/timeout completes only the subscription. Ready results contain
+bounded output tails, explicit omissions, loss counters, and initialization
+provenance, and are saved through the session artifact store. Acknowledgement
+removes only the live reminder. Eight retained monitors bound memory and prompt
+growth; unacknowledged results are never evicted to admit another watch.
+
+The existing idle/batch-boundary notification path displays monitor notices
+without launching requests. Context assembly independently snapshots live state:
+setup instructions when empty, active reminders while watching, and inline ready
+results until acknowledged. Previews do not acknowledge or consume results. All
+three sections obey tool availability. Output is labelled as untrusted data.
+Repeated notices coalesce for five seconds; terminal outcomes flush immediately.
+Raw command output follows the existing retention quota regardless of suppression.
+
+Jobs settle before monitor timers are cleared and archives close. Compatible
+reloads retain subscriptions; reset/resume/fork/deletion/exit clear live state.
+Saved result artifacts retain initialization metadata after restart, but prior
+process subscriptions are not reattached or replayed automatically.
+
 ## Optional LSP Ownership
 
 `LanguageServers` owns configured stdio clients across compatible reloads.

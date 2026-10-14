@@ -47,6 +47,12 @@ class CommandLog:
         self.artifact_kind = "command_output"
 
     def write(self, name: str, text: str) -> None:
+        self._write(name, text)
+        monitor = self.__dict__.get("monitor_output")
+        if monitor is not None and text:
+            monitor(name, text)
+
+    def _write(self, name: str, text: str) -> None:
         stream = self.streams[name]
         raw = text.encode("utf-8")
         if not raw:

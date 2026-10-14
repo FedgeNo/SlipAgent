@@ -1755,6 +1755,7 @@ The complete built-in tool set is:
 | `list_dir` | List one directory, directories first. |
 | `run_command` | Run a shell command and capture output; `background=true` returns a managed job ID. |
 | `command_jobs` | List, inspect, wait for, or stop managed background commands. |
+| `monitor_command` | Watch background output or completion; deliver results and their initialization turn directly in request prompts. |
 | `read_command_output` | Page retained stdout/stderr or read its tail by log ID; list logs by step/call ID. |
 | `read_artifact` | Read a bounded character page of a saved inspection record by numeric `record_id`; select `field`, `offset`, and `limit`. Omit the ID for a paginated record list. |
 | `git_status` | Show the branch and short repository status. |
@@ -1831,6 +1832,43 @@ Compatible reloads preserve jobs and logs. `/reset`, `/resume`, `/fork`, `/delet
 and drain active jobs before replacing or closing their output archive. Saved
 sessions retain output, but do not reattach to or relaunch prior processes.
 After a crash, inspect recorded output and running processes before rerunning work.
+
+### Command Event Monitoring
+
+The optional `monitor_command` tool watches existing managed background jobs.
+The model receives setup instructions when no monitors are initialized: load the
+tool with `load_tools`, start a background command, then initialize a watch using
+its returned job ID. For example,
+`{"action":"start","job_id":"ID_FROM_RESULT","pattern":"ready","timeout":120}`
+watches a case-sensitive literal substring; omit `pattern` to watch completion.
+`stream` selects `stdout`, `stderr`, or `both` (default). Patterns contain 1–256
+characters and match across chunks, but never across streams. Initialization
+replays up to the last 65,536 retained bytes per stream, reporting earlier omissions.
+
+Active watches appear in an additional prompt section. When ready, another
+section delivers the result itself, identifies the initialization turn, and
+includes the outcome, exit status, latest matching excerpt, counts, and up to
+1,000 observed characters from each output stream. Omitted text and storage loss
+are explicit. The model need not spend a call retrieving the supplied result;
+full retained logs remain available if it needs more detail. Results also become
+saved inspection artifacts, subject to the existing archive quota.
+
+The default watch completes on the first match. `repeat=true` watches repeated
+matches until the job ends or the watch expires. Intermediate notices are limited
+to one per five seconds per monitor, with suppressed counts; raw logs remain
+independent of notification suppression. Completion is always announced.
+`action="wait"` waits up to 30 seconds without stopping anything. Watches default
+to 30 seconds and can last up to 600; they do not extend the command's timeout.
+`action="cancel"` ends only the watch. `action="acknowledge"` removes a ready
+result from live reminders without deleting logs or saved artifacts. At most
+eight active or unacknowledged watches are retained; capacity errors never evict
+unacknowledged results. `action="list"` returns the retained watches.
+
+Monitoring never starts a model request or resumes a finished agent. Results
+arrive in its next normal request. Compatible reloads and `/stop` preserve watches;
+session replacement and shutdown clear them after stopping the jobs. Restarting
+does not recreate subscriptions. Monitor instructions are omitted when the tool
+is unavailable under the current tool restrictions.
 
 ### Optional Language Servers
 

@@ -69,6 +69,7 @@ def build_default_registry(
     Code navigation is included only when language servers are configured.
     """
     from ..jobs import CommandJobs, CommandJobsTool
+    from ..monitoring import MonitorCommandTool
     from ..diagnostics import RequestDiagnostics
     from ..lsp import LanguageServers, NavigateCodeTool
     from ..artifacts import ArtifactStore, ReadArtifactTool
@@ -98,6 +99,7 @@ def build_default_registry(
             *navigate_tools(workspace),
             *shell_tools(workspace, archive, services.get("command_jobs")),
             *([CommandJobsTool(services["command_jobs"])] if "command_jobs" in services else []),
+            *([MonitorCommandTool(services["command_jobs"])] if "command_jobs" in services else []),
             *([NavigateCodeTool(services["language_servers"])]
               if "language_servers" in services and load_project_options(workspace).get("language_servers") else []),
             *git_tools(workspace, archive),

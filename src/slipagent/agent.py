@@ -246,6 +246,12 @@ class Agent:
         jobs = self.registry.resources.jobs
         if jobs is None:
             return
+        for monitor in jobs.monitors.notices():
+            outcome = "result ready" if monitor["state"] == "ready" else "matched output"
+            self._emit(AgentEvent(kind="notice", text=f"Monitor {monitor['monitor_id']} initialized in turn {monitor['initialized_turn']}: {outcome}; {monitor['suppressed_notifications']} notifications suppressed."))
+            if monitor.get("artifact"):
+                self._attach_artifact(monitor["artifact"])
+                self._emit(AgentEvent(kind="artifact", result=ToolResult.ok(monitor["artifact"])))
         completed = jobs.completions()
         if completed:
             self.registry.context_notes["background_commands"] = {

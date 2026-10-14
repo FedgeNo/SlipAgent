@@ -141,7 +141,7 @@ def _literal_tool_output(text: str) -> str:
 
 
 COMMAND_OUTPUT_TOOLS = frozenset({
-    "run_command", "read_command_output", "command_jobs",
+    "run_command", "read_command_output", "command_jobs", "monitor_command",
     "git_status", "git_diff", "git_log", "git_add", "git_commit",
 })
 

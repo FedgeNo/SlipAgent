@@ -475,6 +475,7 @@ async def test_options_field_isolated_from_prompt_queue_and_draft(display, monke
         ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
         ui.input.text = "keep this draft"
         ui.write("Feed stays in place.")
+        ui.toggle_inspection()
         task = asyncio.create_task(ui.run())
         try:
             await wait_until(lambda: "Options" in snapshot()[17])
@@ -1283,8 +1284,11 @@ async def test_inspection_panel_toggles_by_combo_and_click_and_opens_files_and_c
             ui.track_call(call, 1)
             ui.finish_call(call, 1, 'file contents\n"quoted" and literal \\n', False)
             await wait_until(lambda: "Inspect [Ctrl+O]" in snapshot()[17])
+            assert "Options" not in snapshot()[17]
             pipe.send_text("\x0f")
             await wait_until(lambda: "Touched" in snapshot()[0])
+            assert "Close Inspector [Ctrl+O]" in snapshot()[17]
+            assert "Options" in snapshot()[17]
             assert snapshot()[0].index("Touched") == 75
             assert "Calls" in snapshot()[9]
             assert "demo.txt [read]" in snapshot()[1]
@@ -1301,9 +1305,11 @@ async def test_inspection_panel_toggles_by_combo_and_click_and_opens_files_and_c
             assert 'result:\n' in text
             pipe.send_text("\x1b")
             await wait_until(lambda: not ui._viewer_active)
-            pipe.send_text("\x1b[<0;90;18M\x1b[<0;90;18m")
+            pipe.send_text("\x1b[<0;75;18M\x1b[<0;75;18m")
             await wait_until(lambda: not ui._inspection_visible)
             await wait_until(lambda: "Touched" not in snapshot()[0])
+            assert "Close Inspector" not in snapshot()[17]
+            assert "Options" not in snapshot()[17]
         finally:
             ui.close()
             await task

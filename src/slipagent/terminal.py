@@ -233,7 +233,8 @@ class TerminalUI:
                               Window(ActionControl(self._inspect_link), height=1, width=lambda: self._right_control_width(), align=WindowAlign.RIGHT)])
         scroll_row = VSplit([
             Window(ActionControl(lambda: self._activity()), height=1,
-                   width=lambda: max(0, (self.output.get_size().columns - 18) // 2)),
+                   width=lambda: max(0, min((self.output.get_size().columns - 18) // 2,
+                                           self.output.get_size().columns - 18 - self._right_control_width()))),
             Window(ActionControl(self._scroll_bottom_link), height=1, width=18),
             Window(ActionControl(self._inspect_link), height=1, align=WindowAlign.RIGHT),
         ])
@@ -407,11 +408,15 @@ class TerminalUI:
 
     def _inspect_link(self) -> StyleAndTextTuples:
         label = "Inspect [Ctrl+O]" if self._right_control_width() > 18 else "Inspect"
-        return [*self._action_link(label, "inspect", self.toggle_inspection), ("", "  "),
-                *self._task_link("Options", "options", self._options_panel.show), ("", " ")]
+        if self._inspection_visible and self.output.get_size().columns >= 60:
+            return [*self._action_link("Close Inspector [Ctrl+O]", "inspect", self.toggle_inspection), ("", "  "),
+                    *self._task_link("Options", "options", self._options_panel.show), ("", " ")]
+        return [*self._action_link(label, "inspect", self.toggle_inspection), ("", " ")]
 
     def _right_control_width(self) -> int:
         columns = self.output.get_size().columns
+        if self._inspection_visible and columns >= 60:
+            return 35
         return 30 if columns >= 80 else 18 if columns >= 30 else 0
 
     def _footer_rows(self) -> int:

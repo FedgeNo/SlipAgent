@@ -888,11 +888,19 @@ screen rows needed to reveal the whole selected item. Items taller than the
 viewport reveal their beginning. Resizing recalculates visibility; manual sidebar
 scrolling preserves its position until selection moves. Those policies remain distinct.
 
-`FocusCoordinator` owns one route through the prompt, active feed/editor/viewer/context,
-visible links and lists, and footer actions. Tab and Shift+Tab follow it forward;
-Shift+Tab also works from the editor, whose plain Tab inserts
-indentation. Lists are single stops with their own arrow navigation. Feed action
-discovery reads only viewport rows, rather than scanning historical scrollback.
+`FocusCoordinator` owns a forward route through the prompt, active feed/editor/viewer/context,
+links and lists, and footer actions. Tab includes indexed feed links and reveals
+each selected item. Shift+Tab skips individual feed links and selects the next
+UI component; it also works from the editor, whose plain Tab inserts indentation.
+Lists are single stops with their own arrow navigation. `WrappedTranscript`
+indexes linked rows as they are written, so discovery does not scan scrollback.
+Tabbing temporarily shows the component-selection tip without flashing or
+discarding the latest event notification.
+`TranscriptLayouts` retains at most two file-backed wrapped layouts and prepares
+the alternate Inspect width in an application-owned task, yielding between
+records. Both layouts consume new output incrementally. Theme/source changes,
+transcript replacement, and reload invalidate them; closing cancels prewarming
+before its files close.
 `ActionControl` retains rendered handlers for keyboard activation and focus styling;
 keyboard Enter invokes the same enabled action as a left click.
 Mouse presses use the same focus owner before native mouse dispatch, so input

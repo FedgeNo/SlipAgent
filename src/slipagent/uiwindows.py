@@ -15,6 +15,11 @@ class TranscriptWindow(Window):
     def scroll(self, rows: int) -> None:
         self._pending_scroll += rows
 
+    def reveal_row(self, row: int) -> None:
+        self.__dict__["_reveal_row"] = row
+        self._following = False
+        self._pending_scroll = 0
+
     def _scroll(self, ui_content: UIContent, width: int, height: int) -> None:
         if width <= 0 or height <= 0:
             return
@@ -57,6 +62,17 @@ class TranscriptWindow(Window):
                 offset = 0
             rows -= 1
         self.vertical_scroll, self.vertical_scroll_2 = min((line, offset), bottom)
+        selected = self.__dict__.pop("_reveal_row", None)
+        if selected is not None:
+            selected = min(max(0, selected), ui_content.line_count - 1)
+            if selected < self.vertical_scroll or selected == self.vertical_scroll and self.vertical_scroll_2:
+                self.vertical_scroll, self.vertical_scroll_2 = max(0, selected - (height > 1)), 0
+            else:
+                before = sum(line_height(row) for row in range(self.vertical_scroll, selected)) - self.vertical_scroll_2
+                overflow = before + min(height, line_height(selected)) - height
+                if overflow > 0:
+                    self.vertical_scroll, self.vertical_scroll_2 = max(0, selected - (height > 1)), 0
+        self.vertical_scroll, self.vertical_scroll_2 = min((self.vertical_scroll, self.vertical_scroll_2), bottom)
         self._following = (self.vertical_scroll, self.vertical_scroll_2) == bottom
         self.horizontal_scroll = 0
 

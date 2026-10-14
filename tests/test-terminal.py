@@ -2752,7 +2752,7 @@ def test_rotating_tips_do_not_flash_status(display, monkeypatch):
             original = ui._activity()
             clock[0] += 14.01
             rotated = ui._activity()
-            assert "Shift+Tab selects the next control" in ui._notification_text()
+            assert "Shift+Tab to select UI component." in ui._notification_text()
             assert "".join(part[1] for part in rotated) != "".join(part[1] for part in original)
             assert all("status-flash" not in part[0] for part in rotated)
             ui.notify("Saved changes.")

@@ -44,6 +44,7 @@ from .clipboard import clipboard_sequence, copy_to_clipboard
 from .explorer import folder_opener, open_folder
 from .viewerpanels import ViewerDeck, TextViewerPanel, DiffViewerPanel, FileViewerPanel, file_signature
 from .inspection import IndexedText, field_snapshot, artifact_snapshot, build_snapshot
+from .transcriptlayouts import TranscriptLayouts
 from .types import ToolCall
 
 FOOTER_ROWS = 7
@@ -329,8 +330,9 @@ class TerminalUI:
         return (self._inspection_visible and self.output.get_size().columns >= 60
                 and self.app.layout.current_window in (self._files_window, self._calls_window))
 
-    def _cycle_panel(self, direction: int = 1) -> None:
-        self._focus.travel(direction)
+    def _cycle_panel(self, direction: int = 1, *, components: bool = False) -> None:
+        self.__dict__["_navigation_tip_until"] = time.monotonic() + 15
+        self._focus.travel(direction, components=components)
         self.app.invalidate()
 
     def _ensure_focus(self) -> None:
@@ -749,14 +751,14 @@ class TerminalUI:
         self.app.invalidate()
 
     def _notification_text(self, columns: int | None = None) -> str:
-        text = self.__dict__.get("_notification", "")
+        text = self._navigation_tip() or self.__dict__.get("_notification", "")
         if not text:
             tips = ["Select and right-click for text options."]
             if self._editor_active:
                 tips = ["Ctrl+S saves; Esc closes the editor.", "PgUp/PgDn scrolls with overlap."]
             elif self._viewer_active:
                 tips = ["Scroll to inspect; Esc closes the viewer."]
-            tips.insert(1, "Shift+Tab selects the next control, including from the editor.")
+            tips.insert(1, "Shift+Tab to select UI component.")
             if not self.working and self._input_label == "> " and self._menu_future is None and not self._viewer_active and not self._editor_active:
                 tips.append("Click Commands to browse commands.")
             if self.__dict__.get("_folder_opener") is not None:
@@ -769,6 +771,10 @@ class TerminalUI:
             if self.__dict__.get("_notification") and display_width(text) > columns:
                 columns = self._activity_width()
         return fragment_list_to_text(self._marquee([("", text)], columns, "notice"))
+
+    def _navigation_tip(self) -> str:
+        return ("Shift+Tab to select UI component."
+                if time.monotonic() < self.__dict__.get("_navigation_tip_until", 0) else "")
 
     def _marquee(self, fragments: StyleAndTextTuples, columns: int, key: str) -> StyleAndTextTuples:
         """Scroll overflowing text without splitting graphemes or losing handlers."""
@@ -1159,9 +1165,12 @@ class TerminalUI:
                                   not (self._editor_active or self._viewer_active or self.context_visible))
 
         @bindings.add("tab", filter=~in_editor)
-        @bindings.add("s-tab")
         def cycle_panel(event: KeyPressEvent) -> None:
             self._cycle_panel()
+
+        @bindings.add("s-tab")
+        def cycle_component(event: KeyPressEvent) -> None:
+            self._cycle_panel(components=True)
 
         @bindings.add("enter", filter=in_link, eager=True)
         def activate_link(event: KeyPressEvent) -> None:
@@ -1541,7 +1550,7 @@ class TerminalUI:
         return self._activity_notice(fragments)
 
     def _activity_notice(self, fragments: StyleAndTextTuples) -> StyleAndTextTuples:
-        notification = self.__dict__.get("_notification", "")
+        notification = "" if self._navigation_tip() else self.__dict__.get("_notification", "")
         available = self._activity_width()
         if not notification and display_width(fragment_list_to_text(fragments)) >= available:
             return self._marquee(fragments, available, "activity")
@@ -1550,7 +1559,7 @@ class TerminalUI:
         if notification:
             controls_visible = (self._editor_active or self._viewer_active) and self._menu_future is None and not self._options_field_active
             text = self._notification_text(remaining) if controls_visible and remaining else self._notification_text()
-        elif self._menu_future is None and not self._options_field_active:
+        elif self._navigation_tip() or self._menu_future is None and not self._options_field_active:
             text = self._notification_text(remaining)
         if text:
             if display_width(fragment_list_to_text(fragments)) + 2 + display_width(text) > available:
@@ -1962,29 +1971,30 @@ class TerminalUI:
         self._ensure_transcript()
         self._ensure_prompt()
         columns = max(1, width)
-        if self._flow is None or columns != self._wrapped_columns or not hasattr(self._flow, "prompt_rows"):
+        layouts = self.__dict__.get("_transcript_layouts")
+        if layouts is None:
+            layouts = self._transcript_layouts = TranscriptLayouts()
             if self._flow is not None:
                 self._flow.close()
-            self._flow = WrappedTranscript(columns, theme=self._markdown_theme,
-                                           color=self.app.color_depth != ColorDepth.DEPTH_1_BIT,
-                                           source=self._markdown_source)
+            self._flow = None
+        color = self.app.color_depth != ColorDepth.DEPTH_1_BIT
+        layouts.configure((id(self._raw_output), self._markdown_theme, color, self._markdown_source),
+                          reset=self._wrapped_columns == 0 and self._flow is not None)
+        def create(columns: int) -> WrappedTranscript:
+            return WrappedTranscript(columns, theme=self._markdown_theme, color=color, source=self._markdown_source)
+        state = layouts.state(columns, create)
+        if self._flow is not state.flow:
             self._selection_start = self._selection_end = None
             self._selection_dragging = False
-            self._wrapped_count = 0
-            self._wrapped_columns = columns
-        flow = self._flow
-        for index in range(self._wrapped_count, len(self._raw_output)):
-            if index in self._markdown_chunks:
-                flow.append_markdown(self._raw_output[index], first=index in self._block_starts,
-                                     final=index in self._markdown_finals)
-            else:
-                flow.append(self._raw_output[index], first=index in self._block_starts,
-                            continuation_indents=self._continuation_indents.get(index),
-                            extra_style=(f" class:directory-{index}" if index in self.__dict__.get("_directory_links", {}) else "") +
-                                        (f" class:file-{index}" if index in self.__dict__.get("_file_links", {}) else "") +
-                                        (f" class:artifact-{index}" if index in self.__dict__.get("_artifact_links", {}) else "") +
-                                        (f" class:suggestion-{index}" if index in self.__dict__.get("_suggestion_links", {}) else ""))
+        self._flow = flow = state.flow
+        self._wrapped_columns = columns
+        layouts.update(state, len(self._raw_output), self._append_transcript_record)
         self._wrapped_count = len(self._raw_output)
+        full = self.output.get_size().columns
+        narrow = full - full // 4
+        if full >= 60 and columns in (full, narrow):
+            layouts.warm(narrow if columns == full else full, len(self._raw_output), create,
+                         self._append_transcript_record, self.app.create_background_task)
         preview = flow.content_rows()
         complete = len(flow.rows)
         self._line_count = complete + len(preview)
@@ -2049,8 +2059,21 @@ class TerminalUI:
                     result.append((padding_style, trailing))
             return result
 
-        return UIContent(get_line=get_line, line_count=self._line_count + 1,
-                         cursor_position=Point(x=0, y=max(0, self._line_count - 1)), show_cursor=False)
+        content = UIContent(get_line=get_line, line_count=self._line_count + 1,
+                            cursor_position=Point(x=0, y=max(0, self._line_count - 1)), show_cursor=False)
+        content.__dict__["focus_rows"] = flow.linked_rows()
+        return content
+
+    def _append_transcript_record(self, flow: WrappedTranscript, index: int) -> None:
+        if index in self._markdown_chunks:
+            flow.append_markdown(self._raw_output[index], first=index in self._block_starts,
+                                 final=index in self._markdown_finals)
+        else:
+            flow.append(self._raw_output[index], first=index in self._block_starts,
+                        continuation_indents=self._continuation_indents.get(index),
+                        extra_style="".join(f" class:{kind}-{index}" for kind in
+                                           ("directory", "file", "artifact", "suggestion")
+                                           if index in self.__dict__.get(f"_{kind}_links", {})))
 
     async def read_line(self) -> str | None:
         if self._eof and self._lines.empty():
@@ -2108,7 +2131,10 @@ class TerminalUI:
             coordinator.close()
         self._viewer.close()
         self._raw_output.close()
-        if self._flow is not None:
+        layouts = self.__dict__.get("_transcript_layouts")
+        if layouts is not None:
+            layouts.close()
+        elif self._flow is not None:
             self._flow.close()
 
     def close(self) -> None:

@@ -39,6 +39,23 @@ def test_plain_partial_selection_excludes_hidden_separator():
         flow.close()
 
 
+def test_link_index_tracks_wrapped_streaming_and_removed_rows():
+    flow = WrappedTranscript(12)
+    try:
+        flow.append('First linked item with wrapping\n', first=True, extra_style=' class:artifact-0')
+        first_rows = len(flow.rows)
+        flow.append('ordinary output\n', first=True)
+        flow.append('Second linked item', first=True, extra_style=' class:suggestion-2')
+        assert flow.linked_rows()[0] == 0
+        second_row = flow.linked_rows()[1]
+        flow.append(' with more text\n', first=False, extra_style=' class:suggestion-2')
+        assert flow.linked_rows() == [0, second_row]
+        flow.remove_rows(0, first_rows)
+        assert flow.linked_rows() == [second_row - first_rows]
+    finally:
+        flow.close()
+
+
 def expected(text, columns):
     result = []
     for paragraph in text.split("\n"):

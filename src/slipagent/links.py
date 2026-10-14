@@ -95,9 +95,12 @@ def keyboard_content(control: UIControl, content: UIContent) -> UIContent:
                 result.append(fragment)
         return result
 
-    return UIContent(get_line=get_line, line_count=content.line_count,
-                     cursor_position=content.cursor_position, menu_position=content.menu_position,
-                     show_cursor=False)
+    result = UIContent(get_line=get_line, line_count=content.line_count,
+                       cursor_position=content.cursor_position, menu_position=content.menu_position,
+                       show_cursor=False)
+    if "focus_rows" in content.__dict__:
+        result.__dict__["focus_rows"] = content.__dict__["focus_rows"]
+    return result
 
 
 class ActionControl(FormattedTextControl):

@@ -97,7 +97,8 @@ async def test_route_reaches_feed_links_lists_and_footer_actions(ui, tmp_path, k
     assert terminal._calls_window.content in controls
     keys = [value for _, value in visited]
     for kind in ("file", "directory", "artifact", "suggestion"):
-        assert any(isinstance(value, tuple) and value[0] == "feed" and value[1].startswith(f"class:{kind}-") for value in keys)
+        assert any(isinstance(value, tuple) and value[0] == "feed" and value[1].startswith(f"class:{kind}-")
+                   for value in keys) is (key == Keys.Tab)
     assert "inspect" in keys and "options" in keys
     assert "commands" in keys and terminal._folder_mouse in keys
     assert terminal.input.text == ""
@@ -200,7 +201,7 @@ async def test_feed_links_activate_their_existing_operations(ui, tmp_path, monke
     action.assert_awaited_once_with(*arguments, **keywords)
 
 
-async def test_offscreen_and_disabled_feed_actions_do_not_join_the_route(ui):
+async def test_offscreen_feed_actions_join_the_route_but_disabled_actions_do_not(ui):
     terminal, _ = ui
     terminal.write_suggestion("Old suggestion")
     for number in range(100):
@@ -208,11 +209,129 @@ async def test_offscreen_and_disabled_feed_actions_do_not_join_the_route(ui):
     terminal.write_suggestion("New suggestion")
     render(terminal)
     keys = [key for _, key, _, _ in terminal._focus.stops()]
-    assert ("feed", "class:suggestion-0") not in keys
+    assert ("feed", "class:suggestion-0") in keys
     assert ("feed", "class:suggestion-101") in keys
     terminal.set_working(True)
     render(terminal)
     assert all(not isinstance(key, tuple) or key[0] != "feed" for _, key, _, _ in terminal._focus.stops())
+
+
+async def test_tab_reveals_each_selected_feed_link_and_shift_tab_leaves_feed(ui):
+    terminal, _ = ui
+    terminal.write_suggestion('First item')
+    for index in range(60):
+        terminal.write(f'line {index}')
+    terminal.write_suggestion('Second item')
+    for index in range(60):
+        terminal.write(f'later line {index}')
+    terminal.write_suggestion('Third item')
+    terminal.toggle_inspection()
+    render(terminal)
+    terminal._focus.focus(terminal.input)
+    press(terminal, Keys.Tab)
+    assert terminal.app.layout.current_window is terminal.transcript
+    for expected in [0, 61, 122]:
+        press(terminal, Keys.Tab)
+        assert selected(terminal)[1] == ('feed', f'class:suggestion-{expected}')
+        point = terminal.transcript.content.__dict__['_keyboard_point']
+        assert point.y in terminal.transcript.render_info.displayed_lines
+        scroll = terminal.transcript.vertical_scroll
+        render(terminal)
+        assert terminal.transcript.vertical_scroll == scroll
+    press(terminal, Keys.BackTab)
+    assert terminal.app.layout.current_window is terminal._files_window
+
+
+async def test_shift_tab_skips_feed_links_and_still_focuses_feed_component(ui):
+    terminal, _ = ui
+    terminal.write_suggestion('Skip this item')
+    terminal.toggle_inspection()
+    render(terminal)
+    press(terminal, Keys.BackTab)
+    assert selected(terminal) == (terminal.transcript.content, None)
+    press(terminal, Keys.BackTab)
+    assert terminal.app.layout.current_window is terminal._files_window
+
+
+@pytest.mark.parametrize('key', [Keys.Tab, Keys.BackTab])
+async def test_tabbing_shows_component_tip_without_flashing_or_losing_notification(ui, monkeypatch, key):
+    terminal, _ = ui
+    clock = [100.0]
+    monkeypatch.setattr('slipagent.terminal.time.monotonic', lambda: clock[0])
+    terminal.notify('Saved notification')
+    render(terminal)
+    press(terminal, key)
+    assert terminal._notification_text(100) == 'Shift+Tab to select UI component.'
+    assert not any('status-flash' in style for style, *_ in terminal._activity_notice([]))
+    assert terminal.__dict__['_notification'] == 'Saved notification'
+    clock[0] += 16
+    assert terminal._notification_text(100) == 'Saved notification'
+
+
+async def test_inspect_uses_prewarmed_width_and_keeps_new_output(ui, monkeypatch):
+    terminal, _ = ui
+    for index in range(60):
+        terminal.write(f'line {index}: ' + 'text ' * 20)
+    render(terminal)
+    layouts = terminal._transcript_layouts
+    await asyncio.gather(*list(layouts.tasks.values()))
+    formatted = []
+    append = terminal._append_transcript_record
+    monkeypatch.setattr(terminal, '_append_transcript_record', lambda flow, index: (formatted.append(index), append(flow, index)))
+    for _ in range(4):
+        terminal.toggle_inspection()
+        render(terminal)
+    assert formatted == []
+    assert len(layouts.states) == 2
+    terminal.write('New output after toggles')
+    render(terminal)
+    await asyncio.gather(*list(layouts.tasks.values()))
+    assert formatted == [60, 60]
+    for state in layouts.states.values():
+        assert state.count == 61
+        assert 'New output after toggles' in '\n'.join(
+            ''.join(part[1] for part in row) for row in [
+                *[state.flow.get_row(index) for index in range(len(state.flow.rows))],
+                *state.flow.content_rows(),
+            ])
+
+
+async def test_wrapping_cache_is_bounded_and_reset_on_theme_or_clear(ui):
+    terminal, sizes = ui
+    terminal.write_markdown('**Original** text')
+    render(terminal)
+    layouts = terminal._transcript_layouts
+    await asyncio.gather(*list(layouts.tasks.values()))
+    old = list(layouts.states.values())
+    terminal.configure_markdown(theme='light')
+    render(terminal)
+    assert all(state.flow.rows._file.closed for state in old)
+    sizes[0] = Size(rows=24, columns=120)
+    render(terminal)
+    assert len(layouts.states) == 2
+    terminal.clear_transcript()
+    terminal.write('Replacement')
+    render(terminal)
+    content = terminal._transcript_content(120)
+    text = '\n'.join(''.join(part[1] for part in content.get_line(row)) for row in range(content.line_count))
+    assert 'Replacement' in text and 'Original' not in text
+
+
+@pytest.mark.parametrize('close', [False, True])
+async def test_pending_prewarm_is_cancelled_before_storage_closes(ui, close):
+    terminal, _ = ui
+    terminal.write('Old data')
+    render(terminal)
+    pending = list(terminal._transcript_layouts.tasks.values())
+    assert pending
+    if close:
+        terminal.close()
+    else:
+        terminal.clear_transcript()
+        terminal.write('New data')
+        render(terminal)
+    await asyncio.gather(*pending, return_exceptions=True)
+    assert all(task.cancelled() for task in pending)
 
 
 async def test_feed_scroll_and_escape_do_not_change_draft_or_interrupt(ui):

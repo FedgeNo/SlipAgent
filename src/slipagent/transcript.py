@@ -21,6 +21,8 @@ from wcwidth import width as display_width, wrap
 from .palette import USER_BACKGROUND_COLOR, USER_TEXT_COLOR
 from .markdown import DisplayRow, MarkdownRenderer, MarkdownStream
 
+FEED_LINK_PREFIXES = ("class:artifact-", "class:file-", "class:directory-", "class:suggestion-")
+
 
 class TranscriptFile(Sequence[str]):
     """Indexed UTF-8 records; embedded newlines need no special treatment."""
@@ -157,6 +159,7 @@ class WrappedTranscript:
         self._markdown_start = self._markdown_tail = 0
         self._copy_rows = TranscriptFile()
         self._copy_index: dict[int, int] = {}
+        self._link_rows: dict[str, int] = {}
 
     def append_markdown(self, text: str, *, first: bool, final: bool = False) -> None:
         if first or self._markdown is None:
@@ -208,7 +211,22 @@ class WrappedTranscript:
         return DisplayRow(fragments, "".join(item[1] for item in fragments) + "\n")
 
     def _save(self, row: StyleAndTextTuples) -> None:
+        for style, *_ in row:
+            for token in style.split():
+                if token.startswith(FEED_LINK_PREFIXES):
+                    self._link_rows.setdefault(token, len(self.rows))
         self.rows.append(json.dumps(row, ensure_ascii=False))
+
+    def linked_rows(self) -> list[int]:
+        """Locate feed actions without reading every row during traversal."""
+        preview = self.content_rows()
+        links = dict(self._link_rows)
+        for offset, row in enumerate(preview, len(self.rows)):
+            for style, *_ in row:
+                for token in style.split():
+                    if token.startswith(FEED_LINK_PREFIXES):
+                        links.setdefault(token, offset)
+        return sorted(set(links.values()))
 
     def _raw_copy_row(self, rows: list[StyleAndTextTuples], starts: list[int], index: int,
                       *, newline: bool = False) -> DisplayRow:
@@ -403,6 +421,8 @@ class WrappedTranscript:
                             if left < start or left >= stop]
         self._copy_index = {shifted(index): record for index, record in self._copy_index.items()
                             if index < start or index >= stop}
+        self._link_rows = {token: shifted(index) for token, index in self._link_rows.items()
+                           if index < start or index >= stop}
 
     def close(self) -> None:
         if self._markdown is not None:

@@ -779,7 +779,7 @@ when entering prompts, command arguments, configuration values, or file edits.
 | --- | --- | --- |
 | Browse commands | Commands link, then click an item | `/menu`, arrows, Enter |
 | Show/hide inspection panel | Inspect link | Ctrl+O |
-| Focus visible regions and links | Click the region or link | Shift+Tab selects the next control; Tab also works outside the editor |
+| Focus regions and links | Click the region or link | Shift+Tab selects the next UI component; Tab also selects feed links outside the editor |
 | Activate a focused link | Click the link | Enter |
 | Scroll feed output | Mouse wheel | Arrows, Page Up/Down, Home/End with feed focus; Page Up/Down also work from the prompt |
 | Open a touched item or saved call | Click its list entry | Focus its list, arrows, Enter |
@@ -820,10 +820,12 @@ directories, which open in the file explorer when one is available.
 Click a file to edit it, or a call
 to inspect its decoded arguments and result as labelled fields with literal text
 and line breaks. The mouse wheel scrolls the section under
-the pointer. **Tab** and **Shift+Tab** follow the same forward route through the prompt,
-active feed/editor/viewer/context, visible links, lists, and footer controls.
-Links receive a visible focus highlight; **Enter** activates them.
-Only currently visible feed links join the route; scroll to reach older links.
+the pointer. **Tab** moves forward through the prompt, active
+feed/editor/viewer/context, links, lists, and footer controls. Each selected feed
+link scrolls into view, including links earlier in the conversation.
+**Shift+Tab** selects the next UI component, skipping individual feed links.
+Links receive a visible focus highlight; **Enter** activates them. Tabbing shows
+the tip “Shift+Tab to select UI component.” without flashing.
 Use the **Inspect** link or **Ctrl+O** to reveal hidden sidebar lists.
 Use **Up/Down** to select an entry and **Enter** to open it.
 Inside the code editor, **Tab** inserts indentation; **Shift+Tab** moves focus
@@ -833,6 +835,8 @@ Hidden panels cannot retain keyboard focus. Viewer and context navigation keys
 apply when that region owns focus; prompt editing keeps its normal shortcuts.
 Clicking a focusable area focuses it. Prompt clicks place the cursor on the first
 click; clicking a list title focuses that list for arrow-key navigation.
+The feed retains at most two wrapped layouts and prepares the alternate Inspect
+width in the background, so opening and closing the panel reuses formatted text.
 Closing a menu restores its invoking region if it remains visible. A completed
 background save preserves any focus choice made while it ran.
 

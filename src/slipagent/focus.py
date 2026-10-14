@@ -14,6 +14,7 @@ from prompt_toolkit.widgets import TextArea
 from wcwidth import width as display_width
 
 from .links import ActionControl, ActionLink, link_key
+from .uiwindows import TranscriptWindow
 
 FocusStop = tuple[Window, object | None, Point, Callable[[MouseEvent], object] | None]
 
@@ -94,8 +95,8 @@ class FocusCoordinator:
         else:
             self.restore_primary()
 
-    def stops(self) -> list[FocusStop]:
-        """Walk current visible regions and actions, bounded by their viewports."""
+    def stops(self, *, components: bool = False) -> list[FocusStop]:
+        """Walk components and indexed feed actions without scanning scrollback."""
         stops: list[FocusStop] = []
         size = self.app().output.get_size()
         for window in walk(self.app().layout.container, skip_hidden=True):
@@ -109,6 +110,8 @@ class FocusCoordinator:
                 stops.append((window, None, Point(0, 0), None))
             if not actions and not control.__dict__.get("_keyboard_links", False):
                 continue
+            if components and not actions:
+                continue
             info = window.render_info
             width = info.window_width if info is not None else size.columns
             height = info.window_height if info is not None else size.rows
@@ -118,6 +121,8 @@ class FocusCoordinator:
             rows: Iterable[int]
             if actions:
                 rows = info.displayed_lines if info is not None else range(min(content.line_count, height))
+            elif "focus_rows" in content.__dict__:
+                rows = content.__dict__["focus_rows"]
             elif info is not None:
                 rows = info.displayed_lines
             else:
@@ -145,12 +150,14 @@ class FocusCoordinator:
             stops.insert(0, (self.prompt.window, None, Point(0, 0), None))
         return stops
 
-    def travel(self, direction: int = 1) -> None:
-        stops = self.stops()
+    def travel(self, direction: int = 1, *, components: bool = False) -> None:
+        stops = self.stops(components=components)
         if not stops:
             return
         current = self.app().layout.current_control
         selected = current.__dict__.get("_keyboard_key")
+        if components and current.__dict__.get("_keyboard_links", False):
+            selected = None
         index = next((i for i, (window, key, _, _) in enumerate(stops)
                       if window.content is current and key == selected), -1 if direction > 0 else 0)
         window, key, point, _ = stops[(index + direction) % len(stops)]
@@ -164,6 +171,8 @@ class FocusCoordinator:
         if key is not None:
             window.content.__dict__["_keyboard_key"] = key
             window.content.__dict__["_keyboard_point"] = point
+            if window.content.__dict__.get("_keyboard_links", False) and isinstance(window, TranscriptWindow):
+                window.reveal_row(point.y)
 
     def activate(self) -> None:
         current = self.app().layout.current_control

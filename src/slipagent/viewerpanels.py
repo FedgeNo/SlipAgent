@@ -44,6 +44,7 @@ class TextViewerPanel:
 
 class DiffViewerPanel(TextViewerPanel):
     control_type = DiffViewControl
+    reference: dict[str, Any] | None = None
 
 
 class FileViewerPanel(TextViewerPanel):

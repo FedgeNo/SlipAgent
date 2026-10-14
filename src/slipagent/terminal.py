@@ -25,7 +25,7 @@ from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout import ConditionalContainer, Dimension, DynamicContainer, Float, FloatContainer, HSplit, Layout, VSplit, Window, WindowAlign
 from prompt_toolkit.layout.controls import FormattedTextControl, UIContent, UIControl
 from prompt_toolkit.layout.mouse_handlers import MouseHandlers
-from prompt_toolkit.layout.processors import Processor, Transformation, TransformationInput
+from prompt_toolkit.layout.processors import BeforeInput, Processor, Transformation, TransformationInput
 from prompt_toolkit.layout.utils import explode_text_fragments
 from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 from prompt_toolkit.output import ColorDepth, Output, create_output
@@ -46,6 +46,7 @@ from .viewerpanels import ViewerDeck, TextViewerPanel, DiffViewerPanel, FileView
 from .inspection import IndexedText, field_snapshot, artifact_snapshot, build_snapshot
 from .transcriptlayouts import TranscriptLayouts
 from .types import ToolCall
+from .diffcomments import attach_reference, diff_reference
 
 FOOTER_ROWS = 7
 PULSE_FRAMES = ("🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘")
@@ -176,7 +177,7 @@ class TerminalUI:
         self._input_label = "> "
         self.input = TextArea(
             height=5, multiline=False, wrap_lines=True,
-            prompt=lambda: self._input_label,
+            prompt=lambda: self._prompt_label(),
             password=Condition(lambda: self._password), accept_handler=lambda buffer: self._accept(buffer),
             style="class:user",
         )
@@ -198,6 +199,10 @@ class TerminalUI:
         self._title_pulse_bound = True
 
     def _layout(self) -> Layout:
+        self.__dict__.setdefault("_diff_reference", None)
+        for processor in self.input.control.input_processors or []:
+            if isinstance(processor, BeforeInput):
+                processor.text = lambda: self._prompt_label()
         self._ensure_editor()
         self._ensure_options()
         self._ensure_context()
@@ -590,6 +595,12 @@ class TerminalUI:
 
     def _viewer_header(self) -> StyleAndTextTuples:
         text = self._viewer.panel.title + " — Read Only | ↑↓ / Wheel / PgUp / PgDn | Esc: Close"
+        panel = self._viewer.panel
+        if isinstance(panel, DiffViewerPanel) and panel.reference is not None:
+            reference = dict(panel.reference)
+            return [("", panel.title + " | "), *self._action_link(
+                "Comment on Diff", "comment-on-diff", lambda: self._comment_on_diff(reference)),
+                ("", " — Read Only | ↑↓ / Wheel / PgUp / PgDn | Esc: Close")]
         if not self._viewer.panel.changed:
             return [("", text)]
         return [("class:retry", "File changed on disk. "),
@@ -638,6 +649,26 @@ class TerminalUI:
             snapshot.close()
             return
         self.open_viewer(f"Record {record_id}", snapshot, diff=record["kind"] == "diff", line=line)
+        panel = self._viewer.panel
+        if self._viewer_active and isinstance(panel, DiffViewerPanel) and panel.control.lines is snapshot:
+            panel.reference = diff_reference(record)
+
+    def _comment_on_diff(self, reference: dict[str, Any]) -> None:
+        if self._input_label != "> " or self._password or self._eof:
+            return
+        self.__dict__["_diff_reference"] = dict(reference)
+        self._focus.focus(self.input)
+        self.app.invalidate()
+
+    def _remove_diff_reference(self) -> None:
+        self.__dict__["_diff_reference"] = None
+        self.app.invalidate()
+
+    def _prompt_label(self) -> str:
+        reference = self.__dict__.get("_diff_reference")
+        if reference is not None and self._input_label == "> ":
+            return f"[Diff {reference['record_id']}] > "
+        return self._input_label
 
     def write_artifact_reference(self, record: dict[str, object]) -> None:
         identifier = record["record_id"]
@@ -1526,7 +1557,13 @@ class TerminalUI:
         app.renderer.mouse_handlers = handlers
 
     def _accept(self, buffer: Buffer) -> bool:
-        self._lines.put_nowait(buffer.text)
+        text = buffer.text
+        reference = self.__dict__.get("_diff_reference")
+        if (reference is not None and self._input_label == "> " and not self._password
+                and text.strip() and not text.lstrip().startswith("/")):
+            text = attach_reference(text, reference)
+            self._remove_diff_reference()
+        self._lines.put_nowait(text)
         if _key_supplied(buffer.text):
             # prompt_toolkit appends history after the accept handler returns.
             buffer.text = ""
@@ -1547,6 +1584,9 @@ class TerminalUI:
             if display_width(fragment_list_to_text(fragments)) + len("  ESC to " + label + " ") > self.output.get_size().columns - self._right_control_width():
                 fragments = []
             fragments.extend([("", "  ESC to " if fragments else "ESC to "), *link, ("", " ")])
+        if self.__dict__.get("_diff_reference") is not None and self._input_label == "> ":
+            return self._activity_notice(fragments, suffix=[("", "  "), *self._action_link(
+                "Remove Diff Reference", "remove-diff-reference", self._remove_diff_reference), ("", " ")])
         return self._activity_notice(fragments)
 
     def _activity_notice(self, fragments: StyleAndTextTuples, *, suffix: StyleAndTextTuples | None = None) -> StyleAndTextTuples:
@@ -1638,6 +1678,7 @@ class TerminalUI:
     def clear_transcript(self) -> None:
         """Replace display storage while retaining the input draft and application."""
         self._ensure_transcript()
+        self._remove_diff_reference()
         self.clear_queued_prompts()
         archive = TranscriptFile()
         self._close_transcript()

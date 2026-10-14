@@ -788,7 +788,7 @@ def test_running_terminal_accepts_input_after_component_reload(run_copy):
                 async with asyncio.timeout(3):
                     while terminal.input.buffer.text != 'draft':
                         await asyncio.sleep(.02)
-                edit('terminal.py', 'self._lines.put_nowait(buffer.text)', 'self._lines.put_nowait("live:" + buffer.text)')
+                edit('terminal.py', 'self._lines.put_nowait(text)', 'self._lines.put_nowait("live:" + text)')
                 await frame.checkpoint()
                 assert frame.generation == 1, ''.join(terminal._raw_output)
                 assert terminal.app is app and app.is_running

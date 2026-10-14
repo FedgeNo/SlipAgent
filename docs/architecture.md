@@ -936,6 +936,24 @@ check for a replaced panel cannot alter the current panel. Calls and ordinary
 output use the shared text panel. This ownership transition requires restarting
 processes with the earlier viewer state; reload rejects that state explicitly.
 
+Saved diff panels retain a compact record/step/call reference for their whole-diff
+comment action. The action attaches the reference to the existing prompt draft
+and focuses it without submitting or holding the agent. `TerminalUI` migrates the
+draft attachment and prompt-label processor during layout rebuilds. Existing
+panels without a reference gain the action when a saved diff is opened again.
+The attachment is consumed only by an ordinary nonempty prompt submission;
+commands and secret input do not consume or inherit it. Detaching retains the
+draft, and clearing the feed clears the attachment.
+
+`diffcomments.py` serializes references in a labelled footer of the ordinary user
+message. Queue acceptance/discard, failure retries, original-request retention,
+and journal resume therefore use their existing paths without separate delivery
+state or a new journal format. `ContextBuilder` supplies `diff-comment.md` only
+for valid references in the latest contiguous group of actual user messages.
+It persists across that group's tool calls and disappears for a later ordinary
+turn; tool-result text cannot activate it. The system section identifies whole
+saved changes, whose current files may have changed since the original edit.
+
 `AgentEvent.step` is the conversation step ID, matching archival, checkpoints,
 tool provenance, and artifact references. A new user request does not restart
 that identity. Run-local request budgets and diagnostic attempt numbers remain

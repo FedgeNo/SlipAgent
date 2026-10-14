@@ -12,6 +12,7 @@ from .budget import ContextBudget
 from .capabilities import RequestProfile, model_context_limit
 from .context import ContextError, ConversationHistory, tool_history_as_text
 from .data_text import render_data
+from .diffcomments import current_references
 from .mcp import MCPTool
 from .prompts import PromptSections, load_prompt, model_prompt_profile
 from .protocol import model_response_format
@@ -129,6 +130,10 @@ class ContextBuilder:
                 load_prompt('mcp-guidance.md', servers=render_data(servers)),
                 40, owner="mcp", dynamic=False,
             )
+        references = current_references(self.messages)
+        if references:
+            sections.add("diff_comments", "Current Diff Comments", load_prompt("diff-comment.md",
+                         references=json.dumps(references, ensure_ascii=False, indent=2)), 46, owner="user")
         state_notes = {key: value for key, value in self.registry.context_notes.items() if key != "user_edits"}
         if state_notes:
             sections.add("state", "Current Harness State", load_prompt('harness-state.md', state=render_data(state_notes)), 50)

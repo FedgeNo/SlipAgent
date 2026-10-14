@@ -940,6 +940,22 @@ Inspection storage has the configured command-log quota independently of the
 existing raw command archive. Saving a record does not alter raw-log byte
 offsets. Without session persistence, inspection records are temporary.
 
+Open a saved diff and select **Comment on Diff** to attach it to your prompt.
+Your existing draft stays in place; `[Diff …]` beside the prompt identifies the
+attachment. Enter sends an ordinary user turn, queued normally while the agent
+works, with the saved diff's record, step, and call references attached. For
+example, write “Undo this” or “Escape it properly.” Comments apply to the whole
+diff. **Remove Diff Reference** detaches it without deleting your draft.
+Opening another diff does not change an attachment unless you select its comment
+action. Sending the comment clears the draft attachment; slash commands and blank
+input leave it in place. Clearing the feed also clears an unsent attachment.
+
+While a referenced turn is current, the system prompt identifies its particular
+saved diff as the target. The agent can retrieve the full diff with `read_artifact`
+and should inspect current files before changing or undoing an older edit. The
+reference follows normal queue, history, and session-resume storage. Later
+ordinary turns remove the special system instructions.
+
 ### Directory Links and Selected Text
 
 When a native file explorer is available, the CWD readout is an underlined link

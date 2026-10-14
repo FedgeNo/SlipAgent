@@ -75,5 +75,6 @@ class LoadToolsTool(Tool):
                 continue
             catalog.loaded.add(name)
             loaded.append(name)
-            definitions.append(spec.to_api())
+            if name not in self.services.get("request_only_definitions", ()):
+                definitions.append(spec.to_api())
         return ToolResult({"loaded": loaded, "definitions": definitions, "errors": errors}, bool(errors))

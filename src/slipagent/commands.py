@@ -336,6 +336,34 @@ class PlanningCommand(Command):
         return None
 
 
+class HashlineCommand(Command):
+    name = 'hashline'
+    help = (
+        CommandHelp('/hashline [on|off]', 'show or change optional hash-anchored editing (queues while working)', '/hashline '),
+    )
+
+    def changes_session(self, argument: str) -> bool:
+        return argument.lower() in {'on', 'off'}
+
+    async def run(self, context: CommandContext, argument: str) -> bool | None:
+        from .tools.hashline import set_hashline
+
+        session, style, out = context.session, context.style, context.out
+        value = argument.lower()
+        if value not in {'', 'on', 'off'}:
+            print(style.red('  usage: /hashline [on|off]'), file=out)
+            return False
+        if value:
+            set_hashline(session.registry, value == 'on')
+            frame = session.reloader
+            if frame is not None:
+                frame._builtin_tools = tuple(tool for tool in session.registry.tools
+                                             if tool.name in session.registry.builtin_names)
+        enabled = session.registry.services.get('hashline_enabled', True)
+        print(f"  Hashline editing {'ON' if enabled else 'OFF'}.", file=out)
+        return None
+
+
 class ToolsCommand(Command):
     name = 'tools'
     banner = '/tools'
@@ -920,6 +948,7 @@ COMMANDS: tuple[Command, ...] = (
     DangerCommand(),
     OverthinkingCommand(),
     PlanningCommand(),
+    HashlineCommand(),
     ToolsCommand(),
     ModelCommand(),
     ModelsCommand(),

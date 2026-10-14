@@ -1536,9 +1536,9 @@ class TerminalUI:
         fragments = self._activity_status()
         edits = self.__dict__.get("_user_edits")
         if edits is not None and getattr(edits, "pending", None) is not None:
-            return self._marquee([*fragments, ("", "  "), *self._action_link(
+            return self._activity_notice(self._activity_status(compact=True), suffix=[("", "  "), *self._action_link(
                 "Cancel Opening Editor", "cancel-opening-editor", edits.close,
-                enabled=lambda: edits.pending is not None), ("", " ")], self._activity_width(), "activity")
+                enabled=lambda: edits.pending is not None), ("", " ")])
         if self._viewer_active or self._editor_active:
             mode = "editor" if self._editor_active else "viewer"
             label = "Close Text Editor" if self._editor_active else "exit viewer"
@@ -1549,11 +1549,14 @@ class TerminalUI:
             fragments.extend([("", "  ESC to " if fragments else "ESC to "), *link, ("", " ")])
         return self._activity_notice(fragments)
 
-    def _activity_notice(self, fragments: StyleAndTextTuples) -> StyleAndTextTuples:
+    def _activity_notice(self, fragments: StyleAndTextTuples, *, suffix: StyleAndTextTuples | None = None) -> StyleAndTextTuples:
         notification = "" if self._navigation_tip() else self.__dict__.get("_notification", "")
-        available = self._activity_width()
+        suffix = suffix or []
+        if suffix:
+            suffix = self._marquee(suffix, self._activity_width(), "activity-actions")
+        available = max(0, self._activity_width() - display_width(fragment_list_to_text(suffix)))
         if not notification and display_width(fragment_list_to_text(fragments)) >= available:
-            return self._marquee(fragments, available, "activity")
+            return [*self._marquee(fragments, available, "activity"), *suffix]
         remaining = max(0, available - display_width(fragment_list_to_text(fragments)) - 2)
         text = ""
         if notification:
@@ -1573,15 +1576,11 @@ class TerminalUI:
             if fragments:
                 fragments = [*fragments, ("", "  ")]
             fragments = [*fragments, (style, text)]
-        return self._marquee(fragments, available, "activity")
+        return [*self._marquee(fragments, available, "activity"), *suffix]
 
-    def _activity_status(self) -> StyleAndTextTuples:
+    def _activity_status(self, *, compact: bool = False) -> StyleAndTextTuples:
         if self._editor_active:
             return [("class:idle", "Agent Held")]
-        edits = self.__dict__.get("_user_edits")
-        if edits is not None and getattr(edits, "pending", None) is not None:
-            frame = self.__dict__.get("_activity_frame", PULSE_FRAMES[int(time.monotonic() * 4) % len(PULSE_FRAMES)])
-            return [("class:pulse", f"{frame} Opening editor after this turn")]
         retry_status = self.__dict__.get("_retry_status", "")
         if retry_status and not self.stopping:
             return [("class:retry", retry_status)]
@@ -1590,12 +1589,12 @@ class TerminalUI:
             return [("class:idle", command_status)]
         if not self.working:
             fragments: StyleAndTextTuples = [("class:idle", "Ready")]
-            if self._input_label == "> " and not self._viewer_active:
+            if self._input_label == "> " and not self._viewer_active and not compact:
                 # Window maps clicks past text onto its last character.
                 fragments.extend([("", "  "), *self._task_link("Commands", "commands", self._choose_command), ("", " ")])
             return fragments
         frame = self.__dict__.get("_activity_frame", PULSE_FRAMES[int(time.monotonic() * 4) % len(PULSE_FRAMES)])
-        label = "Stopping After This Step" if self.stopping else "Working" if self._viewer_active else "Working (esc to interrupt)"
+        label = "Stopping After This Step" if self.stopping else "Working" if self._viewer_active or compact else "Working (esc to interrupt)"
         return [("class:pulse", f"{frame} {label}")]
 
     def set_retry_status(self, text: str) -> None:

@@ -33,6 +33,22 @@ async def test_edit_request_waits_for_batch_boundary_and_preserves_background_jo
     await boundary
 
 
+async def test_opening_notification_clears_at_boundary_and_preserves_newer_events(tmp_path):
+    terminal = SimpleNamespace(_editor_active=False, _notification="")
+    terminal.notify = lambda text: setattr(terminal, "_notification", text)
+    terminal._open_editor_now = AsyncMock()
+    session = SimpleNamespace(agent=SimpleNamespace(running=True), reloader=None)
+    edits = UserEdits(session, terminal)
+    await edits.request(tmp_path / "a")
+    assert terminal._notification == "Opening editor after this turn"
+    await edits.boundary()
+    assert terminal._notification == ""
+    await edits.request(tmp_path / "b")
+    terminal.notify("New event")
+    edits.close()
+    assert terminal._notification == "New event"
+
+
 async def test_agent_finishes_all_tools_before_opening_editor_and_waits_before_next_request(tmp_path):
     tool = RecordingTool()
     client = StubClient([completion(tool_calls=[ToolCall("one", "record", {"value": "first"}), ToolCall("two", "record", {"value": "second"})]), completion("done")])

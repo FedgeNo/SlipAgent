@@ -767,7 +767,9 @@ async def test_right_click_keeps_selection_and_no_selection_shows_notice(display
             await task
 
 
-async def test_pending_editor_status_keeps_spinner_and_read_only_calls_open_immediately(display, tmp_path):
+async def test_pending_editor_notification_flashes_without_changing_status(display, tmp_path, monkeypatch):
+    from prompt_toolkit.formatted_text import fragment_list_to_text
+    from wcwidth import width as display_width
     from slipagent.useredits import UserEdits
     from slipagent.terminal import PULSE_FRAMES
     from slipagent.tools.base import ToolRegistry
@@ -788,17 +790,28 @@ async def test_pending_editor_status_keeps_spinner_and_read_only_calls_open_imme
             ui.close_viewer()
             await edits.request(tmp_path / "file.txt")
             opened.assert_not_awaited()
+            assert ui._notification == "Opening editor after this turn"
+            changed_at = ui._status_changed_at
+            monkeypatch.setattr("slipagent.terminal.time", SimpleNamespace(monotonic=lambda: changed_at))
             for frame in PULSE_FRAMES:
                 ui._activity_frame = frame
-                assert ui._activity_status() == [("class:pulse", f"{frame} Opening editor after this turn")]
+                assert ui._activity_status() == [("class:pulse", f"{frame} Working (esc to interrupt)")]
+                fragments = ui._activity()
+                assert any("class:status-flash" in part[0] and "Opening editor" in part[1] for part in fragments)
+                assert all("class:status-flash" not in part[0] for part in fragments if "Working" in part[1] or "Cancel" in part[1])
+            with monkeypatch.context() as narrow:
+                narrow.setattr(ui, "_activity_width", lambda: 16)
+                assert display_width(fragment_list_to_text(ui._activity())) <= 16
             edits.close()
+            assert ui._notification == "" and ui._status_changed_at is None
+            assert all("class:status-flash" not in part[0] for part in ui._activity())
             assert "Working" in ui._activity_status()[0][1]
         finally:
             ui._close_transcript()
 
 
 @pytest.mark.parametrize("notification", ["", "Saved changes."])
-async def test_pending_editor_cancel_link_replaces_status_and_releases_hold(display, tmp_path, notification):
+async def test_pending_editor_cancel_link_beside_notification_releases_hold(display, tmp_path, notification):
     from unittest.mock import AsyncMock
     from slipagent.tools.base import ToolRegistry
     from slipagent.useredits import UserEdits
@@ -824,6 +837,7 @@ async def test_pending_editor_cancel_link_replaces_status_and_releases_hold(disp
         try:
             await wait_until(lambda: "Cancel Opening Editor" in snapshot()[17])
             row = snapshot()[17]
+            assert "Working" in row
             assert "Opening editor after this turn  Cancel Opening Editor" in row
             assert "status" not in row and "Saved changes." not in row
             start = row.index("Cancel Opening Editor") + 8
@@ -831,7 +845,7 @@ async def test_pending_editor_cancel_link_replaces_status_and_releases_hold(disp
             await wait_until(lambda: ui.__dict__.get("_hovered_control") == "cancel-opening-editor")
             pipe.send_text(f"\x1b[<0;{start};18M\x1b[<0;{start};18m")
             await wait_until(lambda: edits.pending is None)
-            await wait_until(lambda: "Working" in snapshot()[17])
+            await wait_until(lambda: "Cancel Opening Editor" not in snapshot()[17])
             assert edits.released.is_set() and frame.busy == 0
             await asyncio.wait_for(edits.boundary(), 1)
             opened.assert_not_awaited()
@@ -839,7 +853,7 @@ async def test_pending_editor_cancel_link_replaces_status_and_releases_hold(disp
             assert session.agent.running and ui.working
             assert ui.input.text == "keep draft"
             assert "Cancel Opening Editor" not in snapshot()[17]
-            assert (notification or "Select and right-click") in snapshot()[17]
+            assert "Select and right-click" in snapshot()[17]
         finally:
             edits.close()
             ui.close()

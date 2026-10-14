@@ -75,6 +75,7 @@ The `z-ai/glm-5.3` profile uses `models/glm-5.3.md`, embedded calls, and XML com
 | `file-rewind.md`, `tool-use-correction.md` | State changes and harness corrections |
 | `background-command-results.md`, `command-output-*.md` | Command completion and output recovery |
 | `tools/*.md` | Built-in tool descriptions |
+| `tools/read-hashlines.md`, `tools/edit-hashlines.md` | Optional anchored-edit contracts, supplied only after loading while hashline editing is enabled |
 | `tools/*-parameters.json` | Tool argument descriptions, keyed by their location in the schema |
 | `response-fields.json` | Response-schema field descriptions |
 | `tool-discovery.md` | Compact deferred-tool catalog and loading guidance |

@@ -2,7 +2,7 @@
 
 The tools below are available to load, but their complete definitions are not
 included in this request. Use `load_tools` with the exact names you need, then
-wait for the next request before calling those tools with the returned argument
+wait for the next request before calling those tools with the supplied argument
 schemas. A call to any tool without a supplied full definition rejects the entire
 batch: no tools in that response execute, including `load_tools`. Prefer the
 supplied native tools when they suffice; load a suitable tool rather than

@@ -38,12 +38,15 @@ class UserEdits(WorkCoordinator):
         self.hold()
         if not self.session.agent.running or switching:
             await self.boundary()
+        else:
+            self.terminal.notify("Opening editor after this turn")
 
     async def boundary(self) -> None:
         if self.pending is not None and not self.opening:
             self.opening = True
             path, line = self.pending
             self.pending = None
+            self._clear_opening_notification()
             try:
                 await self.terminal._open_editor_now(path, line=line)
             except BaseException:
@@ -91,7 +94,12 @@ class UserEdits(WorkCoordinator):
 
     def close(self) -> None:
         self.pending = None
+        self._clear_opening_notification()
         self.release()
+
+    def _clear_opening_notification(self) -> None:
+        if self.terminal.__dict__.get("_notification") == "Opening editor after this turn":
+            self.terminal.notify("")
 
     async def aclose(self) -> None:
         try:

@@ -715,6 +715,7 @@ In the REPL:
 | `/danger status` | Show the current access mode |
 | `/overthinking [on\|off]` | Enable recent archived thoughts, up to 25 steps, with `/overthinking` or `/overthinking on`; disable with `/overthinking off`. Enabled by default; queues while working. |
 | `/planning [on\|off]` | Enable planning with `/planning` or `/planning on`; disable with `/planning off`. Enabled by default; queues while working. Disabling preserves the saved plan. |
+| `/hashline [on\|off]` | Show or change optional anchored editing for this session; enabled by default, queues while working. Start disabled with `--no-hashline`. |
 | `/tools` | List available tools |
 | `/model` | Select a model with Up/Down and Enter; Escape cancels |
 | `/model <slug>` | Switch model and remember the choice for future launches |
@@ -1730,6 +1731,8 @@ The complete built-in tool set is:
 | `create_directory` | Create a directory, optionally including missing parents. |
 | `create_python_environment` | Create and select a Python venv when none is selected; repeated calls reuse the selected interpreter and never recreate existing directories. |
 | `edit_file` | Replace one exact string or an `edits` array against one original file. All matches must validate before an atomic write; returns a bounded diff and helpful match diagnostics. |
+| `read_hashlines` (hashline enabled) | Read a bounded page of UTF-8 lines with copyable anchors and a complete file revision. |
+| `edit_hashlines` (hashline enabled) | Replace/delete anchored ranges or insert lines; validates the revision and every edit before one atomic write, with normal checkpoints and batch checks. |
 | `grep` | Regex search across file contents, with an optional glob filter and a 120-second timeout. |
 | `semantic_search` | Deferred local search by behavior or purpose when the repository map is insufficient; returns complete indexed excerpts with paths and line numbers. |
 | `glob` | Find files and directories by name pattern. |
@@ -1749,6 +1752,22 @@ The complete built-in tool set is:
 | `recall_history` | Search history or retrieve a complete original step or selected fields, without character limits or paging. |
 | `update_plan` (planning enabled) | Save an objective and 1–8 stages, with at most one in progress; the latest successful plan is supplied with its last-updated step. |
 | `navigate_code` (configured projects only) | Definitions, references, implementations, and hover via a local language server. |
+
+### Optional Anchored Editing
+
+The deferred `read_hashlines` and `edit_hashlines` tools provide an alternative to
+exact-string editing. Load their definitions in a separate response, then copy
+the revision and line anchors returned by `read_hashlines`; the model does not
+calculate hashes. Each edit uses original-file anchors, including when a batch
+inserts or deletes earlier lines. Any changed file revision or invalid/overlapping
+edit rejects the whole edit call. Reread after external changes; moved blocks are
+not matched approximately. Successful edits return fresh anchors near the change.
+
+Use `/hashline off` or `--no-hashline` to remove both tools, their catalog entries,
+and their instructions. `/hashline on` enables them again for the current session.
+Their full definitions are delivered with the next request, rather than duplicated
+in historical `load_tools` results, so disabled feature guidance does not persist
+there. `read_file` and `edit_file` remain available in either mode.
 
 ### Data Size Limits
 

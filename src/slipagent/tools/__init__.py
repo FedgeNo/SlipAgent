@@ -21,6 +21,7 @@ from .python import CreatePythonEnvironmentTool
 from .discovery import LoadToolsTool
 from .http import HttpFetchTool
 from .semantic import SemanticSearchTool
+from .hashline import HASHLINE_NAMES, hashline_tools
 
 __all__ = [
     "AnswerTool",
@@ -106,5 +107,8 @@ def build_default_registry(
             HttpFetchTool(),
         ], services=services, owns_services=owns_services,
     )
-    registry.builtin_names = frozenset(registry.names)
+    if services.get("hashline_enabled", True):
+        for tool in hashline_tools(registry):
+            registry.register(tool)
+    registry.builtin_names = frozenset(registry.names) | HASHLINE_NAMES
     return registry

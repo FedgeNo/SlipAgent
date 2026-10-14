@@ -7,6 +7,7 @@ identity so live state, exception handlers, and transport references survive.
 from __future__ import annotations
 
 import asyncio
+import builtins
 import os
 import hashlib
 import importlib
@@ -43,10 +44,24 @@ class ReloadError(Exception):
 
 
 class _SourceLoader(importlib.abc.MetaPathFinder, importlib.abc.Loader):
-    def __init__(self, prefix: str, sources: dict[str, bytes], root: Path) -> None:
+    def __init__(self, prefix: str, sources: dict[str, bytes], root: Path, frame: RuntimeFrame) -> None:
         self.prefix = prefix
         self.sources = sources
         self.root = root
+        self.frame = frame
+
+    def _import(self, name: str, globals: dict[str, Any] | None = None,
+                locals: dict[str, Any] | None = None, fromlist: Any = (), level: int = 0) -> Any:
+        active = self.frame.namespace
+        if self.prefix not in sys.modules and active is not None:
+            package = (globals or {}).get("__package__", "")
+            if level and (package == self.prefix or package.startswith(self.prefix + ".")):
+                # Retained UI callbacks can outlive a retired namespace. Resolve
+                # their lazy imports from accepted snapshots, never edited disk.
+                globals = {"__package__": active + package[len(self.prefix):]}
+            elif not level and (name == self.prefix or name.startswith(self.prefix + ".")):
+                name = active + name[len(self.prefix):]
+        return builtins.__import__(name, globals, locals, fromlist, level)
 
     def find_spec(
         self, fullname: str, path: Any = None, target: types.ModuleType | None = None,
@@ -79,6 +94,7 @@ class _SourceLoader(importlib.abc.MetaPathFinder, importlib.abc.Loader):
         if filename.endswith("/__init__.py"):
             module.__path__ = [str((self.root / filename).parent)]
         # Compile bytes directly: timestamp-based .pyc files can miss quick edits.
+        module.__dict__["__builtins__"] = {**vars(builtins), "__import__": self._import}
         exec(compile(self.sources[filename], module.__file__, "exec"), module.__dict__)
 
 
@@ -261,7 +277,7 @@ class RuntimeFrame:
         sys.modules[prefix] = package
         for name in CORE_MODULES - {""}:
             sys.modules[f"{prefix}.{name}"] = importlib.import_module(f"slipagent.{name}")
-        loader = _SourceLoader(prefix, sources, self.root)
+        loader = _SourceLoader(prefix, sources, self.root, self)
         sys.meta_path.insert(0, loader)
         try:
             return {

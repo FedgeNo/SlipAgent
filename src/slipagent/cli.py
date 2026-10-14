@@ -329,7 +329,7 @@ class Renderer:
                     result = ToolResult(saved["content"], saved["status"] == "error")
                 restored_call = restored_calls.get(message.tool_call_id or "")
                 saved_diff = (self.terminal is not None and restored_call is not None
-                              and restored_call.name in {"write_file", "edit_file"} and not result.is_error
+                              and restored_call.name in {"write_file", "edit_file", "edit_hashlines"} and not result.is_error
                               and isinstance(saved, dict)
                               and any(reference.get("kind") == "diff" for reference in saved.get("artifacts", [])))
                 if self.terminal is not None and restored_call is not None:
@@ -533,7 +533,7 @@ class Renderer:
                 for line in body.splitlines():
                     self.emit(self.style.dim(f"    {line}"), block=self._model_block, tool=True)
             if self.terminal is not None and event.tool_call is not None and not result.is_error:
-                if event.tool_call.name in {"write_file", "edit_file", "copy_path", "move_path"}:
+                if event.tool_call.name in {"write_file", "edit_file", "edit_hashlines", "copy_path", "move_path"}:
                     for key in ("path", "destination"):
                         target = event.tool_call.arguments.get(key)
                         if isinstance(target, str):
@@ -606,6 +606,9 @@ async def build_session(args: argparse.Namespace, *, defer_startup: bool = False
     async with AsyncExitStack() as resources:
         resources.push_async_callback(client.aclose)
         registry = build_default_registry(workspace)
+        if not getattr(args, "hashline", True):
+            from .tools.hashline import set_hashline
+            set_hashline(registry, False)
         registry.services["editable_prompts"] = True
         resources.push_async_callback(registry.aclose)
         registry.services["project_environment"].python_override = args.python
@@ -2051,6 +2054,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--planning", action=argparse.BooleanOptionalAction, default=True,
                         help="Expose a persistent working-plan tool for multi-step tasks (default: enabled).")
+    parser.add_argument("--hashline", action=argparse.BooleanOptionalAction, default=True,
+                        help="Offer optional hash-anchored read/edit tools (default: enabled; --no-hashline removes their guidance).")
     parser.add_argument("--raw-reasoning-history", action="store_true", help="Compare original thoughts instead of filtered thoughts in Overthinking history.")
     parser.add_argument("--context-tokens", type=int, help="Working context cap including output reserve (at least 4096; never expands the endpoint limit).")
     parser.add_argument("--reasoning-history-steps", type=int, choices=range(26), default=25,

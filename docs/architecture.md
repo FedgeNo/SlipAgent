@@ -85,6 +85,17 @@ Reload candidates borrow the same catalog through registry services. MCP server
 guidance enters requests when a tool from that server is eligible in the catalog,
 including before its full definition is loaded.
 
+The optional `tools/hashline.py` reader/editor pair is deferred and session-gated.
+`/hashline off` unregisters both tools and clears their discovery selections;
+registry rebuilds preserve the service-owned switch. Their `load_tools` results
+acknowledge loading without repeating definitions in history. Full descriptions
+and schemas appear in the following request only while enabled. The reader returns
+line-number/content anchors and a SHA-256 revision of the full file bytes. The
+editor validates that revision, all original anchors, and nonoverlapping edits
+before publishing through the ordinary atomic-write/checkpoint path. Successful
+edits participate in batch syntax checks. New lines use the file's line ending;
+unchanged text and the final newline state are preserved.
+
 `Agent` coordinates the pipeline. `ContextBuilder` receives immutable
 `ContextSettings`, the conversation, token budget, and registry resources;
 previews copy history/task and budget state. `RequestDriver` owns attempt-local
@@ -961,6 +972,10 @@ removing its import namespace. This change to the stable frame requires a restar
 
 Closers captured from the constructing generation release rejected candidates or
 retired tools after the transaction. Stable services and MCP clients remain alive.
+Retained callbacks can outlive their generation's import namespace. The snapshot
+loader forwards their lazy imports into the current accepted generation after
+retirement; rejected or unsaved-on-disk code cannot supply those imports. This
+loader behavior is part of the stable frame and requires a process restart to adopt.
 The regex worker is launched from the exact accepted source bytes, so an invalid
 on-disk worker edit cannot leak into a running tool while its reload was rejected.
 

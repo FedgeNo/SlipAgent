@@ -12,6 +12,7 @@ from typing import Any
 
 from .tools.base import ToolRegistry, ToolResult
 from .tools.files import EditFileTool, WriteFileTool
+from .tools.hashline import EditHashlinesTool
 from .tools.shell import capture_process, _subprocess_env, _truncate
 from .types import ToolCall
 
@@ -116,7 +117,7 @@ async def check_edit_batch(registry: ToolRegistry, batch: list[tuple[ToolCall, T
     paths: set[str] = set()
     for call, result in batch:
         tool = registry.get(call.name)
-        if not result.is_error and isinstance(tool, (EditFileTool, WriteFileTool)):
+        if not result.is_error and isinstance(tool, (EditFileTool, WriteFileTool, EditHashlinesTool)):
             paths.add(str(environment.workspace.resolve(call.arguments["path"])))
     if not paths:
         return ""

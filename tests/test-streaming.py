@@ -315,7 +315,7 @@ async def test_invalid_stream_reports_red_error_and_restarts_before_running_tool
     corrections = retry.pop("user_prompt")
     assert first.pop("user_prompt") == ["work"]
     assert len(corrections) == 1 and corrections[0].startswith("Harness tool-use correction:")
-    assert "No tools from it were executed" in corrections[0]
+    assert "No tools executed or reply text displayed" in corrections[0]
     assert retry.pop('request_retry')['consecutive_failures'] == 1
     assert retry['step_id'] == first['step_id'] + 1
     assert tool.seen == []

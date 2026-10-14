@@ -8,9 +8,7 @@ Relative paths and shell cwd remain anchored to `${workspace}`.
 
 ## Temporary Files
 
-The configured system temporary directory is `${temporary_directory}`. You can use it
-for scratch files with the built-in filesystem tools, including when Danger Mode is OFF.
-Use absolute paths to access it. OS permissions still apply.
+Use absolute paths under `${temporary_directory}` for scratch files with built-in filesystem tools, including when Danger Mode is OFF.
 
 ## Process Permissions
 

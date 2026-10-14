@@ -129,7 +129,7 @@ async def test_glm_53_requests_embedded_calls_and_executes_them(parameters, form
     assert tool.seen == [{"value": "A"}]
     for request in router.requests:
         assert "tools" not in request
-        assert "all requested calls inside `tool_calls`" in request["messages"][0]["content"]
+        assert "`tool_calls` (an ordered call array)" in request["messages"][0]["content"]
         assert "# Tool Calls in This Response" in request["messages"][0]["content"]
         assert "Send tools through the API tool channel" not in request["messages"][0]["content"]
         if "structured_outputs" in parameters:

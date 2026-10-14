@@ -248,7 +248,7 @@ def test_background_memory_service_and_task_tool_survive_reload_and_migrate(run_
         await agent.wait_for_compaction()
         compactor = registry.services['step_compactor']
         assert agent.history.steps[0].summary == 'Completed demo step.'
-        edit('background-summary-prompt.md', 'Write concise ordinary sentences', 'Write brief ordinary sentences')
+        edit('background-summary-prompt.md', 'Use terse sentences', 'Use brief sentences')
         await frame.checkpoint()
         assert frame.generation == 2, sink.getvalue()
         assert registry.services['step_compactor'] is compactor

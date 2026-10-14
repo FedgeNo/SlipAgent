@@ -60,7 +60,7 @@ async def test_provider_error_turn_reaches_model_before_it_decides_whether_to_re
         retry = current_input(body["messages"])["request_retry"]
         assert retry == {"consecutive_failures": 1, "total_failed_attempts": 1,
                          "failed_step_ids": [1], "last_failed_step": 1}
-        assert "Respect instructions to stop" in body["messages"][0]["content"]
+        assert "When instructed to stop after failure, report it with no tools" in body["messages"][0]["content"]
         assert failed["user_prompt"] == ["Write the file. If it fails, do not retry."]
         return response(packet({"content": "The attempt failed, so I stopped without retrying the write."}, "stop"))
 

@@ -8,4 +8,4 @@ Patterns are matched against the workspace-relative path (or relative to the sea
 
 ## Directory Results
 
-Directories are shown with a trailing '/'. Use this with `list_dir` to understand the layout before reading code with `read_file`.
+Directories are shown with a trailing '/'.

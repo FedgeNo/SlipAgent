@@ -1,7 +1,7 @@
 # `read_hashlines`
 
-Read optional hash-anchored source for `edit_hashlines`, while ordinary `read_file` and exact `edit_file` remain available. `path` selects a regular UTF-8 file, `offset` is the first 1-based line (default 1), and `limit` is the maximum number of lines (default 200, maximum 2000). CRLF, LF, and CR are line endings; other Unicode characters remain source text. Files are limited to 32 MB.
+Read hash-anchored source for `edit_hashlines`; ordinary `read_file` and `edit_file` remain available. `path` selects a regular UTF-8 file up to 32 MB. `offset` is the first 1-based line (default 1); `limit` caps lines (default 200, maximum 2000). CRLF, LF, and CR are line endings; other Unicode remains source text.
 
-The result contains a complete-file SHA-256 `revision` and `lines` entries with an `anchor` such as `12:8f01ab23cd` and literal `text`. Copy these values; do not calculate or invent hashes. `next_offset` identifies another page. An empty file has no anchors; use `write_file` for an empty or new file.
+Results include a complete-file SHA-256 `revision`, `lines` containing `anchor` and literal `text`, and `next_offset` for paging. Copy revisions and anchors exactly from results. Empty files have no anchors; use `write_file` for empty or new files.
 
-Load `edit_hashlines` separately if its full definition is not supplied in this request. The same response cannot load and execute a deferred tool.
+Load `edit_hashlines` separately when needed and call it after receiving its full definition.

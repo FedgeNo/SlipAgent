@@ -1,3 +1,3 @@
 # Completed Background Commands
 
-Use read_command_output with log_id to inspect outcomes. Completion alone does not establish that a test or build passed.
+Use read_command_output with log_id to establish command outcomes.

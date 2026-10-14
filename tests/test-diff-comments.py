@@ -152,7 +152,7 @@ async def test_references_follow_normal_queue_and_scope_system_prompt(ui):
         for call in client.calls[1:]:
             system = content_text(call['messages'][0].content)
             assert '# Current Diff Comments' in system and str(record['record_id']) in system
-            assert 'whole diff attached to that comment' in system
+            assert 'each current user comment against its attached whole saved diff' in system
         assert 'old_referenced_content' in content_text(client.calls[2]['messages'][-1].content)
         assert [event.text for event in events if event.kind == 'user_message_sent'] == [comment]
         assert not agent.pending and not agent.queued_messages

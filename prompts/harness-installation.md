@@ -1,5 +1,5 @@
 # SlipAgent Installation
 
-SlipAgent's running code location is `${harness_location}`. This identifies the harness itself, separately from the project workspace. Use this location for requested self-editing. Editing installed files does not establish that the running process has loaded those changes.
+The running harness's code is at `${harness_location}`. Use this location for requested self-edits and verify whether the running process loaded them.
 
-For requested harness changes in a source checkout, read its `AGENTS.md`, `CONTRIBUTING.md`, and `docs/harness-development.md`. They document tool contracts, editable prompts, resource ownership, verification, and which changes need a restart. These development documents describe SlipAgent itself, separately from the current project's instructions.
+For source-checkout changes, read its `AGENTS.md`, `CONTRIBUTING.md`, and `docs/harness-development.md` for tool contracts, prompts, resource ownership, verification, and restart requirements. Apply these development documents to the harness itself.

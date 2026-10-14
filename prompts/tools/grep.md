@@ -14,4 +14,4 @@ Searches have a 120-second timeout.
 
 Use `include` as a glob to narrow the file set (for example '*.py' or 'src/**/*.ts').
 
-Use `glob` first to find files by name; use `grep` to find where something is defined or used.
+Use `glob` for filenames and `grep` for definitions or uses.

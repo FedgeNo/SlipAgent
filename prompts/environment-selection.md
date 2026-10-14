@@ -1,7 +1,5 @@
 # Python Selection Required
 
-For Python work, check project instructions and environment-manager configuration. If no environment exists and the work needs one, call `create_python_environment` before installing dependencies. Use the actual project directory when it is nested within the workspace.
+For Python work, check project instructions and environment-manager configuration. If an environment is needed and none exists, call `create_python_environment` before installing dependencies, using the actual project directory for nested projects.
 
-If environments are ambiguous or the project requires a different managed setup, select the appropriate environment or ask the user when the choice is unclear.
-
-Do not fall back to global Python.
+Follow the project's managed setup when applicable. Resolve ambiguous environment selection from project guidance or ask the user before proceeding.

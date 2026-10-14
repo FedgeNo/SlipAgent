@@ -18,14 +18,14 @@ from slipagent.workspace import Workspace, WorkspaceError
 
 def test_harness_operating_guidance_does_not_depend_on_project_notes(workspace):
     prompt = build_system_prompt(str(workspace.root))
-    assert "### Tool Call Batches" in prompt
+    assert "### Tools and Batches" in prompt
     assert "read_command_output" not in prompt and "next_offset" not in prompt
     assert "Project Python Environment" in prompt
     assert "src/slipagent/" not in prompt
     assert "test-runtime.py" not in prompt
     project_guidance = "Project-specific check: run ./verify-project."
     combined = build_system_prompt(str(workspace.root), project_instructions=project_guidance)
-    assert combined.index("### Tool Call Batches") < combined.index("# Project Instructions")
+    assert combined.index("### Tools and Batches") < combined.index("# Project Instructions")
     assert project_guidance in combined
 
 
@@ -73,7 +73,7 @@ def test_rule_content_is_verbatim_and_survives_reset(workspace):
     assert text in prompt
     assert "path and glob restrictions" in prompt
     assert "Explicit user instructions take precedence" in prompt
-    assert "follow the supplied project instructions within their stated scope" in prompt
+    assert "Follow these instructions and supplied project guidance within its scope" in prompt
     agent = Agent(client=None, registry=ToolRegistry(), model="test", system_prompt=prompt)
     agent.reset()
     assert agent.messages[0].content == prompt

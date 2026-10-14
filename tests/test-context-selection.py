@@ -69,7 +69,7 @@ async def test_new_messages_are_retained_only_after_their_tool_batch():
     assert fresh['retained_user_requests'] == []
     fresh_system = content_text((await history.view(messages, [], **options))[0].content)
     assert 'retained_user_requests' not in fresh_system
-    assert 'Later messages supersede earlier ones where they conflict' in fresh_system
+    assert 'later messages supersede conflicting earlier instructions' in fresh_system
     messages.extend([Message.assistant("Reading", [ToolCall('r', 'read_file', {'path': "a'b.py"})]),
                      Message.tool_result('r', 'File contents')])
     continuation = json.loads((await history.view(messages, [], **options))[-1].to_api()['content'])

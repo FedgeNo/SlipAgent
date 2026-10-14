@@ -1,18 +1,8 @@
 # Additional Tool Catalog
 
-The tools below are available to load, but their complete definitions are not
-included in this request. Use `load_tools` with the exact names you need, then
-wait for the next request before calling those tools with the supplied argument
-schemas. A call to any tool without a supplied full definition rejects the entire
-batch: no tools in that response execute, including `load_tools`. Prefer the
-supplied native tools when they suffice; load a suitable tool rather than
-substituting shell commands merely because its definition is deferred. Load only
-what helps the current task.
+Load needed tools with `load_tools` using their exact names. Call them on a later turn after receiving their full definitions and schemas. Calling a tool without its supplied definition rejects the entire batch, including `load_tools`.
 
-Loaded definitions remain available across turns and model changes in this
-conversation. Starting a new conversation clears them; resuming a saved one
-restores tools that were loaded or called in its history. Tool availability
-still depends on current configuration, connections, and session restrictions.
+Use supplied tools when sufficient; load suitable deferred tools for other task needs. Definitions persist across turns and model changes. New conversations clear them; resume restores tools loaded or called in saved history. Availability follows current configuration, connections, and session restrictions.
 
 | Tool | Purpose |
 | --- | --- |

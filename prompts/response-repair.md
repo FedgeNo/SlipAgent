@@ -1,17 +1,7 @@
 # Response Correction
 
-## Rejection
-
 Your last response was rejected: ${rejection}
 
-No tools from it were executed and no reply text was displayed.
-
-## Required Correction
-
-Regenerate the complete response. Follow the response format instructions in this request.
+No tools executed or reply text displayed. Regenerate the complete response in the supplied format, using supported fields. Report observed outcomes and mark requested actions as pending.
 
 ${tool_channel}
-
-## Evidence and Fields
-
-Return only fields supported by the supplied response contract instead of compressed history fields. Report actual observed tool outcomes and label requested actions as pending instead of inventing results.

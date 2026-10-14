@@ -916,7 +916,7 @@ async def test_memory_prompt_explains_background_summaries_and_retrieval(has_pre
     view = await ConversationHistory().view(messages, [], keep_steps=50,
                                             context_length=1000000, max_output=8192)
     system = content_text(view[0].content)
-    assert "Return one JSON object with exactly two fields" in system
+    assert "Return one JSON object with `response`" in system and "`tool_calls`" in system
     assert "The harness creates summaries separately" in system
     assert "recall_history" in system and "complete original object" in system
     assert "ONE JSON object in EVERY response" not in system

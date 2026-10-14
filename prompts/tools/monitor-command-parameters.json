@@ -2,7 +2,7 @@
     "properties/action": "start initializes a watch; list returns all watches; wait waits for readiness; cancel ends only the watch; acknowledge removes a ready result from reminders.",
     "properties/job_id": "Managed background job ID; required for start. Use the ID from run_command or command_jobs.",
     "properties/monitor_id": "Monitor ID returned by start; required for wait, cancel, and acknowledge.",
-    "properties/pattern": "Optional case-sensitive literal substring, 1 to 256 characters. Omit to watch job completion; this is not a regular expression.",
+    "properties/pattern": "Optional case-sensitive literal substring, 1 to 256 characters. Omit to watch job completion.",
     "properties/stream": "Output stream to match: stdout, stderr, or both (default). Result tails include both streams.",
     "properties/repeat": "Keep matching until job completion or timeout instead of completing on the first match; defaults to false. Requires pattern.",
     "properties/timeout": "Watch lifetime in seconds for start (default 30, maximum 600), or wait duration (capped at 30). Does not alter the command timeout."

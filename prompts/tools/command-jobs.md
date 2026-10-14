@@ -18,4 +18,4 @@ Use `action="stop"` with `job_id` to kill its process group and drain cleanup.
 
 ## Lifecycle and Evidence
 
-Starting a job is not evidence that it succeeded. Completion does not wake the model; request status/wait when you need the outcome. `/stop` leaves jobs running; reset, resume, fork, deletion, and exit stop them.
+Request status/wait to establish the outcome. Completion alone starts no model turn. `/stop` leaves jobs running; reset, resume, fork, deletion, and exit stop them.

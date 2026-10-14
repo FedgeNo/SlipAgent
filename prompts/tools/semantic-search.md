@@ -1,9 +1,9 @@
 # `semantic_search`
 
-Find code by behavior or purpose when the repository map does not show where to look.
+Find code by behavior or purpose when the repository map leaves its location unclear.
 
-Use a short query, preferably five or six meaningful words describing the behavior, concept, or identifier you need. Returns up to `limit` complete source excerpts (default five, maximum ten) with workspace-relative paths and line numbers. Ranking combines local semantic embeddings with exact keyword evidence, including filenames. Scores compare results for this query; they are not probabilities.
+Use five or six meaningful query words describing the behavior, concept, or identifier. Returns complete source excerpts with workspace-relative paths and line numbers, up to `limit` (default five, maximum ten). Ranking combines local embeddings and exact keyword evidence, including filenames. Scores are relative to the query.
 
-The first call loads a small CPU model and builds a persistent workspace index, which can take time on a large repository. Existing locally cached model files are reused; missing files download on first use. Source and query text stay local. After first use, filesystem events update changed files and a periodic metadata scan reconciles missed events. Queued edits are indexed before each lookup. Dependencies, hidden files/directories, symlinks, and Git-ignored files are excluded.
+First use loads a small CPU model and builds a persistent workspace index. Cached model files are reused; missing files download. Source and queries stay local. Filesystem events update changed files, periodic metadata scans reconcile missed events, and queued edits are indexed before lookup. Dependencies, hidden files/directories, symlinks, and Git-ignored files are excluded.
 
-These are ranked indexed snapshots, not proof that the first result is correct or that all relevant code was found. Read current source before editing. If results are weak, use `grep`, `glob`, or `read_file`; exact known identifiers usually suit `grep`. This tool supplements the repository map and ordinary file tools.
+Assess ranked snapshots for relevance and completeness; read current source before editing. Use `grep` for known identifiers and `grep`, `glob`, or `read_file` when results are weak.

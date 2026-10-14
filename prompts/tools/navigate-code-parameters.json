@@ -2,7 +2,7 @@
     "properties/operation": "Language-server operation: definition, references, implementation, or hover at the supplied source position.",
     "properties/path": "Source file path, workspace-relative or absolute; follows the current Workspace Access mode. Requires a configured server for the file's extension.",
     "properties/line": "One-based source line number in the current file.",
-    "properties/column": "One-based Unicode character position within that line; input columns are not byte offsets or UTF-16 code units.",
+    "properties/column": "One-based Unicode character position within that line.",
     "properties/server": "Optional configured language-server name to select explicitly from language_servers in .slipagent/project.json.",
     "properties/offset": "Zero-based result-location index, default 0; returns all locations from that position onward. Hover text remains complete."
 }

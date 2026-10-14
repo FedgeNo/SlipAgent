@@ -2,18 +2,12 @@
 
 ## Completing the Run
 
-To finish this run, provide a useful, nonblank final answer in the supplied reply format and send no API tool calls. A successful batch containing only the available `answer` tool also finishes the run. Do not add a completion flag.
+Finish with a useful, nonblank final answer in the supplied reply format and no API tool calls, or a successful batch containing only the available `answer` tool.
 
 ## Requesting Tools
 
-Use the native API tools supplied with this request. Request all predictable independent calls together as one tool call batch; audited reads may run concurrently, while results retain the supplied order. In the next request's `history`, each call carries its outcome under `result` or `error`.
+Use the supplied native API tools. Batch predictable independent calls together; audited reads may run concurrently, with results retained in supplied order. Each call's outcome appears under `result` or `error` in the next request's `history`.
 
 ## Reply Text
 
-Aim to include brief reply text with this tool call batch, recording progress and the batch's purpose. Empty text is still allowed when requesting tools. Provide nonblank text when requesting no tools. Follow the supplied reply format for any text.
-
-## Evidence and Continuation
-
-Report observed findings from available tool results and explain the purpose of a requested tool call batch. Distinguish observations from plans and calls awaiting results. Include conclusions and supporting facts in normal reply text so later steps and summaries retain them.
-
-If no tool results are available, describe the requested tool call batch's purpose instead of inventing findings. If no tools are needed, provide the answer or ask for the specific information needed to proceed instead of requesting unnecessary calls.
+Prefer brief text recording useful findings, supporting facts, and the batch's purpose. Distinguish observations from plans and pending calls. Empty text is allowed with tool calls; otherwise provide an answer or ask for the information needed to proceed. Follow the supplied reply format.

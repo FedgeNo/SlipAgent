@@ -94,7 +94,7 @@ async def test_large_summary_batches_merge_occasionally_and_preserve_source_meta
     assert record["sources"][0] == {"step_id": 1, "tool_calls": [{"call_id": "read-1", "tool_name": "read_file"}],
                                       "artifacts": [{"record_id": 1, "step_id": 1, "call_id": "read-1"}]}
     prompt = content_text(client.calls[0]["messages"][0].content)
-    assert "one compact narrative" in prompt and "turn numbers" in prompt and "call_id" in prompt
+    assert "one compact narrative" in prompt and "original `step_id` numbers" in prompt and "call_id" in prompt
     assert [step.full_text() for step in history.steps] == originals
     assert [step.summary for step in history.steps] == first_pass
     assert persisted == [30, 20] and len(usage) == 1

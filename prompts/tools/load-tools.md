@@ -1,11 +1,5 @@
 # `load_tools`
 
-Load complete definitions for selected tools from the supplied tool catalog.
-Pass their exact names in `names`. The result lists loaded names and may include
-their descriptions and argument schemas. Complete definitions join the API tool
-list and system definitions on the next model turn. Read those supplied
-definitions before choosing arguments.
+Load catalog tools by exact `names`, several per call if needed. Results list loaded names and may include definitions. Full descriptions and schemas join the API tool list and system definitions on the next turn; read them before calling those tools.
 
-Loaded tools remain available for this conversation. Repeated loads are safe
-and supply the definitions on subsequent requests. Loading does not execute the selected tools
-or grant access to tools excluded by the session's restrictions.
+Definitions remain available for this conversation. Repeated loads are safe. Session restrictions still determine tool access.

@@ -599,29 +599,28 @@ def test_system_prompt_asks_for_batched_tool_calls() -> None:
     """The prompt encourages batching independent calls."""
     prompt = build_system_prompt("/tmp/ws")
 
-    assert "Batch all predictable independent calls in one step" in prompt
-    assert "group independent checks" in prompt
+    assert "Batch predictable independent calls together" in prompt
 
 
 def test_system_prompt_allows_splitting_on_real_dependencies() -> None:
     """Batching must not become a rule that breaks read-then-edit work."""
     prompt = build_system_prompt("/tmp/ws")
 
-    assert "Reserve sequencing for real dependencies" in prompt
-    assert "reading source before editing it" in prompt
+    assert "sequence calls with data or side-effect dependencies" in prompt
+    assert "current source before editing" in prompt
 
 
 def test_system_prompt_allows_silent_tool_batches_and_requires_final_output() -> None:
     prompt = build_system_prompt("/tmp/ws")
 
-    assert "Empty text is still allowed when requesting tools" in load_prompt("native-tools.md")
-    assert "If the request is fulfilled, return a useful, nonempty answer and no tool calls" in prompt
+    assert "Empty text is allowed with tool calls" in load_prompt("native-tools.md")
+    assert "When the request is fulfilled, return a useful, nonblank answer with no tool calls" in prompt
 
 
 def test_system_prompt_states_parallel_calls_are_available() -> None:
     prompt = build_system_prompt("/tmp/ws")
 
-    assert "Batch results arrive together in the supplied call order" in prompt
+    assert "Results arrive in supplied order" in prompt
 
 
 async def test_usage_and_cost_accumulate() -> None:

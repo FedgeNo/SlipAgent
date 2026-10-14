@@ -57,7 +57,7 @@ async def test_tool_guidance_reaches_actual_request_body(workspace, native):
             definitions = system_definitions
         descriptions = {item["function"]["name"]: item["function"]["description"] for item in definitions}
         assert "substring" in descriptions["edit_file"] and "`old_string`" in descriptions["edit_file"]
-        assert "same read batch" in descriptions["read_file"]
+        assert "Batch all known needed files and ranges" in descriptions["read_file"]
         assert "whole file" in descriptions["write_file"]
         assert "`poll=true`" in descriptions["run_command"]
         assert "`background=true`" in descriptions["run_command"]

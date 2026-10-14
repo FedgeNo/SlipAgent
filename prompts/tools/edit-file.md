@@ -1,28 +1,11 @@
 # `edit_file`
 
-## Exact Matching
+Replace an exact substring using `old_string` and `new_string`. Copy source and indentation from a current read, excluding displayed line numbers. The target must occur exactly once unless `replace_all=true`; include context to make it unique. Prefer this tool for changes to existing code.
 
-Replace an exact substring within a file. `old_string` contains the text to replace with `new_string`; it does not need to contain the entire file. It must occur exactly once unless `replace_all=true`; include surrounding lines to make it unique.
+Copied LF text containing no CR also matches CRLF or CR. Line endings outside the replacement are preserved.
 
-Prefer this tool over `write_file` for changes to existing code. Copy `old_string` from a real file read, including indentation.
+Alternatively, supply `edits=[{old_string,new_string}, ...]` for unique, non-overlapping replacements, each matching the ORIGINAL file. Choose either `edits` or the single pair. All edits validate before one atomic write.
 
-When copied text contains no CR, its LF also matches CRLF or CR. Existing line endings are preserved outside the replacement.
+The original must be a regular UTF-8 file up to 32 MB. Unsafe path changes are rejected. Matching or validation failures apply no edits; nearby source is diagnostic only. Storage or checkpoint errors may follow a successful write; inspect results before retrying.
 
-Omit `read_file`'s line numbers.
-
-## Multiple Replacements
-
-Alternatively supply `edits=[{old_string,new_string}, ...]` for several unique, non-overlapping replacements in this file.
-
-Every edit matches the ORIGINAL file; all are validated before one atomic write.
-
-Choose either `edits` or the single `old_string`/`new_string` pair, never both.
-
-## Failure and Review
-
-The original must be a regular UTF-8 file no larger than 32 MB. Pipes, devices,
-sockets and unsafe path changes are rejected before reading or modifying them.
-
-A matching or validation failure applies no edits; nearby source is diagnostic evidence, not an applied fuzzy match. A later storage or checkpoint error may report an already-written file; inspect that result before retrying.
-
-Use diffs already supplied in history to assess earlier edits. An edit requested now is not yet verified.
+Use supplied diffs to assess earlier edits; requested edits remain pending verification.

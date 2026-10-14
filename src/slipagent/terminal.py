@@ -580,10 +580,14 @@ class TerminalUI:
         if "_viewer" not in self.__dict__:
             if "_viewer_window" in self.__dict__:
                 raise RuntimeError("Restart required: viewer ownership changed.")
-            self._viewer = ViewerDeck(self._viewer_header)
+            self._viewer = ViewerDeck(lambda: self._viewer_header())
         header = self._viewer.container.children[0]
-        if isinstance(header, Window) and not isinstance(header.content, ActionControl):
-            header.content = ActionControl(self._viewer_header)
+        if isinstance(header, Window):
+            if not isinstance(header.content, ActionControl):
+                header.content = ActionControl(lambda: self._viewer_header())
+            else:
+                # Retained controls must resolve the current generation's method.
+                header.content.text = lambda: self._viewer_header()
         header.__dict__["_focus_target"] = lambda: self._viewer_window
 
     @property

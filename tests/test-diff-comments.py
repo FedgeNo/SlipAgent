@@ -255,3 +255,31 @@ def test_reload_preserves_attached_draft_and_reference(run_copy):
                 terminal.close()
                 renderer.terminal = None
     ''')
+
+
+def test_reload_refreshes_rendered_diff_header(run_copy):
+    run_copy('''
+        from prompt_toolkit.input import create_pipe_input
+        from prompt_toolkit.output import DummyOutput
+        from prompt_toolkit.formatted_text import fragment_list_to_text
+        from prompt_toolkit.application.current import set_app
+        from slipagent.terminal import TerminalUI
+        store = registry.resources.artifacts
+        record = store.save('edit file.py', '--- file.py\\n+++ file.py\\n-old\\n+new', kind='diff', step_id=1, call_id='edit')
+        with create_pipe_input() as pipe:
+            terminal = TerminalUI(lambda columns: 'status', sink, input=pipe, output=DummyOutput())
+            terminal.__dict__['_artifact_store'] = store
+            renderer.terminal = terminal
+            try:
+                await terminal.open_artifact(record['record_id'])
+                edit('terminal.py', '"Comment on Diff"', '"Comment on Saved Diff"')
+                await frame.checkpoint()
+                assert frame.generation == 1, sink.getvalue()
+                header = terminal._viewer.container.children[0].content
+                with set_app(terminal.app):
+                    content = header.create_content(100, 1)
+                assert 'Comment on Saved Diff' in fragment_list_to_text(content.get_line(0))
+            finally:
+                terminal.close()
+                renderer.terminal = None
+    ''')

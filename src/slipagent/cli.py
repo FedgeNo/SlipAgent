@@ -149,6 +149,7 @@ def _display_tool_result(result: ToolResult, call: ToolCall | None) -> ToolResul
             r"(?:[ ]*\d+\t[^\n]*\n)*",
             "", result.text(),
         )
+        text = text.replace("Read the file and copy the exact target text including whitespace.\n", "")
         return ToolResult.error(text)
     return result
 
@@ -251,7 +252,7 @@ class Renderer:
     def _finish_stream(self) -> None:
         if getattr(self, "_stream_kind", None) is None:
             return
-        if self.terminal is not None and self._stream_kind == "assistant_delta":
+        if self.terminal is not None and self._stream_kind in {"assistant_delta", "reasoning_delta"}:
             self.terminal.finish_markdown()
         if self.terminal is None:
             self.stream.write("\n")
@@ -266,7 +267,7 @@ class Renderer:
             if kind != "tool_output":
                 self._model_block = object()
             if kind == "reasoning_delta":
-                text = "Thinking: " + text
+                text = ("Thinking:\n\n" if self.terminal is not None else "Thinking: ") + text
             leading = text
             if kind == "assistant_delta" and self.terminal is not None and not getattr(self.terminal, "_markdown_source", False):
                 leading = ""  # Rendered Markdown discards leading blank lines.
@@ -277,8 +278,8 @@ class Renderer:
         elif kind == "tool_output":
             styled = self.style.dim(text)
         if self.terminal is not None:
-            if kind == "assistant_delta":
-                self.terminal.write_markdown(text, first=first, final=False)
+            if kind in {"assistant_delta", "reasoning_delta"}:
+                self.terminal.write_markdown(text, first=first, final=False, reasoning=kind == "reasoning_delta")
             else:
                 self.terminal.write_chunk(styled, first=first)
         else:

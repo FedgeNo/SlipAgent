@@ -3767,7 +3767,7 @@ async def test_streaming_chunks_wrap_reflow_and_keep_the_footer_and_draft(displa
             renderer.handle(AgentEvent(kind="stream_end"))
             renderer.handle(AgentEvent(kind="retry", text="Response rejected. Retrying from the start."))
             renderer.handle(AgentEvent(kind="reasoning_delta", text="Starting again."))
-            await wait_until(lambda: "Thinking: Starting again." in "\n".join(snapshot()[:17]))
+            await wait_until(lambda: "Starting again." in "\n".join(snapshot()[:17]))
             rows = snapshot()
             row = next(index for index, value in enumerate(rows) if "Response rejected" in value)
             assert screen.buffer[row][2].fg == "ff6666"

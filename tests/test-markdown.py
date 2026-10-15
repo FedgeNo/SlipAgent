@@ -20,6 +20,37 @@ def visible(rows):
     return ["".join(fragment[1] for fragment in row.fragments) for row in rows]
 
 
+def test_reasoning_markdown_stream_is_grey_and_inline_code_has_neutral_background():
+    from slipagent.agent import AgentEvent
+    from slipagent.palette import THOUGHT_COLOR, THOUGHT_CODE_BACKGROUND_COLOR
+
+    with create_pipe_input() as terminal_input:
+        ui = TerminalUI(lambda width: "", io.StringIO(), input=terminal_input, output=DummyOutput())
+        renderer = cli.Renderer(cli.Style(True), io.StringIO(), False)
+        renderer.terminal = ui
+        try:
+            for chunk in ["# Plan\n\nUse **bold** and `val", "ues`.\n\n```python\nreturn 42\n```"]:
+                renderer.handle(AgentEvent(kind="reasoning_delta", text=chunk))
+                ui._transcript_content(80)
+            renderer._finish_stream()
+            for width in (80, 30):
+                ui._transcript_content(width)
+                rows = [ui._flow.copy_row(i) for i in range(len(ui._flow.rows))]
+                text = "\n".join(visible(rows))
+                assert "Plan" in text and "# Plan" not in text
+                assert "**bold**" not in text and "`values`" not in text
+                fragments = [part for row in rows for part in row.fragments if part[1].strip()]
+                assert all(THOUGHT_COLOR in style for style, *_ in fragments)
+                assert any("bold" in style for style, *_ in fragments)
+                assert any("bg:" + THOUGHT_CODE_BACKGROUND_COLOR in style for style, *_ in fragments)
+            renderer.handle(AgentEvent(kind="assistant_delta", text="Answer"))
+            renderer._finish_stream()
+            ui._transcript_content(80)
+            assert THEMES["dark"]["body"] in ui._flow.copy_row(len(ui._flow.rows) - 1).fragments[0][0]
+        finally:
+            ui._close_transcript()
+
+
 def test_headings_share_style_and_body_bold_share_color_without_added_spacing():
     renderer = MarkdownRenderer()
     rows = renderer.render("# First\n## Second\nplain **bold**", 80)

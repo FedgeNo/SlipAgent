@@ -1270,6 +1270,7 @@ class TerminalUI:
             self.close_viewer()
         self._continuation_indents.clear()
         self._markdown_chunks.clear()
+        self._reasoning_chunks.clear()
         self._markdown_finals.clear()
         self._selection_start = self._selection_end = None
         self._selection_dragging = False
@@ -1318,10 +1319,12 @@ class TerminalUI:
         self._wrapped_columns = 0
         self.app.invalidate()
 
-    def write_markdown(self, text: str, *, first: bool = True, final: bool = True) -> None:
+    def write_markdown(self, text: str, *, first: bool = True, final: bool = True, reasoning: bool = False) -> None:
         self._ensure_transcript()
         index = len(self._raw_output)
         self._markdown_chunks.add(index)
+        if reasoning:
+            self._reasoning_chunks.add(index)
         if final:
             self._markdown_finals.add(index)
         self.write_chunk(text, first=first)
@@ -1330,7 +1333,8 @@ class TerminalUI:
         self._ensure_transcript()
         if self._raw_output and len(self._raw_output) - 1 in self._markdown_chunks:
             if len(self._raw_output) - 1 not in self._markdown_finals:
-                self.write_markdown("", first=False, final=True)
+                self.write_markdown("", first=False, final=True,
+                                    reasoning=len(self._raw_output) - 1 in self._reasoning_chunks)
 
     def last_markdown(self) -> str:
         self._ensure_transcript()
@@ -1550,6 +1554,8 @@ class TerminalUI:
         # Existing highlighted selections are inactive after adopting this fix.
         self.__dict__.setdefault("_selection_dragging", False)
         # Explicit migration adds Markdown metadata without treating historical ANSI as Markdown.
+        if "_reasoning_chunks" not in self.__dict__:
+            self._reasoning_chunks: set[int] = set()
         if "_markdown_chunks" not in self.__dict__:
             self._markdown_chunks: set[int] = set()
             self._markdown_finals: set[int] = set()
@@ -1690,7 +1696,7 @@ class TerminalUI:
     def _append_transcript_record(self, flow: WrappedTranscript, index: int) -> None:
         if index in self._markdown_chunks:
             flow.append_markdown(self._raw_output[index], first=index in self._block_starts,
-                                 final=index in self._markdown_finals)
+                                 final=index in self._markdown_finals, reasoning=index in self._reasoning_chunks)
         else:
             flow.append(self._raw_output[index], first=index in self._block_starts,
                         continuation_indents=self._continuation_indents.get(index),

@@ -29,10 +29,12 @@ async def test_nearby_source_is_model_only(workspace, restored):
     else:
         renderer.handle(AgentEvent(kind="tool_end", tool_call=call, result=result))
     assert "Nearby actual source" not in sink.getvalue()
+    assert "Read the file and" not in sink.getvalue()
     assert "value = 2" not in sink.getvalue()
     assert "No match for old_string" in sink.getvalue()
     assert "No changes were made." in sink.getvalue()
     assert "Nearby actual source" in result.text()
+    assert "Read the file and" in result.text()
     assert "value = 2" in result.text()
 
 

@@ -14,6 +14,7 @@ from pygments.lexers import get_lexer_by_name
 from pygments.token import Token as SyntaxToken
 from pygments.util import ClassNotFound
 from wcwidth import iter_graphemes, width as display_width
+from .palette import THOUGHT_COLOR, THOUGHT_CODE_BACKGROUND_COLOR
 
 
 # Foreground roles use separated hues; body and strong deliberately share a color.
@@ -322,6 +323,18 @@ class MarkdownRenderer:
 
     def plain(self, source: str) -> str:
         return "".join(row.copy_text for row in self.render(source, 1_000_000, pad_code=False)).rstrip("\n")
+
+
+class ReasoningMarkdownRenderer(MarkdownRenderer):
+    """Render reasoning with the same structure and a neutral grey palette."""
+
+    def style(self, role: str, *attributes: str) -> str:
+        parts = list(attributes)
+        if self.color:
+            parts.append(THOUGHT_COLOR)
+            if role == "inline":
+                parts.append("bg:" + THOUGHT_CODE_BACKGROUND_COLOR)
+        return " ".join(parts)
 
 
 class MarkdownStream:

@@ -20,7 +20,7 @@ from .sources import spool_directory
 from prompt_toolkit.formatted_text import ANSI, StyleAndTextTuples
 from wcwidth import width as display_width, wrap
 from .palette import USER_BACKGROUND_COLOR, USER_TEXT_COLOR
-from .markdown import DisplayRow, MarkdownRenderer, MarkdownStream
+from .markdown import DisplayRow, MarkdownRenderer, MarkdownStream, ReasoningMarkdownRenderer
 from .rowindex import RowIndex
 
 FEED_LINK_PREFIXES = ("class:artifact-", "class:file-", "class:directory-", "class:suggestion-")
@@ -166,13 +166,16 @@ class WrappedTranscript:
         self._copy_index: RowIndex | dict[int, int] = RowIndex()
         self._link_rows: dict[str, int] = {}
 
-    def append_markdown(self, text: str, *, first: bool, final: bool = False) -> None:
+    def append_markdown(self, text: str, *, first: bool, final: bool = False, reasoning: bool = False) -> None:
         if first or self._markdown is None:
             self.finish_markdown()
             if self.started:
                 self._settle(final=True)
             self.started = False
-            self._markdown = MarkdownStream(self._markdown_renderer)
+            renderer = self._markdown_renderer
+            if reasoning:
+                renderer = ReasoningMarkdownRenderer(color=renderer.color)
+            self._markdown = MarkdownStream(renderer)
             self._markdown_start = self._markdown_tail = len(self.rows)
         self._markdown.append(text)
         if final:
@@ -186,7 +189,8 @@ class WrappedTranscript:
         self.remove_rows(start, len(self.rows))
         if self._markdown_source:
             text = stream.original() if final else stream.pending
-            rendered = self._markdown_renderer.rows([("", text)], self.columns)
+            style = stream.renderer.style("body") if isinstance(stream.renderer, ReasoningMarkdownRenderer) else ""
+            rendered = stream.renderer.rows([(style, text)], self.columns)
             committed = 0
         else:
             rendered, committed = stream.update(self.columns, final=final)

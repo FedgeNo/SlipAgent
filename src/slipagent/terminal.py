@@ -795,15 +795,28 @@ class TerminalUI:
                 ("", " [Esc]")]
 
     def notify(self, text: str) -> None:
-        """Show a notice until replaced or explicitly cleared with an empty string."""
+        """Show a notice for 30 seconds, until replaced, or until cleared."""
         text = " ".join(text.split())
         if text != self.__dict__.get("_notification", ""):
             self.__dict__["_status_changed_at"] = time.monotonic() if text else None
         self.__dict__["_notification"] = text
         self.app.invalidate()
 
+    def _current_notification(self) -> str:
+        text = self.__dict__.get("_notification", "")
+        if text:
+            started = self.__dict__.get("_status_changed_at")
+            if started is None:
+                self.__dict__["_status_changed_at"] = time.monotonic()
+            elif time.monotonic() - started >= 30:
+                self.__dict__["_notification"] = ""
+                self.__dict__["_status_changed_at"] = None
+                return ""
+        return str(text)
+
     def _notification_text(self, columns: int | None = None) -> str:
-        text = self._navigation_tip() or self.__dict__.get("_notification", "")
+        notification = self._current_notification()
+        text = self._navigation_tip() or notification
         if not text:
             tips = ["Select and right-click for text options."]
             if self._editor_active:
@@ -820,7 +833,7 @@ class TerminalUI:
             text = tips[int((now - started) // 15) % len(tips)]
         if columns is None:
             columns = self._notice_width()
-            if self.__dict__.get("_notification") and display_width(text) > columns:
+            if notification and display_width(text) > columns:
                 columns = self._activity_width()
         return fragment_list_to_text(self._marquee([("", text)], columns, "notice"))
 
@@ -1616,7 +1629,9 @@ class TerminalUI:
         return self._activity_notice(fragments)
 
     def _activity_notice(self, fragments: StyleAndTextTuples, *, suffix: StyleAndTextTuples | None = None) -> StyleAndTextTuples:
-        notification = "" if self._navigation_tip() else self.__dict__.get("_notification", "")
+        notification = self._current_notification()
+        if self._navigation_tip():
+            notification = ""
         suffix = suffix or []
         if suffix:
             suffix = self._marquee(suffix, self._activity_width(), "activity-actions")

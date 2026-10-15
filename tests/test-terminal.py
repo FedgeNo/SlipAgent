@@ -2896,6 +2896,37 @@ async def test_working_indicator_pulses_and_becomes_idle(display) -> None:
             await task
 
 
+@pytest.mark.parametrize("replace", [False, True])
+def test_notifications_expire_after_thirty_seconds_and_resume_tips(display, monkeypatch, replace):
+    sink, _, output, _, _ = display
+    clock = [100.0]
+    monkeypatch.setattr("slipagent.terminal.time.monotonic", lambda: clock[0])
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        try:
+            ui._activity()
+            ui.notify("Saved changes.")
+            notice = "Saved changes."
+            if replace:
+                clock[0] += 15
+                notice = "New notice."
+                ui.notify(notice)
+            clock[0] += 29.99
+            assert ui._notification_text(200) == notice
+            clock[0] += .01
+            activity = ui._activity()
+            assert not ui._notification
+            assert ui._status_changed_at is None
+            assert notice not in "".join(part[1] for part in activity)
+            assert any("Commands" in part[1] and len(part) > 2 for part in activity)
+            assert all("status-flash" not in part[0] for part in activity)
+            tip = ui._notification_text(200)
+            clock[0] += 15
+            assert ui._notification_text(200) != tip
+        finally:
+            ui.close()
+
+
 def test_rotating_tips_do_not_flash_status(display, monkeypatch):
     sink, _, output, _, _ = display
     clock = [12345.0]

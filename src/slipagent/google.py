@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from typing import Any
+import os
 import httpx
 
 from .api import APIClient, APIConfigError, APIResponseError
 from .capabilities import RequestProfile
 from .types import ModelInfo
+from .requestbody import RequestBody
 from .upload import PacedRequestBody, UploadPacer
 
 # Free-tier availability, not a claim about the account's billing tier.
@@ -27,7 +29,12 @@ class GoogleClient(APIClient):
     base_url_env = "GEMINI_BASE_URL"
     catalog_requires_auth = True
 
-    def request_body(self, payload: dict[str, Any]) -> PacedRequestBody:
+    def request_body(self, payload: dict[str, Any]) -> RequestBody:
+        tier = os.environ.get("GEMINI_BILLING_TIER", "free").strip().lower()
+        if tier not in {"free", "paid"}:
+            raise APIConfigError("GEMINI_BILLING_TIER must be free or paid.")
+        if tier == "paid" or payload["model"] not in FREE_TIER_MODELS:
+            return super().request_body(payload)
         pacer = getattr(self, "_upload_pacer", None)
         if pacer is None:
             # Leave headroom below the reported 250,000 input TPM free-tier limit.

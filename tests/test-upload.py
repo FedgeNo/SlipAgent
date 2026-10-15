@@ -6,7 +6,7 @@ import json
 import httpx
 import pytest
 
-from slipagent.api import RetryPolicy
+from slipagent.api import APIConfigError, RetryPolicy
 from slipagent.google import GoogleClient
 from slipagent.openrouter import OpenRouterClient
 from slipagent.types import Message
@@ -104,3 +104,26 @@ async def test_concurrent_uploads_share_the_rate(monkeypatch):
 async def test_other_providers_keep_unpaced_uploads():
     async with OpenRouterClient("dummy") as client:
         assert not isinstance(client.request_body({"messages": []}), PacedRequestBody)
+
+
+@pytest.mark.parametrize("tier,model,paced", [("free", "gemini-3.6-flash", True),
+    ("free", "gemini-paid-only", False), ("paid", "gemini-3.6-flash", False),
+    ("paid", "gemini-paid-only", False)])
+async def test_google_pacing_only_applies_to_free_requests(tier, model, paced, monkeypatch):
+    monkeypatch.setenv("GEMINI_BILLING_TIER", tier)
+    waits = []
+    async def sleep(seconds):
+        waits.append(seconds)
+    monkeypatch.setattr("slipagent.upload.sleep", sleep)
+    async with GoogleClient("dummy") as client:
+        body = client.request_body({"model": model, "messages": [{"role": "user", "content": "Hello"}]})
+        assert isinstance(body, PacedRequestBody) == paced
+        assert b"".join([chunk async for chunk in body]) == b"".join(body.chunks())
+        assert bool(waits) == paced
+
+
+async def test_invalid_google_billing_tier_is_reported(monkeypatch):
+    monkeypatch.setenv("GEMINI_BILLING_TIER", "paidd")
+    async with GoogleClient("dummy") as client:
+        with pytest.raises(APIConfigError, match="GEMINI_BILLING_TIER"):
+            client.request_body({"model": "gemini-3.6-flash", "messages": []})

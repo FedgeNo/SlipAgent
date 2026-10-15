@@ -231,9 +231,12 @@ SlipAgent requests thought summaries from Google's thinking models and displays
 them in the reasoning stream, using the model's default thinking level.
 Leading `<thought>…</thought>` blocks are separated from response content before
 tool-call JSON parsing, including when their tags span streaming chunks.
-Google request uploads are paced at 200,000 estimated input tokens per minute,
-including retried uploads. Concurrent uploads through the same client share
-that allowance. Responses continue streaming at the provider's speed. Upload
+Google free-tier model uploads are paced at 200,000 estimated input tokens per
+minute, including retried uploads. Paid-only models upload at full speed.
+Set `GEMINI_BILLING_TIER=paid` for a billed Google account to upload all models
+at full speed; the default is `free`, since the catalog does not report account
+billing status. Concurrent paced uploads through the same client share the
+allowance. Responses continue streaming at the provider's speed. Upload
 pacing does not guarantee that Google will accept a single prompt larger than
 its TPM quota; that depends on Google's server-side quota accounting.
 
@@ -515,6 +518,7 @@ export OPENROUTER_API_KEY="sk-or-..."
 | `MISTRAL_BASE_URL` | `https://api.mistral.ai/v1` | Mistral endpoint override. |
 | `GEMINI_API_KEY` | — | Required for Gemini inference and model discovery. |
 | `GEMINI_MODEL` | `gemini-3.8-flash` | Gemini model ID. |
+| `GEMINI_BILLING_TIER` | `free` | `paid` bypasses free-tier upload pacing for a billed Google account. |
 | `GEMINI_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta/openai` | Gemini endpoint override. |
 | `OPENROUTER_API_KEY` | — | Required for OpenRouter inference. |
 | `OPENROUTER_MODEL` | `nvidia/nemotron-3-ultra-550b-a55b:free` | Default model slug. |

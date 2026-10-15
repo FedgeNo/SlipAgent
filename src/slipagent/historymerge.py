@@ -74,10 +74,13 @@ def schedule_history_merge(owner: StepCompactor, steps: list[HistoryStep], clien
     covered = {step_id for record in records for step_id in record["step_ids"]}
     boundary = total - (total + 2) // 3
     limit = 128_000
-    if capabilities is not None:
+    routed = getattr(owner, "routing", None) is not None
+    if routed:
+        limit = 1_000_000
+    elif capabilities is not None:
         limit = model_context_limit(model, capabilities,
                     min(capabilities.context_length, capabilities.max_prompt_tokens or capabilities.context_length))
-    reserve = min(max_tokens or 8192, capabilities.max_completion_tokens or 8192) if capabilities else (max_tokens or 8192)
+    reserve = 8192 if routed else min(max_tokens or 8192, capabilities.max_completion_tokens or 8192) if capabilities else (max_tokens or 8192)
     system = Message.system(load_prompt("historical-summary-prompt.md", max_characters=MERGE_MAX_CHARS))
     source: dict[str, Any] = {"steps": []}
     batch = []
@@ -124,6 +127,14 @@ async def _merge(owner: StepCompactor, batch: list[HistoryStep], source: dict[st
         attempt = 0
         while generation == owner.generation:
             try:
+                routing = getattr(owner, "routing", None)
+                if routing is not None:
+                    client, model, capabilities, reserve = await routing.select()
+                    options.update(request_profile=capabilities, disable_timeout=True, single_attempt=True)
+                    limit = min(capabilities.context_length, capabilities.max_prompt_tokens or capabilities.context_length) if capabilities else 128_000
+                    limit = model_context_limit(model, capabilities, limit)
+                    if message_tokens([system, Message.user(source)]) + reserve > int(limit * .85):
+                        raise ValueError("the grouped summaries exceed the compression provider's context budget")
                 async with asyncio.timeout(20 * 60):
                     completion = await client.chat(
                         model=model, messages=[system, Message.user(source)], tools=None,

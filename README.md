@@ -1449,14 +1449,30 @@ Oldest contextual records are omitted if needed to fit; the current step remains
 Tool arguments and structured results remain dictionaries or lists internally;
 the complete summary input is serialized once for the model. Complete history
 retrievals return complete objects or arrays without character paging.
-The summarizer uses the model and endpoint profile selected for that step and
-returns a JSON object with separate factual `summary` and filtered
+**Both individual-turn compression and grouped-history compression use free
+Nemotron 3 Ultra, independently of the working model.** Compression rotates
+between configured providers other than the currently selected working provider:
+NVIDIA uses `nvidia/nemotron-3-ultra-550b-a55b`; OpenRouter and Kilo use
+`nvidia/nemotron-3-ultra-550b-a55b:free`. For example, when OpenRouter is selected,
+compression alternates between NVIDIA and Kilo. Each attempt, including retries,
+takes the next available provider. Switching the working provider changes which
+provider is excluded. Each compression request uses its destination's own
+capabilities and context/output limits.
+
+Providers need their own configured API keys (`OPENROUTER_API_KEY`,
+`NVIDIA_API_KEY`, or `KILO_API_KEY`); remembered session credentials also count.
+With one alternative provider, all compression uses that provider. With none,
+SlipAgent reports that compression is unavailable and retains originals; it
+does not fall back to the selected provider or a paid model. Background clients
+are separate from the working client and close with the session.
+
+The summarizer returns a JSON object with separate factual `summary` and filtered
 `reasoning_summary` strings, each limited to 6,000 characters. Short steps
 should get short summaries. The working model continues without waiting.
 One worker runs first-pass summaries, with at most 32 ready references. Further
 steps wait on their retained originals and enter the ready queue as it drains.
-Only the active request copies its payload; deferred summaries keep their model
-and endpoint profile. An occasional historical merge can run alongside it.
+Only the active request copies its payload; deferred summaries select their
+compression provider when they run. An occasional historical merge can run alongside it.
 
 Unseen tool results reach the next working request even if their summary has
 already finished. An oversized new batch uses JSON excerpt records with separate

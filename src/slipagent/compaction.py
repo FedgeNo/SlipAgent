@@ -2,8 +2,8 @@
 
 One worker summarizes immutable completed steps in order. A bounded ready queue
 holds references; deferred steps retain request metadata on their originals.
-The worker materializes one request at a time, using its captured model/profile
-and up to 25 preceding steps as context. It never executes tools.
+The worker materializes one request at a time, rotating configured background
+providers and using up to 25 preceding steps as context. It never executes tools.
 Reset cancels jobs and invalidates late results. The registry owns this service
 so it survives behavior reloads and closes before the shared API client.
 """
@@ -23,6 +23,7 @@ from .capabilities import RequestProfile, model_context_limit
 from .context import SUMMARY_MAX_CHARS, CompletedStep, HistoryStep, message_tokens
 from .api import APIClient, APIResponseError, APITransportError, RETRYABLE_STATUS
 from .types import Completion, Message, Usage
+from .compressionproviders import CompressionProviders, CompressionUnavailableError
 from .prompts import load_prompt
 
 COMPACTION_TIMEOUT = 20 * 60
@@ -75,6 +76,7 @@ class StepCompactor:
         self.jobs: set[asyncio.Task[None]] = set()
         self.generation = 0
         self.on_step: Callable[[CompletedStep], None] | None = None
+        self.routing: CompressionProviders | None = None
 
     def submit(self, step: CompletedStep, client: APIClient, model: str,
                capabilities: RequestProfile | None, max_tokens: int | None, *,
@@ -143,6 +145,10 @@ class StepCompactor:
             attempt = 0
             while True:
                 try:
+                    routing = getattr(self, "routing", None)
+                    if routing is not None:
+                        client, model, capabilities, max_tokens = await routing.select()
+                        self.__dict__.pop("_routing_error", None)
                     await self._compact_once(step, source, client, model, capabilities, max_tokens, generation)
                     return
                 except Exception as exc:
@@ -152,7 +158,7 @@ class StepCompactor:
                         if await self.wait_request_retry(client, attempt, exc):
                             attempt += 1
                             continue
-                    elif attempt < COMPACTION_RETRIES and not isinstance(exc, CompactionBudgetError):
+                    elif attempt < COMPACTION_RETRIES and not isinstance(exc, (CompactionBudgetError, CompressionUnavailableError)):
                         delay = (client._backoff(attempt, getattr(exc, "retry_after", None))
                                  if isinstance(client, APIClient) else min(2 ** attempt, 30))
                         await asyncio.sleep(delay)
@@ -160,7 +166,12 @@ class StepCompactor:
                         continue
                     step.compaction_status = "failed"
                     step.compaction_error = f"{type(exc).__name__}: {exc}"
-                    self.on_error(f"Could not summarize step {step.id}: {exc}. Its full original remains available through recall_history.")
+                    if isinstance(exc, CompressionUnavailableError):
+                        if self.__dict__.get("_routing_error") != str(exc):
+                            self.__dict__["_routing_error"] = str(exc)
+                            self.on_error(f"Compression unavailable: {exc}. Original turns remain available through recall_history.")
+                    else:
+                        self.on_error(f"Could not summarize step {step.id}: {exc}. Its full original remains available through recall_history.")
                     callback = getattr(self, "on_step", None)
                     if callback is not None:
                         callback(step)
@@ -261,3 +272,6 @@ class StepCompactor:
     async def aclose(self) -> None:
         self.reset()
         await self.wait()
+        routing = getattr(self, "routing", None)
+        if routing is not None:
+            await routing.aclose()

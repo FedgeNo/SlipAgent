@@ -665,6 +665,7 @@ async def build_session(args: argparse.Namespace, *, defer_startup: bool = False
             app_title=config.app_title,
             mcp=mcp,
         )
+        session.configure_compaction()
         if defer_startup:
             session.extensions["startup"] = lambda: _initialize_session(session, args, config, announce=True)
         else:

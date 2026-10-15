@@ -508,7 +508,13 @@ After archiving a complete batch, `Agent._archive_step` submits it to
 at most 32 original-step references. Further steps retain deferred request
 metadata on their originals and refill the queue as it drains. Only the active
 request copies its immutable original prompt, response, calls, results, thoughts,
-and up to 25 earlier steps. The model and capabilities are captured on submission.
+and up to 25 earlier steps. CLI sessions attach `CompressionProviders`, which
+rotates both compactors through configured providers other than the current
+working provider. Each attempt uses free Nemotron 3 Ultra and its destination's
+own profile; retries advance the shared rotation. The compactor owns and closes
+these separate clients. Without another configured provider, originals remain
+available and a notification reports compression unavailable. Direct embedded
+callers without routing retain their explicitly supplied model/profile.
 The working loop does not wait. A reply without tools is scheduled the same way. The
 compaction request contains exactly two messages: summarization instructions
 and a structured record separating the completed step's fields from contextual
@@ -1338,7 +1344,7 @@ these explanatory guides separately from local operational conventions.
 
 `api.py` owns `APIClient`, common errors, HTTP/SSE transport, retries, and completion normalization. `providers.py` maps provider names to implementation classes in separate files and exposes `create_client`. Providers subclass `APIClient`; they supply identity/defaults, capability discovery, optional account metadata, headers, request preparation, and options retained during key replacement. Importing modules does not create connections. `openrouter.py` keeps the previous error aliases for callers using those imports.
 
-The agent and compactor use the common `RequestProfile` contract, not a provider class or routing format. `ModelCapabilities` selects OpenRouter routes from live metadata. NVIDIA's explicit profiles describe verified hosted models; unsupported catalog entries stay visible without invented capabilities. A supplied frozen compaction profile remains independent of later selections. Provider request preparation runs before diagnostics so the inspector sees the final body.
+The agent and compactor use the common `RequestProfile` contract, not a provider class or routing format. `ModelCapabilities` selects OpenRouter routes from live metadata. NVIDIA's explicit profiles describe verified hosted models; unsupported catalog entries stay visible without invented capabilities. Compression profiles come from the background destination rather than the working model. Provider request preparation runs before diagnostics so the inspector sees the final body.
 
 `ModelInfo.selector` is `provider::model-id`. Search combines catalogs only for providers with a nonblank environment or session key, preserves duplicate IDs, and reports partial failures. Missing-key providers are not queried or listed. Changes to the active provider set refresh the catalog cache. `Session.select_model` preflights capabilities and context. Same-provider changes preserve pending summaries; provider changes cancel and drain them before closing their client. Originals survive cancellation. Preflight failures close candidate resources and preserve active state. Credentials, URLs, and remembered models are provider-specific. `/key` uses authoritative metadata where available and explicitly reports when verification must wait for inference.
 

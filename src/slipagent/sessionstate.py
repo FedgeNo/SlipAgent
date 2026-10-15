@@ -53,6 +53,26 @@ class Session:
     def __post_init__(self) -> None:
         self.work = SessionWork(self.extensions)
 
+    def configure_compaction(self) -> None:
+        from .compressionproviders import CompressionProviders
+        compactor = self.agent._compactor()
+        if getattr(compactor, "routing", None) is None:
+            compactor.routing = CompressionProviders(lambda: self.client.provider, self.compression_options)
+
+    def compression_options(self) -> dict[str, dict[str, Any]]:
+        """Include remembered session credentials and configured provider endpoints."""
+        from .providers import PROVIDERS
+        result = dict(self.extensions.get("provider_options", {}))
+        for name in PROVIDERS:
+            if name in result or name == self.client.provider:
+                continue
+            implementation = provider_class(name)
+            key = os.environ.get(implementation.key_env, "").strip()
+            if key:
+                result[name] = {"api_key": key, "base_url": os.environ.get(implementation.base_url_env),
+                                "http_referer": self.http_referer, "app_title": self.app_title}
+        return result
+
     @property
     def resources(self) -> SessionResources:
         return self.registry.resources

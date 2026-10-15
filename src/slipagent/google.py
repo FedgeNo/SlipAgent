@@ -8,6 +8,7 @@ import httpx
 from .api import APIClient, APIConfigError, APIResponseError
 from .capabilities import RequestProfile
 from .types import ModelInfo
+from .upload import PacedRequestBody, UploadPacer
 
 # Free-tier availability, not a claim about the account's billing tier.
 # https://ai.google.dev/gemini-api/docs/pricing (2026-10-15)
@@ -25,6 +26,13 @@ class GoogleClient(APIClient):
     model_env = "GEMINI_MODEL"
     base_url_env = "GEMINI_BASE_URL"
     catalog_requires_auth = True
+
+    def request_body(self, payload: dict[str, Any]) -> PacedRequestBody:
+        pacer = getattr(self, "_upload_pacer", None)
+        if pacer is None:
+            # Leave headroom below the reported 250,000 input TPM free-tier limit.
+            pacer = self._upload_pacer = UploadPacer(200000)
+        return PacedRequestBody(payload, pacer)
 
     def _catalog_auth(self, request: httpx.Request) -> httpx.Request:
         # Native metadata uses an API-key header; completions use bearer auth.

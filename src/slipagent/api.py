@@ -17,7 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import httpx
 
@@ -26,6 +26,9 @@ from .capabilities import RequestProfile
 from .protocol import ResponseFormatError, normalize_calls, combine_calls
 from .prompts import model_prompt_profile
 from .thoughts import ThoughtStream
+
+if TYPE_CHECKING:
+    from .requestbody import RequestBody
 
 DEFAULT_TIMEOUT = 180.0
 DEFAULT_MAX_RETRIES = 3
@@ -170,7 +173,7 @@ class APIClient:
         if not self.api_key:
             raise APIConfigError(f"Set {self.key_env} before using {self.provider} inference.")
 
-        from .requestbody import RequestBody, wire_message
+        from .requestbody import wire_message
         payload: dict[str, Any] = {
             "model": model,
             "messages": [wire_message(message) for message in messages],
@@ -217,7 +220,7 @@ class APIClient:
             payload["stream"] = True
             payload["stream_options"] = {"include_usage": True}
         self.prepare_payload(payload, capabilities)
-        body = RequestBody(payload)
+        body = self.request_body(payload)
         if on_request is not None:
             # Capture the final request body before transport, without headers.
             on_request(body.read())
@@ -231,8 +234,7 @@ class APIClient:
 
     async def _stream_request(self, payload: dict[str, Any], on_delta: Callable[[str, str], None], *, single_attempt: bool = False, disable_timeout: bool = False,
                               on_response: Callable[[dict[str, Any]], None] | None = None, request_body: Any = None) -> Completion:
-        from .requestbody import RequestBody
-        body = request_body if request_body is not None else RequestBody(payload)
+        body = request_body if request_body is not None else self.request_body(payload)
         transport_options: dict[str, Any] = {"timeout": None} if disable_timeout else {}
         observed = False
         attempt = 0
@@ -374,6 +376,10 @@ class APIClient:
 
     def prepare_payload(self, payload: dict[str, Any], profile: RequestProfile | None) -> None:
         """Apply provider-specific fields before diagnostics and transport."""
+
+    def request_body(self, payload: dict[str, Any]) -> RequestBody:
+        from .requestbody import RequestBody
+        return RequestBody(payload)
 
     def request_headers(self, http_referer: str | None, app_title: str | None) -> dict[str, str]:
         return {}

@@ -231,6 +231,11 @@ SlipAgent requests thought summaries from Google's thinking models and displays
 them in the reasoning stream, using the model's default thinking level.
 Leading `<thought>…</thought>` blocks are separated from response content before
 tool-call JSON parsing, including when their tags span streaming chunks.
+Google request uploads are paced at 200,000 estimated input tokens per minute,
+including retried uploads. Concurrent uploads through the same client share
+that allowance. Responses continue streaming at the provider's speed. Upload
+pacing does not guarantee that Google will accept a single prompt larger than
+its TPM quota; that depends on Google's server-side quota accounting.
 
 Model lists put free models first. The interactive picker uses a green background
 and a matching `= free` legend on the right. `/models free` includes models with

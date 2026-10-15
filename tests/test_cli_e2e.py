@@ -1576,7 +1576,7 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             wait_for(lambda: screen.display[17].strip() == "Resume Session")
             os.write(master, b"\x1b[B\r")
             wait_for(lambda: screen.title == "Work in progress | SlipAgent")
-            wait_for(lambda: "restored " in "\n".join(screen.display[:17]))
+            wait_for(lambda: "Restored " in "\n".join(screen.display[:17]))
             assert "resumed successfully" in "\n".join(screen.display[:17])
             assert "conversation cleared" not in "\n".join(screen.display[:17])
             os.write(master, b"/exit\r")

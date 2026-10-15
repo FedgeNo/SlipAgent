@@ -778,7 +778,7 @@ class ResumeCommand(StoredSessionCommand):
             journal.restore(session.agent, data)
             await session.renderer.restore_transcript(session.agent.messages, session.agent.pending,
                                                       queued_messages=session.agent.queued_messages)
-            print(f"  restored {journal.session_id}; no tools were replayed. Type a task or continue when ready.", file=out)
+            print(f"  Restored {journal.session_id}; no tools were replayed. Type a task or continue when ready.", file=out)
         except SessionError as exc:
             print(style.red(f"  {exc}"), file=out)
         return None

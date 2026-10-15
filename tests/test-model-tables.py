@@ -115,3 +115,32 @@ async def test_model_search_requires_every_word_across_fields(query, interactive
         assert models[0].id in out.getvalue()
         assert models[1].id not in out.getvalue()
         assert models[2].id not in out.getvalue()
+
+
+@pytest.mark.parametrize("query,provider", [("google", "google"), ("GOOGLE", "google"),
+    ("openrouter", "openrouter"), ("nvidia", "nvidia"),
+    ("kilo", "kilo"), ("mistral", "mistral")])
+async def test_provider_name_matches_all_its_models(query, provider):
+    models = [ModelInfo("first", provider=provider), ModelInfo("second", provider=provider),
+              ModelInfo("unrelated", provider="other")]
+    choose = AsyncMock(return_value=None)
+    session = SimpleNamespace(renderer=SimpleNamespace(terminal=SimpleNamespace(choose=choose)),
+                              catalog=AsyncMock(return_value=models), agent=SimpleNamespace(model="first"))
+    await _models_command(session, query, Style(False), io.StringIO())
+    assert choose.await_count == 1
+    assert [value for value, label in choose.call_args.args[1]] == [m.selector for m in models[:2]]
+
+
+@pytest.mark.parametrize("query", ["google free", "FREE google", "google gemini free", "google flash", "google 1,000,000"])
+async def test_search_matches_all_words_in_displayed_row(query):
+    models = [ModelInfo("gemini-first", name="Flash", provider="google", context_length=1000000,
+                        pricing={"free_tier": True}),
+              ModelInfo("gemini-paid", provider="google", pricing={"prompt": 1, "completion": 1}),
+              ModelInfo("other", provider="mistral", pricing={"prompt": 0, "completion": 0})]
+    choose = AsyncMock(return_value=None)
+    session = SimpleNamespace(renderer=SimpleNamespace(terminal=SimpleNamespace(choose=choose)),
+                              catalog=AsyncMock(return_value=models), agent=SimpleNamespace(model="other"))
+    await _models_command(session, query, Style(False), io.StringIO())
+    options = choose.call_args.args[1]
+    assert [value for value, label in options] == [models[0].selector]
+    assert all(word in options[0][1].lower() for word in query.lower().split())

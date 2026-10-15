@@ -10,7 +10,7 @@ from typing import Any
 from .api import APIClient, APIConfigError
 from .types import ModelInfo
 
-PROVIDERS = {"openrouter": "OpenRouterClient", "nvidia": "NvidiaClient", "kilo": "KiloClient", "mistral": "MistralClient", "gemini": "GeminiClient"}
+PROVIDERS = {"openrouter": "OpenRouterClient", "nvidia": "NvidiaClient", "kilo": "KiloClient", "mistral": "MistralClient", "google": "GoogleClient"}
 
 
 def provider_class(provider: str) -> type[APIClient]:

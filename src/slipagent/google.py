@@ -17,8 +17,8 @@ FREE_TIER_MODELS = {
 }
 
 
-class GeminiClient(APIClient):
-    provider = "gemini"
+class GoogleClient(APIClient):
+    provider = "google"
     default_base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
     default_model = "gemini-3.8-flash"
     key_env = "GEMINI_API_KEY"

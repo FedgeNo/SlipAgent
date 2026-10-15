@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from slipagent.api import APIConfigError, APIResponseError
-from slipagent.gemini import GeminiClient
+from slipagent.google import GoogleClient
 from slipagent.modelpricing import free_label
 from slipagent.types import Message
 
@@ -34,7 +34,7 @@ async def test_catalog_pagination_auth_limits_and_completion():
         assert "session_id" not in body and "tools" not in body
         return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "Done"},
                                                      "finish_reason": "stop"}]})
-    async with GeminiClient("dummy", transport=httpx.MockTransport(handle)) as client:
+    async with GoogleClient("dummy", transport=httpx.MockTransport(handle)) as client:
         models = await client.list_models()
         assert [m.id for m in models] == ["gemini-3.8-flash", "gemini-paid"]
         assert free_label(models[0].pricing) == "free tier"
@@ -50,7 +50,7 @@ async def test_catalog_pagination_auth_limits_and_completion():
 
 async def test_repeated_page_token_rejected():
     transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"models": [], "nextPageToken": "same"}))
-    async with GeminiClient("dummy", transport=transport) as client:
+    async with GoogleClient("dummy", transport=transport) as client:
         with pytest.raises(APIResponseError, match="page token"):
             await client.list_models()
 
@@ -63,7 +63,7 @@ async def test_compatible_stream():
         return httpx.Response(200, text="data: " + json.dumps(chunk) + "\n\ndata: [DONE]\n\n",
                               headers={"content-type": "text/event-stream"})
     deltas = []
-    async with GeminiClient("dummy", transport=httpx.MockTransport(handle)) as client:
+    async with GoogleClient("dummy", transport=httpx.MockTransport(handle)) as client:
         result = await client.chat(model="gemini-3.8-flash", messages=[Message.user("Hello")],
                                    on_delta=lambda kind, text: deltas.append((kind, text)))
     assert result.message.content == "Hello" and deltas

@@ -222,8 +222,8 @@ as free, so select Mistral models explicitly with `/model`, for example
 `/model mistral::labs-leanstral-1-5-1` when available in your account's catalog.
 
 For Google Gemini, add `GEMINI_API_KEY=your-key` to your local `.env`, then run
-`slipagent --provider gemini`. The default is `gemini-3.8-flash`.
-`/models gemini` lists compatible text models with Google's input and output
+`slipagent --provider google`. The default is `gemini-3.8-flash`.
+`/models google` lists compatible text models with Google's input and output
 limits. Tool calls use SlipAgent's embedded JSON protocol so compressed history
 does not depend on Google's opaque native function-call signatures.
 Gemini is excluded from the Nemotron compression rotation.
@@ -232,6 +232,8 @@ Model lists put free models first. The interactive picker uses a green backgroun
 and a matching `= free` legend on the right. `/models free` includes models with
 a free tier; these retain a `free tier` label because account billing and quotas
 still apply. Unknown prices are shown as `-`.
+Search matches every word against the displayed model row; for example,
+`/models google free` shows Google's free-tier models.
 
 NVIDIA's catalog does not publish tool/schema support or context limits. The built-in verified profile covers Nemotron 3 Ultra: native tools, plain replies, a conservative 1,000,000-token context budget, and at most 32,768 output tokens. Other NVIDIA models appear in search but require an explicit capability profile before use. Unknown prices and limits are not shown as free or unlimited. Free hosted availability and rate limits remain provider-controlled.
 

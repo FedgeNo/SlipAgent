@@ -1470,6 +1470,15 @@ def _describe_model(model: ModelInfo) -> str:
     return f"  {model.id:<44} {context:>8}  {price:>15}"
 
 
+def _model_label(model: ModelInfo) -> str:
+    name = f"  {model.name}" if model.name and model.name != model.id else ""
+    price = _price_cell(model.pricing)
+    if price.startswith("$"):
+        price += "/Mtok"
+    context = f"{model.context_length:,}" if model.context_length else "unknown"
+    return f"{model.selector}{name}  {price}  context: {context}"
+
+
 def _model_table(session: Session, models: list[ModelInfo]) -> str:
     terminal = session.renderer.terminal
     columns = terminal.output.get_size().columns if terminal is not None else shutil.get_terminal_size((80, 24)).columns
@@ -1670,13 +1679,15 @@ async def _models_command(
     for error in getattr(session, "extensions", {}).get("catalog_errors", []):
         print(style.red(f"  catalog unavailable: {error}"), file=out)
 
+    current_model = getattr(getattr(session, "agent", None), "model", None)
+    current_provider = getattr(getattr(session, "client", None), "provider", "openrouter")
+    labels = {m.selector: _model_label(m) + ("  (current)" if m.id == current_model
+                                            and m.provider == current_provider else "") for m in catalog}
     needle = argument.strip().lower()
-    if needle in ("free", "0"):
-        matches = [m for m in catalog if free_label(m.pricing) is not None]
-    elif needle:
-        words = needle.split()
+    if needle:
+        words = ("free" if needle == "0" else needle).split()
         matches = [m for m in catalog
-                   if all(word in f"{m.selector} {m.name or ''}".lower() for word in words)]
+                   if all(word in labels[m.selector].lower() for word in words)]
     else:
         matches = list(catalog)
 
@@ -1687,9 +1698,7 @@ async def _models_command(
     terminal = session.renderer.terminal
     if terminal is not None:
         options = [
-            (model.selector, f"{model.selector}  {_price_cell(model.pricing)}/Mtok  "
-             "context: " + (f"{model.context_length:,}" if model.context_length else "unknown") +
-             ("  (current)" if model.id == session.agent.model and model.provider == getattr(getattr(session, "client", None), "provider", "openrouter") else ""))
+            (model.selector, labels[model.selector])
             for model in sorted(matches, key=model_order)
         ]
         selected = await terminal.choose("Select Model", options,

@@ -85,7 +85,7 @@ class EditorPanel:
             return []
         columns = self.terminal.output.get_size().columns
         if self.terminal.__dict__.get("_inspection_visible") and columns >= 60:
-            columns -= columns // 4
+            columns -= columns // 4 + 1
         text = str(self.file.path)
         if display_width(text) > columns:
             clusters = list(iter_graphemes(text))

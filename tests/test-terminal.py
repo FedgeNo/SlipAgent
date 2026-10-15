@@ -203,7 +203,7 @@ async def test_user_prompt_background_fills_feed_without_copy_padding(display, i
                 size[0] = Size(rows=24, columns=columns)
                 screen.resize(lines=24, columns=columns)
                 ui.app.invalidate()
-                width = columns - columns // 4 if inspect else columns
+                width = columns - columns // 4 - 1 if inspect else columns
                 await wait_until(lambda: ui._wrapped_columns == width)
                 await asyncio.sleep(.05)
                 lines = snapshot()
@@ -220,6 +220,43 @@ async def test_user_prompt_background_fills_feed_without_copy_padding(display, i
                 ui._selection_end = Point(width - 1, content.line_count - 1)
                 assert ui.selected_text() == "> " + prompt + "\nordinary output"
                 ui._selection_start = ui._selection_end = None
+        finally:
+            ui.close()
+            await task
+
+
+async def test_feed_scrollbar_click_drag_and_follow(display):
+    sink, _, output, screen, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        ui.write("\n".join(f"row {n:03}" for n in range(300)))
+        ui.toggle_inspection()
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: "row 299" in "\n".join(snapshot()))
+            assert ui._wrapped_columns == 74
+            assert all(screen.buffer[row][74].bg == "000040" for row in range(17))
+            assert screen.buffer[16][74].data == "┃"
+            pipe.send_text("\x1b[<0;75;1M\x1b[<0;75;1m")
+            await wait_until(lambda: snapshot()[0].startswith("row 000"))
+            assert not ui.transcript._following
+            pipe.send_text("\x1b[<0;75;1M\x1b[<32;75;9M\x1b[<0;75;9m")
+            await wait_until(lambda: 100 < ui.transcript.vertical_scroll < 200)
+            pipe.send_text("\x1b[<0;75;17M\x1b[<0;75;17m")
+            await wait_until(lambda: ui.transcript._following)
+            ui.write("new tail")
+            await wait_until(lambda: "new tail" in "\n".join(snapshot()))
+            assert ui.app.layout.current_control is ui.input.control
+            ui.queue_prompt("queued " * 20)
+            await wait_until(lambda: snapshot()[16].startswith("> queued"))
+            assert screen.buffer[16][73].bg == "004000"
+            assert screen.buffer[16][74].bg == "000040"
+            assert screen.buffer[16][75].bg == "400040"
+            ui.clear_queued_prompts()
+            ui.open_viewer("Viewer", "plain text")
+            await wait_until(lambda: snapshot()[1].startswith("plain text"))
+            assert screen.buffer[1][73].bg == "000000"
+            assert screen.buffer[10][73].bg == "000000"
         finally:
             ui.close()
             await task
@@ -1541,6 +1578,7 @@ async def test_notifications_remain_visible_in_menu_context_and_after_resize(dis
             ui.context_visible = True
             ui.app.invalidate()
             await wait_until(lambda: "Context" in snapshot()[0])
+            assert screen.buffer[10][99].bg == "000000"
             assert "Saved changes." in snapshot()[17]
             size[0] = Size(rows=24, columns=12)
             screen.resize(lines=24, columns=12)

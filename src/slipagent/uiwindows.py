@@ -1,7 +1,11 @@
 """Wrapped scrolling windows shared by transcript and inspection panels."""
 
+from collections.abc import Callable
+
+from prompt_toolkit.application.current import get_app
 from prompt_toolkit.layout import Window
 from prompt_toolkit.layout.controls import UIContent, UIControl
+from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 
 
 class TranscriptWindow(Window):
@@ -75,6 +79,58 @@ class TranscriptWindow(Window):
         self.vertical_scroll, self.vertical_scroll_2 = min((self.vertical_scroll, self.vertical_scroll_2), bottom)
         self._following = (self.vertical_scroll, self.vertical_scroll_2) == bottom
         self.horizontal_scroll = 0
+
+
+class TranscriptScrollbar(UIControl):
+    """A clickable, draggable track for the visible transcript window."""
+
+    def __init__(self, target: Callable[[], TranscriptWindow | None]) -> None:
+        self.target = target
+        self.height = 0
+        self.drag_offset: int | None = None
+
+    def geometry(self) -> tuple[int, int, int]:
+        window = self.target()
+        info = window.render_info if window is not None else None
+        if info is None or self.height <= 0:
+            return 0, self.height, 0
+        visible = max(1, len(info.displayed_lines))
+        maximum = max(0, info.content_height - visible)
+        thumb = max(1, min(self.height, self.height * visible // max(1, info.content_height)))
+        top = round((self.height - thumb) * min(info.vertical_scroll, maximum) / maximum) if maximum else 0
+        return top, thumb, maximum
+
+    def create_content(self, width: int, height: int) -> UIContent:
+        self.height = height
+        top, thumb, maximum = self.geometry()
+        return UIContent(
+            get_line=lambda row: [("class:scroll-track", "┃" if maximum and top <= row < top + thumb else " ")],
+            line_count=height, show_cursor=False,
+        )
+
+    def mouse_handler(self, mouse_event: MouseEvent) -> object:
+        window = self.target()
+        if window is None:
+            return None
+        top, thumb, maximum = self.geometry()
+        row = mouse_event.position.y
+        if mouse_event.event_type == MouseEventType.MOUSE_UP:
+            self.drag_offset = None
+            return None
+        if mouse_event.event_type == MouseEventType.MOUSE_DOWN and mouse_event.button == MouseButton.LEFT:
+            if top <= row < top + thumb:
+                self.drag_offset = row - top
+                return None
+            self.drag_offset = thumb // 2
+        elif mouse_event.event_type != MouseEventType.MOUSE_MOVE or self.drag_offset is None:
+            return NotImplemented
+        travel = self.height - thumb
+        position = min(travel, max(0, row - self.drag_offset))
+        window.vertical_scroll = round(maximum * position / travel) if travel else 0
+        window.vertical_scroll_2 = window._pending_scroll = 0
+        window._following = position == travel
+        get_app().invalidate()
+        return None
 
 
 class ListWindow(TranscriptWindow):

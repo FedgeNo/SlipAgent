@@ -34,7 +34,7 @@ from prompt_toolkit.widgets import TextArea
 from wcwidth import iter_graphemes, width as display_width, wrap
 
 from .transcript import TranscriptFile, WrappedTranscript
-from .uiwindows import TranscriptWindow
+from .uiwindows import TranscriptScrollbar, TranscriptWindow
 from .focus import FocusCoordinator, FocusTarget
 from .links import ActionControl, ActionLink, CallbackLink, TaskLink, LinkHover, keyboard_content
 from .listpanels import TouchedPanel, CallsPanel, ChoicePanel, ListActions
@@ -266,13 +266,18 @@ class TerminalUI:
         )])
         transcript = DynamicContainer(lambda: pinned_transcript if self.output.get_size().rows > self._footer_rows() + self._queued_prompt_height() + 1 else self.transcript)
         inspection_visible = Condition(lambda: self._inspection_visible and self.output.get_size().columns >= 60)
+        self._scrollbar = TranscriptScrollbar(lambda: None if self._editor_active else
+                                             self._viewer_window if self._viewer_active else
+                                             self.context_window if self.context_visible else self.transcript)
         return Layout(HSplit([
             VSplit([DynamicContainer(lambda: self._editor_container if self._editor_active else self._viewer_container if self._viewer_active else
                                      context if self.context_visible else transcript),
-                    ConditionalContainer(self._inspection_panel, inspection_visible)]),
+                    ConditionalContainer(Window(self._scrollbar, width=1, style="class:scroll-track"), inspection_visible),
+                    ConditionalContainer(self._inspection_panel, inspection_visible)], style="class:content"),
             ConditionalContainer(VSplit([Window(TranscriptControl(self._queued_prompt_content),
                                         height=self._queued_prompt_height, dont_extend_height=True,
                                         style="class:user"),
+                                         ConditionalContainer(Window(width=1, style="class:scroll-track"), inspection_visible),
                                          ConditionalContainer(Window(width=self._inspection_panel.width, style="class:menu"), inspection_visible)],
                                         height=self._queued_prompt_height),
                                  Condition(lambda: self._queued_prompt_height() > 0)),
@@ -1094,7 +1099,7 @@ class TerminalUI:
         if columns is None:
             columns = size.columns
             if self.__dict__.get("_inspection_visible") and columns >= 60:
-                columns -= columns // 4
+                columns -= columns // 4 + 1
         self._transcript_content(columns)
         assert self._flow is not None
         self._pinned_prompt = self._flow.prompt_at(self.transcript.vertical_scroll)
@@ -1451,6 +1456,7 @@ class TerminalUI:
             "context-system": "#ffff00", "retry": "ansired",
             "footer": "bg:" + FOOTER_BACKGROUND_COLOR,
             "content": "bg:" + CONTENT_BACKGROUND_COLOR,
+            "scroll-track": "#aaaaaa bg:" + FOOTER_BACKGROUND_COLOR,
             "menu": "bg:" + MENU_BACKGROUND_COLOR,
             "status-flash": "bold reverse",
             "keyboard-focus": "bold reverse",
@@ -1487,6 +1493,8 @@ class TerminalUI:
         original = app.renderer.mouse_handlers
 
         def mouse_handler(event: MouseEvent) -> object:
+            if event.event_type == MouseEventType.MOUSE_UP:
+                self._scrollbar.drag_offset = None
             previous_hover = self.__dict__.get("_hovered_control")
             if event.event_type == MouseEventType.MOUSE_MOVE:
                 self.__dict__["_hovered_control"] = None
@@ -2043,7 +2051,7 @@ class TerminalUI:
         layouts.update(state, len(self._raw_output), self._append_transcript_record)
         self._wrapped_count = len(self._raw_output)
         full = self.output.get_size().columns
-        narrow = full - full // 4
+        narrow = full - full // 4 - 1
         if full >= 60 and columns in (full, narrow):
             layouts.warm(narrow if columns == full else full, len(self._raw_output), create,
                          self._append_transcript_record, self.app.create_background_task)

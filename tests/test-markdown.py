@@ -10,7 +10,7 @@ from prompt_toolkit.output import DummyOutput
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 
-from slipagent.markdown import MarkdownRenderer, THEMES, code_blocks
+from slipagent.markdown import MarkdownRenderer, ReasoningMarkdownRenderer, THEMES, code_blocks
 from slipagent.terminal import TerminalUI
 from slipagent.transcript import WrappedTranscript, compact_fragments
 from slipagent import cli
@@ -58,6 +58,18 @@ def test_headings_share_style_and_body_bold_share_color_without_added_spacing():
     assert rows[0].fragments[0][0] == rows[1].fragments[0][0] == "bold #ffffff"
     assert rows[2].fragments[0][0] == "#ffffff"
     assert rows[2].fragments[-1][0] == "bold #ffffff"
+
+
+@pytest.mark.parametrize("renderer_type", [MarkdownRenderer, ReasoningMarkdownRenderer])
+@pytest.mark.parametrize("heading", ["#", "##", "###", "####", "#####", "######", "setext"])
+def test_entire_heading_is_bold_in_answers_and_reasoning(renderer_type, heading):
+    text = "Title *emphasis* `code` [link](https://example.com) ![image](image.png)"
+    source = text + "\n===\n" if heading == "setext" else heading + " " + text
+    rows = renderer_type().render(source, 24)
+    fragments = [fragment for row in rows for fragment in row.fragments if fragment[1].strip()]
+    assert fragments
+    assert all("bold" in style.split() for style, *_ in fragments)
+    assert any("italic" in style.split() for style, *_ in fragments)
 
 
 @pytest.mark.parametrize("theme", THEMES)

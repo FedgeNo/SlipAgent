@@ -104,6 +104,7 @@ class MarkdownRenderer:
         links: list[str] = []
         for token in tokens:
             kind = token.type
+            attrs = (["bold"] if heading else []) + list(stack)
             if kind in {"strong_open", "em_open", "s_open"}:
                 stack.append({"strong_open": "bold", "em_open": "italic", "s_open": "strike"}[kind])
             elif kind in {"strong_close", "em_close", "s_close"}:
@@ -113,12 +114,11 @@ class MarkdownRenderer:
                 links.append(str(token.attrGet("href") or ""))
             elif kind == "link_close":
                 destination = links.pop() if links else ""
-                result.append((self.style("link", "underline"), f" ({literal(destination)})"))
+                result.append((self.style("link", *attrs, "underline"), f" ({literal(destination)})"))
             elif kind == "image":
-                result.append((self.style("link"), f"{literal(token.content)} ({literal(str(token.attrGet('src') or ''))})"))
+                result.append((self.style("link", *attrs), f"{literal(token.content)} ({literal(str(token.attrGet('src') or ''))})"))
             else:
                 role = "heading" if heading else "body"
-                attrs = ["bold"] if heading else list(stack)
                 if links:
                     role = "link"
                     attrs.append("underline")

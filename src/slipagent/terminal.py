@@ -29,7 +29,7 @@ from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 from prompt_toolkit.output import ColorDepth, Output, create_output
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import TextArea
-from wcwidth import iter_graphemes, width as display_width, wrap
+from wcwidth import iter_graphemes, width as display_width
 
 from .transcript import TranscriptFile, WrappedTranscript
 from .uiwindows import TranscriptScrollbar, TranscriptWindow
@@ -155,6 +155,7 @@ class TerminalUI:
     _selection_start: Point | None
     _selection_end: Point | None
     _scrollbar: TranscriptScrollbar
+    context_window: TranscriptWindow
 
     def __init__(
         self, status: Callable[[int], str], stream: TextIO, *, color: bool = True,
@@ -1057,52 +1058,38 @@ class TerminalUI:
         return UIContent(get_line=get_line, line_count=height, show_cursor=False)
 
     def _ensure_context(self) -> None:
-        """Initialize optional view state for both new and already running terminals."""
-        if hasattr(self, "context_window"):
+        """Move legacy request text to disk while preserving the context window."""
+        from .contextview import ContextControl, ContextView
+        if "_context_view" in self.__dict__:
             return
-        self.context_visible = False
-        self._context_blocks: list[tuple[str, str]] = [("", "No model request has been sent yet.")]
-        self._context_columns = 0
-        self._context_fragments: StyleAndTextTuples = []
-        self.context_window = TranscriptWindow(FormattedTextControl(lambda: self._formatted_context(), focusable=True))
-        self.context_window._following = False
+        blocks = self.__dict__.get("_context_blocks", [("", "No model request has been sent yet.")])
+        self._context_view = ContextView(blocks)
+        self.__dict__.pop("_context_blocks", None)
+        self.__dict__.pop("_context_fragments", None)
+        self.__dict__.pop("_context_columns", None)
+        control = ContextControl(lambda width: self._context_view.content(self.output.get_size().columns))
+        if hasattr(self, "context_window"):
+            self.context_window.content = control
+        else:
+            self.context_visible = False
+            self.context_window = TranscriptWindow(control)
+            self.context_window._following = False
+
+    @property
+    def _context_blocks(self) -> Any:
+        self._ensure_context()
+        return self._context_view
 
     def set_context(self, request: str) -> None:
-        """Replace the view with an immutable snapshot of the actual request."""
+        """Replace the disk-backed snapshot of the actual request."""
+        from .contextview import ContextView
         self._ensure_context()
-        blocks: list[tuple[str, str]] = []
-        for field, value in json.loads(request).items():
-            if field == "messages":
-                blocks.append(("", "Messages — sent order"))
-                for index, message in enumerate(value, 1):
-                    role = message.get("role", "unknown")
-                    style = "class:context-system" if role == "system" else ""
-                    content = message.get("content")
-                    text = f"[{index:02}] {role.upper()}\n"
-                    text += content if isinstance(content, str) else json.dumps(content, ensure_ascii=False, indent=2)
-                    extra = {key: item for key, item in message.items() if key not in {"role", "content"}}
-                    if extra:
-                        text += "\n" + json.dumps(extra, ensure_ascii=False, indent=2)
-                    blocks.append((style, text))
-            else:
-                blocks.append(("", field + ":\n" + json.dumps(value, ensure_ascii=False, indent=2)))
-        self._context_blocks = blocks
-        self._context_columns = 0
+        replacement = ContextView.from_request(request)
+        previous = self._context_view
+        self._context_view = replacement
+        previous.close()
         self.context_window.seek()
         self.app.invalidate()
-
-    def _formatted_context(self) -> StyleAndTextTuples:
-        columns = max(1, self.output.get_size().columns)
-        if columns != self._context_columns:
-            self._context_fragments = []
-            for index, (style, text) in enumerate(self._context_blocks):
-                if index:
-                    self._context_fragments.append(("", "\n"))
-                for line in text.split("\n"):
-                    lines = wrap(line, columns, replace_whitespace=False, break_on_hyphens=False) or [""]
-                    self._context_fragments.append((style, "\n".join(lines) + "\n"))
-            self._context_columns = columns
-        return self._context_fragments
 
     def _scroll_output(self, rows: int) -> None:
         if self._menu_future is not None:
@@ -1758,6 +1745,9 @@ class TerminalUI:
         if coordinator is not None:
             coordinator.close()
         self._viewer.close()
+        context = self.__dict__.get("_context_view")
+        if context is not None:
+            context.close()
         self._raw_output.close()
         layouts = self.__dict__.get("_transcript_layouts")
         if layouts is not None:

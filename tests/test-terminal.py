@@ -55,6 +55,29 @@ def test_status_owner_migrates_retained_state_and_survives_refresh(display, monk
             ui.close()
 
 
+def test_legacy_context_migrates_to_disk_and_failed_replacement_preserves_it(display):
+    sink, _, output, _, _ = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        try:
+            ui.__dict__.pop("_context_view").close()
+            ui.__dict__["_context_blocks"] = [("class:context-system", "Retained request")]
+            ui.__dict__["_context_fragments"] = [("", "Old formatted copy")]
+            ui.context_visible = True
+            window = ui.context_window
+            ui.refresh()
+            assert ui.context_window is window and ui.context_visible
+            assert list(ui._context_blocks) == [("class:context-system", "Retained request")]
+            assert "_context_fragments" not in ui.__dict__
+            with pytest.raises(json.JSONDecodeError):
+                ui.set_context("{")
+            assert list(ui._context_blocks) == [("class:context-system", "Retained request")]
+            content = window.content.create_content(80, 20)
+            assert content.get_line(0) == [("class:context-system", "Retained request")]
+        finally:
+            ui.close()
+
+
 @pytest.mark.parametrize("setting", [False, True])
 async def test_menu_lifetime_survives_refresh_and_cancellation(display, setting):
     sink, _, output, _, _ = display

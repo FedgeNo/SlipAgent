@@ -96,7 +96,7 @@ class RequestDriver:
             if self.hooks.has_pending():
                 context = await self.hooks.context(repair, budget_fraction)
             self.hooks.reserve()
-            request_body: dict[str, Any] = {}
+            request_estimate = 0
             diagnostic_id: int | None = None
             diagnostics = self.registry.resources.diagnostics
             xml_tool_calls = model_prompt_profile(self.settings.model).get("xml_tool_calls", False)
@@ -125,8 +125,8 @@ class RequestDriver:
                 step_usage = Usage()
                 start_next_step = True
             def request_sent(request: dict[str, Any]) -> None:
-                nonlocal request_body, diagnostic_id
-                request_body = request
+                nonlocal request_estimate, diagnostic_id
+                request_estimate = self.budget.estimate(request)
                 self.hooks.delivered()
                 if diagnostics is not None:
                     diagnostic_id = diagnostics.begin(request, step=run_step, step_id=step)
@@ -240,7 +240,7 @@ class RequestDriver:
                     record_failure("cancelled", "Request cancelled before acceptance.", preview.text, Usage())
                 raise
             attempts += 1
-            self.budget.observe(request_body, completion.usage.prompt_tokens)
+            self.budget.observe_estimate(request_estimate, completion.usage.prompt_tokens)
             self.hooks.account(completion.usage)
             self.hooks.persist()
             step_usage = step_usage + completion.usage

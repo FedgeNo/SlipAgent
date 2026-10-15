@@ -968,6 +968,17 @@ and settings fields retain their own pending futures across layout refreshes.
 `TranscriptWindow.seek` resets viewport position and pending scrolling for feed,
 viewer, and context navigation.
 
+`ContextView` stores the latest request's display blocks and wrapped rows in
+private temporary files. Opening it builds rows once per width; repaint reads
+through a 128-row cache. Replacing the request closes the old snapshot, and
+terminal shutdown closes the current one. Legacy in-memory blocks migrate on
+refresh while retaining the context window. Full request contents remain
+inspectable, including message metadata and provider options.
+
+Request accounting retains a scalar token estimate during inference rather
+than a second payload tree. The request callback still receives its isolated
+copy, and exact diagnostics and context snapshots are captured before transport.
+
 Slash-command definitions live in `commands.py`. Each `Command` descendant
 owns syntax, help, menu insertion text, aliases, execution, and argument-dependent
 scheduling policy. Shared presentation and saved-session bases supply common
@@ -1165,6 +1176,9 @@ to the model along with the active generation number.
   immutable. Adjacent characters with the same style are stored as one run.
   `TranscriptControl` supplies indexed rows through `UIContent.get_line`, with
   a 256-row cache; it does not build or hash a full transcript on each repaint.
+  Copy-row mappings use two packed integer arrays in `RowIndex`, with binary
+  search for sparse rows. Retraction removes mappings and shifts later row keys;
+  existing dictionary indexes migrate when first used after reload.
   The application coalesces redraws at a maximum of 30 per second. Resize replays
   original chunks to rebuild the width-specific row file; ordinary appends
   process only new chunks. Explicit continuation indents are indexed by chunk

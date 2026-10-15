@@ -20,6 +20,7 @@ from prompt_toolkit.formatted_text import ANSI, StyleAndTextTuples
 from wcwidth import width as display_width, wrap
 from .palette import USER_BACKGROUND_COLOR, USER_TEXT_COLOR
 from .markdown import DisplayRow, MarkdownRenderer, MarkdownStream
+from .rowindex import RowIndex
 
 FEED_LINK_PREFIXES = ("class:artifact-", "class:file-", "class:directory-", "class:suggestion-")
 
@@ -158,7 +159,7 @@ class WrappedTranscript:
         self._markdown: MarkdownStream | None = None
         self._markdown_start = self._markdown_tail = 0
         self._copy_rows = TranscriptFile()
-        self._copy_index: dict[int, int] = {}
+        self._copy_index: RowIndex | dict[int, int] = RowIndex()
         self._link_rows: dict[str, int] = {}
 
     def append_markdown(self, text: str, *, first: bool, final: bool = False) -> None:
@@ -186,7 +187,7 @@ class WrappedTranscript:
         else:
             rendered, committed = stream.update(self.columns, final=final)
         for row in rendered:
-            self._copy_index[len(self.rows)] = len(self._copy_rows)
+            self._copy_records()[len(self.rows)] = len(self._copy_rows)
             self._copy_rows.append(json.dumps([row.copy_text, row.positions], ensure_ascii=False))
             self._save(compact_fragments(row.fragments))
         self._markdown_tail = start + committed
@@ -204,7 +205,7 @@ class WrappedTranscript:
             rows, starts = self._render()
             return self._raw_copy_row(rows, starts, index - len(self.rows))
         fragments = self.get_row(index)
-        record = self._copy_index.get(index)
+        record = self._copy_records().get(index)
         if record is not None:
             text, positions = json.loads(self._copy_rows[record])
             return DisplayRow(fragments, text, positions)
@@ -311,7 +312,7 @@ class WrappedTranscript:
                 self.prompt_rows.append((len(self.rows), len(self.rows)))
         for index, row in enumerate(rows[:count]):
             copied = self._raw_copy_row(rows, starts, index, newline=newline and index == count - 1)
-            self._copy_index[len(self.rows)] = len(self._copy_rows)
+            self._copy_records()[len(self.rows)] = len(self._copy_rows)
             self._copy_rows.append(json.dumps([copied.copy_text, copied.positions], ensure_ascii=False))
             self._save(row)
         if count and self._prompt_line:
@@ -423,10 +424,14 @@ class WrappedTranscript:
             return index - min(count, max(0, index - start))
         self.prompt_rows = [(shifted(left), shifted(right)) for left, right in self.prompt_rows
                             if left < start or left >= stop]
-        self._copy_index = {shifted(index): record for index, record in self._copy_index.items()
-                            if index < start or index >= stop}
+        self._copy_records().remove_rows(start, stop)
         self._link_rows = {token: shifted(index) for token, index in self._link_rows.items()
                            if index < start or index >= stop}
+
+    def _copy_records(self) -> RowIndex:
+        if isinstance(self._copy_index, dict):
+            self._copy_index = RowIndex(self._copy_index.items())
+        return self._copy_index
 
     def close(self) -> None:
         if self._markdown is not None:

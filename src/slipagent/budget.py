@@ -30,13 +30,21 @@ class ContextBudget:
     def observe(self, request: dict[str, Any] | str, prompt_tokens: int) -> None:
         if prompt_tokens <= 0 or not request:
             return
+        self.observe_estimate(self.estimate(request), prompt_tokens)
+
+    @staticmethod
+    def estimate(request: dict[str, Any] | str) -> int:
         body = json.loads(request) if isinstance(request, str) else request
         estimate = sum(estimate_tokens(json.dumps(message, ensure_ascii=False))
                        for message in body.get("messages", []))
         for key in ("tools", "response_format"):
             if key in body:
                 estimate += estimate_tokens(json.dumps(body[key]))
-        if estimate:
+        return estimate
+
+    def observe_estimate(self, estimate: int, prompt_tokens: int) -> None:
+        """Calibrate from a scalar retained while the request is in flight."""
+        if estimate and prompt_tokens > 0:
             # Older live instances acquire the window at their next observation.
             if not hasattr(self, "measurements"):
                 self.measurements = deque(maxlen=CALIBRATION_WINDOW)

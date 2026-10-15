@@ -1,0 +1,74 @@
+"""Request inspection preserves text without retaining full formatted copies."""
+
+import gc
+import json
+import tracemalloc
+
+import pytest
+
+from slipagent.contextview import ContextView
+from slipagent.budget import ContextBudget
+
+
+def test_context_rows_styles_and_resize():
+    view = ContextView([("class:context-system", "abc def\n\nend"), ("", "next")])
+    try:
+        assert len(view.rows) == 0
+        content = view.content(4)
+        assert [content.get_line(n) for n in range(content.line_count)] == [
+            [("class:context-system", "abc")], [("class:context-system", "def")],
+            [("class:context-system", "")], [("class:context-system", "end")],
+            [("", "")], [("", "next")], [("", "")],
+        ]
+        content = view.content(20)
+        assert content.get_line(0) == [("class:context-system", "abc def")]
+        assert list(view) == [("class:context-system", "abc def\n\nend"), ("", "next")]
+    finally:
+        view.close()
+    assert view.blocks._file.closed and view.rows._file.closed
+
+
+def test_context_preserves_message_metadata_and_request_fields():
+    request = {"messages": [{"role": "system", "content": "Exact 🌕 text"},
+                            {"role": "assistant", "content": None, "tool_calls": [{"id": "one"}]}],
+               "tools": [{"name": "example"}], "stream": True}
+    view = ContextView.from_request(json.dumps(request))
+    try:
+        assert list(view) == [
+            ("", "Messages — sent order"), ("class:context-system", "[01] SYSTEM\nExact 🌕 text"),
+            ("", '[02] ASSISTANT\nnull\n{\n  "tool_calls": [\n    {\n      "id": "one"\n    }\n  ]\n}'),
+            ("", 'tools:\n[\n  {\n    "name": "example"\n  }\n]'), ("", "stream:\ntrue")]
+    finally:
+        view.close()
+
+
+def test_large_context_retains_only_indexes_and_a_bounded_row_cache():
+    request = json.dumps({"messages": [{"role": "user", "content": ("0123456789 " * 10 + "\n") * 20000}]})
+    tracemalloc.start()
+    view = ContextView.from_request(request)
+    try:
+        gc.collect()
+        hidden_bytes = tracemalloc.get_traced_memory()[0]
+        assert hidden_bytes < len(request) // 4
+        content = view.content(120)
+        for index in range(content.line_count):
+            content.get_line(index)
+        gc.collect()
+        visible_bytes = tracemalloc.get_traced_memory()[0]
+        assert visible_bytes < len(request) // 2
+        assert content.get_line(content.line_count - 2)[0][1] == ""
+        assert len(view.cache) <= 128
+    finally:
+        view.close()
+        tracemalloc.stop()
+
+
+@pytest.mark.parametrize("usage", [0, 123, 456])
+def test_scalar_budget_measurement_matches_request_measurement(usage):
+    request = {"messages": [{"role": "user", "content": "Hello"}],
+               "tools": [{"name": "example"}], "response_format": {"type": "json_object"}}
+    original, scalar = ContextBudget(), ContextBudget()
+    original.observe(request, usage)
+    scalar.observe_estimate(scalar.estimate(request), usage)
+    assert scalar.scale == original.scale
+    assert scalar.measurements == original.measurements

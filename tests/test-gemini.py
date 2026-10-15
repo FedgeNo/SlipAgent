@@ -1,0 +1,69 @@
+"""Google catalog authentication, limits, and compatible completions."""
+
+import json
+
+import httpx
+import pytest
+
+from slipagent.api import APIConfigError, APIResponseError
+from slipagent.gemini import GeminiClient
+from slipagent.modelpricing import free_label
+from slipagent.types import Message
+
+
+def entry(name):
+    return {"name": "models/" + name, "inputTokenLimit": 1000000, "outputTokenLimit": 65536,
+            "supportedGenerationMethods": ["generateContent"]}
+
+
+async def test_catalog_pagination_auth_limits_and_completion():
+    requests = []
+    def handle(request):
+        requests.append(request)
+        if request.method == "GET":
+            assert request.url.path == "/v1beta/models"
+            assert request.headers["x-goog-api-key"] == "dummy"
+            assert "authorization" not in request.headers
+            if request.url.params.get("pageToken"):
+                return httpx.Response(200, json={"models": [entry("gemini-paid")]})
+            return httpx.Response(200, json={"models": [entry("gemini-3.8-flash"), entry("gemini-image")],
+                                            "nextPageToken": "next"})
+        assert request.headers["authorization"] == "Bearer dummy"
+        assert "x-goog-api-key" not in request.headers
+        body = json.loads(request.content)
+        assert "session_id" not in body and "tools" not in body
+        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "Done"},
+                                                     "finish_reason": "stop"}]})
+    async with GeminiClient("dummy", transport=httpx.MockTransport(handle)) as client:
+        models = await client.list_models()
+        assert [m.id for m in models] == ["gemini-3.8-flash", "gemini-paid"]
+        assert free_label(models[0].pricing) == "free tier"
+        assert free_label(models[1].pricing) is None
+        profile = await client.model_capabilities("gemini-3.8-flash")
+        assert profile.context_length == 1000000 and profile.max_completion_tokens == 65536
+        assert not profile.native_tools and profile.format == "json_object"
+        result = await client.chat(model="gemini-3.8-flash", messages=[Message.user("Hello")], session_id="local")
+        assert result.message.content == "Done"
+        with pytest.raises(APIConfigError):
+            await client.model_capabilities("absent")
+
+
+async def test_repeated_page_token_rejected():
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"models": [], "nextPageToken": "same"}))
+    async with GeminiClient("dummy", transport=transport) as client:
+        with pytest.raises(APIResponseError, match="page token"):
+            await client.list_models()
+
+
+async def test_compatible_stream():
+    def handle(request):
+        body = json.loads(request.content)
+        assert body["stream"] is True
+        chunk = {"choices": [{"delta": {"content": "Hello"}, "finish_reason": "stop"}]}
+        return httpx.Response(200, text="data: " + json.dumps(chunk) + "\n\ndata: [DONE]\n\n",
+                              headers={"content-type": "text/event-stream"})
+    deltas = []
+    async with GeminiClient("dummy", transport=httpx.MockTransport(handle)) as client:
+        result = await client.chat(model="gemini-3.8-flash", messages=[Message.user("Hello")],
+                                   on_delta=lambda kind, text: deltas.append((kind, text)))
+    assert result.message.content == "Hello" and deltas

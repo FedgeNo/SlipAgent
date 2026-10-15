@@ -23,6 +23,63 @@ from slipagent.tools.base import ToolResult
 from slipagent.types import Message, ToolCall, Usage
 
 
+@pytest.mark.parametrize("origin", ["prompt", "feed", "commands"])
+async def test_opening_menu_takes_keyboard_focus(display, origin):
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        running = asyncio.create_task(ui.run())
+        choice = None
+        try:
+            await wait_until(lambda: any("Ready" in row for row in snapshot()))
+            if origin == "feed":
+                ui._focus.focus(ui.transcript)
+            if origin == "commands":
+                choice = asyncio.create_task(ui._choose_command())
+            else:
+                choice = asyncio.create_task(ui.choose("Models", [("a", "First"), ("b", "Second")]))
+            await wait_until(lambda: ui._menu_future is not None)
+            await asyncio.sleep(.05)
+            assert ui.app.layout.current_window is ui._menu_window
+            pipe.send_text("\x1b[B")
+            await wait_until(lambda: ui._menu_index == 1)
+            ui._finish_menu(None)
+            await choice
+        finally:
+            if choice is not None:
+                choice.cancel()
+                await asyncio.gather(choice, return_exceptions=True)
+            ui.close()
+            await running
+
+
+async def test_free_model_background_matches_right_aligned_legend(display):
+    sink, _, output, screen, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        running = asyncio.create_task(ui.run())
+        choice = asyncio.create_task(ui.choose("Models", [("free", "Free Model"), ("paid", "Paid Model")],
+                                              styles={"free": "class:menu-free"},
+                                              legend=[("class:menu-free", "   "), ("", " = free")]))
+        try:
+            await wait_until(lambda: any("= free" in row for row in snapshot()))
+            rows = snapshot()
+            header = next(i for i, row in enumerate(rows) if "= free" in row)
+            free = next(i for i, row in enumerate(rows) if "Free Model" in row)
+            paid = next(i for i, row in enumerate(rows) if "Paid Model" in row)
+            assert rows[header].endswith("= free")
+            assert screen.buffer[header][rows[header].index("= free") - 2].bg == "17452f"
+            assert screen.buffer[free][rows[free].index("Free Model")].bg == "17452f"
+            assert screen.buffer[paid][rows[paid].index("Paid Model")].bg != "17452f"
+            ui._finish_menu(None)
+            await choice
+        finally:
+            choice.cancel()
+            await asyncio.gather(choice, return_exceptions=True)
+            ui.close()
+            await running
+
+
 async def wait_until(predicate) -> None:
     async with asyncio.timeout(3):
         while not predicate():

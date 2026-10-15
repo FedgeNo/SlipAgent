@@ -63,7 +63,7 @@ async def test_models_displays_every_matching_catalog_entry(argument):
 async def test_free_model_selector_filters_and_switches_only_on_selection(monkeypatch, selection):
     from slipagent import cli
     models = [ModelInfo("test/paid", pricing={"prompt": "0.01", "completion": "0.01"}),
-              ModelInfo("test/free")]
+              ModelInfo("test/free", pricing={"prompt": "0", "completion": "0"})]
     catalog = AsyncMock(return_value=models)
     choose = AsyncMock(return_value=selection)
     renderer = Renderer(Style(False), io.StringIO(), False)

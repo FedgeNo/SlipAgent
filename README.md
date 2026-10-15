@@ -1,7 +1,7 @@
 # SlipAgent
 
 **A terminal coding agent designed for free models with large context windows on
-[OpenRouter](https://openrouter.ai), [NVIDIA](https://build.nvidia.com), [Kilo](https://kilo.ai/gateway), and [Mistral](https://console.mistral.ai), with a harness you can modify while it runs.**
+[OpenRouter](https://openrouter.ai), [NVIDIA](https://build.nvidia.com), [Kilo](https://kilo.ai/gateway), [Mistral](https://console.mistral.ai), and [Google Gemini](https://ai.google.dev), with a harness you can modify while it runs.**
 
 SlipAgent gives a model tools to read, search, edit, test, and commit code in a
 project directory. It keeps asking the model what to do next until the task is
@@ -213,13 +213,25 @@ For Mistral, add `MISTRAL_API_KEY=your-key` to your local `.env`, then run
 `slipagent --provider mistral`. The default is `mistral-small-latest`;
 `/models mistral` lists available chat models and
 `/model mistral::<model-id>` selects one. Mistral's authenticated catalog supplies
-context limits, aliases, and native tool support. Prices remain unknown because
-the catalog does not identify your account's free allowance. Free-mode access
+context limits, aliases, and native tool support. Leanstral 1.5.1 is labelled free;
+other prices remain unknown because the catalog does not identify your account's free allowance. Free-mode access
 and quotas are controlled by Mistral. Background compression continues to use
 Nemotron 3 Ultra on configured OpenRouter, NVIDIA, and Kilo providers; Mistral
 is excluded from that rotation. `/provider` switches only to defaults advertised
 as free, so select Mistral models explicitly with `/model`, for example
 `/model mistral::labs-leanstral-1-5-1` when available in your account's catalog.
+
+For Google Gemini, add `GEMINI_API_KEY=your-key` to your local `.env`, then run
+`slipagent --provider gemini`. The default is `gemini-3.8-flash`.
+`/models gemini` lists compatible text models with Google's input and output
+limits. Tool calls use SlipAgent's embedded JSON protocol so compressed history
+does not depend on Google's opaque native function-call signatures.
+Gemini is excluded from the Nemotron compression rotation.
+
+Model lists put free models first. The interactive picker uses a green background
+and a matching `= free` legend on the right. `/models free` includes models with
+a free tier; these retain a `free tier` label because account billing and quotas
+still apply. Unknown prices are shown as `-`.
 
 NVIDIA's catalog does not publish tool/schema support or context limits. The built-in verified profile covers Nemotron 3 Ultra: native tools, plain replies, a conservative 1,000,000-token context budget, and at most 32,768 output tokens. Other NVIDIA models appear in search but require an explicit capability profile before use. Unknown prices and limits are not shown as free or unlimited. Free hosted availability and rate limits remain provider-controlled.
 
@@ -490,6 +502,9 @@ export OPENROUTER_API_KEY="sk-or-..."
 | `MISTRAL_API_KEY` | — | Required for Mistral inference and model discovery. |
 | `MISTRAL_MODEL` | `mistral-small-latest` | Mistral model ID. |
 | `MISTRAL_BASE_URL` | `https://api.mistral.ai/v1` | Mistral endpoint override. |
+| `GEMINI_API_KEY` | — | Required for Gemini inference and model discovery. |
+| `GEMINI_MODEL` | `gemini-3.8-flash` | Gemini model ID. |
+| `GEMINI_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta/openai` | Gemini endpoint override. |
 | `OPENROUTER_API_KEY` | — | Required for OpenRouter inference. |
 | `OPENROUTER_MODEL` | `nvidia/nemotron-3-ultra-550b-a55b:free` | Default model slug. |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Point at a gateway or mock. |

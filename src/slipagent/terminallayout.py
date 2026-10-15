@@ -15,6 +15,7 @@ from .links import ActionControl
 from .menulifecycle import MenuLifecycle
 from .palette import (
     CONTENT_BACKGROUND_COLOR, FOOTER_BACKGROUND_COLOR, MENU_BACKGROUND_COLOR,
+    FREE_MODEL_BACKGROUND_COLOR,
     MUTED_COLOR, USER_PROMPT_STYLE, TEXT_COLOR, LINK_COLOR, TOOL_COLOR,
     SUCCESS_COLOR, WARNING_COLOR, ERROR_COLOR, PANEL_HEADER_BACKGROUND_COLOR,
     EDITOR_BACKGROUND_COLOR, DIFF_ADDED_BACKGROUND_COLOR, DIFF_REMOVED_BACKGROUND_COLOR,
@@ -75,7 +76,7 @@ def build_layout(ui: TerminalUI) -> Layout:
     ], height=lambda: ui._footer_rows(), style="class:footer")
     menus = MenuLifecycle(ui)
     menu_footer = menus.footer(
-        ActionControl(lambda: ui._activity_notice([("class:menu-title", ui._menu_title)])),
+        ActionControl(ui._menu_heading),
         ui._menu_window, lambda: ui._menu_window, ui._bottom_row(menu=True))
     setting_footer = menus.footer(
         ActionControl(lambda: ui._activity_notice([("class:menu-title", "Folder Opener")])),
@@ -127,6 +128,7 @@ def build_style() -> Style:
         "clickable": "underline", "hover": "reverse",
         "diff-number": MUTED_COLOR,
         "menu-item": MUTED_COLOR,
+        "menu-free": "noreverse bg:" + FREE_MODEL_BACKGROUND_COLOR + " " + TEXT_COLOR,
         "call-running": WARNING_COLOR, "call-completed": SUCCESS_COLOR, "call-error": ERROR_COLOR,
         "diff-added": SUCCESS_COLOR + " bg:" + DIFF_ADDED_BACKGROUND_COLOR,
         "diff-removed": ERROR_COLOR + " bg:" + DIFF_REMOVED_BACKGROUND_COLOR,

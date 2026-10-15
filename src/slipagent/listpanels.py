@@ -167,6 +167,7 @@ class ChoicePanel(ListPanel[int]):
 
     def __init__(self, actions: ListActions[int]) -> None:
         self.options: list[tuple[str, str]] = []
+        self.option_styles: dict[str, str] = {}
         super().__init__(actions)
 
     def keys(self) -> list[int]:
@@ -176,7 +177,9 @@ class ChoicePanel(ListPanel[int]):
         return self.options[key][1]
 
     def item_style(self, key: int) -> str:
-        return "class:menu-item" + (" class:menu-selected" if key == self.selection else "")
+        style = "class:menu-item" + (" class:menu-selected" if key == self.selection else "")
+        styles: dict[str, str] = getattr(self, "option_styles", {})
+        return style + " " + styles.get(self.options[key][0], "")
 
     def item_text(self, key: int) -> str:
         return ("› " if key == self.selection else "  ") + self.label(key)

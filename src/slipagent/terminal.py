@@ -795,7 +795,21 @@ class TerminalUI:
         return [("", prefix), *self._action_link("back", "menu-back", lambda: self._finish_menu(None)),
                 ("", tail), *to_formatted_text(ANSI(suffix))]
 
-    async def choose(self, title: str, options: list[tuple[str, str]]) -> str | None:
+    def _menu_heading(self) -> StyleAndTextTuples:
+        legend: StyleAndTextTuples = self.__dict__.get("_menu_legend", [])
+        title: StyleAndTextTuples = [("class:menu-title", self._menu_title)]
+        if not legend:
+            return self._activity_notice(title)
+        legend = self._marquee(legend, self._activity_width(), "menu-legend")
+        if not legend:
+            return self._activity_notice(title)
+        left = self._activity_notice(title, suffix=legend)
+        gap = max(0, self._activity_width() - display_width(fragment_list_to_text(left)))
+        return left[:-len(legend)] + [("", " " * gap)] + legend
+
+    async def choose(self, title: str, options: list[tuple[str, str]], *,
+                     styles: dict[str, str] | None = None,
+                     legend: StyleAndTextTuples | None = None) -> str | None:
         """Choose a value/label pair in the footer; cancellation preserves the draft."""
         self._ensure_menu()
         if self._menu_future is not None:
@@ -805,6 +819,8 @@ class TerminalUI:
         future: asyncio.Future[str | None] = asyncio.get_running_loop().create_future()
         self._menu_future = future
         self._menu_title = title
+        self._choice_panel.option_styles = styles or {}
+        self.__dict__["_menu_legend"] = legend or []
         self._menu_options = [(value, re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", label))
                               for value, label in options]
         self._menu_index = 0
@@ -813,6 +829,8 @@ class TerminalUI:
         def cleanup() -> None:
             self._menu_future = None
             self._menu_options = []
+            self._choice_panel.option_styles = {}
+            self.__dict__["_menu_legend"] = []
 
         with MenuLifecycle(self).opened(self._menu_window, cleanup):
             return await future

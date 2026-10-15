@@ -47,6 +47,7 @@ from .api import (
 )
 from .providers import PROVIDERS, active_providers, create_client, provider_class, fetch_catalog
 from .model_catalog import coding_models
+from .modelpricing import free_label, model_order, price_label
 from .tools.base import ToolRegistry, ToolResult
 from .tools import build_default_registry
 from .types import KeyInfo, Message, ModelInfo, ToolCall
@@ -1460,14 +1461,7 @@ def _mask_key(key: str) -> str:
 
 def _price_cell(pricing: dict[str, Any]) -> str:
     """Render prompt/completion pricing as $/Mtok, or 'free'."""
-    try:
-        prompt = float(pricing.get("prompt") or 0.0) * 1e6
-        completion = float(pricing.get("completion") or 0.0) * 1e6
-    except (TypeError, ValueError):
-        return "-"
-    if prompt == 0 and completion == 0:
-        return "free"
-    return f"${prompt:.2f}/${completion:.2f}"
+    return price_label(pricing)
 
 
 def _describe_model(model: ModelInfo) -> str:
@@ -1678,7 +1672,7 @@ async def _models_command(
 
     needle = argument.strip().lower()
     if needle in ("free", "0"):
-        matches = [m for m in catalog if _price_cell(m.pricing) == "free"]
+        matches = [m for m in catalog if free_label(m.pricing) is not None]
     elif needle:
         words = needle.split()
         matches = [m for m in catalog
@@ -1696,14 +1690,17 @@ async def _models_command(
             (model.selector, f"{model.selector}  {_price_cell(model.pricing)}/Mtok  "
              "context: " + (f"{model.context_length:,}" if model.context_length else "unknown") +
              ("  (current)" if model.id == session.agent.model and model.provider == getattr(getattr(session, "client", None), "provider", "openrouter") else ""))
-            for model in sorted(matches, key=lambda model: (model.id, model.provider))
+            for model in sorted(matches, key=model_order)
         ]
-        selected = await terminal.choose("Select Model", options)
+        selected = await terminal.choose("Select Model", options,
+                                        styles={m.selector: "class:menu-free" for m in matches
+                                                if free_label(m.pricing) is not None},
+                                        legend=[("class:menu-free", "   "), ("", " = free")])
         if selected is not None:
             await _model_command(session, selected, style, out)
         return
 
-    free_count = sum(1 for m in catalog if _price_cell(m.pricing) == "free")
+    free_count = sum(1 for m in catalog if free_label(m.pricing) is not None)
     print(style.dim(
         f"  {len(matches)} shown of {len(catalog)} "
         f"({free_count} free — /models free)\n"
@@ -1721,7 +1718,7 @@ async def _models_command(
                 "below will respond\n"
             ), file=out)
 
-    print(_model_table(session, sorted(matches, key=lambda m: m.id)), file=out)
+    print(_model_table(session, sorted(matches, key=model_order)), file=out)
 
 
 def _cache_quota(session: Session, info: KeyInfo) -> None:
@@ -2151,7 +2148,7 @@ async def _list_models(args: argparse.Namespace) -> int:
         return 1
 
     style = Style(_use_color(sys.stdout, args.no_color))
-    for model in sorted(models, key=lambda m: m.id):
+    for model in sorted(models, key=model_order):
         context = f"  {model.context_length:,} ctx" if model.context_length else ""
         print(f"{literal(model.selector)}{style.dim(context)}")
     print(style.dim(f"\n{len(models)} models"), file=sys.stderr)

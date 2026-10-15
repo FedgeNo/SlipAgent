@@ -944,6 +944,13 @@ sizes toward the quota. Even incomplete attempt files reserve their numbers.
 
 ## Terminal Components and Invocation Identity
 
+`terminalbindings.py` builds keyboard commands and their focus filters;
+`terminalmouse.py` routes pointer events among visible regions;
+`terminallayout.py` assembles the layout and styles around retained controls.
+`TerminalUI` delegates through its existing presentation entry points, so reload
+rebuilds callbacks without replacing the application, buffers, or panel owners.
+These modules hold no independent session state.
+
 `StatusLine` retains notification expiry and flashing, retry and command status,
 navigation hints, rotating-tip timing, and marquee positions independently of
 layout rebuilds. `TerminalUI` supplies contextual tip choices and clickable

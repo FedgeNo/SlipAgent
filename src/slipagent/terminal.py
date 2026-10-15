@@ -20,12 +20,10 @@ from prompt_toolkit.formatted_text import ANSI, StyleAndTextTuples, to_formatted
 from prompt_toolkit.formatted_text.utils import fragment_list_to_text
 from prompt_toolkit.input import Input
 from prompt_toolkit.history import DummyHistory
-from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
-from prompt_toolkit.keys import Keys
-from prompt_toolkit.layout import ConditionalContainer, Dimension, DynamicContainer, Float, FloatContainer, HSplit, Layout, VSplit, Window, WindowAlign
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.layout import Dimension, HSplit, Layout, VSplit, Window
 from prompt_toolkit.layout.controls import FormattedTextControl, UIContent, UIControl
-from prompt_toolkit.layout.mouse_handlers import MouseHandlers
-from prompt_toolkit.layout.processors import BeforeInput, Processor, Transformation, TransformationInput
+from prompt_toolkit.layout.processors import Processor, Transformation, TransformationInput
 from prompt_toolkit.layout.utils import explode_text_fragments
 from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 from prompt_toolkit.output import ColorDepth, Output, create_output
@@ -38,7 +36,7 @@ from .uiwindows import TranscriptScrollbar, TranscriptWindow
 from .focus import FocusCoordinator, FocusTarget
 from .links import ActionControl, ActionLink, CallbackLink, TaskLink, LinkHover, keyboard_content
 from .listpanels import TouchedPanel, CallsPanel, ChoicePanel, ListActions
-from .palette import CONTENT_BACKGROUND_COLOR, FOOTER_BACKGROUND_COLOR, MENU_BACKGROUND_COLOR, MUTED_COLOR, USER_BACKGROUND_COLOR, USER_PROMPT_STYLE
+from .palette import USER_BACKGROUND_COLOR, USER_PROMPT_STYLE
 from .markdown import THEMES, MarkdownRenderer, code_blocks, literal
 from .clipboard import clipboard_sequence, copy_to_clipboard
 from .explorer import folder_opener, open_folder
@@ -50,6 +48,9 @@ from .diffcomments import attach_reference, diff_reference
 from .statusline import PULSE_FRAMES, StatusLine
 from .mainarea import MainArea
 from .menulifecycle import MenuLifecycle
+from .terminalbindings import build_bindings
+from .terminalmouse import route_mouse
+from .terminallayout import build_layout, build_style
 
 FOOTER_ROWS = 7
 
@@ -153,6 +154,7 @@ class TerminalUI:
     """
     _selection_start: Point | None
     _selection_end: Point | None
+    _scrollbar: TranscriptScrollbar
 
     def __init__(
         self, status: Callable[[int], str], stream: TextIO, *, color: bool = True,
@@ -202,84 +204,7 @@ class TerminalUI:
         self._title_pulse_bound = True
 
     def _layout(self) -> Layout:
-        self.transcript.style = "class:content"
-        self.__dict__.setdefault("_diff_reference", None)
-        for processor in self.input.control.input_processors or []:
-            if isinstance(processor, BeforeInput):
-                processor.text = lambda: self._prompt_label()
-        self._ensure_editor()
-        self._ensure_options()
-        self._ensure_context()
-        self._ensure_prompt()
-        self._ensure_menu()
-        self._ensure_viewer()
-        self._ensure_inspection()
-        self._ensure_focus()
-        self._ensure_queued_prompts()
-        if not isinstance(self.input.window, InputWindow):
-            self.input.window = InputWindow(self.input.control)
-            self.input.window.style = "class:text-area class:user"
-        body_height = Dimension(min=1, preferred=FOOTER_ROWS - 2, max=FOOTER_ROWS - 2)
-        self.input.window.height = body_height
-        self._menu_window.height = body_height
-        self._editor_panel.controls.height = body_height
-        if not isinstance(self._editor_panel.controls.content, ActionControl):
-            self._editor_panel.controls.content = ActionControl(self._editor_panel.actions)
-        self._editor_panel.controls.style = "class:menu"
-        self._options_panel.field.window.height = body_height
-        # Attach during layout rebuilds so existing sessions gain input wrapping.
-        processors = self.input.control.input_processors or []
-        if not any(isinstance(processor, WordWrapInput) for processor in processors):
-            self.input.control.input_processors = [*processors, WordWrapInput()]
-        if self._input_label == "you › ":
-            self._input_label = "> "
-        activity_row = VSplit([Window(ActionControl(lambda: self._activity()), height=1),
-                              Window(ActionControl(self._inspect_link), height=1, width=lambda: self._right_control_width(), align=WindowAlign.RIGHT)])
-        scroll_row = VSplit([
-            Window(ActionControl(lambda: self._activity()), height=1,
-                   width=lambda: max(0, min((self.output.get_size().columns - 18) // 2,
-                                           self.output.get_size().columns - 18 - self._right_control_width()))),
-            Window(ActionControl(self._scroll_bottom_link), height=1, width=18),
-            Window(ActionControl(self._inspect_link), height=1, align=WindowAlign.RIGHT),
-        ])
-        footer = HSplit([
-            DynamicContainer(lambda: scroll_row if self._show_scroll_bottom() else activity_row),
-            DynamicContainer(lambda: self._editor_panel.controls if self._editor_active and not self._focus.prompt_active else self.input),
-            self._bottom_row(menu=False),
-        ], height=lambda: self._footer_rows(), style="class:footer")
-        menus = MenuLifecycle(self)
-        menu_footer = menus.footer(
-            ActionControl(lambda: self._activity_notice([("class:menu-title", self._menu_title)])),
-            self._menu_window, lambda: self._menu_window, self._bottom_row(menu=True))
-        setting_footer = menus.footer(
-            ActionControl(lambda: self._activity_notice([("class:menu-title", "Folder Opener")])),
-            self._options_panel.field, lambda: self._options_panel.field, self._bottom_row(menu=False))
-        context = FocusCoordinator.panel(
-            FormattedTextControl("Context — latest model request | Ctrl+\\: close"),
-            self.context_window, lambda: self.context_window)
-        # Overlay the prompt so switching between prompts of different heights
-        # does not move the scroll position and select a different prompt again.
-        pinned_transcript = FloatContainer(self.transcript, floats=[Float(
-            top=0, left=0, right=0, height=self._pinned_prompt_height,
-            content=Window(TranscriptControl(self._pinned_prompt_content), style="class:user"),
-        )])
-        transcript = DynamicContainer(lambda: pinned_transcript if self.output.get_size().rows > self._footer_rows() + self._queued_prompt_height() + 1 else self.transcript)
-        inspection_visible = Condition(lambda: self.main_area.inspector_visible)
-        self._scrollbar = TranscriptScrollbar(lambda: self.main_area.scroll_target())
-        return Layout(HSplit([
-            VSplit([DynamicContainer(lambda: self.main_area.container(context, transcript)),
-                    ConditionalContainer(Window(self._scrollbar, width=1, style="class:scroll-track"), inspection_visible),
-                    ConditionalContainer(self._inspection_panel, inspection_visible)], style="class:content"),
-            ConditionalContainer(VSplit([Window(TranscriptControl(self._queued_prompt_content),
-                                        height=self._queued_prompt_height, dont_extend_height=True,
-                                        style="class:user"),
-                                         ConditionalContainer(Window(width=1, style="class:scroll-track"), inspection_visible),
-                                         ConditionalContainer(Window(width=self._inspection_panel.width, style="class:menu"), inspection_visible)],
-                                        height=self._queued_prompt_height),
-                                 Condition(lambda: self._queued_prompt_height() > 0)),
-            DynamicContainer(lambda: menu_footer if self._menu_future is not None else setting_footer if self._options_field_active else footer),
-        ]), focused_element=self._menu_window if self._menu_future is not None else self._options_panel.field if self._options_field_active else self._editor_input if self._editor_active else
-            self._viewer_window if self._viewer_active else self.input)
+        return build_layout(self)
 
     def _ensure_inspection(self) -> None:
         if "_inspection_visible" in self.__dict__:
@@ -1189,268 +1114,14 @@ class TerminalUI:
         self.app.invalidate()
 
     def _bindings(self) -> KeyBindings:
-        bindings = KeyBindings()
-        in_menu = Condition(lambda: self._menu_future is not None and self.app.layout.current_window is self._menu_window)
-        in_setting = Condition(lambda: self.__dict__.get("_options_field_active", False) and self.app.layout.current_control is self._options_panel.field.control)
-        in_inspection = Condition(self._inspection_focused) & ~in_menu & ~in_setting
-        in_editor = Condition(lambda: self.__dict__.get("_editor_active", False) and self.app.layout.current_control is self._editor_input.control) & ~in_menu & ~in_setting
-        in_viewer = Condition(lambda: self._viewer.active and self.app.layout.current_window is self._viewer_window) & ~in_menu & ~in_editor & ~in_setting & ~in_inspection
-
-        in_link = Condition(lambda: self.app.layout.current_control.__dict__.get("_keyboard_key") is not None)
-        in_feed = Condition(lambda: self.app.layout.current_window is self.transcript)
-        at_feed_prompt = Condition(lambda: self.app.layout.current_control is self.input.control and
-                                  not (self._editor_active or self._viewer_active or self.context_visible))
-
-        @bindings.add("tab", filter=~in_editor)
-        def cycle_panel(event: KeyPressEvent) -> None:
-            self._cycle_panel()
-
-        @bindings.add("s-tab")
-        def cycle_component(event: KeyPressEvent) -> None:
-            self._cycle_panel(components=True)
-
-        @bindings.add("enter", filter=in_link, eager=True)
-        def activate_link(event: KeyPressEvent) -> None:
-            self._focus.activate()
-
-        @bindings.add("escape", filter=in_link | in_feed, eager=True)
-        def leave_feed(event: KeyPressEvent) -> None:
-            if self._menu_future is not None:
-                self._finish_menu(None)
-            elif self._options_field_active:
-                self._options_panel.cancel()
-            else:
-                self._focus.restore_prompt()
-
-        @bindings.add(Keys.Any, filter=in_link | in_feed)
-        def ignore_feed_text(event: KeyPressEvent) -> None:
-            pass
-
-        @bindings.add("up", filter=in_feed)
-        @bindings.add("down", filter=in_feed)
-        @bindings.add("pageup", filter=in_feed | at_feed_prompt)
-        @bindings.add("pagedown", filter=in_feed | at_feed_prompt)
-        def scroll_feed(event: KeyPressEvent) -> None:
-            key = event.key_sequence[-1].key
-            rows = max(1, self.output.get_size().rows - self._footer_rows() - self._queued_prompt_height() - 1) if key in {"pageup", "pagedown"} else 1
-            self.transcript.content.__dict__.pop("_keyboard_key", None)
-            self.transcript.scroll(-rows if key in {"up", "pageup"} else rows)
-            self.app.invalidate()
-
-        @bindings.add("home", filter=in_feed)
-        @bindings.add("end", filter=in_feed)
-        def edge_feed(event: KeyPressEvent) -> None:
-            self.transcript.content.__dict__.pop("_keyboard_key", None)
-            self.transcript.seek(following=event.key_sequence[-1].key == Keys.End)
-            self.app.invalidate()
-
-        @bindings.add("up", filter=in_inspection)
-        @bindings.add("down", filter=in_inspection)
-        def move_inspection(event: KeyPressEvent) -> None:
-            self._move_inspection(-1 if event.key_sequence[-1].key == Keys.Up else 1)
-
-        @bindings.add("enter", filter=in_inspection)
-        def activate_inspection(event: KeyPressEvent) -> None:
-            self._activate_inspection()
-
-        @bindings.add("escape", filter=in_inspection, eager=True)
-        def leave_inspection(event: KeyPressEvent) -> None:
-            self._focus.restore_primary()
-
-        @bindings.add(Keys.Any, filter=in_inspection)
-        def ignore_inspection_text(event: KeyPressEvent) -> None:
-            pass
-
-        @bindings.add("f4", filter=~in_menu & ~in_setting)
-        def options_screen(event: KeyPressEvent) -> None:
-            self.app.create_background_task(self._options_panel.show())
-
-        @bindings.add("escape", filter=in_setting, eager=True)
-        def cancel_setting(event: KeyPressEvent) -> None:
-            self._options_panel.cancel()
-
-        @bindings.add("tab", filter=in_editor)
-        def editor_tab(event: KeyPressEvent) -> None:
-            if not self._editor_panel.busy and not self._editor_panel.read_only:
-                self._editor_input.buffer.insert_text(" " * self._options_panel.values.get("tab_width", 4))
-
-        @bindings.add("c-z", filter=in_editor)
-        @bindings.add("c-y", filter=in_editor)
-        def editor_undo(event: KeyPressEvent) -> None:
-            if not self._editor_panel.busy and not self._editor_panel.read_only:
-                if event.key_sequence[-1].key == Keys.ControlZ:
-                    self._editor_input.buffer.undo()
-                else:
-                    self._editor_input.buffer.redo()
-
-        @bindings.add("c-s", filter=in_editor)
-        def save_editor(event: KeyPressEvent) -> None:
-            self.app.create_background_task(self._save_editor())
-
-        @bindings.add("backspace", filter=in_editor)
-        @bindings.add("delete", filter=in_editor)
-        def delete_editor(event: KeyPressEvent) -> None:
-            direction = -1 if event.key_sequence[-1].key == Keys.Backspace else 1
-            for _ in range(event.arg):
-                self._editor_panel.delete_grapheme(direction)
-
-        @bindings.add("escape", filter=in_editor, eager=True)
-        def close_editor(event: KeyPressEvent) -> None:
-            self.app.create_background_task(self._close_editor())
-
-        @bindings.add("c-r", filter=in_editor)
-        def reload_editor(event: KeyPressEvent) -> None:
-            self.app.create_background_task(self._reload_editor())
-
-        @bindings.add("pageup", filter=in_editor)
-        @bindings.add("pagedown", filter=in_editor)
-        def page_editor(event: KeyPressEvent) -> None:
-            self._editor_panel.move_screen(-1 if event.key_sequence[-1].key == Keys.PageUp else 1)
-
-        @bindings.add("up", filter=in_editor)
-        @bindings.add("down", filter=in_editor)
-        def move_editor_vertical(event: KeyPressEvent) -> None:
-            self._editor_panel.move_cursor(-event.arg if event.key_sequence[-1].key == Keys.Up else event.arg)
-
-        @bindings.add("left", filter=in_editor)
-        @bindings.add("right", filter=in_editor)
-        def move_editor_horizontal(event: KeyPressEvent) -> None:
-            direction = -1 if event.key_sequence[-1].key == Keys.Left else 1
-            for _ in range(event.arg):
-                self._editor_panel.move_horizontal(direction)
-
-        @bindings.add("c-home", filter=in_editor)
-        @bindings.add("c-end", filter=in_editor)
-        def move_editor_end(event: KeyPressEvent) -> None:
-            self._editor_panel.move_to_end(end=event.key_sequence[-1].key == Keys.ControlEnd)
-
-        @bindings.add("c-o")
-        def inspect_panel(event: KeyPressEvent) -> None:
-            self.toggle_inspection()
-
-        @bindings.add("escape", filter=in_viewer, eager=True)
-        def close_view(event: KeyPressEvent) -> None:
-            self.close_viewer()
-
-        @bindings.add("c-r", filter=in_viewer)
-        def reload_view(event: KeyPressEvent) -> None:
-            self.app.create_background_task(self._reload_viewer())
-
-        @bindings.add("up", filter=in_viewer)
-        @bindings.add("down", filter=in_viewer)
-        @bindings.add("pageup", filter=in_viewer)
-        @bindings.add("pagedown", filter=in_viewer)
-        def scroll_view(event: KeyPressEvent) -> None:
-            key = event.key_sequence[-1].key
-            rows = max(1, self.output.get_size().rows - self._footer_rows() - self._queued_prompt_height() - 1) if key in {"pageup", "pagedown"} else 1
-            self._viewer_window.scroll(-rows if key in {"up", "pageup"} else rows)
-            self.app.invalidate()
-
-        @bindings.add("home", filter=in_viewer)
-        @bindings.add("end", filter=in_viewer)
-        def edge_view(event: KeyPressEvent) -> None:
-            self._viewer_window.seek(following=event.key_sequence[-1].key == Keys.End)
-            self.app.invalidate()
-
-        @bindings.add("f2", filter=~in_menu & ~in_viewer & ~in_editor & ~in_setting)
-        def toggle_markdown(event: KeyPressEvent) -> None:
-            self.configure_markdown(source=not self.__dict__.get("_markdown_source", False))
-
-        @bindings.add("f3", filter=~in_menu & ~in_viewer & ~in_editor & ~in_setting)
-        def copy_response(event: KeyPressEvent) -> None:
-            if self.last_markdown():
-                self.copy_response()
-
-        @bindings.add("up", filter=in_menu)
-        @bindings.add("down", filter=in_menu)
-        def move_menu(event: KeyPressEvent) -> None:
-            self._move_menu(-1 if event.key_sequence[-1].key == Keys.Up else 1)
-
-        @bindings.add("enter", filter=in_menu, eager=True)
-        def select_menu(event: KeyPressEvent) -> None:
-            self._finish_menu(self._menu_options[self._menu_index][0])
-
-        @bindings.add("escape", filter=in_menu, eager=True)
-        @bindings.add("c-d", filter=in_menu)
-        def cancel_menu(event: KeyPressEvent) -> None:
-            self._finish_menu(None)
-
-        @bindings.add("escape", filter=~in_menu & ~in_viewer & ~in_editor & ~in_setting & ~in_inspection & ~in_link & ~in_feed, eager=True)
-        def stop_now(event: KeyPressEvent) -> None:
-            callback = getattr(self, "_interrupt_callback", None)
-            if callback is not None:
-                callback()
-
-        @bindings.add(Keys.Any, filter=in_menu)
-        def ignore_menu_text(event: KeyPressEvent) -> None:
-            pass
-
-        @bindings.add("c-\\", filter=~in_menu & ~in_viewer & ~in_editor & ~in_setting)
-        def toggle_context(event: KeyPressEvent) -> None:
-            self.context_visible = not self.context_visible
-            self._focus.focus(self.context_window if self.context_visible else self.input)
-            self.app.invalidate()
-
-        in_context = Condition(lambda: self.context_visible and self.app.layout.current_window is self.context_window) & ~in_menu & ~in_viewer & ~in_editor & ~in_setting & ~in_inspection
-
-        @bindings.add("up", filter=in_context)
-        @bindings.add("down", filter=in_context)
-        @bindings.add("pageup", filter=in_context)
-        @bindings.add("pagedown", filter=in_context)
-        def scroll_context(event: KeyPressEvent) -> None:
-            key = event.key_sequence[-1].key
-            rows = max(1, self.output.get_size().rows - self._footer_rows() - self._queued_prompt_height() - 1) if key in {"pageup", "pagedown"} else 1
-            self.context_window.scroll(-rows if key in {"up", "pageup"} else rows)
-            self.app.invalidate()
-
-        @bindings.add("home", filter=in_context)
-        def context_top(event: KeyPressEvent) -> None:
-            self.context_window.seek()
-            self.app.invalidate()
-
-        @bindings.add("end", filter=in_context)
-        def context_bottom(event: KeyPressEvent) -> None:
-            self.context_window._following = True
-            self.app.invalidate()
-
-        @bindings.add("<scroll-up>")
-        def scroll_up(event: KeyPressEvent) -> None:
-            self._scroll_output(-3)
-
-        @bindings.add("<scroll-down>")
-        def scroll_down(event: KeyPressEvent) -> None:
-            self._scroll_output(3)
-
-        @bindings.add("c-d", filter=~in_menu & ~in_viewer & ~in_editor & ~in_setting & ~in_inspection)
-        def eof(event: KeyPressEvent) -> None:
-            if not event.current_buffer.text:
-                self._end_input()
-            else:
-                event.current_buffer.delete()
-
-        return bindings
+        return build_bindings(self)
 
     def set_interrupt_handler(self, callback: Callable[[], None]) -> None:
         """Interrupt work directly, without submitting or changing the draft."""
         self._interrupt_callback = callback
 
     def _style(self) -> Style:
-        return Style.from_dict({
-            "status": MUTED_COLOR, "pulse": "bold ansicyan", "idle": "bold ansicyan", "user": USER_PROMPT_STYLE,
-            "context-system": "#ffff00", "retry": "bold ansired",
-            "footer": "bg:" + FOOTER_BACKGROUND_COLOR,
-            "content": "bg:" + CONTENT_BACKGROUND_COLOR,
-            "scroll-track": "#aaaaaa bg:" + FOOTER_BACKGROUND_COLOR,
-            "menu": "bg:" + MENU_BACKGROUND_COLOR,
-            "status-flash": "bold reverse",
-            "keyboard-focus": "bold reverse",
-            "menu-title": "bold", "menu-selected": "reverse bold",
-            "clickable": "underline", "hover": "reverse",
-            "diff-number": MUTED_COLOR,
-            "menu-item": "#999999",
-            "diff-added": "#66dd88", "diff-removed": "#ff6666",
-            "diff-header": "bold #ffdd66", "diff-hunk": "#66ccff",
-        })
+        return build_style()
 
     def refresh(self) -> None:
         """Rebuild presentation while retaining input, transcript, and application."""
@@ -1474,91 +1145,7 @@ class TerminalUI:
         self.app.invalidate()
 
     def _route_mouse_wheel(self, app: Application[None]) -> None:
-        original = app.renderer.mouse_handlers
-
-        def mouse_handler(event: MouseEvent) -> object:
-            if event.event_type == MouseEventType.MOUSE_UP:
-                self._scrollbar.drag_offset = None
-            previous_hover = self.__dict__.get("_hovered_control")
-            if event.event_type == MouseEventType.MOUSE_MOVE:
-                self.__dict__["_hovered_control"] = None
-            if event.event_type == MouseEventType.MOUSE_DOWN:
-                self._selection_dragging = False
-                if event.button == MouseButton.LEFT:
-                    self._focus.click(event.position)
-            if event.event_type in (MouseEventType.SCROLL_UP, MouseEventType.SCROLL_DOWN):
-                size = self.output.get_size()
-                if self._menu_future is not None:
-                    self._move_menu(-1 if event.event_type == MouseEventType.SCROLL_UP else 1)
-                    return None
-                if self._editor_active and event.position.y < size.rows - self._footer_rows() - self._queued_prompt_height() and self._menu_future is None:
-                    if not self.main_area.in_inspector(event.position.x):
-                        self._editor_panel.move_cursor(-3 if event.event_type == MouseEventType.SCROLL_UP else 3)
-                        app.invalidate()
-                        return None
-                if self._menu_future is None and size.rows - self._footer_rows() + 1 <= event.position.y < size.rows - 1:
-                    if self._editor_active:
-                        return None
-                    window = self.input.window
-                    if isinstance(window, InputWindow):
-                        window.scroll(-3 if event.event_type == MouseEventType.SCROLL_UP else 3)
-                    app.invalidate()
-                    return None
-                if self.main_area.in_inspector(event.position.x) and event.position.y < size.rows - self._footer_rows() - self._queued_prompt_height() and self._menu_future is None:
-                    screen = app.renderer._last_screen
-                    if screen is not None:
-                        for pane in (self._files_window, self._calls_window):
-                            position = screen.visible_windows_to_write_positions.get(pane)
-                            if position is not None and position.ypos <= event.position.y < position.ypos + position.height:
-                                pane.scroll(-3 if event.event_type == MouseEventType.SCROLL_UP else 3)
-                                break
-                    app.invalidate()
-                    return None
-                self._scroll_output(-3 if event.event_type == MouseEventType.SCROLL_UP else 3)
-                app.invalidate()
-                return None
-            try:
-                screen = app.renderer._last_screen
-                if screen is not None:
-                    position = screen.visible_windows_to_write_positions.get(self.transcript)
-                    info = self.transcript.render_info
-                    if position is not None and info is not None and self.transcript in app.layout.walk_through_modal_area() and (
-                        position.xpos <= event.position.x < position.xpos + position.width
-                        and position.ypos <= event.position.y < position.ypos + position.height
-                    ):
-                        source = info.visible_line_to_row_col.get(event.position.y - position.ypos)
-                        if source is not None and any(token.startswith(FEED_LINK_PREFIXES)
-                                                      for style, _, *_ in info.ui_content.get_line(source[0])
-                                                      for token in style.split()):
-                            # Window clamps blank columns to the last character, which would activate the link.
-                            return self._select_transcript(MouseEvent(
-                                Point(x=source[1] + event.position.x - position.xpos, y=source[0]),
-                                event.event_type, event.button, event.modifiers,
-                            ))
-                    for hit_window in (self._menu_window, self._files_window, self._calls_window):
-                        position = screen.visible_windows_to_write_positions.get(hit_window)
-                        if position is None or not (position.xpos <= event.position.x < position.xpos + position.width
-                                                   and position.ypos <= event.position.y < position.ypos + position.height):
-                            continue
-                        info = hit_window.render_info
-                        row = event.position.y - position.ypos
-                        source = info.visible_line_to_row_col.get(row) if info is not None else None
-                        # Window otherwise clamps blank rows onto the last item.
-                        if source is None or info is None or not fragment_list_to_text(info.ui_content.get_line(source[0])):
-                            return None
-                return original.mouse_handlers[event.position.y][event.position.x](event)
-            finally:
-                # Releases outside the transcript must also end its drag.
-                if event.event_type == MouseEventType.MOUSE_UP:
-                    self._selection_dragging = False
-                if previous_hover != self.__dict__.get("_hovered_control"):
-                    app.invalidate()
-
-        # Wheels preserve drafts; clicks retain native handling after focus.
-        handlers = MouseHandlers()
-        size = self.output.get_size()
-        handlers.set_mouse_handler_for_range(0, size.columns, 0, size.rows, mouse_handler)
-        app.renderer.mouse_handlers = handlers
+        route_mouse(self, app)
 
     def _accept(self, buffer: Buffer) -> bool:
         text = buffer.text

@@ -794,10 +794,19 @@ def test_running_terminal_accepts_input_after_component_reload(run_copy):
                     while terminal.input.buffer.text != 'draft':
                         await asyncio.sleep(.02)
                 edit('terminal.py', 'self._lines.put_nowait(text)', 'self._lines.put_nowait("live:" + text)')
+                edit('terminalbindings.py', '@bindings.add("c-o")', '@bindings.add("c-t")')
+                edit('terminallayout.py', '"menu-item": "#999999"', '"menu-item": "#aaaaaa"')
+                edit('terminalmouse.py', '    original = app.renderer.mouse_handlers',
+                     '    ui.__dict__["mouse_generation"] = "updated"\\n    original = app.renderer.mouse_handlers')
                 await frame.checkpoint()
                 assert frame.generation == 1, ''.join(terminal._raw_output)
                 assert terminal.app is app and app.is_running
                 assert terminal.input.buffer.text == 'draft'
+                pipe.send_text('\\x14')
+                async with asyncio.timeout(3):
+                    while not terminal._inspection_visible or terminal.__dict__.get('mouse_generation') != 'updated':
+                        await asyncio.sleep(.02)
+                assert dict(app.style.style_rules)['menu-item'] == '#aaaaaa'
                 pipe.send_text('\\r')
                 assert await asyncio.wait_for(terminal.read_line(), 3) == 'live:draft'
             finally:

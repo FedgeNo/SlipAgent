@@ -53,6 +53,8 @@ from .tools import build_default_registry
 from .types import KeyInfo, Message, ModelInfo, ToolCall
 from .workspace import Workspace, WorkspaceError
 from .terminal import TerminalUI, SuggestedPrompt
+from .submissions import Submission, cancelled, suggested as submitted_suggestion
+from .inputqueue import input_queue
 from .palette import ERROR_COLOR, MUTED_COLOR, THOUGHT_COLOR, USER_BACKGROUND_COLOR, USER_COLOR, USER_TEXT_COLOR, TOOL_COLOR, LINK_COLOR, WARNING_COLOR, foreground_code
 from .runtime import RuntimeFrame
 from .repomap import RepositoryMap
@@ -861,6 +863,7 @@ async def run_repl(session: Session) -> int:
             project_directory=session.workspace.root,
         )
         renderer.terminal = terminal
+        terminal.__dict__["_agent_input_queue"] = lambda: input_queue(session.agent)
         from .useredits import UserEdits
         user_edits = UserEdits(session, terminal)
         registry_edits = session.registry.services.get("user_edits")
@@ -897,7 +900,9 @@ async def run_repl(session: Session) -> int:
             if line is None:
                 break
             await _wait_for_interrupt(session)
-            suggested = isinstance(line, SuggestedPrompt)
+            if cancelled(line):
+                continue
+            suggested = isinstance(line, SuggestedPrompt) or submitted_suggestion(line)
             if not suggested:
                 line = line.strip()
 
@@ -917,9 +922,16 @@ async def run_repl(session: Session) -> int:
 
             # The prompt stays live while the agent works: anything typed in
             # the meantime is queued onto the step instead of being ignored.
-            renderer.user_prompt(line)
+            if isinstance(line, Submission):
+                if renderer.terminal is not None:
+                    renderer.terminal.consume_submission(line)
+                session.agent.enqueue(line)
+                prompt = ""
+            else:
+                renderer.user_prompt(line)
+                prompt = line
             try:
-                if await _run_request(session, line, style):
+                if await _run_request(session, prompt, style):
                     break
             except KeyboardInterrupt:
                 # Preserve completed results; interrupted actions may be partial.
@@ -1158,6 +1170,16 @@ async def _run_request(session: Session, prompt: str, style: Style) -> bool:
     queued onto the agent, and `/exit` or `/quit` finishes the step before exiting.
     Returns True when the user asked to exit.
     """
+    previous_boundary = getattr(session.agent, "on_boundary", None)
+
+    async def boundary() -> None:
+        if previous_boundary is not None:
+            await previous_boundary()
+        # Earlier prompts must reach a request before a later command applies.
+        if session.work.deferred_commands and not session.agent.has_queued_input:
+            session.agent.request_stop()
+
+    session.agent.on_boundary = boundary
     reader: asyncio.Task[str | None] | None = asyncio.create_task(
         _read_line(session, style)
     )
@@ -1165,6 +1187,7 @@ async def _run_request(session: Session, prompt: str, style: Style) -> bool:
     session.work.agent_task = agent_task
     renderer = session.renderer
     exiting = False
+    eof = False
     if renderer.terminal is not None:
         renderer.terminal.set_interrupt_handler(lambda: _request_interrupt(session))
         renderer.terminal.set_working(True)
@@ -1183,17 +1206,22 @@ async def _run_request(session: Session, prompt: str, style: Style) -> bool:
                     # EOF lets the active run finish before shutdown.
                     reader = None
                     exiting = True
+                    eof = True
                 else:
                     text = line.strip()
-                    # Read-only commands stay available during the step.
-                    # /exit lets the current work finish before shutdown.
-                    if _background_command(text):
-                        _start_background_command(session, text)
-                    elif text.startswith("/") and await _handle_command(session, text):
-                        renderer.emit(style.dim("  exiting."))
-                        exiting = True
-                        reader = None
-                    elif text and not text.startswith("/"):
+                    is_command = text.startswith("/") and not (isinstance(line, SuggestedPrompt) or submitted_suggestion(line))
+                    if cancelled(line):
+                        pass
+                    elif is_command and text.split(None, 1)[0].lower() in {"/stop", "/exit", "/quit"}:
+                        if await _handle_command(session, text):
+                            renderer.emit(style.dim("  exiting."))
+                            exiting = True
+                            reader = None
+                    elif text and (is_command or session.work.deferred_commands):
+                        _queue_command(session, text, text.split(None, 1)[0].lstrip("/") if is_command else "input")
+                    elif text:
+                        if renderer.terminal is not None:
+                            renderer.terminal.consume_submission(line)
                         session.agent.enqueue(text)
                     if reader is not None:
                         reader = asyncio.create_task(_read_line(session, style))
@@ -1203,10 +1231,10 @@ async def _run_request(session: Session, prompt: str, style: Style) -> bool:
                     await _wait_for_interrupt(session)
                     break
                 answer = agent_task.result()
-                resume, commands_exit = await _apply_deferred_commands(session, exiting=exiting)
+                resume, commands_exit = await _apply_deferred_commands(session, exiting=exiting and not eof)
                 exiting = exiting or commands_exit
-                if resume and not exiting and answer == STOP_NOTICE:
-                    renderer.emit(style.dim("  Queued commands applied; continuing the current task."))
+                if resume and not exiting and answer != STEP_LIMIT_NOTICE and (answer == STOP_NOTICE or session.agent.has_queued_input):
+                    renderer.emit(style.dim("  Continuing with queued input."))
                     if renderer.terminal is not None:
                         renderer.terminal.set_working(True)
                     agent_task = asyncio.create_task(session.agent.run("", continue_run=True))
@@ -1237,6 +1265,7 @@ async def _run_request(session: Session, prompt: str, style: Style) -> bool:
         else:
             raise
     finally:
+        session.agent.on_boundary = previous_boundary
         session.work.agent_task = None
         if reader is not None and not reader.done():
             reader.cancel()
@@ -1265,6 +1294,17 @@ async def _run_request(session: Session, prompt: str, style: Style) -> bool:
     return exiting
 
 
+def _cancel_queued_commands(session: Session, lines: list[str]) -> None:
+    """Cancel settings while retaining unsent user input for continuation."""
+    for line in lines:
+        if cancelled(line):
+            continue
+        if isinstance(line, Submission) and session.renderer.terminal is not None:
+            session.renderer.terminal.consume_submission(line)
+        if not line.startswith("/") or submitted_suggestion(line) or isinstance(line, SuggestedPrompt):
+            session.agent.enqueue(line)
+
+
 def _request_interrupt(session: Session) -> None:
     """Signal cancellation immediately; retain cleanup outside the input loop."""
     cleanup = session.extensions.get("interrupt_task")
@@ -1273,7 +1313,8 @@ def _request_interrupt(session: Session) -> None:
     session.extensions["interrupt_requested"] = True
     session.extensions["interrupt_sequence"] = session.extensions.get("interrupt_sequence", 0) + 1
     session.registry.services["interrupt_requested"] = True
-    session.extensions.pop("deferred_commands", None)
+    discarded = session.extensions.pop("deferred_commands", [])
+    _cancel_queued_commands(session, discarded)
     session.extensions["resume_after_commands"] = False
     session.renderer._queued_settings_pause = False
     session.agent.request_stop()
@@ -1347,33 +1388,55 @@ def _queue_command(session: Session, line: str, command: str) -> None:
         session.extensions["resume_after_commands"] = not session.agent.stop_requested
     commands.append(line)
     session.renderer._queued_settings_pause = bool(session.extensions.get("resume_after_commands"))
-    session.agent.request_stop()
+    if not session.agent.has_queued_input:
+        session.agent.request_stop()
     if session.renderer.terminal is not None:
         session.renderer.terminal.set_working(True, stopping=True)
-    session.renderer.emit(session.renderer.style.dim(
-        f"  Queued /{command}; it will run after the current response and tool batch."
-    ))
+    if session.renderer.terminal is None:
+        session.renderer.emit(session.renderer.style.dim(
+            f"  Queued /{command}; it will run after earlier input and the current tool batch."
+        ))
 
 
 async def _apply_deferred_commands(session: Session, *, exiting: bool = False) -> tuple[bool, bool]:
-    """Apply FIFO commands while idle; task replacements do not resume old work.
+    """Dispatch the shared FIFO through its next prompt barrier while idle.
 
     Command text stays outside model history and journals, including credentials.
     The active response and every tool have settled before this is called.
     """
     commands = session.work.deferred_commands or []
+    if session.agent.has_queued_input and not exiting:
+        return bool(commands and session.work.resume_after_commands), False
     session.work.deferred_commands = None
     interrupt_sequence = session.extensions.get("interrupt_sequence", 0)
     resume = bool(session.work.resume_after_commands)
     session.work.resume_after_commands = None
     session.renderer._queued_settings_pause = False
     if exiting:
+        _cancel_queued_commands(session, commands)
         if commands:
             session.renderer.emit(session.renderer.style.dim(
                 f"  {len(commands)} queued command(s) were not run because the session is exiting."
             ))
         return False, True
-    for line in commands:
+    for position, line in enumerate(commands):
+        if cancelled(line):
+            continue
+        if not line.startswith("/") or submitted_suggestion(line) or isinstance(line, SuggestedPrompt):
+            end = position
+            while end < len(commands):
+                queued = commands[end]
+                if not cancelled(queued):
+                    if queued.startswith("/") and not (submitted_suggestion(queued) or isinstance(queued, SuggestedPrompt)):
+                        break
+                    if session.renderer.terminal is not None:
+                        session.renderer.terminal.consume_submission(queued)
+                    session.agent.enqueue(queued)
+                end += 1
+            # A prompt is a barrier: later commands wait for its request.
+            session.work.deferred_commands = commands[end:] or None
+            session.work.resume_after_commands = resume
+            return True, False
         parts = line[1:].split(None, 1)
         command = parts[0].lower()
         argument = parts[1].strip() if len(parts) > 1 else ""
@@ -1386,6 +1449,7 @@ async def _apply_deferred_commands(session: Session, *, exiting: bool = False) -
             if await _run_interactive_command(session, line):
                 return False, True
             if session.extensions.get("interrupt_sequence", 0) != interrupt_sequence:
+                _cancel_queued_commands(session, commands[position + 1:])
                 return False, False
         except Exception as exc:
             session.renderer.emit(session.renderer.style.red(f"  ✗ /{command} failed: {exc}"))
@@ -1567,9 +1631,13 @@ async def _execute_command(session: Session, line: str) -> bool:
     name = parts[0].lower() if parts else ""
     argument = parts[1].strip() if len(parts) > 1 else ""
     command = BY_NAME.get(name)
+    if cancelled(line):
+        return False
     if command is not None and command.changes_session(argument) and (session.agent.running or session.extensions.get("deferred_commands")):
         _queue_command(session, line, name)
         return False
+    if isinstance(line, Submission) and session.renderer.terminal is not None:
+        session.renderer.terminal.consume_submission(line)
     if command is None:
         session.renderer.emit(session.renderer.style.red(f"  unknown command: /{name} (try /help)"))
     else:

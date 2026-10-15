@@ -65,7 +65,7 @@ def session_with_paused_request(tmp_path):
     return session, started, release
 
 
-async def test_slow_key_status_does_not_block_stop(tmp_path, monkeypatch):
+async def test_slow_key_status_waits_for_batch_and_can_be_interrupted(tmp_path, monkeypatch):
     session, started, release = session_with_paused_request(tmp_path)
     queue = asyncio.Queue()
     catalog_started = asyncio.Event()
@@ -80,13 +80,15 @@ async def test_slow_key_status_does_not_block_stop(tmp_path, monkeypatch):
     try:
         await started.wait()
         queue.put_nowait("/key status")
-        await asyncio.wait_for(catalog_started.wait(), 1)
-        queue.put_nowait("/stop")
         async with asyncio.timeout(.5):
             while not session.agent.stop_requested:
                 await asyncio.sleep(.005)
+        assert not catalog_started.is_set()
         release.set()
+        await asyncio.wait_for(catalog_started.wait(), 1)
+        cli._request_interrupt(session)
         await asyncio.wait_for(task, 1)
+        await cli._wait_for_interrupt(session)
         assert len(session.client.calls) == 1
         assert session.agent.stopped
     finally:

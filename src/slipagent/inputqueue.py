@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from .context import ConversationHistory
 from .events import AgentEvent
 from .task import TaskMemory
+from .submissions import Submission
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -45,7 +46,7 @@ class InputQueue:
         return list(self.entries)
 
     def appended(self, text: str) -> None:
-        self.entries.append((uuid.uuid4().hex, text))
+        self.entries.append((text.identifier if isinstance(text, Submission) else uuid.uuid4().hex, text))
 
     def sent(self, count: int) -> None:
         self.snapshot()

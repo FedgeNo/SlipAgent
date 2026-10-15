@@ -35,6 +35,7 @@ from .transcript import TranscriptFile, WrappedTranscript
 from .uiwindows import TranscriptScrollbar, TranscriptWindow
 from .focus import FocusCoordinator, FocusTarget
 from .links import ActionControl, ActionLink, CallbackLink, TaskLink, LinkHover, keyboard_content
+from .submissions import Submission, cancelled
 from .listpanels import TouchedPanel, CallsPanel, ChoicePanel, ListActions
 from .palette import USER_BACKGROUND_COLOR, USER_PROMPT_STYLE
 from .markdown import THEMES, MarkdownRenderer, code_blocks, literal
@@ -63,6 +64,12 @@ def _key_supplied(text: str) -> bool:
 
 class SuggestedPrompt(str):
     """A feed action submitted verbatim, without slash-command dispatch."""
+
+
+class QueuedSuggestion(Submission, SuggestedPrompt):
+    """Retain the suggestion contract while waiting in the submission queue."""
+
+
 MIN_REDRAW_INTERVAL = 1 / 30
 FEED_LINK_PREFIXES = ("class:artifact-", "class:file-", "class:directory-", "class:suggestion-")
 
@@ -960,7 +967,7 @@ class TerminalUI:
             return
         # Reserve the run immediately so a double click cannot submit twice.
         self.set_working(True)
-        self._lines.put_nowait(SuggestedPrompt(prompt))
+        self._submit(prompt, suggested=True)
 
     def _suggestion_at(self, point: Point) -> str | None:
         if self._flow is None:
@@ -1164,11 +1171,66 @@ class TerminalUI:
                 and text.strip() and not text.lstrip().startswith("/")):
             text = attach_reference(text, reference)
             self._remove_diff_reference()
-        self._lines.put_nowait(text)
+        if self._input_label == "> " and not self._password:
+            self._submit(text)
+        else:
+            self._lines.put_nowait(text)
         if _key_supplied(buffer.text):
             # prompt_toolkit appends history after the accept handler returns.
             buffer.text = ""
         return False
+
+    def _submit(self, text: str, *, suggested: bool = False) -> None:
+        if not text.strip():
+            self._lines.put_nowait(text)
+            return
+        line = (QueuedSuggestion if suggested else Submission)(text, suggested=suggested)
+        self.__dict__.setdefault("_submissions", []).append(line)
+        self._lines.put_nowait(line)
+        self.app.invalidate()
+
+    def consume_submission(self, line: str) -> None:
+        submissions = self.__dict__.get("_submissions", [])
+        if isinstance(line, Submission):
+            submissions[:] = [item for item in submissions if item.identifier != line.identifier]
+        self.app.invalidate()
+
+    def _discard_submission(self, line: Submission) -> None:
+        if any(item.identifier == line.identifier for item in self.__dict__.get("_submissions", [])):
+            line.cancelled = True
+            self.consume_submission(line)
+            self._focus.restore_prompt()
+        else:
+            # A redraw can lag behind transfer to the agent's durable queue.
+            self._discard_agent_input(line.identifier)
+
+    def _discard_agent_input(self, identifier: str) -> None:
+        from .sessions import SessionError
+        current = self.__dict__.get("_agent_input_queue")
+        try:
+            if current is not None and current().discard(identifier):
+                self._focus.restore_prompt()
+        except SessionError as exc:
+            self.notify(f"Could not remove queued input: {exc}")
+
+    def _queued_items(self) -> list[tuple[str, object, Callable[[], object] | None]]:
+        self._ensure_queued_prompts()
+        current = self.__dict__.get("_agent_input_queue")
+        queue = current() if current is not None else None
+        entries = queue.snapshot() if queue is not None else []
+        result: list[tuple[str, object, Callable[[], object] | None]] = []
+        for index, text in enumerate(self._queued_prompts):
+            identifier = entries[index][0] if index < len(entries) and entries[index][1] == text else None
+            def discard(identifier: str | None = identifier) -> None:
+                if identifier is not None:
+                    self._discard_agent_input(identifier)
+            result.append((text, identifier or ("preview", index), discard if identifier is not None else None))
+        for line in self.__dict__.get("_submissions", []):
+            label = "/key …" if _key_supplied(line) else str(line)
+            def discard_submission(line: Submission = line) -> None:
+                self._discard_submission(line)
+            result.append((label, line.identifier, discard_submission))
+        return result
 
     def _activity(self) -> StyleAndTextTuples:
         fragments = self._activity_status()
@@ -1544,26 +1606,49 @@ class TerminalUI:
     def _queued_prompt_height(self) -> int:
         self._ensure_queued_prompts()
         available = max(0, self.output.get_size().rows - self._footer_rows() - 1)
-        return min(len(self._queued_prompts), available)
+        return min(len(self._queued_prompts) + len(self.__dict__.get("_submissions", [])), available)
 
     def _queued_prompt_content(self, width: int) -> UIContent:
         height = self._queued_prompt_height()
-        prompts = self._queued_prompts[-height:] if height else []
+        prompts = self._queued_items()[-height:] if height else []
+        self.__dict__["_queued_width"] = width
 
         def get_line(index: int) -> StyleAndTextTuples:
             if not 0 <= index < len(prompts) or width <= 0:
                 return []
-            text = "> " + " ".join(literal(prompts[index]).splitlines())
-            if display_width(text) > width:
+            prompt, identifier, discard = prompts[index]
+            text = "> " + " ".join(literal(prompt).splitlines())
+            text_width = max(0, width - 2) if discard is not None else width
+            if display_width(text) > text_width:
                 prefix = ""
                 for cluster in iter_graphemes(text):
-                    if display_width(prefix + cluster) > width - 1:
+                    if display_width(prefix + cluster) > text_width - 1:
                         break
                     prefix += cluster
-                text = prefix.rstrip() + "…"
-            return [("class:user", text)]
+                text = prefix.rstrip() + "…" if text_width else ""
+            result: StyleAndTextTuples = [("class:user", text)]
+            if discard is not None:
+                result.append(("class:user", " " * max(0, width - display_width(text) - 1)))
+                result.extend(self._action_link("X", ("discard-input", identifier), discard, style="fg:#ff5555 bold"))
+            return result
 
-        return UIContent(get_line=get_line, line_count=height, show_cursor=False)
+        content = UIContent(get_line=get_line, line_count=height, show_cursor=False)
+        self.__dict__["_queued_mouse_content"] = content
+        return content
+
+    def _queued_prompt_mouse(self, event: MouseEvent) -> object:
+        content = self.__dict__.get("_queued_mouse_content")
+        if content is None:
+            return NotImplemented
+        if 0 <= event.position.y < content.line_count:
+            column = 0
+            for fragment in content.get_line(event.position.y):
+                # Window translates terminal cells to source character offsets.
+                end = column + len(fragment[1])
+                if column <= event.position.x < end and len(fragment) == 3:
+                    return fragment[2](event)
+                column = end
+        return NotImplemented
 
     def _ensure_transcript(self) -> None:
         """Migrate pre-file-buffer sessions once, without rebuilding the frame."""
@@ -1723,9 +1808,12 @@ class TerminalUI:
                                            if index in self.__dict__.get(f"_{kind}_links", {})))
 
     async def read_line(self) -> str | None:
-        if self._eof and self._lines.empty():
-            return None
-        return await self._lines.get()
+        while True:
+            if self._eof and self._lines.empty():
+                return None
+            line = await self._lines.get()
+            if not cancelled(line):
+                return line
 
     def _end_input(self) -> None:
         options = self.__dict__.get("_options_panel")
@@ -1738,24 +1826,25 @@ class TerminalUI:
     async def ask(self, prompt: str, *, password: bool = False) -> str:
         ordinary_buffer = self.input.buffer
         ordinary_lines = self._lines
+        # Replies belong to this question, never to the submission FIFO.
+        self._lines = asyncio.Queue()
         if password:
             # A password processor only masks display. A separate buffer and
             # queue also isolate history, drafts, and input already queued.
             self.input.buffer = Buffer(history=DummyHistory(), multiline=False,
                                        accept_handler=lambda buffer: self._accept(buffer))
             self.input.control.buffer = self.input.buffer
-            self._lines = asyncio.Queue()
         self._input_label = prompt
         self._password = password
         self.app.invalidate()
         try:
             return await self.read_line() or ""
         finally:
+            self._lines = ordinary_lines
             if password:
                 self.input.buffer.reset()
                 self.input.buffer = ordinary_buffer
                 self.input.control.buffer = ordinary_buffer
-                self._lines = ordinary_lines
             self._input_label = "> "
             self._password = False
             self.app.invalidate()

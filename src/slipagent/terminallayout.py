@@ -97,7 +97,7 @@ def build_layout(ui: TerminalUI) -> Layout:
         VSplit([DynamicContainer(lambda: ui.main_area.container(context, transcript)),
                 Window(ui._scrollbar, width=1, style="class:scroll-track"),
                 ConditionalContainer(ui._inspection_panel, inspection_visible)], style="class:content"),
-        ConditionalContainer(VSplit([Window(TranscriptControl(ui._queued_prompt_content),
+        ConditionalContainer(VSplit([Window(TranscriptControl(ui._queued_prompt_content, ui._queued_prompt_mouse),
                                     height=ui._queued_prompt_height, dont_extend_height=True,
                                     style="class:user"),
                                      Window(width=1, style="class:scroll-track"),

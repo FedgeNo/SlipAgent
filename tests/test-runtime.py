@@ -793,7 +793,7 @@ def test_running_terminal_accepts_input_after_component_reload(run_copy):
                 async with asyncio.timeout(3):
                     while terminal.input.buffer.text != 'draft':
                         await asyncio.sleep(.02)
-                edit('terminal.py', 'self._lines.put_nowait(text)', 'self._lines.put_nowait("live:" + text)')
+                edit('terminal.py', 'self._submit(text)', 'self._submit("live:" + text)')
                 edit('terminalbindings.py', '@bindings.add("c-o")', '@bindings.add("c-t")')
                 edit('terminallayout.py', '"menu-item": MUTED_COLOR', '"menu-item": "#aaaaaa"')
                 edit('terminalmouse.py', '    original = app.renderer.mouse_handlers',

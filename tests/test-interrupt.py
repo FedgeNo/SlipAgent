@@ -79,7 +79,7 @@ async def test_model_change_pause_resumes_and_preserves_submitted_input(tmp_path
         output = session.renderer.stream.getvalue()
         assert 'ask me to continue' not in output
         assert 'applying queued commands' in output
-        assert 'continuing the current task' in output
+        assert 'Continuing with queued input' in output
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)

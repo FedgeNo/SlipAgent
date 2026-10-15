@@ -269,7 +269,7 @@ async def test_suggestion_links_submit_verbatim_and_preserve_draft(display):
     from prompt_toolkit.data_structures import Point
     from prompt_toolkit.document import Document
     from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
-    from slipagent.terminal import SuggestedPrompt
+    from slipagent.submissions import suggested
 
     sink, _, output, _, _ = display
     with create_pipe_input() as pipe:
@@ -294,7 +294,7 @@ async def test_suggestion_links_submit_verbatim_and_preserve_draft(display):
             for kind in (MouseEventType.MOUSE_DOWN, MouseEventType.MOUSE_UP):
                 ui._select_transcript(MouseEvent(point, kind, MouseButton.LEFT, frozenset()))
             submitted = await asyncio.wait_for(ui.read_line(), 1)
-            assert isinstance(submitted, SuggestedPrompt)
+            assert suggested(submitted)
             assert submitted == prompt
             assert ui.input.buffer.document == draft
             assert ui.working
@@ -2321,6 +2321,7 @@ async def test_startup_scrolls_welcome_keeps_input_live_and_drains(display, tmp_
             await wait_until(lambda: "MCP: stub connected" in "\n".join(snapshot()))
             pipe.send_text("first task\rsecond task\rstill typing")
             await wait_until(lambda: ui.input.text == "still typing")
+            await wait_until(lambda: "first task" in "\n".join(snapshot()) and "second task" in "\n".join(snapshot()))
             assert not task.done()
             if ending == "ready":
                 release.set()
@@ -3702,7 +3703,9 @@ async def test_mouse_wheel_scrolls_transcript_without_changing_input(display, mo
         try:
             await wait_until(lambda: ">" in snapshot()[18])
             pipe.send_text("old prompt\r")
-            assert await ui.read_line() == "old prompt"
+            accepted = await ui.read_line()
+            assert accepted == "old prompt"
+            ui.consume_submission(accepted)
             history = ui.input.buffer.history.get_strings()
             pipe.send_text("draft")
             await wait_until(lambda: "draft" in snapshot()[18])

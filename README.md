@@ -1105,11 +1105,14 @@ Progress then reports repository mapping, model catalogs and metadata, quota,
 Python discovery, session history, and each MCP server's connection result.
 Independent work runs concurrently, with four worker threads and at most four MCP
 connections starting together. Tasks and settings entered during startup queue
-until setup finishes. Esc, `/exit`, `/quit`, or Ctrl-D cancels startup and exits.
+until setup finishes, with their previews visible immediately above the controls.
+Esc, `/exit`, `/quit`, or Ctrl-D cancels startup and exits.
 
-State-changing commands queue in order while the agent works. They apply after
-the current response and complete tool batch finish. Settings changes then resume
-the task without resetting its request limit. `/stop` prevents automatic
+Commands and prompts share submission order while the agent works. Commands apply
+after the current response and complete tool batch finish, and after earlier prompts
+reach a model request. Later prompts use the resulting settings. Settings changes then resume
+the task without resetting its request limit. `/stop` and exit controls remain
+immediate control actions. `/stop` prevents automatic
 continuation; reset, resume, and `/task new` replace the task instead of restarting
 the previous work. Slash commands are never sent to the model as user messages.
 
@@ -1208,11 +1211,13 @@ Echoes of former harness response labels are removed from ordinary reply text
 and from assistant replies reused as context, without rewriting saved originals.
 Quoted or fenced examples, user input, tool arguments and file content remain intact.
 
-The prompt stays live while the agent works. All waiting prompts join the next
+The prompt stays live while the agent works. Consecutive waiting prompts join the next
 model request together, after the current tool batch finishes. Their previews
 stay just above the bottom controls until their request is sent. Each
 preview occupies one line within the main pane, stopping at the visible
-inspection sidebar and adding an ellipsis when it is too long. On submission,
+inspection sidebar and adding an ellipsis when it is too long. Each queued prompt
+or command has a red X at the right: click it, or focus it and press Enter, to
+remove that specific item. API keys are hidden in command previews. On submission,
 the full prompts enter the feed in arrival order before that request's output.
 If context preparation fails or `/stop` prevents that request, the previews stay.
 Use `/queue` to inspect pending messages and select one to view in full or discard.

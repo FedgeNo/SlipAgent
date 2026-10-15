@@ -22,6 +22,12 @@ def route_mouse(ui: TerminalUI, app: Application[None]) -> None:
     def mouse_handler(event: MouseEvent) -> object:
         if event.event_type == MouseEventType.MOUSE_UP:
             ui._scrollbar.drag_offset = None
+        if (event.event_type not in (MouseEventType.SCROLL_UP, MouseEventType.SCROLL_DOWN)
+                and not ui._focus.mouse_target_current(event.position)):
+            if event.event_type == MouseEventType.MOUSE_UP:
+                ui._selection_dragging = False
+            app.invalidate()
+            return None
         previous_hover = ui.__dict__.get("_hovered_control")
         if event.event_type == MouseEventType.MOUSE_MOVE:
             ui.__dict__["_hovered_control"] = None

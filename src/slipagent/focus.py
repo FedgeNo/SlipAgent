@@ -62,8 +62,30 @@ class FocusCoordinator:
         """Build a titled region whose title focuses its retained body."""
         return HSplit([cls.header(title, target, style=style), body])
 
+    def mouse_target_current(self, point: Point) -> bool:
+        """Reject hit maps left behind by a panel change before the next redraw."""
+        app = self.app()
+        screen = app.renderer._last_screen
+        if screen is None:
+            return False
+        live = set(walk(app.layout.container, skip_hidden=True))
+        for window, position in screen.visible_windows_to_write_positions.items():
+            if (position.xpos <= point.x < position.xpos + position.width
+                    and position.ypos <= point.y < position.ypos + position.height):
+                if window not in live:
+                    return False
+                target = window.__dict__.get("_focus_target")
+                if target is not None:
+                    panel = target()
+                    if (panel.window if isinstance(panel, TextArea) else panel) not in live:
+                        return False
+        return True
+
     def click(self, point: Point) -> None:
         """Focus before dispatch so native input handlers also place the cursor."""
+        if not self.mouse_target_current(point):
+            self.app().invalidate()
+            return
         screen = self.app().renderer._last_screen
         if screen is None:
             return

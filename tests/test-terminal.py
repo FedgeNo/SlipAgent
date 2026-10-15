@@ -29,6 +29,38 @@ async def wait_until(predicate) -> None:
             await asyncio.sleep(.02)
 
 
+@pytest.mark.parametrize("row", [17, 18])
+async def test_click_on_closed_menu_before_redraw_is_ignored(display, row):
+    from prompt_toolkit.data_structures import Point
+    from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
+
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        task = asyncio.create_task(ui.run())
+        choice = asyncio.create_task(ui.choose("Choices", [("one", "One")]))
+        try:
+            await wait_until(lambda: "One" in snapshot()[18])
+            future = ui._menu_future
+            # A closed dynamic menu can still own the last rendered hit map.
+            ui._menu_future = None
+            ui._focus.restore_prompt()
+            ui._focus.click(Point(1, row))
+            with set_app(ui.app):
+                for kind in (MouseEventType.MOUSE_DOWN, MouseEventType.MOUSE_UP):
+                    ui.app.renderer.mouse_handlers.mouse_handlers[row][1](
+                        MouseEvent(Point(1, row), kind, MouseButton.LEFT, frozenset()))
+            assert ui.app.layout.current_control is ui.input.control
+            assert not future.done()
+            future.set_result(None)
+            assert await choice is None
+        finally:
+            choice.cancel()
+            await asyncio.gather(choice, return_exceptions=True)
+            ui.close()
+            await task
+
+
 def test_status_owner_migrates_retained_state_and_survives_refresh(display, monkeypatch):
     sink, _, output, _, _ = display
     clock = [100.0]

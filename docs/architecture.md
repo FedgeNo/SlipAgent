@@ -127,10 +127,10 @@ Context construction proceeds in this order:
    Static headings belong to editable templates; `PromptSections` renders their
    content without adding wrappers. Markdown uses `#`, `##`, and `###` for the
    instruction hierarchy, fenced examples, and field tables. History occupies
-   the separate user-input JSON object rather than a system-prompt section.
+   separate user-input metadata and result blocks rather than a system-prompt section.
    Prompt paragraphs occupy one physical line, without fixed-width wrapping. Two newlines separate paragraphs, headings, topic groups, task fields, tool guidance, examples, and assembled sections. Single newlines remain for meaningful item boundaries, metadata fields, code, and other structured content.
    Loaded instruction-file contents and original conversation text stay intact.
-   The input uses system instructions followed by one JSON user-input object. The inspector
+   The input uses system instructions followed by JSON user-input metadata and literal tool-result blocks in the same user message. The inspector
    displays the final body rather than reconstructing it separately.
 3. Economical older records precede the recent full window. Each retained step
    occupies one object. Full records contain originals plus available compressed
@@ -141,9 +141,9 @@ Context construction proceeds in this order:
    Both native-tool and embedded-tool profiles receive the same record format;
    ties keep originals, with complete tool batches intact. Every step has its
    own object in the user input's `history` list. `JSONInput` keeps the input
-   structured until `Message.to_api()` serializes the whole object through
+   structured until `Message.to_api()` renders metadata and tool-result blocks through
    `data_text.py`; the HTTP client then encodes the provider transport envelope.
-   Nested objects are never pre-serialized. Literal rendering remains available
+   Tool-result text is copied verbatim into length-labelled blocks, with references in the JSON metadata. Explicitly structured results use pretty-printed JSON blocks. JSON-looking strings are never implicitly decoded. Literal rendering remains available
    for system data sections, compression input, and archive retrieval.
    The newest third of the retained individual-post window targets full originals,
    rounded up. Older posts use economical summaries; unavailable summaries retain
@@ -154,7 +154,7 @@ Context construction proceeds in this order:
    Boundaries and representation caches belong to one view: later requests can
    restore omitted records as large calls age into smaller summaries. There is
    no persistent omission marker. `--context-tokens` can cap total working context.
-   `records.py` represents saved full steps with `record_type`, `representation`, `user_prompt`,
+   `records.py` represents saved full steps with `record_type`, `representation`, `user_prompts`,
    `agent_response`, `tool_calls`, and `tool_results`. Prompts remain an array so
    queued inputs retain their boundaries. Calls use `call_id`, `tool_name`, and
    argument objects; results use matching IDs, names, status, and content.
@@ -175,11 +175,11 @@ Context construction proceeds in this order:
    not rewritten. This avoids teaching the reply format through artificial
    assistant-message prefixes, including when resuming an older session.
 4. Current-step metadata in the system prompt supplies `step_id` and
-   `is_tool_result_response`. One user-input JSON object contains `user_messages`
+   `is_tool_result_response`. One user-input JSON metadata object contains `user_prompts`
    (new messages in chronological order, or `[]` without new input),
-   `retained_user_requests`, `history`, and `errors`. Later user messages supersede
+   `retained_user_prompts`, `history`, and `errors`. Later user messages supersede
    conflicting earlier instructions. Tool errors belong to their
-   calls; `errors` holds harness corrections not attached to a call. Keys label
+   calls through references to literal result blocks; `errors` holds harness corrections not attached to a call. Keys label
    content without inserting labels into its values. If the supplied results
    satisfy the user's request, return the result with no tool calls to finish;
    request more tools only when necessary work remains.
@@ -193,7 +193,7 @@ Context construction proceeds in this order:
    occupy `response_excerpts`. Request assembly does not append its JSON envelope,
    tool definitions, or system guidance to archived turns.
 5. `TaskMemory` retains original requests independently of compression. Request
-   assembly supplies the active source messages in `retained_user_requests`,
+   assembly supplies the active source messages in `retained_user_prompts`,
    with their source step ID in system task metadata. Retained input counts
    against the endpoint budget. The active prompt is independent
    of the historical representation of the call that first received it.
@@ -1277,4 +1277,4 @@ The agent and compactor use the common `RequestProfile` contract, not a provider
 
 Provider behavior files participate in the existing reload transaction. Shared state contracts in `types.py`, configuration, package exports, and changes to class inheritance require restart. Adding a provider requires a module, registry entry, documented configuration, and offline wire/selection tests.
 
-Common transport and agent recovery share one retry schedule. Working requests remain `single_attempt=True`, so each attempt consumes exactly one working request. Three retries are silent; subsequent waits update the terminal activity row once per second, clearing it after success, stop, or cancellation. Noninteractive output retains the error and periodic countdown notices. No interval exceeds one minute. Background compaction uses the same transient-error schedule; malformed summaries retain a separate finite repair limit. HTTP 200 overload envelopes and SSE errors are retryable; partial tool calls never execute before a complete accepted response.
+Common transport and agent recovery share one retry schedule. Working requests remain `single_attempt=True`, so each attempt consumes exactly one working request. Three retries are silent; subsequent waits update the terminal activity row once per second, clearing it after success, stop, or cancellation. Noninteractive output retains the error and periodic countdown notices. Working recovery stops before an interval exceeds one minute. Both background compactors use the same transient-error schedule with persistent recovery: after the working retry limit, waits continue at the configured ceiling (at most 60 seconds), honoring longer provider `Retry-After` cooldowns. Reset and shutdown cancel these waits. Malformed single-turn summaries retain a separate finite repair limit. HTTP 200 overload envelopes and SSE errors are retryable; partial tool calls never execute before a complete accepted response.

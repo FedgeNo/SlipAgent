@@ -2,7 +2,7 @@
 
 ## State and Settings
 
-Restored session ${session_id}. The model and request settings are those currently selected; saved usage includes the parent session.
+Restored session ${session_id}. The model and request settings are those currently selected.
 
 ## Interrupted Actions
 

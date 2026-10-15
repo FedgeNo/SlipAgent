@@ -29,6 +29,10 @@ COMPACTION_RETRIES = 5
 COMPACTION_QUEUE_SIZE = 32
 
 
+class CompactionBudgetError(ValueError):
+    """The step cannot fit the compaction request; another attempt gives the same answer."""
+
+
 def _frozen_step(step: HistoryStep) -> HistoryStep:
     """Share immutable text while freezing message and metadata bindings."""
     messages = getattr(step, "_compaction_messages", None)
@@ -120,12 +124,11 @@ class StepCompactor:
                 except Exception as exc:
                     if generation != self.generation:
                         return
-                    if isinstance(client, APIClient) and isinstance(exc, APIResponseError):
-                        transient = isinstance(exc, APITransportError) or exc.status_code in RETRYABLE_STATUS
-                        if transient and await client.wait_retry(attempt, exc):
+                    if isinstance(client, APIClient) and isinstance(exc, (APIResponseError, TimeoutError)):
+                        if await self.wait_request_retry(client, attempt, exc):
                             attempt += 1
                             continue
-                    elif attempt < COMPACTION_RETRIES:
+                    elif attempt < COMPACTION_RETRIES and not isinstance(exc, CompactionBudgetError):
                         delay = (client._backoff(attempt, getattr(exc, "retry_after", None))
                                  if isinstance(client, APIClient) else min(2 ** attempt, 30))
                         await asyncio.sleep(delay)
@@ -141,6 +144,16 @@ class StepCompactor:
         except asyncio.CancelledError:
             step.compaction_status = "cancelled"
             raise
+
+    async def wait_request_retry(self, client: APIClient, attempt: int, error: Exception) -> bool:
+        """Keep transient background requests pending until recovery or cancellation."""
+        if isinstance(error, TimeoutError):
+            error = APITransportError("Background compaction request timed out")
+        if isinstance(error, APIResponseError):
+            transient = isinstance(error, APITransportError) or error.status_code in RETRYABLE_STATUS
+            if transient:
+                return await client.wait_retry(attempt, error, persistent=True)
+        return False
 
     async def _compact_once(self, step: CompletedStep, source: dict[str, Any], client: APIClient, model: str,
                             capabilities: RequestProfile | None, max_tokens: int | None, generation: int) -> None:
@@ -160,7 +173,7 @@ class StepCompactor:
                     source['history'].pop(0)
                     source['history_omitted'] += 1
                 if message_tokens(messages) + reserve > int(context_limit * .85):
-                    raise ValueError("the complete step exceeds the selected model's compaction context budget")
+                    raise CompactionBudgetError("the complete step exceeds the selected model's compaction context budget")
             options: dict[str, Any] = {}
             if isinstance(client, APIClient):
                 options["request_profile"] = capabilities

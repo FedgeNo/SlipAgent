@@ -169,6 +169,11 @@ class ProjectEnvironment:
                 self._cached = {**properties, "is_virtual_environment": virtual}
                 self._cached_key = key[:-1] + (self._module_stamp(),)
         except (OSError, ValueError) as exc:
+            if source == "discovery":
+                info["status"] = "invalid"
+                info["error"] = f"Discovered interpreter {path} cannot be used: {exc}"
+                info["instruction"] = load_prompt('environment-selection.md')
+                return info
             raise ConfigError(f"Invalid project Python interpreter {path}: {exc}. {info['selection_help']}") from exc
         quote = shlex.join if os.name != "nt" else subprocess.list2cmdline
         command = quote([str(path)])

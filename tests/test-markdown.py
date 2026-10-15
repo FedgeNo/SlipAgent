@@ -116,7 +116,7 @@ async def test_redirected_answer_plain_by_default_or_markdown_on_request(monkeyp
     sink = io.StringIO()
     monkeypatch.setattr(cli.sys, "stdout", sink)
     monkeypatch.setattr(cli, "_shutdown", AsyncMock())
-    agent = SimpleNamespace(run=AsyncMock(return_value=source), wait_for_compaction=AsyncMock())
+    agent = SimpleNamespace(run=AsyncMock(return_value=source), wait_for_compaction=AsyncMock(), stopped=False)
     session = SimpleNamespace(agent=agent, renderer=renderer)
     assert await cli.run_one_shot(session, "show code") == 0
     assert sink.getvalue() == (source + "\n" if source_output else "Result\n\nx = 1\n")

@@ -53,7 +53,7 @@ class ArtifactStore:
         if self._directory is None:
             if self._temporary is None:
                 self._temporary = tempfile.TemporaryDirectory(prefix="slipagent-artifacts-")
-            return Path(self._temporary.name)
+            return Path(self._temporary.name).resolve()
         return self._directory
 
     def use_directory(self, directory: Path, *, source: Path | None = None) -> None:

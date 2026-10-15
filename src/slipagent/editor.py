@@ -9,6 +9,7 @@ import stat
 import subprocess
 import tempfile
 import uuid
+import re
 import io
 from pathlib import Path
 from collections.abc import Iterator
@@ -17,6 +18,7 @@ from .inspection import IndexedText, CHUNK_SIZE
 from .fileio import open_regular
 
 PAGE_SEGMENTS = 32
+UNSUPPORTED_CONTROLS = re.compile(r"[\x01-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 
 
 def signature(path: Path) -> tuple[int, int, int, int, int] | None:
@@ -43,11 +45,14 @@ class FileEditor:
         self.original = IndexedText()
         self.overlay = tempfile.TemporaryDirectory(prefix="slipagent-editor-")
         self.pages: dict[int, Path] = {}
+        self.read_only = False
         try:
             with io.TextIOWrapper(open_regular(self.path), encoding="utf-8", newline="") as source:
                 while text := source.read(CHUNK_SIZE):
                     if "\x00" in text:
                         raise ValueError("Binary files cannot be edited as text")
+                    if UNSUPPORTED_CONTROLS.search(text):
+                        self.read_only = True
                     self.original.text.write(text)
             self.original.finish()
             if signature(self.path) != self.loaded:
@@ -75,6 +80,8 @@ class FileEditor:
         return "".join(self._original_chunks(page))
 
     def set_page(self, page: int, text: str) -> None:
+        if getattr(self, "read_only", False):
+            raise ValueError("File is read-only because it contains unsupported control characters")
         if text == self.page_text(page):
             return
         if text == "".join(self._original_chunks(page)):
@@ -103,6 +110,8 @@ class FileEditor:
 
     def save(self, *, overwrite: bool = False,
              confirmed_signature: tuple[int, int, int, int, int] | None = None) -> None:
+        if getattr(self, "read_only", False):
+            raise ValueError("File is read-only because it contains unsupported control characters")
         expected = confirmed_signature if overwrite else self.loaded
         if signature(self.path) != expected:
             raise EditConflict("File changed on disk; reload, cancel, or explicitly overwrite")

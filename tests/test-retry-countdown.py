@@ -58,6 +58,22 @@ async def test_default_recovery_gives_up_before_interval_exceeds_one_minute(monk
     assert all(delay <= 60 for delay in waits)
 
 
+async def test_persistent_retries_honor_long_retry_after_and_remain_bounded(monkeypatch):
+    waits = []
+    async def sleep(delay):
+        waits.append(delay)
+    monkeypatch.setattr("slipagent.api.asyncio.sleep", sleep)
+    async with OpenRouterClient("dummy", transport=httpx.MockTransport(lambda r: httpx.Response(503))) as client:
+        error = APIResponseError("limited", 429)
+        assert await client.wait_retry(10000, error, persistent=True)
+        assert waits == [60]
+        waits.clear()
+        error.retry_after = "120"
+        assert await client.wait_retry(10000, error, persistent=True)
+        assert waits == [120]
+        assert not await client.wait_retry(10000, error)
+
+
 async def test_stop_interrupts_visible_countdown_and_clears_it():
     notices = []
     stop = asyncio.Event()

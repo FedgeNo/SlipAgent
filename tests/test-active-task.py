@@ -97,7 +97,7 @@ async def test_legacy_task_envelopes_do_not_replace_the_users_request(include_re
     assert all("Implement inventory support" not in content_text(message.content) for message in agent.messages)
 
 
-async def test_context_supplies_retained_prompt_when_legacy_full_post_has_no_copy():
+async def test_continuation_steps_never_repeat_the_retained_prompt():
     prompt = "ORIGINAL PROMPT\nUse the local environment."
     messages = [Message.user(prompt), Message.assistant("First answer " * 1000),
                 *[Message.assistant("Later answer") for _ in range(5)]]
@@ -110,9 +110,12 @@ async def test_context_supplies_retained_prompt_when_legacy_full_post_has_no_cop
     originals = [message.to_api() for message in messages]
     view = await history.view(messages, [], keep_steps=1, context_length=9000, max_output=1000)
     supplied = [message for message in unpack_context(view) if message.role == "user"]
-    assert len(supplied) == 5
-    assert all(message.content == prompt for message in supplied)
-    assert context_records(view)[-1]["user_prompt"] == []
+    # Continuation steps list no user text; the request arrives once, retained.
+    assert [message.content for message in supplied] == [prompt]
+    from data_text_reader import read_json_input
+    payload = read_json_input(view[-1].to_api()['content'])
+    assert payload['retained_user_prompts'] == [prompt]
+    assert all(record.get('user_prompts', []) == [] for record in payload['history'])
     assert message_tokens(view) + 1000 < 9000 * .85
     assert [message.to_api() for message in messages] == originals
 

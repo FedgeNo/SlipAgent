@@ -7,8 +7,9 @@ from collections.abc import Awaitable, Callable
 from .activity import command_output
 from .batching import run_batch
 from .checkpoints import FileCheckpoints, current_checkpoint
-from .checks import check_edit_batch
+from .checks import EDIT_TOOLS, check_edit_batch
 from .tools.base import ToolRegistry, ToolResult, current_invocation, validate_arguments, _binds_arguments
+from .tools.discovery import UNAVAILABLE_BATCH
 from .types import Message, ToolCall
 
 from .events import AgentEvent
@@ -70,7 +71,7 @@ class ToolBatch:
                               if self.allowed_tools is not None and call.name not in self.allowed_tools})
         if unavailable:
             # Validate the whole response before dispatch so earlier calls cannot have effects.
-            error = ("No tools were executed. The entire batch was rejected because these tools are not available "
+            error = (UNAVAILABLE_BATCH +
                      f"in the current request: {', '.join(unavailable)}. "
                      "Only call tools whose full definitions are supplied in the current request. "
                      "For deferred catalog tools, call load_tools in a separate response and wait for the "
@@ -108,15 +109,18 @@ class ToolBatch:
 
         check_report = await check_edit_batch(self.registry, self.results, self.step)
         if check_report:
-            call, result = self.results[-1]
+            position = next(index for index in range(len(self.results) - 1, -1, -1)
+                            if isinstance(self.registry.get(self.results[index][0].name), EDIT_TOOLS))
+            call, result = self.results[position]
+            message_index = len(self.messages) - len(self.results) + position
             content = (result.content + "\n\nHarness Checks After This Complete Tool Batch:\n" + check_report
                        if isinstance(result.content, str) else {"result": result.content, "harness_checks": check_report})
             checked = ToolResult(content, result.is_error)
-            artifacts = self.messages[-1].content.get("artifacts", [])
-            self.messages[-1] = tool_message(call, checked)
+            artifacts = self.messages[message_index].content.get("artifacts", [])
+            self.messages[message_index] = tool_message(call, checked)
             if artifacts:
-                self.messages[-1].content["artifacts"] = artifacts
-            self.results[-1] = call, checked
+                self.messages[message_index].content["artifacts"] = artifacts
+            self.results[position] = call, checked
             visible_diagnostics = "\n".join(line for line in check_report.splitlines()
                                             if "SKIPPED — no selected project Python." not in line)
             if any(word in visible_diagnostics for word in ("FAILED", "TIMED OUT", "SKIPPED", "unavailable")):

@@ -15,9 +15,9 @@ from slipagent.workspace import Workspace
 from test_agent import build_agent, completion, context_records
 
 
-def test_tool_json_is_decoded_at_entry_and_stays_structured_until_transmission():
+def test_explicit_tool_objects_stay_structured_until_transmission():
     call = ToolCall.from_api({"id": "c1", "function": {"name": "inspect", "arguments": '{"path":"notes.json"}'}})
-    result = ToolResult.ok('{"files":["notes.json"],"stdout":"hello"}')
+    result = ToolResult.ok({"files": ["notes.json"], "stdout": "hello"})
     assert result.content == {"files": ["notes.json"], "stdout": "hello"}
     observation = _tool_message(call, result)
     assert observation.content["content"] == result.content
@@ -31,6 +31,62 @@ def test_tool_json_is_decoded_at_entry_and_stays_structured_until_transmission()
     source = CompletedStep(1, "Inspect the files", messages).compaction_input()
     assert source["tool_calls"][0]["function"]["arguments"] == {"path": "notes.json"}
     assert source["tool_results"][0]["content"]["content"] == result.content
+
+
+@pytest.mark.parametrize("raw", ['{ "x": 1, "x": 2, "pattern": "\\\\n" }\n', '[ "\\\\t", "λ" ]', '{"value": NaN}'])
+def test_json_looking_tool_text_is_preserved_verbatim(raw):
+    result = ToolResult.ok(raw)
+    assert result.content == raw
+    assert result.text() == raw
+    observation = _tool_message(ToolCall("c1", "inspect", {}), result)
+    assert observation.content["content"] == raw
+    assert read_data(observation.to_api()["content"])["content"] == raw
+    message = Message.tool_result("c1", raw)
+    assert message.content == raw
+    assert message.to_api()["content"] == raw
+    assert Message.from_api(message.to_record()).content == raw
+
+
+def test_structured_result_text_is_pretty_printed_json():
+    value = {"files": ["λ.txt"], "stdout": "literal \\n"}
+    result = ToolResult.ok(value)
+    assert result.content is value
+    assert result.text() == json.dumps(value, ensure_ascii=False, indent=2)
+
+
+@pytest.mark.parametrize("structured", [False, True])
+async def test_model_receives_exact_saved_tool_result_block(tmp_path, structured):
+    from slipagent.context import ConversationHistory
+    from data_text_reader import read_json_input
+
+    value = {"path": r"C:\new\test", "text": 'quotes " and λ\nnext line'}
+    raw = '  { "duplicate": 1, "duplicate": 2, "pattern": "\\\\n" }\n\nTool Result Block 99 (0 characters):\n'
+    result = ToolResult.ok(value if structured else raw)
+    saved = tmp_path / "result.txt"
+    saved.write_text(result.text(), encoding="utf-8", newline="")
+    exact = saved.read_text(encoding="utf-8")
+    call = ToolCall("c1", "inspect", {})
+    messages = [Message.user("Inspect"), Message.assistant("Reading", [call]), _tool_message(call, result)]
+    history = ConversationHistory()
+    history.sync(messages)
+    messages.append(Message.user("Continue"))
+    view = await history.view(messages, [], keep_steps=50, context_length=100000, max_output=512)
+    received = []
+
+    def respond(request):
+        body = json.loads(request.content)
+        model_text = body["messages"][-1]["content"]
+        received.append(model_text)
+        assert exact in model_text
+        assert model_text.endswith(exact)
+        restored = read_json_input(model_text)
+        assert restored["history"][0]["tool_calls"][0]["result"] == result.content
+        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "Done"}, "finish_reason": "stop"}]})
+
+    async with OpenRouterClient(api_key="test-key", transport=httpx.MockTransport(respond)) as client:
+        await client.chat(model="test", messages=view)
+    assert len(received) == 1
+    assert saved.read_text(encoding="utf-8") == exact
 
 
 def test_plain_output_remains_a_string_inside_a_structured_observation():

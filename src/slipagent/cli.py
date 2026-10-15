@@ -67,14 +67,14 @@ BANNER = """SlipAgent — coding agent with selectable API providers
 
   Workspace: {workspace}
 
-  Tools:     {tools}
-
 {mcp}  Commands:  {commands}
 
 Type a task and press Enter. Follow-ups queue while the agent works.
 Settings changes also queue until the current response and tool batch finish.
 /stop stops after this step; Esc interrupts now. /exit, /quit, or Ctrl-D quits.
-Use /help for command details. Ctrl+\\ toggles the context view.""".replace("{commands}", banner_commands())
+Use /help for command details. Ctrl+\\ toggles the context view.
+
+""".replace("{commands}", banner_commands())
 
 QUOTA_REFRESH_INTERVAL = 15 * 60
 
@@ -101,6 +101,7 @@ class Style:
     enabled: bool
 
     def _wrap(self, code: str, text: str) -> str:
+        text = literal(text)
         return f"\033[{code}m{text}\033[0m" if self.enabled else text
 
     def dim(self, text: str) -> str:
@@ -137,7 +138,7 @@ def _use_color(stream: TextIO, force_off: bool) -> bool:
 
 def _literal_tool_output(text: str) -> str:
     """Keep captured terminal controls inert in both live and restored output."""
-    return re.sub(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]", lambda match: f"\\x{ord(match[0]):02x}", text)
+    return literal(text)
 
 
 COMMAND_OUTPUT_TOOLS = frozenset({
@@ -216,24 +217,20 @@ class Renderer:
             self._begin_block(block, text=text, tool=tool)
         self._write(text, continuation_indents=continuation_indents)
 
-    def show_banner(self, *, model: str, workspace: Path, tools: list[str], mcp: str = "") -> None:
-        before, _, after = BANNER.partition("{tools}")
-        before = before.format(model=model, workspace=workspace, mcp=mcp)
-        after = after.format(model=model, workspace=workspace, mcp=mcp)
-        # Keep both lists unbroken so resize can reflow them beneath their first item.
-        banner = before + ", ".join(tools) + after
+    def show_banner(self, *, model: str, workspace: Path, mcp: str = "") -> None:
+        banner = BANNER.format(model=literal(model), workspace=literal(str(workspace)), mcp=literal(mcp))
         self.emit(
             banner,
             continuation_indents={index: prefix.end() for index, line in enumerate(banner.splitlines())
-                                  if (prefix := re.match(r"  (?:Tools|Commands): +", line)) is not None},
+                                  if (prefix := re.match(r"  Commands: +", line)) is not None},
         )
 
-    async def show_welcome(self, *, model: str, workspace: Path, tools: list[str], mcp: str = "") -> None:
+    async def show_welcome(self, *, model: str, workspace: Path, mcp: str = "") -> None:
         """Reveal the welcome a line at a time while the terminal stays responsive."""
-        banner = BANNER.format(model=model, workspace=workspace, tools=", ".join(tools), mcp=mcp)
+        banner = BANNER.format(model=literal(model), workspace=literal(str(workspace)), mcp=literal(mcp))
         lines = banner.splitlines()
         for index, line in enumerate(lines):
-            prefix = re.match(r"  (?:Tools|Commands): +", line)
+            prefix = re.match(r"  Commands: +", line)
             self.emit(line, separate=False,
                       continuation_indents={0: prefix.end()} if prefix else None)
             if self.terminal is not None and index < len(lines) - 1:
@@ -672,13 +669,13 @@ async def _initialize_session(session: Session, args: argparse.Namespace, config
         notice(f"{label}…")
         action = label[0].lower() + label[1:]
         try:
-            await operation()
+            outcome = await operation()
         except BaseException:
             notice(f"Interrupted or failed while {action}.")
             raise
-        notice(f"Finished {action}.")
+        notice(outcome if isinstance(outcome, str) else f"Finished {action}.")
 
-    async def metadata() -> None:
+    async def metadata() -> str | None:
         nonlocal model_error
         try:
             # Each provider fetches its catalog as part of capability discovery.
@@ -686,12 +683,13 @@ async def _initialize_session(session: Session, args: argparse.Namespace, config
                 raise APIConfigError("The API did not supply capabilities to verify the configured model's compatibility.")
         except APIError as exc:
             model_error = exc
-            renderer.emit(f"  model check failed: {exc} Select another model with /models or /model <slug>.")
+            renderer.emit(literal(f"  model check failed: {exc} Select another model with /models or /model <slug>."))
+            return "Model capability check: failed."
+        return None
 
-    async def mcp() -> None:
+    async def mcp() -> str:
         if session.mcp is None:
-            notice("MCP: disabled.")
-            return
+            return "MCP: disabled."
         def report(state: Any) -> None:
             if state.status == "error":
                 renderer.emit(renderer.style.red(f"  Warning: mcp: {state.line()}"), separate=False)
@@ -700,9 +698,14 @@ async def _initialize_session(session: Session, args: argparse.Namespace, config
         try:
             states = await session.mcp.connect_all(on_state=report)
             if not states:
-                notice("MCP: no servers configured.")
+                return "MCP: no servers configured."
+            connected = sum(state.status == "connected" for state in states)
+            failed = sum(state.status == "error" for state in states)
+            other = len(states) - connected - failed
+            return f"MCP: {connected} connected; {failed} failed." + (f" {other} disconnected." if other else "")
         except MCPError as exc:
             renderer.emit(renderer.style.red(f"  Warning: mcp: {exc}"), separate=False)
+            return "MCP: connection failed."
 
     async def repository() -> None:
         environment = registry.resources.environment
@@ -721,9 +724,9 @@ async def _initialize_session(session: Session, args: argparse.Namespace, config
         if registry.resources.environment is not None:
             await registry.resources.environment.snapshot()
 
-    async def quota() -> None:
+    async def quota() -> str:
         await _refresh_quota(session)
-        notice("Quota: unavailable." if session.free_calls is None else f"Quota: {session.free_calls} free calls remaining.")
+        return "Quota: unavailable." if session.free_calls is None else f"Quota: {session.free_calls} free calls remaining."
 
     async def resume() -> None:
         if not getattr(args, "no_session", False):
@@ -762,7 +765,7 @@ async def _initialize_session(session: Session, args: argparse.Namespace, config
                 raise
         except APIError as exc:
             model_error = exc
-            renderer.emit(f"  model check failed: {exc} Select another model with /models or /model <slug>.")
+            renderer.emit(literal(f"  model check failed: {exc} Select another model with /models or /model <slug>."))
     if not getattr(args, "no_reload", False):
         frame = await run_blocking(RuntimeFrame, session, sys.modules[__name__])
         session.reloader = frame
@@ -772,8 +775,8 @@ async def _initialize_session(session: Session, args: argparse.Namespace, config
         try:
             await run_blocking(save_model_choice, config.model, config.provider)
         except (OSError, ConfigError) as exc:
-            renderer.emit(f"  could not remember model choice: {exc}")
-    notice("Startup complete.")
+            renderer.emit(literal(f"  could not remember model choice: {exc}"))
+    notice("Startup complete." if model_error is None else "Startup finished; model capability check failed.")
 
 
 # --------------------------------------------------------------------------- #
@@ -790,7 +793,7 @@ async def run_one_shot(session: Session, prompt: str, events: JsonEventStream | 
         answer = await session.agent.run(prompt)
         await session.agent.wait_for_compaction()
     except (APIError, WorkspaceError) as exc:
-        print(f"slipagent: {exc}", file=sys.stderr)
+        print(literal(f"slipagent: {exc}"), file=sys.stderr)
         failure = exc
     finally:
         await _shutdown(session)
@@ -823,7 +826,7 @@ async def run_one_shot(session: Session, prompt: str, events: JsonEventStream | 
         print_formatted_text(FormattedText(fragments), file=sys.stdout, end="")
     else:
         print(MarkdownRenderer(color=False).plain(answer))
-    return 1 if answer == STEP_LIMIT_NOTICE else 0
+    return 1 if answer == STEP_LIMIT_NOTICE or session.agent.stopped else 0
 
 
 async def run_repl(session: Session) -> int:
@@ -932,8 +935,7 @@ async def _start_repl(session: Session) -> bool:
     startup = session.extensions.pop("startup", None)
 
     async def initialize() -> None:
-        await renderer.show_welcome(model=session.agent.model, workspace=session.workspace.root,
-                                    tools=session.registry.names)
+        await renderer.show_welcome(model=session.agent.model, workspace=session.workspace.root)
         if startup is not None:
             await startup()
 
@@ -1190,7 +1192,7 @@ async def _run_request(session: Session, prompt: str, style: Style) -> bool:
                     agent_task = asyncio.create_task(session.agent.run("", continue_run=True))
                     session.work.agent_task = agent_task
                     continue
-                if not exiting and session.agent.pending and answer != STEP_LIMIT_NOTICE and not session.agent.stopped:
+                if not exiting and session.agent.has_queued_input and answer != STEP_LIMIT_NOTICE and not session.agent.stopped:
                     if renderer.terminal is not None:
                         renderer.terminal.set_working(True)
                     agent_task = asyncio.create_task(session.agent.run(""))
@@ -1231,8 +1233,8 @@ async def _run_request(session: Session, prompt: str, style: Style) -> bool:
         failure = agent_task.exception()
         if failure is not None:
             raise failure
-        if exiting and session.agent.pending:
-            count = len(session.agent.pending)
+        if exiting and session.agent.has_queued_input:
+            count = len(session.agent.pending) + len(session.agent.queued_messages)
             subject = "message was" if count == 1 else "messages were"
             renderer.emit(style.dim(
                 f"  {count} queued {subject} not run because the session is exiting."
@@ -1477,7 +1479,7 @@ def _model_table(session: Session, models: list[ModelInfo]) -> str:
         cells = [[f"Model: {row[0]}\nContext: {row[1]}\nIn/Out $/Mtok: {row[2]}"] for row in rows]
         table = tabulate(cells, tablefmt="outline", disable_numparse=True,
                          maxcolwidths=[max(1, columns - 6)])
-    return "\n".join("  " + line for line in table.splitlines())
+    return literal("\n".join("  " + line for line in table.splitlines()))
 
 
 class _RendererStream(io.TextIOBase):
@@ -1712,7 +1714,7 @@ def _cache_quota(session: Session, info: KeyInfo) -> None:
 def _describe_key_info(info: KeyInfo, style: Style, out: io.TextIOBase) -> None:
     """Print a key's limits so the user knows what it can actually reach."""
     if info.label:
-        print(f"    label      {info.label}", file=out)
+        print(literal(f"    label      {info.label}"), file=out)
     if info.limit is not None:
         remaining = info.limit_remaining
         detail = f"${info.limit:.2f} limit"
@@ -1933,9 +1935,9 @@ async def _mcp_command(
         print(style.red(f"  Warning: {state.line()}"), file=out)
         return
 
-    print(f"  {style.green('connected')} {state.spec.name} — {state.detail}", file=out)
+    print(f"  {style.green('connected')} {literal(state.spec.name)} — {literal(state.detail)}", file=out)
     for qualified in state.qualified:
-        print(f"    {qualified}", file=out)
+        print(literal(f"    {qualified}"), file=out)
     if not state.qualified:
         print(style.dim("    (no tools)"), file=out)
 
@@ -2025,9 +2027,9 @@ def _describe_mcp(session: Session, style: Style, out: io.TextIOBase) -> None:
     for name in sorted(set(configured) | set(live)):
         state = live.get(name)
         if state is not None:
-            print(f"  {style.cyan(name)}: {state.status} — {state.detail}", file=out)
+            print(f"  {style.cyan(name)}: {literal(state.status)} — {literal(state.detail)}", file=out)
             for qualified in state.qualified:
-                print(f"    {qualified}", file=out)
+                print(literal(f"    {qualified}"), file=out)
         else:
             spec = configured[name]
             marker = "not connected" if name in configured else "session only"
@@ -2122,7 +2124,7 @@ async def _list_models(args: argparse.Namespace) -> int:
         if isinstance(result, BaseException):
             if not isinstance(result, (APIError, ConfigError)):
                 raise result
-            print(f"slipagent: {name}: {result}", file=sys.stderr)
+            print(literal(f"slipagent: {name}: {result}"), file=sys.stderr)
         else:
             models.extend(coding_models(result))
     if not models:
@@ -2131,7 +2133,7 @@ async def _list_models(args: argparse.Namespace) -> int:
     style = Style(_use_color(sys.stdout, args.no_color))
     for model in sorted(models, key=lambda m: m.id):
         context = f"  {model.context_length:,} ctx" if model.context_length else ""
-        print(f"{model.selector}{style.dim(context)}")
+        print(f"{literal(model.selector)}{style.dim(context)}")
     print(style.dim(f"\n{len(models)} models"), file=sys.stderr)
     return 0
 
@@ -2139,6 +2141,12 @@ async def _list_models(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    try:
+        Path.cwd()
+    except OSError as exc:
+        print(literal(f"slipagent: current directory is unavailable: {exc}. "
+                      "Run cd to an existing directory, then start SlipAgent again."), file=sys.stderr)
+        return 2
 
     # argparse allows both a positional prompt and -p; prefer the explicit flag.
     prompt = args.prompt_flag or " ".join(args.prompt).strip() or None
@@ -2161,7 +2169,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return asyncio.run(_dispatch(args, prompt))
     except PromptError as exc:
-        print(f"slipagent: {exc}", file=sys.stderr)
+        print(literal(f"slipagent: {exc}"), file=sys.stderr)
         return 2
     except KeyboardInterrupt:
         return 130
@@ -2178,7 +2186,7 @@ async def _dispatch(args: argparse.Namespace, prompt: str | None) -> int:
         try:
             return await _list_models(args)
         except (ConfigError, APIConfigError) as exc:
-            print(f"slipagent: {exc}", file=sys.stderr)
+            print(literal(f"slipagent: {exc}"), file=sys.stderr)
             return 2
 
     events = JsonEventStream(sys.stdout) if getattr(args, "json_events", False) else None
@@ -2186,7 +2194,7 @@ async def _dispatch(args: argparse.Namespace, prompt: str | None) -> int:
         interactive = not prompt and sys.stdin.isatty() and sys.stderr.isatty() and os.environ.get("TERM") != "dumb"
         session = await build_session(args, defer_startup=interactive)
     except (ConfigError, APIError) as exc:
-        print(f"slipagent: {exc}", file=sys.stderr)
+        print(literal(f"slipagent: {exc}"), file=sys.stderr)
         if events is not None:
             events.write("run_end", status="error", exit_code=2, phase="setup",
                          error={"type": type(exc).__name__, "message": str(exc)})

@@ -195,7 +195,7 @@ class CommandLog:
             errors = " ".join(part for part in (errors, self.artifact_error) if part)
         arguments = json.dumps({"log_id": self.id, "stream": "stdout"})
         return load_prompt("command-output-recovery.md", log_id=self.id, arguments=arguments,
-            retention=load_prompt("command-output-saved.md" if getattr(self.archive, "_persistent", None) else "command-output-temporary.md"),
+            retention=load_prompt("command-output-saved.md" if getattr(self.archive, "_persistent", None) else "command-output-temporary.md").strip(),
             errors=errors).rstrip()
 
 
@@ -219,7 +219,7 @@ class CommandArchive:
             return persistent
         if self._temporary is None:
             self._temporary = tempfile.TemporaryDirectory(prefix="slipagent-logs-", dir=self._parent)
-        return Path(self._temporary.name)
+        return Path(self._temporary.name).resolve()
 
     def use_directory(self, directory: Path, on_log: Callable[[CommandLog], None]) -> None:
         """Attach private durable storage; clear detaches it without deleting it."""

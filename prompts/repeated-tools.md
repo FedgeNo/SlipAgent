@@ -10,4 +10,4 @@ Those tools already ran. Change the approach: inspect the specific error, choose
 ${tool_calls}
 ```
 
-If intentionally polling an external change with run_command, set poll=true; ordinary retries are not polling.
+If intentionally polling an external change with run_command, set poll=true.

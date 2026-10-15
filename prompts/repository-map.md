@@ -2,7 +2,7 @@
 
 ## Map Contents
 
-Paths and declaration outlines with line numbers, ranked by user-request terms and symbol references. Python signatures omit defaults and annotations. Other supported languages use syntax-tree declaration headers; unsupported files list paths only. Partial outlines are labelled. Symbol matches are orientation hints, not verified bindings.
+Paths and declaration outlines with line numbers, ranked by user-request terms and symbol references. Python signatures omit defaults and annotations. Other supported languages use syntax-tree declaration headers; unsupported files list paths only. Partial outlines are labelled. Symbol matches are orientation hints.
 
 ## Limits and Source Inspection
 

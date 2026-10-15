@@ -4,11 +4,9 @@
 
 Commit already staged changes with a message.
 
-Does not stage files, amend, or push.
-
 ## External Helpers
 
-Hooks and signing are disabled to keep external helpers from bypassing workspace checks.
+Hooks and signing are disabled.
 
 ## Output Recovery
 

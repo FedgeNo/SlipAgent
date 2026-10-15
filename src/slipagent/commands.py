@@ -666,7 +666,6 @@ class DeleteCommand(BranchSessionCommand):
             terminal.clear_transcript()
         session.renderer.show_banner(
             model=session.agent.model, workspace=session.workspace.root,
-            tools=session.registry.names,
         )
 
     async def confirm(self, context: CommandContext, journal: SessionJournal) -> bool:

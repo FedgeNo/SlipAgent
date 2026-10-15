@@ -125,7 +125,8 @@ class Session:
             capabilities = await replacement.model_capabilities(model.id, refresh=True, store=False)
             if capabilities is None:
                 raise APIConfigError("The API did not supply capabilities to verify this model's compatibility.")
-            await self.agent._context_view(self.registry.specs(), 0, capabilities=capabilities, preview=True)
+            await self.agent._context_view(self.registry.specs(), 0, capabilities=capabilities, preview=True,
+                                           candidate_model=model.id)
             if replacement is not self.client:
                 # Pending jobs use the old client; originals survive cancellation.
                 self.agent._compactor().reset()

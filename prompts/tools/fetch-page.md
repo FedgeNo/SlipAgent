@@ -6,4 +6,4 @@ Fetch a public URL over HTTP(S) and return its readable text, with scripts and m
 
 ## Supported Content
 
-Works on documentation, articles, and raw files; it does not run JavaScript, so client-rendered pages may come back thin.
+Works on documentation, articles, and raw files; client-rendered pages may come back thin.

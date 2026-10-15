@@ -61,7 +61,9 @@ async def test_provider_error_turn_reaches_model_before_it_decides_whether_to_re
         assert retry == {"consecutive_failures": 1, "total_failed_attempts": 1,
                          "failed_step_ids": [1], "last_failed_step": 1}
         assert "When instructed to stop after failure, report it with no tools" in body["messages"][0]["content"]
-        assert failed["user_prompt"] == ["Write the file. If it fails, do not retry."]
+        # The prompt was entered in the failed step itself; the retry turn also receives it retained.
+        assert failed["user_prompts"] == ["Write the file. If it fails, do not retry."]
+        assert payload["retained_user_prompts"] == ["Write the file. If it fails, do not retry."]
         return response(packet({"content": "The attempt failed, so I stopped without retrying the write."}, "stop"))
 
     async with client_for(handle) as client:

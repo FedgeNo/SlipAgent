@@ -417,15 +417,19 @@ class APIClient:
         if attempt >= self.retry.max_retries:
             if not self.retry.extended or self.retry.initial_backoff <= 0:
                 return None
-            if self.retry.initial_backoff * 2 ** attempt > maximum:
+            if maximum <= 0 or attempt > math.log2(maximum / self.retry.initial_backoff):
                 return None
         return min(maximum, self._backoff(attempt, retry_after))
 
     async def wait_retry(self, attempt: int, error: APIResponseError, *,
                          stop: asyncio.Event | None = None,
-                         on_retry: Callable[[str, int], None] | None = None) -> bool:
+                         on_retry: Callable[[str, int], None] | None = None,
+                         persistent: bool = False) -> bool:
         """Wait silently first, then report a cancellable countdown on each retry."""
         delay = self.retry_delay(attempt, error.retry_after)
+        if delay is None and persistent:
+            # Background work remains queued; honor longer provider cooldowns.
+            delay = max(1.0, _parse_retry_after(error.retry_after) or min(60.0, self.retry.max_backoff))
         if delay is None or stop is not None and stop.is_set():
             return False
         callback = on_retry or self.on_retry

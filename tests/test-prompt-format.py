@@ -60,7 +60,7 @@ async def test_working_and_summary_requests_have_markdown_structure(native):
     assert len(requests) == len(summaries) == 1
     assert_markdown_structure(requests[0]["messages"][0]["content"])
     assert_markdown_structure(summaries[0]["messages"][0]["content"])
-    assert json.loads(requests[0]["messages"][1]["content"])["user_messages"] == [user]
+    assert json.loads(requests[0]["messages"][1]["content"])["user_prompts"] == [user]
     assert read_data(summaries[0]["messages"][1]["content"])["user_prompt"] == user
     definitions = requests[0].get("tools")
     if not native:

@@ -16,6 +16,51 @@ from slipagent.nvidia import ULTRA_MODEL
 from slipagent.providers import create_client
 
 
+@pytest.mark.parametrize("mcp_status", ["connected", "error"])
+async def test_startup_reports_failed_metadata_and_mcp_outcomes(tmp_path, monkeypatch, mcp_status):
+    import io
+    from unittest.mock import AsyncMock
+    client = SimpleNamespace(aclose=AsyncMock(), model_capabilities=AsyncMock(return_value=None),
+                             key_info=AsyncMock(return_value=None))
+    monkeypatch.setattr(cli, "create_client", lambda *args, **kwargs: client)
+    monkeypatch.setattr(ProjectEnvironment, "snapshot", AsyncMock(return_value={}))
+    monkeypatch.setattr(RepositoryMap, "snapshot", AsyncMock(return_value=""))
+    args = cli.build_parser().parse_args([
+        "--workspace", str(tmp_path), "--api-key", "dummy", "--no-session", "--no-reload", "--no-mcp",
+    ])
+    session = await cli.build_session(args, defer_startup=True)
+    session.renderer.stream = io.StringIO()
+    session.mcp = SimpleNamespace(connect_all=AsyncMock(return_value=[SimpleNamespace(status=mcp_status)]),
+                                  aclose=AsyncMock())
+    try:
+        await cli._initialize_session(session, args, cli.Config.from_env(api_key="dummy", workspace=tmp_path), announce=True)
+        output = session.renderer.stream.getvalue()
+        assert "Model capability check: failed." in output
+        assert "Finished fetching the model catalog" not in output
+        assert f"MCP: {int(mcp_status == 'connected')} connected; {int(mcp_status == 'error')} failed." in output
+        assert "Finished connecting to MCP" not in output
+    finally:
+        await cli._shutdown(session)
+
+
+def test_startup_reports_missing_current_directory(monkeypatch, capsys):
+    from pathlib import Path
+
+    def missing_directory(cls):
+        raise FileNotFoundError(2, "No such file or directory")
+
+    async def dispatch(*args):
+        pytest.fail("Startup must stop before initializing services")
+
+    monkeypatch.setattr(Path, "cwd", classmethod(missing_directory))
+    monkeypatch.setattr(cli, "_dispatch", dispatch)
+    assert cli.main(["-p", "test", "--no-mcp", "--no-session"]) == 2
+    error = capsys.readouterr().err
+    assert "current directory is unavailable" in error
+    assert "cd" in error
+    assert "Traceback" not in error
+
+
 @pytest.mark.parametrize("cancel", [False, True])
 async def test_deferred_startup_overlaps_services_before_context(tmp_path, monkeypatch, cancel):
     entered = set()

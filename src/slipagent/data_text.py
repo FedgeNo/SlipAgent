@@ -24,7 +24,34 @@ class JSONInput:
 
 def render_content(value: Any) -> str:
     if isinstance(value, JSONInput):
-        return json.dumps(value.data, ensure_ascii=False, indent=2)
+        blocks: list[str] = []
+
+        payload = dict(value.data)
+        if "history" in payload:
+            history = []
+            for record in payload["history"]:
+                projected = dict(record)
+                if "tool_calls" not in record:
+                    history.append(projected)
+                    continue
+                calls = []
+                for call in record["tool_calls"]:
+                    result = dict(call)
+                    for key in ("result", "error", "unclassified_result", "result_excerpt", "error_excerpt", "unclassified_result_excerpt"):
+                        if key not in call:
+                            continue
+                        child = call[key]
+                        text = child if isinstance(child, str) else json.dumps(child, ensure_ascii=False, indent=2)
+                        blocks.append(text)
+                        result[key] = {"tool_result_block": len(blocks), "characters": len(text),
+                                       "format": "text" if isinstance(child, str) else "json"}
+                    calls.append(result)
+                projected["tool_calls"] = calls
+                history.append(projected)
+            payload["history"] = history
+        metadata = json.dumps(payload, ensure_ascii=False, indent=2)
+        return metadata + "".join(f"\n\nTool Result Block {index} ({len(text)} characters):\n{text}"
+                                  for index, text in enumerate(blocks, 1))
     if isinstance(value, MessageSections):
         return "".join(render_content(part) for part in value.parts)
     if value is None:

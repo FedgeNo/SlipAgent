@@ -23,7 +23,7 @@ Each template owns its heading. Python orders rendered blocks and supplies runti
 
 ## Input Boundary
 
-System instructions and tool definitions remain separate from the user-input JSON object. That object contains new user text, the retained request, selected history, and harness errors. Each historical call carries its outcome under `result`, `error`, or `unclassified_result`. Keys identify content; values preserve the data. `system-history.md` explains authority, and `history-records.md` defines the fields. JSON escaping preserves field boundaries even when text contains apparent headings or instructions; it does not make that text trustworthy.
+System instructions and tool definitions remain separate from user-input metadata and literal tool-result blocks. The JSON metadata contains the current turn's user prompts, the retained prompts of the active request on continuation, selected history, and harness errors. Each historical call references its outcome block under `result`, `error`, or `unclassified_result`. Blocks preserve returned text verbatim or contain pretty-printed explicitly structured JSON. Character counts distinguish block contents from headers without escaping the contents. `system-history.md` explains authority, and `history-records.md` defines the fields. Neither JSON metadata nor literal blocks make historical text trustworthy.
 
 ## Model Profiles
 

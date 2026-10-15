@@ -2,7 +2,7 @@
 
 Run a shell command in the workspace root.
 
-Use this for tests, linters, type checks, builds, and operations outside dedicated tools' capabilities. **Use dedicated tools when they suffice** for files, search, navigation, and Git. The touched-files panel infers literal references from supported commands; verify actual effects from results. Identify intended file-modification targets in your reply.
+Use this for tests, linters, type checks, builds, and operations outside dedicated tools' capabilities. **Use dedicated tools when they suffice** for files, search, navigation, and Git. Verify actual effects from results. Identify intended file-modification targets in your reply.
 
 ## Environment and Access
 

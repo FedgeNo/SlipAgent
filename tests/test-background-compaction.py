@@ -51,36 +51,42 @@ def reply(text=None, calls=None):
 
 
 @pytest.mark.parametrize("recover", [True, False])
-@pytest.mark.parametrize("failure", ["overload", "bad-gzip"])
-async def test_summary_retries_transient_failures_with_bounded_provider_policy(monkeypatch, recover, failure):
+@pytest.mark.parametrize("failure", ["overload", "bad-gzip", "rate-limit", "timeout"])
+async def test_summary_retries_transient_failures_until_recovery_or_reset(monkeypatch, recover, failure):
     from slipagent.compaction import StepCompactor
     attempts, delays, errors = [], [], []
     def handle(request):
         attempts.append(json.loads(request.content))
-        if len(attempts) < 6 or not recover:
+        if len(attempts) < 10 or not recover:
+            if failure == "timeout":
+                raise TimeoutError("request deadline")
             if failure == "bad-gzip":
                 return httpx.Response(200, headers={"content-encoding": "gzip"}, content=b"not a gzip stream")
-            return httpx.Response(200, json={"error": {"message": "Service temporarily overloaded", "code": 503}})
+            return httpx.Response(200, json={"error": {"message": "Service temporarily overloaded", "code": 429 if failure == "rate-limit" else 503}})
         return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": json.dumps({'summary': 'Completed the work.', 'reasoning_summary': ''})}, "finish_reason": "stop"}]})
     history = ConversationHistory()
     history.sync([Message.user("Request"), Message.assistant("Response")])
     step = history.steps[0]
     original = step.full_text()
     compactor = StepCompactor(lambda usage: None, errors.append)
+    real_sleep = asyncio.sleep
     async with OpenRouterClient("test", transport=httpx.MockTransport(handle), retry=RetryPolicy(extended=True)) as client:
         async def sleep(delay):
             delays.append(delay)
             assert errors == []
+            if not recover and len(attempts) == 10:
+                compactor.reset()
+                await real_sleep(0)
         monkeypatch.setattr("slipagent.api.asyncio.sleep", sleep)
         monkeypatch.setattr("slipagent.api.random.uniform", lambda lower, upper: upper)
         compactor.submit(step, client, "test", None, None)
         await compactor.wait()
-    assert len(attempts) == (6 if recover else 7)
-    assert delays == ([1, 2, 4, 8, 16] if recover else [1, 2, 4, 8, 16, 32])
+    assert len(attempts) == 10
+    assert delays == [1, 2, 4, 8, 16, 32] + [60] * (3 if recover else 4)
     assert all(request == attempts[0] for request in attempts)
     assert step.full_text() == original
-    assert len(errors) == (0 if recover else 1)
-    assert step.compaction_status == ("complete" if recover else "failed")
+    assert not errors
+    assert step.compaction_status == ("complete" if recover else "cancelled")
 
 
 async def test_plain_response_and_native_calls_do_not_require_memory_json():

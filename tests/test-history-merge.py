@@ -115,6 +115,45 @@ async def test_large_summary_batches_merge_occasionally_and_preserve_source_meta
     assert all("compressed_summary" in step for step in source["steps"])
 
 
+@pytest.mark.parametrize("outcome", ["recover", "reset", "permanent"])
+@pytest.mark.parametrize("status", [429, 503, "timeout", "transport"])
+async def test_history_merge_retries_until_recovery_or_reset(monkeypatch, outcome, status):
+    import httpx
+    from slipagent.openrouter import OpenRouterClient
+
+    history, _ = history_with_posts(30)
+    requests, waits, errors = [], [], []
+    owner = StepCompactor(lambda usage: None, errors.append)
+    originals = [step.summary for step in history.steps]
+    def handle(request):
+        requests.append(json.loads(request.content))
+        if outcome == "permanent" or len(requests) < 10 or outcome == "reset":
+            if outcome != "permanent" and status == "timeout":
+                raise TimeoutError("request deadline")
+            if outcome != "permanent" and status == "transport":
+                raise httpx.ReadError("connection lost")
+            return httpx.Response(401 if outcome == "permanent" else status, json={"error": {"message": "unavailable"}})
+        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": json.dumps({"summary": "Completed the requested inspections."})}, "finish_reason": "stop"}]})
+    real_sleep = asyncio.sleep
+    async def sleep(delay):
+        waits.append(delay)
+        assert not errors
+        if outcome == "reset" and len(requests) == 10:
+            owner.reset()
+            await real_sleep(0)
+    monkeypatch.setattr("slipagent.api.asyncio.sleep", sleep)
+    monkeypatch.setattr("slipagent.api.random.uniform", lambda low, high: high)
+    async with OpenRouterClient("dummy", transport=httpx.MockTransport(handle)) as client:
+        schedule(owner, history, client)
+        await owner.wait()
+    assert len(requests) == (1 if outcome == "permanent" else 10)
+    assert all(request == requests[0] for request in requests)
+    assert [step.summary for step in history.steps] == originals
+    assert bool(historical_records(history.steps)) == (outcome == "recover")
+    assert bool(errors) == (outcome == "permanent")
+    assert waits == ([] if outcome == "permanent" else [1, 2, 4, 8, 16, 32] + [60] * (4 if outcome == "reset" else 3))
+
+
 async def test_small_normal_turns_do_not_merge_just_because_twenty_turns_passed():
     history, _ = history_with_posts(90, size=70)
     client = MergeClient()

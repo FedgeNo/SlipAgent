@@ -274,7 +274,7 @@ async def test_older_window_uses_original_when_summary_is_larger():
     assert "LARGE SECOND ANSWER" not in wire and "Second answer compressed." in wire
     assert 'Latest answer compressed.' in wire
     assert [context_body(message.content) for message in unpack_context(view) if message.role == "user"] == [
-        "first request", *("third request" for _ in range(4)), "current request",
+        "first request", "current request",  # continuation steps repeat no prompt
     ]
 
 
@@ -293,7 +293,7 @@ async def test_shrunk_window_has_whole_turn_summary_and_full_latest_turn():
     view = client.calls[-1]["messages"]
     wire = "\n".join(content_text(message.content) for message in view)
     assert [context_body(message.content) for message in unpack_context(view) if message.role == "user"] == [
-        "Original exact request", "Follow-up exact request",
+        "Follow-up exact request",
     ]
     assert agent.history.steps[0].summary in wire
     assert not any(context_body(m.content) == "FULL TOOL RESPONSE" for m in unpack_context(view))
@@ -357,7 +357,7 @@ async def test_only_posts_outside_window_replace_originals_with_summaries():
     assert "MIDDLE FULL RESPONSE " * 50 not in wire
     assert "LATEST FULL RESPONSE " * 50 not in wire
     assert [context_body(m.content) for m in unpack_context(view) if m.role == "user"] == [
-        *("latest question" for _ in range(2)), "next question",
+        "next question",
     ]
     assert history.steps[0].summary in wire
     assert context_records(view)[1]['compressed_summary'] == history.steps[1].summary
@@ -416,7 +416,8 @@ async def test_reduced_history_keeps_active_request_and_complete_latest_tool_bat
     originals = [step.full_text() for step in history.steps]
     view = await history.view(messages, [], keep_steps=50,
                               context_length=9000, max_output=1000)
-    assert [context_body(message.content) for message in unpack_context(view) if message.role == "user"] == [request + "\n" + correction]
+    # The active request arrives retained as its original separate messages.
+    assert [context_body(message.content) for message in unpack_context(view) if message.role == "user"] == [request, correction]
     assert [(message.tool_call_id, context_body(message.content)) for message in unpack_context(view) if message.role == "tool"] == [
         ("a", "EXACT FIRST RESULT"), ("b", "EXACT SECOND RESULT"),
     ]
@@ -561,11 +562,11 @@ async def test_retry_keeps_previous_tool_results_and_current_user_correction():
     assert len(client.calls) == 3
     for index, request in enumerate(client.calls[1:]):
         assert any(m.role == "tool" and context_body(m.content) == "EXACT TOOL RESULT" for m in unpack_context(request["messages"]))
-        prompts = context_records(request["messages"])[-1]["user_prompt"]
+        prompts = context_records(request["messages"])[-1]["user_prompts"]
         assert len(prompts) == 1
         if index:
             assert prompts[0].startswith("Harness tool-use correction:")
-            assert context_records(request["messages"])[-2]["user_prompt"] == ["current correction"]
+            assert context_records(request["messages"])[-2]["user_prompts"] == ["current correction"]
         else:
             assert prompts[0] == "current correction"
         assert context_records(request["messages"])[-1]["step_id"] == 2 + index
@@ -880,13 +881,14 @@ def test_real_cli_rejects_invalid_calls_before_reply_and_readonly_batch(tmp_path
     assert result.stdout.strip() == "Done."
     assert "Rejected response" not in result.stdout + result.stderr
     assert len(stub.requests) == 3
-    prompts = context_records(stub.requests[1]["messages"])[-1]["user_prompt"]
+    prompts = context_records(stub.requests[1]["messages"])[-1]["user_prompts"]
     assert len(prompts) == 1 and prompts[0].startswith("Harness tool-use correction:")
-    assert context_records(stub.requests[1]["messages"])[0]["user_prompt"] == ["List the directory"]
-    assert "List the directory" in json.loads(stub.requests[2]["messages"][-1]["content"])["retained_user_requests"]
+    assert context_records(stub.requests[1]["messages"])[0]["user_prompts"] == ["List the directory"]
+    from data_text_reader import read_json_input
+    assert "List the directory" in read_json_input(stub.requests[2]["messages"][-1]["content"])["retained_user_prompts"]
     assert all(not prompt.startswith("Harness tool-use correction:")
                for record in context_records(stub.requests[2]["messages"])
-               for prompt in record.get("user_prompt", []))
+               for prompt in record.get("user_prompts", []))
     assert not any(m.get("tool_calls") for m in stub.requests[1]["messages"])
 
 
@@ -917,7 +919,7 @@ async def test_memory_prompt_explains_background_summaries_and_retrieval(has_pre
                                             context_length=1000000, max_output=8192)
     system = content_text(view[0].content)
     assert "Return one JSON object with `response`" in system and "`tool_calls`" in system
-    assert "The harness creates summaries separately" in system
+    assert "`representation=\"full\"` supplies original parts" in system
     assert "recall_history" in system and "complete original object" in system
     assert "ONE JSON object in EVERY response" not in system
     assert "previous_tool_responses_compressed" not in system

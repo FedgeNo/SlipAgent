@@ -752,7 +752,7 @@ def test_shared_lists_retain_selection_across_accepted_and_rejected_reloads(run_
                 panel = terminal._touched_panel
                 panel.move(4)
                 selected = panel.selection
-                edit('listpanels.py', 'return f"{key} [{self.items[key]}]"', 'return f"Updated {key} [{self.items[key]}]"')
+                edit('listpanels.py', 'return f"{key} [{status}]"', 'return f"Updated {key} [{status}]"')
                 await frame.checkpoint()
                 assert frame.generation == 1, sink.getvalue()
                 assert terminal._touched_panel is panel

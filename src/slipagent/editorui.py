@@ -15,7 +15,7 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.widgets import TextArea
 from wcwidth import iter_graphemes, width as display_width
 
-from .editor import FileEditor, PAGE_SEGMENTS, signature
+from .editor import FileEditor, PAGE_SEGMENTS, UNSUPPORTED_CONTROLS, signature
 from .editorcontrol import EditorControl, EditorWindow
 from .editorbuffer import EditorBuffer, grapheme_edge
 from .links import ActionControl
@@ -31,15 +31,24 @@ class EditorPanel:
         self.saving_task: asyncio.Task[Any] | None = None
         self.saved_pages: dict[int, str] = {}
         self.input = TextArea(multiline=True, wrap_lines=True,
-                              read_only=Condition(lambda: self.busy))
+                              read_only=Condition(lambda: self.busy or self.read_only))
         self.ensure_control()
         self.container = HSplit([FocusCoordinator.header(FormattedTextControl(self.header), lambda: self.input, style="class:status class:footer"), self.input])
         self.controls = Window(ActionControl(self.actions), height=5)
+
+    @property
+    def read_only(self) -> bool:
+        if self.file is None:
+            return False
+        if not hasattr(self.file, "read_only"):
+            self.file.read_only = any(UNSUPPORTED_CONTROLS.search(chunk) for chunk in self.file.chunks())
+        return self.file.read_only
 
     def ensure_control(self) -> None:
         if not isinstance(self.input.buffer, EditorBuffer):
             self.input.buffer = EditorBuffer(self, self.input.buffer)
             self.input.control.buffer = self.input.buffer
+        self.input.buffer.read_only = Condition(lambda: self.busy or self.read_only)
         if hasattr(self, "container"):
             header = self.container.children[0]
             if isinstance(header, Window):
@@ -75,7 +84,7 @@ class EditorPanel:
                     result.append(("", "  |  "))
                 result.extend(self.terminal._action_link(
                     label, ("editor-action", label), action, style="class:menu-item",
-                    enabled=lambda: not self.busy,
+                    enabled=lambda label=label: not self.busy and (not self.read_only or label not in {"Save File [Ctrl+S]", "Undo [Ctrl+Z]", "Redo [Ctrl+Y]"}),
                 ))
             result.append(("", " \n"))
         return result
@@ -87,6 +96,8 @@ class EditorPanel:
         if self.terminal.__dict__.get("_inspection_visible") and columns >= 60:
             columns -= columns // 4 + 1
         text = str(self.file.path)
+        if self.read_only:
+            text = "Read-Only: Unsupported Control Characters — " + text
         if display_width(text) > columns:
             clusters = list(iter_graphemes(text))
             left = ""
@@ -128,7 +139,7 @@ class EditorPanel:
             self.input.buffer.cursor_position = position
             self.terminal._editor_active = True
             self.terminal._focus.focus(self.input)
-            self.terminal.notify("Agent held while editor is open.")
+            self.terminal.notify("Read-only: unsupported control characters." if self.read_only else "Agent held while editor is open.")
         except (OSError, UnicodeError, ValueError) as exc:
             self.terminal.notify("Could not open editor.")
             self.terminal.write(f"{path}: {exc}")
@@ -137,11 +148,13 @@ class EditorPanel:
             self.terminal.app.invalidate()
 
     def flush(self) -> None:
-        if self.file is not None:
+        if self.file is not None and not self.read_only:
             self.file.set_page(self.page, self.input.text)
 
     def dirty(self) -> bool:
         assert self.file is not None
+        if self.read_only:
+            return False
         current = {page: hashlib.sha256(self.file.page_text(page).encode()).hexdigest() for page in self.file.pages}
         if self.input.text == self.file.original_page_text(self.page):
             current.pop(self.page, None)
@@ -249,6 +262,9 @@ class EditorPanel:
         self.terminal.app.invalidate()
 
     async def save(self) -> bool:
+        if self.read_only:
+            self.terminal.notify("Read-only: unsupported control characters; file not saved.")
+            return False
         if self.busy or self.file is None:
             return False
         self.busy = True

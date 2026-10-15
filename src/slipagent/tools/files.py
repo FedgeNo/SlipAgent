@@ -199,6 +199,8 @@ class ReadFileTool(Tool):
         window = lines[start - 1 : end]
 
         if not window:
+            if not total:
+                return ToolResult.ok(f"{self.workspace.relative(target)} is empty (0 lines).")
             return ToolResult.ok(
                 f"{self.workspace.relative(target)} has {total} line(s); "
                 f"offset {start} is past the end of the file."
@@ -256,7 +258,7 @@ class WriteFileTool(Tool):
         before: str | None = ""
         if existed and self.__dict__.get("artifacts") is not None:
             try:
-                before = read_regular(target, MAX_READ_BYTES).decode("utf-8")
+                before = None if target.stat().st_size > MAX_READ_BYTES else read_regular(target, MAX_READ_BYTES).decode("utf-8")
             except UnicodeError:
                 before = None
             except OSError as exc:
@@ -272,7 +274,7 @@ class WriteFileTool(Tool):
             artifact_notice = _save_diff(self.artifacts, f"write_file {path!r}",
                                          edit_diff(self.workspace.relative(target), before, content, limit=None))
         elif self.__dict__.get("artifacts") is not None and before is None:
-            artifact_notice = "\nPrevious contents were not readable as UTF-8; no diff record was created."
+            artifact_notice = "\nPrevious contents were not readable as UTF-8 text within the read limit; no diff record was created."
         line_count = len(content.splitlines())
         return ToolResult.ok(
             f"{verb} {self.workspace.relative(target)} "

@@ -873,6 +873,7 @@ there are unsaved changes. Clicking text places the cursor there; clicking right
 it at that line's end, and clicking below the content places it at the file's end.
 Editor action controls replace the prompt area while editing; the same prompt
 buffer, text, cursor, and scrolling return when the editor closes.
+Files containing unsupported control characters open read-only, with an explanation in the header and status. Editing and saving are disabled; tabs and normal line endings remain editable. Binary files remain unsupported.
 The editor's top line shows the full file path, truncating its middle when needed.
 Help, reload controls, and external-change warnings appear in the bottom area.
 Clicking another touched file opens it immediately when the current file is
@@ -1114,12 +1115,12 @@ been sent.
 
 System instructions, tool definitions, and current-step metadata appear in the
 system prompt. Native tools also use the API tool field. A single user message
-contains one JSON object with these fields:
+begins with JSON metadata containing these fields, followed by literal tool-result blocks:
 
 | Field | Content |
 | --- | --- |
-| `user_messages` | New messages in chronological order, or `[]` without new input; later messages supersede conflicting earlier instructions |
-| `retained_user_requests` | Full ordered array of user messages received before tool use began; supplied only after tools when no new user messages are present |
+| `user_prompts` | New messages in chronological order, or `[]` without new input; later messages supersede conflicting earlier instructions |
+| `retained_user_prompts` | Full ordered array of user messages received before tool use began; supplied only after tools when no new user messages are present |
 | `history` | Selected completed steps, oldest to newest |
 | `errors` | Harness errors and response corrections not attached to a call |
 | `user_edits` (when present) | Saved user file edits, with revision IDs, bounded diff prefixes and artifact references |
@@ -1129,19 +1130,18 @@ Saved-edit guidance is included only when the request contains pending edit
 notifications or selected history with saved edits. Requests without them omit
 both the fields and that guidance.
 
-Each full history record contains `user_prompt`, `agent_response`, and `tool_calls`.
+Each full history record contains `user_prompts`, `agent_response`, and `tool_calls`. `user_prompts` lists only the messages the user sent in that step.
 Each call retains its `call_id`, `tool_name`, and argument object, with its raw
-outcome under `result` for success or `error` for failure. Legacy observations
+outcome reference under `result` for success or `error` for failure. Legacy observations
 without a recorded status use `unclassified_result`. Labels belong to keys;
-no classification prefixes are inserted into values. Structured results stay
-objects, and textual results stay strings even when they resemble JSON.
+no classification prefixes are inserted into result contents. Each reference identifies a numbered block, its character count, and its `text` or `json` format. Textual results are copied verbatim, even when they resemble JSON. Explicitly structured results use pretty-printed JSON blocks.
 
 Records remain raw objects and lists internally. At the message boundary the
-complete user-input object is serialized once. The HTTP client then encodes the
+user-input metadata is serialized and exact result blocks are appended without extra escaping or indentation. The HTTP client then encodes the
 provider's required transport envelope; native tool-call arguments also use the
 JSON string required by that protocol. Quotes, backslashes, and newlines round-trip
 without changing the values or allowing text to create sibling input fields.
-JSON provides structural separation, not a guarantee against prompt injection.
+Metadata and length-labelled blocks provide structural separation, not a guarantee against prompt injection.
 `prompts/system-history.md` explains that historical text and tool observations
 are evidence, not system instructions. Request assembly does not archive the
 input envelope or system guidance as conversation turns.
@@ -1251,8 +1251,8 @@ when the selected endpoints advertise `tools`. Tool definitions go in the API's
 `tools` parameter; calls arrive in `message.tool_calls`, separately from the
 response text. The harness preserves each call ID and stores its result with
 the matching `call_id` in that step's `tool_results` array. The next request
-supplies the completed step in the user-input JSON, with each result attached
-to its call under `result` or `error`. Native calls remain the model's
+supplies the completed step in the user-input metadata, with each literal result block referenced
+by its call under `result` or `error`. Native calls remain the model's
 response format; the input records describe completed history. SlipAgent does
 not force a `tool_choice` setting.
 
@@ -1370,11 +1370,12 @@ use plain output.
 ### Active-Task Memory
 
 The model retains nothing between API requests unless SlipAgent sends it again.
-New input arrives in one chronological `user_messages` array. Later messages
+New input arrives in one chronological `user_prompts` array. Later messages
 supersede earlier conflicting instructions; queued messages are not relegated
-to a secondary field. With no new input after tool use, `user_messages` is empty
-and `retained_user_requests` carries the full original array for that tool-use
-sequence. A new set of messages leaves the retained array empty.
+to a secondary field. With no new input, `user_prompts` is empty and
+`retained_user_prompts` carries the full original array for the active request,
+after tool use and on any other continuation. A new set of messages leaves the
+retained array empty.
 
 The harness stores original source messages independently of compression.
 `current_prompt_step` identifies the step that received them, and the model can
@@ -1404,7 +1405,7 @@ object, alongside the original fields. Compressed-only records use that same key
 Both originals and their accompanying analysis count toward the context budget;
 the representation comparison above uses the original before adding its summary.
 
-Each background compression attempt has a 20-minute timeout instead of the normal HTTP timeout. Retry waits and additional attempts can extend the job beyond 20 minutes. Final failure preserves original steps for `recall_history`. Working requests retain their configured timeout; reset and shutdown cancel pending summaries.
+Each background compression attempt has a 20-minute timeout instead of the normal HTTP timeout. Single-turn and multi-turn compression keep retrying rate limits, transient provider errors, and transport failures until recovery or cancellation. They share the working request retry schedule, then continue with waits of up to 60 seconds, honoring longer provider `Retry-After` cooldowns. Retry waits and additional attempts can extend the job beyond 20 minutes. Permanent failures preserve original steps for `recall_history`. Working requests retain their configured timeout and retry limit; reset and shutdown cancel pending summaries.
 
 Each working request identifies the source step of the active requests in system guidance; their exact text belongs in the structured user-input object. Steps after tool batches explicitly explain that control returned automatically without a new user instruction: assess results against that goal and return an answer without tools when it is fulfilled. This guidance is assembled for the outgoing request only; it is not saved in conversation history or background summaries. Historical requests provide background rather than independently requesting more work.
 

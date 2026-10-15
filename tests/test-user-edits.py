@@ -6,11 +6,47 @@ from unittest.mock import AsyncMock, Mock
 
 from slipagent.agent import Agent
 from slipagent.tools.base import ToolRegistry
-from slipagent.types import decode_json_content
+from data_text_reader import read_json_input
 from slipagent.useredits import UserEdits
 from slipagent.sessions import SessionJournal
 from test_agent import StubClient, RecordingTool, completion
 from slipagent.types import ToolCall
+
+
+def test_repeated_saved_diff_is_published_once_and_revert_is_notified(tmp_path):
+    agent = Agent(StubClient([]), ToolRegistry(), "test/model")
+    store = SimpleNamespace(save=Mock(side_effect=["first", "second", "third", "fourth"]))
+    agent.registry.services["artifact_store"] = store
+    terminal = SimpleNamespace(_touched_items={}, write_artifact_reference=Mock(), notify=Mock(), write=Mock())
+    edits = UserEdits(SimpleNamespace(agent=agent, registry=agent.registry), terminal)
+    path = tmp_path / "file"
+    edits.record(path, "+first", "edit")
+    edits.record(path, "+first", "edit")
+    assert store.save.call_count == 1
+    assert terminal.write_artifact_reference.call_count == 1
+    edits.record(path, "+second", "edit")
+    assert store.save.call_count == 2
+    edits.record(path, "", "edit")
+    notice = agent.registry.context_notes["user_edits"]["edit"]
+    assert notice["reverted_to_editor_baseline"] and not notice["delivered"]
+    edits.record(path, "", "edit")
+    assert store.save.call_count == 3
+    edits.record(path, "+first", "edit")
+    assert store.save.call_count == 4
+
+
+def test_unchanged_save_retries_failed_diff_archive(tmp_path):
+    agent = Agent(StubClient([]), ToolRegistry(), "test/model")
+    store = SimpleNamespace(save=Mock(side_effect=[OSError("archive unavailable"), "record"]))
+    agent.registry.services["artifact_store"] = store
+    terminal = SimpleNamespace(_touched_items={}, write_artifact_reference=Mock(), notify=Mock(), write=Mock())
+    edits = UserEdits(SimpleNamespace(agent=agent, registry=agent.registry), terminal)
+    path = tmp_path / "file"
+    edits.record(path, "+first", "edit")
+    edits.record(path, "+first", "edit")
+    edits.record(path, "+first", "edit")
+    assert store.save.call_count == 2
+    terminal.write_artifact_reference.assert_called_once_with("record")
 
 
 async def test_edit_request_waits_for_batch_boundary_and_preserves_background_jobs(tmp_path):
@@ -76,8 +112,8 @@ async def test_agent_finishes_all_tools_before_opening_editor_and_waits_before_n
         terminal._editor_active = False
         edits.close()
         assert await run == "done"
-        payload = decode_json_content(client.calls[-1]["messages"][-1].to_api()["content"])
-        assert payload["user_messages"] == []
+        payload = read_json_input(client.calls[-1]["messages"][-1].to_api()["content"])
+        assert payload["user_prompts"] == []
         assert payload["user_edits"][0]["diff"] == "+user edit"
         assert {call["call_id"] for call in payload["history"][-1]["tool_calls"]} == {"one", "two"}
     finally:
@@ -101,8 +137,8 @@ async def test_saved_user_edit_survives_resume_and_is_distinct_from_user_message
     restored = Agent(client, ToolRegistry(), "test/model")
     journal.restore(restored, data)
     await restored.run("Continue")
-    payload = decode_json_content(client.calls[-1]["messages"][-1].to_api()["content"])
-    assert payload["user_messages"] == ["Continue"]
+    payload = read_json_input(client.calls[-1]["messages"][-1].to_api()["content"])
+    assert payload["user_prompts"] == ["Continue"]
     assert payload["user_edits"][0]["path"] == str(path)
     assert payload["user_edits"][0]["source"] == "user"
     assert "+user" in payload["user_edits"][0]["diff"]

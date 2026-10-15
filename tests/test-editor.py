@@ -5,6 +5,24 @@ import pytest
 from slipagent.editor import FileEditor, EditConflict, signature
 
 
+@pytest.mark.parametrize("control", ["\x01", "\x07", "\x1b", "\x7f", "\x9b"])
+def test_unsupported_control_characters_open_read_only(tmp_path, control):
+    path = tmp_path / "controls.txt"
+    original = ("plain\n" * 100 + control + "tail\n").encode()
+    path.write_bytes(original)
+    editor = FileEditor(path)
+    try:
+        assert editor.read_only
+        assert "".join(editor.chunks()).encode() == original
+        with pytest.raises(ValueError, match="read-only"):
+            editor.set_page(0, "changed")
+        with pytest.raises(ValueError, match="read-only"):
+            editor.save()
+        assert path.read_bytes() == original
+    finally:
+        editor.close()
+
+
 @pytest.mark.parametrize("original,edited,expected", [
     ("unchanged\n", "unchanged\n", ""),
     ("old", "new", "-old\n\\ No newline at end of file\n+new\n\\ No newline at end of file\n"),

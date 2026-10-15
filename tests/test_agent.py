@@ -54,7 +54,7 @@ def unpack_context(messages):
         if not isinstance(record, dict) or record.get("record_type") not in {"history_step", "current_step"}:
             result.append(message)
             continue
-        result.extend(Message.user(text) for text in record.get("user_prompt", []))
+        result.extend(Message.user(text) for text in record.get("user_prompts", []))
         if record["representation"] in {"compressed", "historical_summary"}:
             result.append(Message.assistant(record["compressed_summary"]))
         elif record["representation"] == "excerpt":

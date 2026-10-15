@@ -150,7 +150,7 @@ async def test_openrouter_receipt_matches_the_submitted_payload():
         await agent.run("")
         await agent.wait_for_compaction()
         await agent.registry.aclose()
-    users = context_records(requests[0]["messages"])[-1]["user_prompt"]
+    users = context_records(requests[0]["messages"])[-1]["user_prompts"]
     assert users == ["first", "second"]
     assert agent.pending == ["next request"]
     assert len([e for e in events if e.kind == "user_message_sent"]) == 2

@@ -29,6 +29,80 @@ async def wait_until(predicate) -> None:
             await asyncio.sleep(.02)
 
 
+@pytest.mark.parametrize("color", [False, True])
+@pytest.mark.parametrize("kind", ["reasoning_delta", "warning", "notice", "retry", "user_message", "tool_end", "tool_output"])
+def test_renderer_displays_untrusted_controls_literally(color, kind):
+    import re
+    from slipagent.markdown import literal
+
+    sink = io.StringIO()
+    renderer = Renderer(Style(color), sink, verbose=True)
+    payload = "before\x1b[2J\x1b]52;c;payload\x07\x9b2J\rafter"
+    event = AgentEvent(kind=kind, text=payload)
+    if kind == "tool_end":
+        event.tool_call = ToolCall("test", "read_file", {"path": "fixture.txt"})
+        event.result = ToolResult.error(payload)
+    renderer.handle(event)
+    output = sink.getvalue()
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", output)
+    assert literal(payload) in plain
+    assert not re.search(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]", plain)
+    if color:
+        assert "\x1b[" in output
+
+
+@pytest.mark.parametrize("color", [False, True])
+async def test_restored_and_split_reasoning_controls_remain_inert(color):
+    import re
+
+    sink = io.StringIO()
+    renderer = Renderer(Style(color), sink, verbose=True)
+    for chunk in ["before\x1b", "[2Jafter"]:
+        renderer.handle(AgentEvent(kind="reasoning_delta", text=chunk))
+    await renderer.restore_transcript([
+        Message.user("user\x1b[2J"),
+        Message(role="assistant", content="reply", reasoning="reason\x1b]52;c;value\x07"),
+        Message(role="tool", content="result\x1b[2J", tool_call_id="test"),
+    ], [])
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", sink.getvalue())
+    assert "before\\x1b[2Jafter" in plain
+    assert "user\\x1b[2J" in plain
+    assert "reason\\x1b]52;c;value\\x07" in plain
+    assert "result\\x1b[2J" in plain
+    assert "\x1b" not in plain and "\x07" not in plain
+
+
+@pytest.mark.parametrize("text,read_only", [("text\x1b[2J\n", True), ("text\x07\n", True), ("text\x9b2J\n", True), ("text\tvalue\r\n", False)])
+async def test_editor_control_characters_are_read_only_without_changing_bytes(display, tmp_path, text, read_only):
+    from prompt_toolkit.buffer import EditReadOnlyBuffer
+
+    sink, _, output, _, _ = display
+    path = tmp_path / "controls.txt"
+    original = ("ordinary\n" * 70 + text).encode()
+    path.write_bytes(original)
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        try:
+            panel = ui._editor_panel
+            await panel.open(path, 1)
+            assert panel.read_only is read_only
+            assert panel.input.buffer.read_only() is read_only
+            del panel.file.read_only
+            assert panel.read_only is read_only
+            if read_only:
+                with pytest.raises(EditReadOnlyBuffer):
+                    panel.input.buffer.insert_text("changed")
+                assert panel.change_page(1)
+                assert not await panel.save()
+                assert not panel.dirty()
+            else:
+                panel.input.buffer.insert_text("changed")
+                assert panel.dirty()
+            assert path.read_bytes() == original
+        finally:
+            ui.close()
+
+
 async def test_suggestion_links_submit_verbatim_and_preserve_draft(display):
     from prompt_toolkit.data_structures import Point
     from prompt_toolkit.document import Document
@@ -45,10 +119,14 @@ async def test_suggestion_links_submit_verbatim_and_preserve_draft(display):
             ui.write_suggestion(prompt)
             for width in (12, 25):
                 content = ui._transcript_content(width)
-                points = [Point(x=0, y=row) for row in range(content.line_count)
-                          if ui._suggestion_at(Point(x=0, y=row)) == prompt]
+                points = []
+                for row in range(content.line_count):
+                    hits = [Point(x=x, y=row) for x in range(width)
+                            if ui._suggestion_at(Point(x=x, y=row)) == prompt]
+                    if hits:
+                        points.append(hits[0])
                 assert len(points) > 1
-                assert "class:clickable" in content.get_line(points[0].y)[0][0]
+                assert any("class:clickable" in style for style, _, *_ in content.get_line(points[0].y))
                 assert ui._suggestion_at(Point(x=width + 1, y=points[0].y)) is None
             point = points[0]
             for kind in (MouseEventType.MOUSE_DOWN, MouseEventType.MOUSE_UP):
@@ -530,6 +608,7 @@ async def test_repeated_wrap_toggles_and_saves_preserve_long_lines_and_diff(
                     assert added == [expected.splitlines()[0]]
                     assert diff.startswith(entry["diff_preview"])
                     assert entry["diff_characters"] == len(diff)
+                    assert len(store.records) == 1
                 else:
                     assert not entries
                     assert not store.records
@@ -1274,19 +1353,36 @@ async def test_tool_groups_keep_file_references_tight_after_restore(display, tmp
             ui.close()
 
 
-@pytest.mark.parametrize("kind", ["command_output", "diff", "file"])
+@pytest.mark.parametrize("kind", ["command_output", "diff", "file", "directory", "suggestion"])
 @pytest.mark.parametrize("columns", [24, 100])
-async def test_feed_link_styling_and_mouse_target_follow_text(display, tmp_path, kind, columns):
-    from unittest.mock import AsyncMock
+async def test_feed_link_styling_and_mouse_target_follow_text(display, tmp_path, monkeypatch, kind, columns):
+    from unittest.mock import AsyncMock, Mock
+    from slipagent import terminal
 
     sink, size, output, screen, snapshot = display
     size[0] = Size(rows=24, columns=columns)
     screen.resize(lines=24, columns=columns)
+    monkeypatch.setattr(terminal, "folder_opener", lambda: ("test-opener",))
     with create_pipe_input() as pipe:
         ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
         request = AsyncMock()
+        explore = AsyncMock()
+        monkeypatch.setattr(ui, "_explore_directory", explore)
+        submit = Mock()
+        monkeypatch.setattr(ui, "_submit_suggestion", submit)
         ui.__dict__["_user_edits"] = SimpleNamespace(request=request, close=lambda: None)
-        if kind == "file":
+        if kind == "suggestion":
+            prompt = "    Check the directory and explain the results.    "
+            ui.write_suggestion(prompt)
+            label = "Check the"
+            hover = ("suggestion", prompt)
+        elif kind == "directory":
+            path = tmp_path / "directory with spaces"
+            path.mkdir()
+            ui.write_directory_reference(path.name)
+            label = str(path)[:10]
+            hover = ("directory", path)
+        elif kind == "file":
             path = tmp_path / "a-long-written-file-name.txt"
             path.write_text("contents\n")
             ui.write_file_reference(path.name, line=3)
@@ -1320,6 +1416,8 @@ async def test_feed_link_styling_and_mouse_target_follow_text(display, tmp_path,
                     assert not ui._viewer_active
                     assert ui._viewer.request == 0
                     request.assert_not_awaited()
+                    explore.assert_not_awaited()
+                    submit.assert_not_called()
         finally:
             ui.close()
             await task
@@ -1585,6 +1683,8 @@ async def test_inspection_directories_use_explorer_without_editor_hold(display, 
             assert ui._touched_items == {".": "read", "directory": "read"}
             fragments = ui._inspection_entries(files=True)
             entry = next(fragment for fragment in fragments if fragment[1].startswith("directory"))
+            assert entry[1] == "directory [dir]"
+            assert any(fragment[1] == ". [dir]" for fragment in fragments)
             assert ("class:clickable" in entry[0]) is available
             if available:
                 entry[2](MouseEvent(Point(0, 0), MouseEventType.MOUSE_UP, MouseButton.LEFT, frozenset()))
@@ -1638,7 +1738,7 @@ async def test_notifications_remain_visible_in_menu_context_and_after_resize(dis
             screen.resize(lines=24, columns=12)
             output.get_size = lambda: size[0]
             ui.app._on_resize()
-            await wait_until(lambda: ui._notification_text() in snapshot()[17])
+            await wait_until(lambda: "Ready" in snapshot()[17] and "Saved" in snapshot()[17])
             ui.notify("")
             assert not ui._notification_text().endswith("…")
             assert "Saved" not in ui._notification_text()
@@ -2350,6 +2450,47 @@ async def test_project_directory_link_requires_opener_and_disables_after_failure
             await task
 
 
+@pytest.mark.parametrize("opened", [True, False])
+@pytest.mark.parametrize("new_notice", [False, True])
+async def test_directory_launch_notifies_without_replacing_agent_status(display, tmp_path, monkeypatch, opened, new_notice):
+    import threading
+    from prompt_toolkit.formatted_text import fragment_list_to_text
+    from slipagent import terminal
+    sink, _, output, _, snapshot = display
+    release = threading.Event()
+    monkeypatch.setattr(terminal, "folder_opener", lambda: ("test-opener",))
+
+    def launch(directory, opener):
+        release.wait(timeout=3)
+        return opened
+
+    monkeypatch.setattr(terminal, "open_folder", launch)
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
+        ui.set_command_status("Existing status")
+        ui.notify("Previous notice")
+        app = asyncio.create_task(ui.run())
+        task = asyncio.create_task(ui._explore_directory(tmp_path))
+        try:
+            await wait_until(lambda: "Opening file manager" in snapshot()[17])
+            assert "Existing status" in snapshot()[17]
+            assert "Opening file manager" not in snapshot()[23]
+            assert fragment_list_to_text(ui._activity_status()) == "Existing status"
+            assert "Opening file manager" in fragment_list_to_text(ui._activity())
+            assert ui.__dict__["_notification"] == "Opening file manager"
+            if new_notice:
+                ui.notify("New notice")
+        finally:
+            release.set()
+            await task
+            ui.close()
+            await app
+        assert fragment_list_to_text(ui._activity_status()) == "Existing status"
+        assert fragment_list_to_text(ui._status_fragments()) == "status"
+        assert ui.__dict__["_notification"] == ("Could not open folder." if not opened else
+                                                "New notice" if new_notice else "")
+
+
 @pytest.mark.parametrize("available", [True, False])
 async def test_tool_directory_links_wrap_hover_click_and_preserve_selection(display, tmp_path, monkeypatch, available):
     from unittest.mock import Mock
@@ -2832,7 +2973,7 @@ async def test_restored_transcript_replaces_output_and_scrolls_to_end(display):
                 ToolCall("read", "read_file", {"path": "app.py"}),
                 ToolCall("legacy", "custom_tool", {}),
             ]),
-            Message.tool_result("read", json.dumps({"status": "error", "content": "Saved tool failure"})),
+            Message.tool_result("read", {"status": "error", "content": "Saved tool failure"}),
             Message.tool_result("legacy", '{"status": [], "data": "Legacy tool output"}'),
             Message.assistant("\n".join(f"Saved output {i}" for i in range(40)) + "\nSaved final answer"),
         ]
@@ -2853,7 +2994,7 @@ async def test_restored_transcript_replaces_output_and_scrolls_to_end(display):
             assert "System instructions" not in recorded and "opaque signature" not in recorded
             assert "Saved readable thoughts" in recorded and "Saved first answer" in recorded
             assert "read_file" in recorded and "Saved tool failure" in recorded
-            assert 'status: list (0 items):' in recorded and 'Legacy tool output' in recorded
+            assert '{"status": [], "data": "Legacy tool output"}' in recorded
             assert "\x1b[38;2;255;0;255m" in recorded
             assert "\x1b[38;2;255;102;102m" in recorded
             assert [message.to_api() for message in messages] == original
@@ -2927,6 +3068,24 @@ def test_notifications_expire_after_thirty_seconds_and_resume_tips(display, monk
             ui.close()
 
 
+@pytest.mark.parametrize("status", ["ready", "working", "retry", "command", "error"])
+def test_activity_status_is_bold(display, status):
+    sink, _, output, _, _ = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        try:
+            if status == "working":
+                ui.set_working(True)
+            elif status in {"retry", "error"}:
+                ui.set_retry_status("Retrying in 10s" if status == "retry" else "Provider error")
+            elif status == "command":
+                ui.set_command_status("Applying /model")
+            style, text, *_ = ui._activity_status()[0]
+            assert text and ui._style().get_attrs_for_style_str(style).bold
+        finally:
+            ui.close()
+
+
 def test_rotating_tips_do_not_flash_status(display, monkeypatch):
     sink, _, output, _, _ = display
     clock = [12345.0]
@@ -2949,6 +3108,23 @@ def test_rotating_tips_do_not_flash_status(display, monkeypatch):
             ui.close()
 
 
+@pytest.mark.parametrize("working", [False, True])
+@pytest.mark.parametrize("columns", [40, 80])
+def test_long_notification_keeps_agent_state_visible(display, working, columns):
+    sink, size, output, _, _ = display
+    size[0] = Size(rows=24, columns=columns)
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        try:
+            ui.set_working(working)
+            ui.notify("Opening file manager " * 10)
+            fragments = ui._activity()
+            assert ("Working" if working else "Ready") in "".join(part[1] for part in fragments)
+            assert any(part[1] and "status-flash" in part[0] for part in fragments)
+        finally:
+            ui.close()
+
+
 def test_status_updates_flash_three_times_then_remain_steady(display, monkeypatch):
     sink, _, output, _, _ = display
     clock = [0.0]
@@ -2967,7 +3143,8 @@ def test_status_updates_flash_three_times_then_remain_steady(display, monkeypatc
             assert all("status-flash" not in fragment[0] for fragment in ui._activity())
             assert "Saved changes." in "".join(fragment[1] for fragment in ui._activity())
             ui.notify("  Saved changes.\n")
-            assert all("status-flash" not in fragment[0] for fragment in ui._activity())
+            assert any("status-flash" in fragment[0] for fragment in ui._activity())
+            clock[0] = 2.2
             ui.set_working(True)
             assert all("status-flash" not in fragment[0] for fragment in ui._activity())
             ui.set_working(True, stopping=True)
@@ -3121,7 +3298,7 @@ def test_streamed_markdown_reply_is_rendered_once(display):
 
 
 def test_startup_and_help_list_all_commands_with_requested_spacing():
-    banner = BANNER.format(model="test/model", workspace="project", tools="read_file", mcp="")
+    banner = BANNER.format(model="test/model", workspace="project", mcp="")
     for command in [
         "/help", "/menu", "/danger", "/tools", "/model", "/models", "/key", "/cost", "/mcp",
         "/rename", "/reset", "/reload", "/generations", "/init", "/stop", "/exit", "/quit",
@@ -3129,34 +3306,32 @@ def test_startup_and_help_list_all_commands_with_requested_spacing():
         assert command in banner
         assert command in HELP
     assert banner.splitlines()[1] == ""
+    assert "Tools:" not in banner
+    assert "  Workspace: project\n\n  Commands:" in banner
     assert "\n\nType a task and press Enter." in banner
 
 
-def test_startup_lists_wrap_under_first_item_after_resize(display, tmp_path):
+@pytest.mark.parametrize("animated", [False, True])
+async def test_startup_commands_wrap_under_first_item_after_resize(display, tmp_path, animated):
     from wcwidth import width
 
     sink, _, output, _, _ = display
-    tools = ["read_file", "write_file", "list_dir"] + [f"mcp__server__tool_{i}" for i in range(40)]
     with create_pipe_input() as pipe:
         ui = TerminalUI(lambda columns: "status", sink, input=pipe, output=output)
         renderer = Renderer(Style(False), sink, verbose=False)
         renderer.terminal = ui
         try:
-            renderer.show_banner(model="test/model", workspace=tmp_path, tools=tools)
+            if animated:
+                await renderer.show_welcome(model="test/model", workspace=tmp_path)
+            else:
+                renderer.show_banner(model="test/model", workspace=tmp_path)
             renderer.emit("  ordinary output wraps with its original indentation")
             for columns in [80, 40, 120, 14, 13, 80]:
                 content = ui.transcript.content.create_content(columns, 17)
                 rows = ["".join(fragment[1] for fragment in content.get_line(i))
                         for i in range(content.line_count)]
-                start = next(i for i, row in enumerate(rows) if row.startswith("  Tools:"))
-                end = next(i for i in range(start + 1, len(rows)) if not rows[i].strip())
-                tool_rows = rows[start:end]
-                assert len(tool_rows) > 1
-                assert all(width(row) <= columns for row in tool_rows)
+                assert "Tools:" not in "\n".join(rows)
                 indent = " " * (13 if columns > 13 else 2)
-                assert all(row.startswith(indent) and not row[len(indent):].startswith(" ")
-                           for row in tool_rows[1:])
-                assert "".join(row.strip().replace(" ", "") for row in tool_rows) == "Tools:" + ",".join(tools)
                 start = next(i for i, row in enumerate(rows) if row.startswith("  Commands:"))
                 end = next(i for i in range(start + 1, len(rows)) if not rows[i].strip())
                 command_rows = rows[start:end]
@@ -3209,7 +3384,7 @@ async def test_turn_token_counts_follow_output_without_blank_line(monkeypatch):
     session = SimpleNamespace(
         renderer=renderer,
         extensions=extensions, work=SessionWork(extensions),
-        agent=SimpleNamespace(run=run, pending=[], stopped=False,
+        agent=SimpleNamespace(run=run, pending=[], stopped=False, has_queued_input=False,
                               usage=Usage(prompt_tokens=10, completion_tokens=5, cost=0.0)),
     )
     monkeypatch.setattr(cli, "_read_line", read)

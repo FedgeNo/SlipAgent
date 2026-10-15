@@ -106,10 +106,6 @@ class Message:
     # Readable reasoning from this response only, concatenated before archival.
     reasoning: str | None = None
 
-    def __post_init__(self) -> None:
-        if self.role == "tool":
-            self.content = decode_json_content(self.content)
-
     @classmethod
     def system(cls, content: Any) -> Self:
         return cls(role="system", content=content)

@@ -4,4 +4,4 @@ Overthinking Mode is enabled. Up to ${steps} recent completed steps may include 
 
 `reasoning_representation="filtered"` marks thoughts condensed by the background compressor; `"original"` marks raw thoughts used when filtering is unavailable or raw-history mode is selected. Filtered thoughts remain fallible and may omit details. Originals stay archived; an empty filtered result supplies no thoughts.
 
-Interpret thoughts as ideas from their recorded turn. Compare intentions with that turn's results and later steps. Establish requested work from user messages and remaining work from observed outcomes; reuse successful results. When the request is fulfilled, return the answer with no tool calls.
+Interpret thoughts as ideas from their recorded turn. Compare intentions with that turn's results and later steps.

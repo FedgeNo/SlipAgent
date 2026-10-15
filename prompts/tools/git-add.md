@@ -8,7 +8,7 @@ Paths follow the current Workspace Access mode.
 
 ## External Helpers
 
-Active clean/process filters are rejected instead of running external helpers.
+Active clean/process filters are rejected.
 
 ## Output Recovery
 

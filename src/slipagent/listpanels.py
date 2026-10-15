@@ -124,7 +124,14 @@ class TouchedPanel(ListPanel[str]):
         return list(reversed(list(self.items)))
 
     def label(self, key: str) -> str:
-        return f"{key} [{self.items[key]}]"
+        status = self.items[key]
+        root = self.root()
+        try:
+            if root is not None and (root / key).is_dir():
+                status = "dir"
+        except OSError:
+            pass
+        return f"{key} [{status}]"
 
     def clickable(self, key: str) -> bool:
         root = self.root()

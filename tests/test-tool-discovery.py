@@ -64,7 +64,7 @@ async def test_loading_changes_prompt_and_api_definitions_on_the_next_turn(nativ
         for request in router.requests[1:]:
             assert "A distinctive long contract" in request["messages"][0]["content"]
         if native:
-            assert {tool["function"]["name"] for tool in first["tools"]} == {"load_tools"}
+            assert {tool["function"]["name"] for tool in first["tools"]} == {"load_tools", "update_plan"}
             assert all("optional_record" in {tool["function"]["name"] for tool in request["tools"]}
                        for request in router.requests[1:])
         else:
@@ -127,7 +127,7 @@ async def test_default_registry_starts_with_only_core_definitions(tmp_path):
         catalog = tool_catalog(tools)
         assert "write_file" not in {entry["name"] for entry in catalog.deferred()}
         assert "recall_history" in {entry["name"] for entry in catalog.deferred()}
-        assert "update_plan" in {entry["name"] for entry in catalog.deferred()}
+        assert "update_plan" not in {entry["name"] for entry in catalog.deferred()}
     finally:
         await tools.aclose()
 
@@ -190,7 +190,7 @@ async def test_unavailable_call_rejects_the_whole_batch(monkeypatch, native, all
         if unavailable == "optional_record" and allowlist != ("read_file",):
             assert all("load_tools" in m.content["content"] for m in observations)
         if native:
-            assert {tool["function"]["name"] for tool in router.requests[0]["tools"]} == {"load_tools", "read_file"}
+            assert {tool["function"]["name"] for tool in router.requests[0]["tools"]} == {"load_tools", "read_file", "update_plan"}
         errors = [m for m in router.requests[1]["messages"] if m["role"] in {"tool", "user"}]
         assert any("No tools were executed" in str(m["content"]) for m in errors)
     finally:

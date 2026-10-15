@@ -19,22 +19,23 @@ async def test_full_context_has_one_object_per_turn_and_preserves_original_parts
     history = ConversationHistory()
     view = await history.view(originals, [], keep_steps=50, context_length=1_000_000, max_output=8192)
     assert [message.role for message in view] == ["system", "user"]
-    payload = json.loads(view[1].to_api()['content'])
-    assert payload['user_messages'] == ['Now explain it', 'Use ASCII']
+    from data_text_reader import read_json_input
+    payload = read_json_input(view[1].to_api()['content'])
+    assert payload['user_prompts'] == ['Now explain it', 'Use ASCII']
     assert payload['history'][0]['tool_calls'][0]['unclassified_result'] == source
     system = content_text(view[0].content)
     assert source not in system and prompt not in system
     assert '# Current Turn Input' in system
     previous, current = context_records(view)
     assert previous == {
-        "record_type": "history_step", "representation": "full", "step_id": 1, "user_prompt": [prompt],
+        "record_type": "history_step", "representation": "full", "step_id": 1, "user_prompts": [prompt],
         "agent_response": "Reading",
         "tool_calls": [{"call_id": "read-1", "tool_name": "read_file", "arguments": {"path": "notes.md"}}],
         "tool_results": [{"call_id": "read-1", "tool_name": "read_file", "status": "unknown", "content": source}],
     }
     assert current == {
-        "record_type": "current_step", "representation": "full", "step_id": 2, "user_prompt": ["Now explain it", "Use ASCII"],
-        "agent_response": None, "tool_calls": [], "tool_results": [], "is_tool_result_response": False,
+        "record_type": "current_step", "representation": "full", "step_id": 2, "user_prompts": ["Now explain it", "Use ASCII"],
+        "agent_response": None, "tool_calls": [], "tool_results": [], "is_tool_result_response": True,
     }
     assert [message.to_api() for message in originals] == before
     assert read_data(history.steps[0].full_text())["tool_results"][0]["content"] == source
@@ -54,7 +55,7 @@ async def test_compressed_records_are_separate_objects_without_original_fields()
                            for i in range(1, 5)]
     assert [record["agent_response"] for record in records[4:-1]] == [f"Answer {i} " * 100 for i in range(5, 8)]
     assert records[-1]["record_type"] == "current_step"
-    assert records[-1]["user_prompt"] == ["Current task"]
+    assert records[-1]["user_prompts"] == ["Current task"]
 
 
 async def test_excerpt_omissions_are_fields_instead_of_text_inserted_in_the_output():
@@ -72,7 +73,7 @@ async def test_excerpt_omissions_are_fields_instead_of_text_inserted_in_the_outp
     assert result["omitted_characters"] == len(source) - len(result["beginning"]) - len(result["ending"])
     assert current["is_tool_result_response"] is True
     assert view[-1].role == "user"
-    assert request_input(view)['user_messages'] == []
+    assert request_input(view)['user_prompts'] == []
     system = content_text(view[0].content)
     assert 'LARGE RESULT' not in system
     assert 'unclassified_result_excerpt' in request_input(view)['history'][0]['tool_calls'][0]

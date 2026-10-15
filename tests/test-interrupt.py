@@ -44,6 +44,7 @@ async def test_model_change_pause_resumes_and_preserves_submitted_input(tmp_path
             resumed.set()
             await finish_second.wait()
             agent._drain_pending()
+            agent._queued_messages_sent()
             return 'Done'
         finally:
             agent.running = False

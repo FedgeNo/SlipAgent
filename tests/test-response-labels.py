@@ -43,7 +43,7 @@ async def test_old_echoes_are_excluded_from_context_but_originals_and_tool_data_
         view = tool_history_as_text(view)
     response = context_records(view)[0]
     assert response["agent_response"] == "Reading."
-    assert response["user_prompt"] == [source]
+    assert response["user_prompts"] == [source]
     assert response["tool_results"][0]["content"] == source
     assert [message.to_api() for message in messages] == original
     assert read_data(history.steps[0].full_text())["response"] == legacy

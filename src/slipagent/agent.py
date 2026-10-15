@@ -355,13 +355,15 @@ class Agent:
 
     async def _context_view(self, specs: list[ToolSpec], step: int, *,
                             capabilities: RequestProfile | None = None, preview: bool = False,
-                            repair: str = "", budget_fraction: float | None = None) -> list[Message]:
+                            repair: str = "", budget_fraction: float | None = None,
+                            candidate_model: str | None = None) -> list[Message]:
         """Assemble the exact model-visible state within its endpoint limits.
 
         Selection previews must not register input or archive new steps on
         the active history. Runtime diagnostics and service metadata are explicit
         input because the model cannot see terminal notices or local state.
         """
+        model = self.model if candidate_model is None else candidate_model
         specs = self._visible_specs(specs)
         if capabilities is None and isinstance(self.client, APIClient):
             capabilities = await self.client.model_capabilities(self.model)
@@ -384,16 +386,16 @@ class Agent:
 
         builder = ContextBuilder(
             self.registry, self.history, self.messages, self._budget(),
-            ContextSettings(self.model, self.planning, self.context_steps, self.overthinking,
+            ContextSettings(model, self.planning, self.context_steps, self.overthinking,
                             self.reasoning_history_steps, self.filtered_thoughts, self.max_tokens),
         )
         return await builder.build(
-            specs, length, self._uses_native_tools(capabilities), capabilities=capabilities,
+            specs, length, self._uses_native_tools(capabilities, model=model), capabilities=capabilities,
             preview=preview, repair=repair, budget_fraction=budget_fraction,
         )
 
-    def _uses_native_tools(self, capabilities: RequestProfile | None) -> bool:
-        channel = model_prompt_profile(self.model).get("tool_channel")
+    def _uses_native_tools(self, capabilities: RequestProfile | None, *, model: str | None = None) -> bool:
+        channel = model_prompt_profile(self.model if model is None else model).get("tool_channel")
         if channel == "embedded":
             return False
         return capabilities is None or capabilities.native_tools
@@ -428,6 +430,11 @@ class Agent:
         for message in queued:
             self.queued_messages[len(self.messages)] = message
             self.messages.append(Message.user(message))
+
+    @property
+    def has_queued_input(self) -> bool:
+        """Accepted follow-ups remain owed until an actual request submits them."""
+        return bool(self.pending or self.queued_messages)
 
     @property
     def queued_messages(self) -> dict[int, str]:
@@ -586,6 +593,8 @@ class Agent:
             ),
         )
         outcome = await driver.run(context, visible_specs, step, run_step, capabilities, native_tools)
+        for delivered in ("background_commands", "resume"):
+            self.registry.context_notes.pop(delivered, None)
         step = len(self.history.steps) + 1
         if isinstance(outcome, RequestStopped):
             if outcome.loop_stopped:
@@ -620,7 +629,7 @@ class Agent:
         self._record_edit_delivery(step, self.registry.services.pop("accepted_user_edits", []))
         if not record.calls:
             await self._archive_step(capabilities)
-            if not self.pending and not self.stop_requested:
+            if not self.has_queued_input and not self.stop_requested:
                 for suggestion in getattr(record, "suggestions", []):
                     self._emit(AgentEvent(kind="suggestion", step=step, text=suggestion))
             self._emit(AgentEvent(kind="step_end", step=step, usage=step_usage))
@@ -659,7 +668,7 @@ class Agent:
 
         self._emit(AgentEvent(kind="step_end", step=step, usage=step_usage))
         if only_answers:
-            if not self.pending and not self.stop_requested:
+            if not self.has_queued_input and not self.stop_requested:
                 for suggestion in getattr(record, "suggestions", []):
                     self._emit(AgentEvent(kind="suggestion", step=step, text=suggestion))
             return "\n\n".join(result.content["text"] for _, result in batch_results)

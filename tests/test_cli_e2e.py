@@ -243,7 +243,7 @@ def test_json_events_preserve_tool_objects_and_literal_prompt(project_dir):
     assert records[-1]['answer'] == 'Done.'
     assert records[-1]['exit_code'] == 0
     request = next(record['request'] for record in records if record.get('kind') == 'context')
-    assert json.loads(request['messages'][-1]['content'])['user_messages'] == [prompt]
+    assert json.loads(request['messages'][-1]['content'])['user_prompts'] == [prompt]
     call = next(record for record in records if record.get('kind') == 'tool_start')
     observation = next(record for record in records if record.get('kind') == 'tool_end')
     assert call['tool_call']['arguments'] == {'path': 'src/app.py'}
@@ -277,7 +277,7 @@ def test_json_events_accept_stdin_without_remembering_model(project_dir):
     assert not (Path(env['SLIPAGENT_STATE_DIR']) / 'preferences.json').exists()
     records = [json.loads(line) for line in result.stdout.splitlines()]
     request = next(record['request'] for record in records if record.get('kind') == 'context')
-    assert json.loads(request['messages'][-1]['content'])['user_messages'] == [prompt]
+    assert json.loads(request['messages'][-1]['content'])['user_prompts'] == [prompt]
 
 
 def test_json_events_include_tool_errors_without_claiming_task_failure(project_dir):
@@ -476,7 +476,7 @@ def test_positional_prompt_is_accepted(project_dir: Path) -> None:
         result = run_cli("hello", "world", "--base-url", stub.base_url, cwd=project_dir)
 
     assert result.returncode == 0, result.stderr
-    assert context_records(stub.requests[0]["messages"])[-1]["user_prompt"] == ["hello world"]
+    assert context_records(stub.requests[0]["messages"])[-1]["user_prompts"] == ["hello world"]
 
 
 def test_verbose_shows_tool_output_on_stderr(project_dir: Path) -> None:
@@ -921,7 +921,7 @@ def test_mid_turn_input_reaches_model_without_queue_label(project_dir: Path) -> 
     assert lines[submitted - 1] == ""
     assert lines[submitted + 1] == ""
     # It must have reached the model as ordinary user input.
-    users = [prompt for record in context_records(stub.requests[-1]["messages"]) for prompt in record.get("user_prompt", [])]
+    users = [prompt for record in context_records(stub.requests[-1]["messages"]) for prompt in record.get("user_prompts", [])]
     assert "also do this" in users
 
 
@@ -1187,7 +1187,8 @@ async def test_planning_commands(tmp_path, metadata_server):
             assert session.agent.planning is enabled
             assert ("update_plan" in session.registry) is enabled
             view = await session.agent._context_view(session.registry.specs(), 1)
-            assert ("# Working Plan" in content_text(view[0].content)) is enabled
+            # The section appears only once a plan has been recorded.
+            assert "# Working Plan" not in content_text(view[0].content)
         assert "usage: /planning [on|off]" in output.getvalue()
         for argument in ("", "on", "off"):
             assert cli._changes_session("planning", argument)

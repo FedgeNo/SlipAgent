@@ -22,7 +22,7 @@ async def test_context_preview_preserves_history_and_budget_owners():
         ContextSettings("test/model", False, 5, False, 25, True, None),
     )
     preview = await builder.build([], 100_000, True, preview=True)
-    assert current_input(preview)["user_prompt"] == ["Inspect the project."]
+    assert current_input(preview)["user_prompts"] == ["Inspect the project."]
     assert history.cursor == 0 and history.steps == []
     assert budget.model == ""
     actual = await builder.build([], 100_000, True)

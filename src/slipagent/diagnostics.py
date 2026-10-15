@@ -32,7 +32,7 @@ class RequestDiagnostics:
     def directory(self) -> Path:
         if self.path is None:
             self.temporary = tempfile.TemporaryDirectory(prefix="slipagent-requests-")
-            self.path = Path(self.temporary.name)
+            self.path = Path(self.temporary.name).resolve()
         return self.path
 
     def use_directory(self, directory: Path) -> None:

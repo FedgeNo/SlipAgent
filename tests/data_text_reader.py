@@ -72,15 +72,15 @@ def current_input(messages):
         if role == 'system':
             _, marker, body = content_text(content).partition(load_prompt('current-turn.md'))
             if marker:
-                metadata = read_data(body)
+                metadata = read_data(body.removeprefix(load_prompt('current-turn-tool-results.md')))
                 payload = request_input(messages)
-                prompts = list(payload['user_messages'])
-                supplied = [text for record in payload['history'] for text in record.get('user_prompt', [])]
-                if not prompts and '\n'.join(payload['retained_user_requests']) not in supplied and not all(text in supplied for text in payload['retained_user_requests']):
-                    prompts = list(payload['retained_user_requests'])
+                prompts = list(payload['user_prompts'])
+                supplied = [text for record in payload['history'] for text in record.get('user_prompts', [])]
+                if not prompts and '\n'.join(payload['retained_user_prompts']) not in supplied and not all(text in supplied for text in payload['retained_user_prompts']):
+                    prompts = list(payload['retained_user_prompts'])
                 prompts += [load_prompt('tool-use-correction.md', correction=error).strip() for error in payload['errors']]
                 return {'record_type': 'current_step', 'representation': 'full',
-                        'user_prompt': prompts, 'agent_response': None, 'tool_calls': [], 'tool_results': [], **metadata}
+                        'user_prompts': prompts, 'agent_response': None, 'tool_calls': [], 'tool_results': [], **metadata}
     raise AssertionError('Current Turn Input missing from system prompt')
 
 
@@ -92,8 +92,33 @@ def request_input(messages):
         role = message.role if isinstance(message, Message) else message['role']
         content = message.content if isinstance(message, Message) else message['content']
         if role == 'user':
-            return content.data if isinstance(content, JSONInput) else json.loads(content)
+            return content.data if isinstance(content, JSONInput) else read_json_input(content)
     raise AssertionError('JSON user input missing')
+
+
+def read_json_input(text):
+    payload, cursor = json.JSONDecoder().raw_decode(text)
+    blocks = {}
+    while cursor < len(text):
+        match = re.match(r"\n\nTool Result Block (\d+) \((\d+) characters\):\n", text[cursor:])
+        assert match, repr(text[cursor:])
+        cursor += match.end()
+        length = int(match[2])
+        blocks[int(match[1])] = text[cursor:cursor + length]
+        assert len(blocks[int(match[1])]) == length
+        cursor += length
+
+    def restore(value):
+        if isinstance(value, list):
+            return [restore(item) for item in value]
+        if isinstance(value, dict):
+            if set(value) == {"tool_result_block", "characters", "format"}:
+                original = blocks[value["tool_result_block"]]
+                assert len(original) == value["characters"]
+                return json.loads(original) if value["format"] == "json" else original
+            return {key: restore(item) for key, item in value.items()}
+        return value
+    return restore(payload)
 
 
 def system_tool_definitions(system):

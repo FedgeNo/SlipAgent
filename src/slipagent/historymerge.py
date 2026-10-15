@@ -119,13 +119,25 @@ async def _merge(owner: StepCompactor, batch: list[HistoryStep], source: dict[st
         options: dict[str, Any] = {}
         if isinstance(client, APIClient):
             options.update(request_profile=capabilities, disable_timeout=True, single_attempt=True)
-        async with asyncio.timeout(20 * 60):
-            completion = await client.chat(
-                model=model, messages=[system, Message.user(source)], tools=None,
-                temperature=.2,
-                max_tokens=reserve if capabilities is not None and "max_tokens" in capabilities.parameters else None,
-                extra_body={}, **options,
-            )
+        attempt = 0
+        while generation == owner.generation:
+            try:
+                async with asyncio.timeout(20 * 60):
+                    completion = await client.chat(
+                        model=model, messages=[system, Message.user(source)], tools=None,
+                        temperature=.2,
+                        max_tokens=reserve if capabilities is not None and "max_tokens" in capabilities.parameters else None,
+                        extra_body={}, **options,
+                    )
+                break
+            except Exception as exc:
+                if generation != owner.generation:
+                    return
+                if not await owner.wait_request_retry(client, attempt, exc):
+                    raise
+                attempt += 1
+        else:
+            return
         if generation != owner.generation:
             return
         owner.on_usage(completion.usage)

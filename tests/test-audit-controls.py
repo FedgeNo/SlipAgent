@@ -10,6 +10,44 @@ from slipagent.workspace import Workspace
 from test_agent import RecordingTool, StubClient, call, completion
 
 
+@pytest.mark.parametrize("stop", [False, True])
+async def test_answer_only_followup_runs_once_unless_stopped(tmp_path, monkeypatch, stop):
+    from slipagent.tools.answer import AnswerTool
+    from slipagent.types import ToolCall
+    session, started, release = session_with_paused_request(tmp_path)
+    session.registry.register(AnswerTool())
+    session.client.responses = [completion(tool_calls=[ToolCall("a", "answer", {"text": "First done"})]), completion("Followup done")]
+    queue = asyncio.Queue()
+    monkeypatch.setattr(cli, "_read_line", lambda *args: queue.get())
+    task = asyncio.create_task(cli._run_request(session, "first task", session.renderer.style))
+    try:
+        await started.wait()
+        session.agent.enqueue("queued followup")
+        if stop:
+            session.agent.request_stop()
+        release.set()
+        await asyncio.wait_for(task, 3)
+        assert len(session.client.calls) == (1 if stop else 2)
+        assert session.agent.has_queued_input is stop
+        assert sum(message.content == "queued followup" for message in session.agent.messages) == 1
+    finally:
+        release.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await cli._shutdown(session)
+
+
+async def test_stopped_one_shot_returns_failure(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    agent = SimpleNamespace(run=AsyncMock(return_value="Stopped after repeated actions."),
+                            wait_for_compaction=AsyncMock(), stopped=True)
+    renderer = cli.Renderer(cli.Style(False), io.StringIO(), False)
+    renderer.output_markdown = True
+    monkeypatch.setattr(cli, "_shutdown", AsyncMock())
+    assert await cli.run_one_shot(SimpleNamespace(agent=agent, renderer=renderer), "task") == 1
+
+
 def session_with_paused_request(tmp_path):
     started, release = asyncio.Event(), asyncio.Event()
     class Client(StubClient):

@@ -56,7 +56,7 @@ async def test_plan_is_supplied_on_next_turn_restored_and_cleared():
             restored.reset()
             view = await restored._context_view(restored.registry.specs(), 1)
             assert 'objective: text (11 characters):\n    Fix parsing' not in content_text(view[0].content)
-            assert 'No working plan has been recorded.' in content_text(view[0].content)
+            assert '# Working Plan' not in content_text(view[0].content)
         finally:
             await restored.registry.aclose()
     finally:

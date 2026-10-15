@@ -66,6 +66,27 @@ def estimate_tokens(value: str) -> int:
     return (len(value.encode("utf-8")) + 2) // 3 + 32
 
 
+HISTORY_GUIDANCE: dict[str, Callable[[list[dict[str, Any]]], bool]] = {
+    "history-unclassified-results.md": lambda records: any(
+        any(result.get("status") == "unknown" for result in record.get("tool_results", []))
+        or any(entry.get("role") == "tool" and entry.get("status") == "unknown" for entry in record.get("messages", []))
+        for record in records),
+    "history-artifacts.md": lambda records: any(
+        record.get("artifacts") or any(result.get("artifacts") for result in record.get("tool_results", []))
+        for record in records),
+    "history-compressed.md": lambda records: any("compressed_summary" in record for record in records),
+    "history-excerpts.md": lambda records: any(record.get("representation") == "excerpt" for record in records),
+    "history-failed-requests.md": lambda records: any("request_failure" in record for record in records),
+    "history-narratives.md": lambda records: any(record.get("representation") == "historical_summary" for record in records),
+}
+
+
+def history_guidance(records: list[dict[str, Any]] | None) -> str:
+    """Explain only the record shapes present in the selected history; None means every shape."""
+    return "\n\n".join(load_prompt(name).strip() for name, present in HISTORY_GUIDANCE.items()
+                       if records is None or present(records))
+
+
 def message_tokens(messages: list[Message]) -> int:
     return sum(estimate_tokens(json.dumps(message.to_api(), ensure_ascii=False)) for message in messages)
 
@@ -126,7 +147,7 @@ class HistoryStep:
             if references:
                 record["artifacts"] = references
             return [record_message(record)]
-        record = step_record(self.messages, retained_prompt=self.request, step_id=self.id)
+        record = step_record(self.messages, step_id=self.id)
         if record["agent_response"] is not None:
             record["agent_response"] = _visible_response(record["agent_response"])
         return [record_message(record)]
@@ -146,8 +167,6 @@ class HistoryStep:
         than an invalid native tool sequence with missing replies or arguments.
         """
         prompts = [message.content or "" for message in self.messages if message.role == "user"]
-        if not prompts and self.request:
-            prompts = [self.request]
         observations = [message for message in self.messages if message.role != "user"]
         original = step_record(self.messages)
         results = original["tool_results"]
@@ -175,7 +194,7 @@ class HistoryStep:
                 load_prompt('history-excerpt.md', shown_messages=count, total_messages=len(observations)) + '\n'
             )
             return [record_message({"record_type": "history_step", "representation": "excerpt",
-                                    "step_id": self.id, "user_prompt": prompts, "messages": entries,
+                                    "step_id": self.id, "user_prompts": prompts, "messages": entries,
                                     **({"artifacts": original["artifacts"]} if original.get("artifacts") else {}),
                                     "omitted_messages": len(observations) - count, "recall_instructions": note})]
 
@@ -445,45 +464,53 @@ class ConversationHistory:
         from .requestfailures import retry_state
         recovery = retry_state(self.steps)
         has_new_user_input = any(message.role == "user" for message in messages[self.cursor:])
-        continuing_tools = not has_new_user_input and bool(self.steps and self.steps[-1].has_results)
+        # The step whose tool results this turn responds to: the newest step,
+        # or the batch before a run of failed attempts.
+        results_step = len(self.steps) - 1 - (recovery["consecutive_failures"] if recovery else 0)
+        has_results = results_step >= 0 and self.steps[results_step].has_results
+        continuing_tools = not has_new_user_input and has_results
         def tokens(part: list[Message]) -> int:
             return math.ceil(message_tokens(tool_history_as_text(part) if text_tool_history else part) * token_scale)
-        sections = [load_prompt("native-tools.md" if native_tools else "json-tools.md"), load_prompt("history-records.md"),
-                    load_prompt("system-history.md")]
-        if overthinking and reasoning_history_steps:
-            sections.append(
+        head_sections = [load_prompt("native-tools.md" if native_tools else "json-tools.md"), load_prompt("history-records.md")]
+        tail_sections = [load_prompt("system-history.md")]
+        if overthinking:
+            tail_sections.append(
                 load_prompt('overthinking-on.md', steps=reasoning_history_steps)
             )
-        else:
-            sections.append(load_prompt('overthinking-off.md'))
         # Stable response/tool guidance precedes changing step IDs and task
         # state. Keep one system-message prefix for provider compatibility.
-        sections.extend([extra_instructions, self.instructions(native_tools=native_tools)])
+        tail_sections.extend([extra_instructions, self.instructions(native_tools=native_tools)])
         if self.task.current_prompt_step is not None:
             input_guidance = (
                 load_prompt('new-user-request.md')
                 if has_new_user_input else
                 load_prompt('tool-result-response.md' if continuing_tools else 'continuation.md')
             )
-            sections.append(
+            tail_sections.append(
                 load_prompt('user-request.md', step_id=self.task.current_prompt_step, input_guidance=input_guidance)
             )
-        if recovery:
-            sections.append(load_prompt('request-retry.md'))
-        instructions = "\n" + "\n\n".join(section.strip() for section in sections if section.strip()) + "\n"
-        pinned = [message for message in messages if message.role == "system"]
-        if pinned:
-            pinned = [*pinned[:-1], Message.system((pinned[-1].content or "").rstrip() + "\n" + instructions)]
-        else:
-            pinned = [Message.system("\n" + instructions)]
-        system_prefix = (pinned[-1].content or "").rstrip() + "\n\n"
-        metadata: dict[str, Any] = {"step_id": len(self.steps) + 1,
-                    "is_tool_result_response": not any(message.role == "user" for message in messages[self.cursor:])}
+        if recovery and not has_new_user_input:
+            tail_sections.append(load_prompt('request-retry.md'))
+        pinned_sources = [message for message in messages if message.role == "system"]
+        leading = pinned_sources[:-1]
+        pinned_base = (pinned_sources[-1].content or "").rstrip() + "\n" if pinned_sources else "\n"
+
+        def system_prefix_for(guidance: str) -> str:
+            # History-shape guidance follows the record format and covers only the selected records.
+            sections = [*head_sections, guidance, *tail_sections]
+            instructions = "\n" + "\n\n".join(section.strip() for section in sections if section.strip()) + "\n"
+            return (pinned_base + instructions).rstrip() + "\n\n"
+
+        # Budget with every guidance section; each assembled candidate includes only applicable ones.
+        system_prefix = system_prefix_for(history_guidance(None))
+        pinned = [*leading, Message.system(system_prefix.rstrip() + "\n")]
+        metadata: dict[str, Any] = {"step_id": len(self.steps) + 1, "is_tool_result_response": has_results}
         if recovery:
             metadata["request_retry"] = recovery
-            metadata["is_tool_result_response"] = False
         edit_guidance = load_prompt('user-edits.md') if user_edits or any(getattr(step, 'user_edits', None) for step in self.steps) else ''
         current_turn_guidance = load_prompt("current-turn.md")
+        if metadata["is_tool_result_response"]:
+            current_turn_guidance += load_prompt("current-turn-tool-results.md")
         # Budget the optional guidance conservatively before history selection.
         pinned[-1] = Message.system(MessageSections([system_prefix + edit_guidance, current_turn_guidance, metadata]))
 
@@ -495,8 +522,10 @@ class ConversationHistory:
             user_text = [message.content for message in tail_messages if message.role == "user"]
             source_step = self.task.current_prompt_step
             payload: dict[str, Any] = {
-                "user_messages": user_text,
-                "retained_user_requests": self.task.sources[source_step] if source_step is not None and continuing_tools else [],
+                "user_prompts": user_text,
+                # Every continuation carries the active request here; history
+                # records list only the messages actually sent in their step.
+                "retained_user_prompts": self.task.sources[source_step] if source_step is not None and not has_new_user_input else [],
                 "history": [linked_tool_results(message.content) for message in selected],
                 "errors": [user_corrections] if user_corrections.strip() else [],
             }
@@ -506,9 +535,10 @@ class ConversationHistory:
                 payload["user_edits_omitted"] = edits_omitted
             has_edits = bool(edit_view or edits_omitted or any(
                 isinstance(message.content, dict) and message.content.get("user_edits") for message in selected))
+            prefix = system_prefix_for(history_guidance([message.content for message in selected]))
             current_system = Message.system(MessageSections([
-                system_prefix + (edit_guidance if has_edits else ''), current_turn_guidance, metadata]))
-            return [*pinned[:-1], current_system, Message.user(JSONInput(payload))]
+                prefix + (edit_guidance if has_edits else ''), current_turn_guidance, metadata]))
+            return [*leading, current_system, Message.user(JSONInput(payload))]
 
         tail_messages = [message for message in messages[self.cursor:] if message.role != "system"]
         # Budget the same input fields that will be sent, including the retained

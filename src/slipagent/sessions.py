@@ -72,7 +72,10 @@ class SessionJournal:
         raw = os.fsencode(self.project)
         identity = hashlib.md5(raw, usedforsecurity=False).hexdigest() + "-" + hashlib.sha1(raw, usedforsecurity=False).hexdigest()
         root = Path(os.path.abspath(os.path.expanduser(str(directory)))) if directory is not None else data_directory()
-        self.directory = root / identity
+        # Storage reads open each component without following links, so the
+        # store itself lives at the resolved location. The project identity
+        # above keeps the lexical spelling.
+        self.directory = root.resolve() / identity
         self.session_id = ""
         self.path: Path | None = None
         self.cursor = 0

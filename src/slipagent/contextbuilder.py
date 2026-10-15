@@ -56,12 +56,11 @@ class ContextBuilder:
                          if message.role == 'tool' and isinstance(message.content, dict)
                          and message.content.get('tool') == 'update_plan'
                          and message.content.get('status') == 'success'), None)
-            plan_record = load_prompt('working-plan-empty.md')
             if saved_plan is not None:
                 plan_record = load_prompt('working-plan-record.md', step_id=saved_plan[0],
                                           plan=render_data(saved_plan[1]))
-            sections.add('plan', 'Working Plan', load_prompt('working-plan.md',
-                         plan_record=plan_record.strip()), 45)
+                sections.add('plan', 'Working Plan', load_prompt('working-plan.md',
+                             plan_record=plan_record.strip()), 45)
         workspace = self.registry.resources.workspace
         if workspace is not None:
             access = load_prompt('workspace-access-off.md')

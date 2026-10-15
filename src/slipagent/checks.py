@@ -16,6 +16,8 @@ from .tools.hashline import EditHashlinesTool
 from .tools.shell import capture_process, _subprocess_env, _truncate
 from .types import ToolCall
 
+EDIT_TOOLS = (EditFileTool, WriteFileTool, EditHashlinesTool)
+
 SYNTAX_CHECK = """import ast, sys, tokenize
 failed = False
 for name in sys.argv[1:]:
@@ -117,7 +119,7 @@ async def check_edit_batch(registry: ToolRegistry, batch: list[tuple[ToolCall, T
     paths: set[str] = set()
     for call, result in batch:
         tool = registry.get(call.name)
-        if not result.is_error and isinstance(tool, (EditFileTool, WriteFileTool, EditHashlinesTool)):
+        if not result.is_error and isinstance(tool, EDIT_TOOLS):
             paths.add(str(environment.workspace.resolve(call.arguments["path"])))
     if not paths:
         return ""

@@ -2,7 +2,7 @@
 
 ## Commit History
 
-Show recent commits in a repository allowed by Workspace Access mode, newest first (default 10, maximum 100,000).
+Show recent commits in a repository allowed by the current Workspace Access mode, newest first (default 10, maximum 100,000).
 
 ## Output Recovery
 

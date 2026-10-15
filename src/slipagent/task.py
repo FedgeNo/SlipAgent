@@ -42,9 +42,9 @@ class TaskMemory:
             if message.role != "user":
                 continue
             record = message.content
-            supplied.update(record.get("user_prompt", []))
+            supplied.update(record.get("user_prompts", []))
             if record.get("record_type") == "current_step":
                 current = record
         if joined in supplied or all(prompt in supplied for prompt in prompts):
             return []
-        return [record_message({**current, "user_prompt": prompts})]
+        return [record_message({**current, "user_prompts": prompts})]

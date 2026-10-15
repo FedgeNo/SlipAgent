@@ -312,10 +312,10 @@ async def test_invalid_stream_reports_red_error_and_restarts_before_running_tool
     assert "Rejected plan" not in agent.history.steps[1].full_text()
     first = current_input(requests[0]["messages"])
     retry = current_input(requests[1]["messages"])
-    corrections = retry.pop("user_prompt")
-    assert first.pop("user_prompt") == ["work"]
+    corrections = retry.pop("user_prompts")
+    assert first.pop("user_prompts") == ["work"]
     assert len(corrections) == 1 and corrections[0].startswith("Harness tool-use correction:")
-    assert "No tools executed or reply text displayed" in corrections[0]
+    assert "No tools were executed and no reply text was displayed" in corrections[0]
     assert retry.pop('request_retry')['consecutive_failures'] == 1
     assert retry['step_id'] == first['step_id'] + 1
     assert tool.seen == []

@@ -61,6 +61,7 @@ def _key_supplied(text: str) -> bool:
 class SuggestedPrompt(str):
     """A feed action submitted verbatim, without slash-command dispatch."""
 MIN_REDRAW_INTERVAL = 1 / 30
+FEED_LINK_PREFIXES = ("class:artifact-", "class:file-", "class:directory-", "class:suggestion-")
 
 
 class TranscriptControl(UIControl):
@@ -797,8 +798,7 @@ class TerminalUI:
     def notify(self, text: str) -> None:
         """Show a notice for 30 seconds, until replaced, or until cleared."""
         text = " ".join(text.split())
-        if text != self.__dict__.get("_notification", ""):
-            self.__dict__["_status_changed_at"] = time.monotonic() if text else None
+        self.__dict__["_status_changed_at"] = time.monotonic() if text else None
         self.__dict__["_notification"] = text
         self.app.invalidate()
 
@@ -996,7 +996,13 @@ class TerminalUI:
         opener = self.__dict__.get("_folder_opener")
         if opener is None:
             return
-        if not await asyncio.to_thread(open_folder, directory, opener):
+        self.notify("Opening file manager")
+        notification_started = self.__dict__.get("_status_changed_at")
+        opened = await asyncio.to_thread(open_folder, directory, opener)
+        if (self.__dict__.get("_notification") == "Opening file manager"
+                and self.__dict__.get("_status_changed_at") == notification_started):
+            self.notify("")
+        if not opened:
             self._folder_opener = None
             self.notify("Could not open folder.")
             self.write(f"Could not open {directory} in the native file explorer.")
@@ -1054,6 +1060,11 @@ class TerminalUI:
         rows = self._flow.content_rows()
         row = self._flow.get_row(point.y) if 0 <= point.y < len(self._flow.rows) else (
             rows[point.y - len(self._flow.rows)] if 0 <= point.y - len(self._flow.rows) < len(rows) else [])
+        text = fragment_list_to_text(row)
+        left = display_width(text[:len(text) - len(text.lstrip())])
+        right = display_width(text.rstrip())
+        if not left <= point.x < right:
+            return None
         column = 0
         for style, text, *_ in row:
             end = column + display_width(text)
@@ -1095,6 +1106,11 @@ class TerminalUI:
         row = self._flow.get_row(point.y) if 0 <= point.y < len(self._flow.rows) else (
             rows[point.y - len(self._flow.rows)] if 0 <= point.y - len(self._flow.rows) < len(rows) else []
         )
+        text = fragment_list_to_text(row)
+        left = display_width(text[:len(text) - len(text.lstrip())])
+        right = display_width(text.rstrip())
+        if not left <= point.x < right:
+            return None
         column = 0
         for style, text, *_ in row:
             end = column + display_width(text)
@@ -1301,13 +1317,13 @@ class TerminalUI:
 
         @bindings.add("tab", filter=in_editor)
         def editor_tab(event: KeyPressEvent) -> None:
-            if not self._editor_panel.busy:
+            if not self._editor_panel.busy and not self._editor_panel.read_only:
                 self._editor_input.buffer.insert_text(" " * self._options_panel.values.get("tab_width", 4))
 
         @bindings.add("c-z", filter=in_editor)
         @bindings.add("c-y", filter=in_editor)
         def editor_undo(event: KeyPressEvent) -> None:
-            if not self._editor_panel.busy:
+            if not self._editor_panel.busy and not self._editor_panel.read_only:
                 if event.key_sequence[-1].key == Keys.ControlZ:
                     self._editor_input.buffer.undo()
                 else:
@@ -1471,8 +1487,8 @@ class TerminalUI:
 
     def _style(self) -> Style:
         return Style.from_dict({
-            "status": MUTED_COLOR, "pulse": "bold ansicyan", "idle": "ansicyan", "user": USER_PROMPT_STYLE,
-            "context-system": "#ffff00", "retry": "ansired",
+            "status": MUTED_COLOR, "pulse": "bold ansicyan", "idle": "bold ansicyan", "user": USER_PROMPT_STYLE,
+            "context-system": "#ffff00", "retry": "bold ansired",
             "footer": "bg:" + FOOTER_BACKGROUND_COLOR,
             "content": "bg:" + CONTENT_BACKGROUND_COLOR,
             "scroll-track": "#aaaaaa bg:" + FOOTER_BACKGROUND_COLOR,
@@ -1562,7 +1578,7 @@ class TerminalUI:
                         and position.ypos <= event.position.y < position.ypos + position.height
                     ):
                         source = info.visible_line_to_row_col.get(event.position.y - position.ypos)
-                        if source is not None and any(token.startswith(("class:artifact-", "class:file-"))
+                        if source is not None and any(token.startswith(FEED_LINK_PREFIXES)
                                                       for style, _, *_ in info.ui_content.get_line(source[0])
                                                       for token in style.split()):
                             # Window clamps blank columns to the last character, which would activate the link.
@@ -1641,8 +1657,11 @@ class TerminalUI:
         remaining = max(0, available - display_width(fragment_list_to_text(fragments)) - 2)
         text = ""
         if notification:
-            controls_visible = (self._editor_active or self._viewer_active) and self._menu_future is None and not self._options_field_active
-            text = self._notification_text(remaining) if controls_visible and remaining else self._notification_text()
+            if not remaining and fragments:
+                fragments = (fragments[:1] if self._menu_future is not None or self._options_field_active
+                             else self._activity_status(compact=True))
+                remaining = max(0, available - display_width(fragment_list_to_text(fragments)) - 2)
+            text = self._notification_text(remaining)
         elif self._navigation_tip() or self._menu_future is None and not self._options_field_active:
             text = self._notification_text(remaining)
         if text:
@@ -2111,9 +2130,9 @@ class TerminalUI:
         def decorate_links(fragments: StyleAndTextTuples) -> StyleAndTextTuples:
             result: StyleAndTextTuples = []
             for style, text, *_ in fragments:
-                padding_style = " ".join(token for token in style.split() if not token.startswith(("class:artifact-", "class:file-")))
+                padding_style = " ".join(token for token in style.split() if not token.startswith(FEED_LINK_PREFIXES))
                 leading = trailing = ""
-                if any(token.startswith(("class:artifact-", "class:file-")) for token in style.split()):
+                if any(token.startswith(FEED_LINK_PREFIXES) for token in style.split()):
                     leading = text[:len(text) - len(text.lstrip())]
                     text = text[len(leading):]
                     trailing = text[len(text.rstrip()):]

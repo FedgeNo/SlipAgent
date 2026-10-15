@@ -1,7 +1,7 @@
 """Structured input records, separate from the model's response/tool-call protocol.
 
-The user-input JSON carries new text and selected history, with tool outcomes
-attached to their calls. Saved originals retain their roles and separate results.
+The user-input metadata carries new text and selected history, with literal tool
+outcome blocks referenced by their calls. Saved originals retain their roles and separate results.
 Values remain structured until the outgoing message is rendered.
 """
 
@@ -48,7 +48,7 @@ def record_message(record: dict[str, Any]) -> Message:
 
 
 def step_record(messages: list[Message], *, current: bool = False,
-                retained_prompt: str = "", step_id: int | None = None) -> dict[str, Any]:
+                step_id: int | None = None) -> dict[str, Any]:
     prompts = [message.content or "" for message in messages if message.role == "user"]
     calls = [call for message in messages for call in message.tool_calls or []]
     names = {call.id: call.name for call in calls}
@@ -73,7 +73,9 @@ def step_record(messages: list[Message], *, current: bool = False,
     record: dict[str, Any] = {
         "record_type": "current_step" if current else "history_step",
         "representation": "full",
-        "user_prompt": prompts or ([retained_prompt] if retained_prompt else []),
+        # Only messages the user actually sent in this step. The active request
+        # reaches continuation turns through retained_user_prompts.
+        "user_prompts": prompts,
         "agent_response": next((message.content for message in messages if message.role == "assistant"), None),
         "tool_calls": [{"call_id": call.id, "tool_name": call.name, "arguments": call.arguments} for call in calls],
         "tool_results": results,

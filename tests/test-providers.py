@@ -221,6 +221,34 @@ async def test_failed_candidate_closes_itself_and_preserves_active_model(tmp_pat
         assert session.agent.client is client and session.agent.model == ULTRA_MODEL
 
 
+async def test_model_preflight_uses_candidate_profile_without_switching_early(tmp_path, monkeypatch):
+    from slipagent import agent as agent_module, contextbuilder
+    old = "old/native"
+    candidate = ULTRA_MODEL
+    lookups = []
+
+    def profile(model):
+        lookups.append(model)
+        return {"tool_channel": "embedded" if model == candidate else "native", "sections": []}
+
+    monkeypatch.setattr(agent_module, "model_prompt_profile", profile)
+    monkeypatch.setattr(contextbuilder, "model_prompt_profile", profile)
+    original = Agent._context_view
+    async def preview(self, *args, **kwargs):
+        assert self.model == old
+        result = await original(self, *args, **kwargs)
+        assert self.model == old
+        return result
+
+    monkeypatch.setattr(Agent, "_context_view", preview)
+    async with OpenRouterClient("dummy", transport=transport_for("openrouter", [])) as client:
+        session = session_for(client, tmp_path)
+        session.agent.model = old
+        await session.select_model(ModelInfo(candidate))
+        assert lookups and set(lookups) == {candidate}
+        assert session.agent.model == candidate
+
+
 async def test_provider_without_key_is_not_queried_and_activation_refreshes_cache(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY")
     async with OpenRouterClient("session-key", transport=transport_for("openrouter", [])) as client:

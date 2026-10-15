@@ -97,7 +97,7 @@ async def test_selected_contract_rejects_then_recovers_without_effects(mode, inv
         await agent.wait_for_compaction()
     assert tool.seen == [{"value": "A"}]
     assert len(requests) == 3
-    correction = current_input(requests[1]["messages"])["user_prompt"]
+    correction = current_input(requests[1]["messages"])["user_prompts"]
     assert any("rejected" in prompt.lower() for prompt in correction)
     for body in requests:
         system = body["messages"][0]["content"]

@@ -107,7 +107,7 @@ async def test_repeated_batches_get_recovery_context_before_stopping():
     assert not any(event.kind == "warning" and "Change the approach" in event.text for event in events)
     assert any(event.kind == "warning" and "unchanged results again" in event.text for event in events)
     current = context_records(client.calls[3]["messages"])[-1]
-    assert any("Change the approach" in prompt for prompt in current["user_prompt"])
+    assert any("Change the approach" in prompt for prompt in current["user_prompts"])
     assert current["is_tool_result_response"] is True
     assert [message.content for message in agent.messages if message.role == "user"] == ["inspect"]
     assert agent.stopped

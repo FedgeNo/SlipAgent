@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from contextvars import ContextVar
 from typing import Any
 
-from ..types import ToolSpec, content_text, decode_json_content
+from ..types import ToolSpec
 from ..lifecycle import Lifetime
 from ..resources import SessionResources
 
@@ -44,11 +44,10 @@ class ToolResult:
     content: Any
     is_error: bool = False
 
-    def __post_init__(self) -> None:
-        self.content = decode_json_content(self.content)
-
     def text(self) -> str:
-        return content_text(self.content)
+        if self.content is None:
+            return ""
+        return self.content if isinstance(self.content, str) else json.dumps(self.content, ensure_ascii=False, indent=2)
 
     @classmethod
     def ok(cls, content: Any) -> ToolResult:

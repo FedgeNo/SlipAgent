@@ -629,10 +629,15 @@ def test_terminal_rebuild_preserves_draft_history_scroll_and_input_queue(run_cop
             app = terminal.app
             input_buffer = terminal.input.buffer
             transcript = terminal.transcript
-            edit('terminal.py', '"Ready"', '"Live Ready"')
+            terminal.notify('Retained notice')
+            status = terminal.status_line
+            main_area = terminal.main_area
+            edit('statusline.py', '"Ready"', '"Live Ready"')
             await frame.checkpoint()
             assert frame.generation == 1, sink.getvalue()
             assert terminal.app is app
+            assert terminal.status_line is status and terminal.main_area is main_area
+            assert terminal._current_notification() == 'Retained notice'
             assert terminal.input.buffer is input_buffer and terminal.transcript is transcript
             assert input_buffer.text == 'draft text' and input_buffer.cursor_position == 4
             assert input_buffer.history.get_strings() == ['previous task']

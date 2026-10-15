@@ -47,9 +47,11 @@ from .inspection import IndexedText, field_snapshot, artifact_snapshot, build_sn
 from .transcriptlayouts import TranscriptLayouts
 from .types import ToolCall
 from .diffcomments import attach_reference, diff_reference
+from .statusline import PULSE_FRAMES, StatusLine
+from .mainarea import MainArea
+from .menulifecycle import MenuLifecycle
 
 FOOTER_ROWS = 7
-PULSE_FRAMES = ("🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘")
 
 
 def _key_supplied(text: str) -> bool:
@@ -245,20 +247,16 @@ class TerminalUI:
             DynamicContainer(lambda: self._editor_panel.controls if self._editor_active and not self._focus.prompt_active else self.input),
             self._bottom_row(menu=False),
         ], height=lambda: self._footer_rows(), style="class:footer")
-        menu_footer = HSplit([
-            FocusCoordinator.header(ActionControl(lambda: self._activity_notice([("class:menu-title", self._menu_title)])), lambda: self._menu_window),
-            self._menu_window,
-            self._bottom_row(menu=True),
-        ], height=lambda: self._footer_rows(), style="class:footer class:menu")
-        setting_footer = HSplit([
-            FocusCoordinator.header(ActionControl(lambda: self._activity_notice([("class:menu-title", "Folder Opener")])), lambda: self._options_panel.field),
-            self._options_panel.field,
-            self._bottom_row(menu=False),
-        ], height=lambda: self._footer_rows(), style="class:footer class:menu")
-        context = HSplit([
-            FocusCoordinator.header(FormattedTextControl("Context — latest model request | Ctrl+\\: close"), lambda: self.context_window, style="class:status"),
-            self.context_window,
-        ])
+        menus = MenuLifecycle(self)
+        menu_footer = menus.footer(
+            ActionControl(lambda: self._activity_notice([("class:menu-title", self._menu_title)])),
+            self._menu_window, lambda: self._menu_window, self._bottom_row(menu=True))
+        setting_footer = menus.footer(
+            ActionControl(lambda: self._activity_notice([("class:menu-title", "Folder Opener")])),
+            self._options_panel.field, lambda: self._options_panel.field, self._bottom_row(menu=False))
+        context = FocusCoordinator.panel(
+            FormattedTextControl("Context — latest model request | Ctrl+\\: close"),
+            self.context_window, lambda: self.context_window)
         # Overlay the prompt so switching between prompts of different heights
         # does not move the scroll position and select a different prompt again.
         pinned_transcript = FloatContainer(self.transcript, floats=[Float(
@@ -266,13 +264,10 @@ class TerminalUI:
             content=Window(TranscriptControl(self._pinned_prompt_content), style="class:user"),
         )])
         transcript = DynamicContainer(lambda: pinned_transcript if self.output.get_size().rows > self._footer_rows() + self._queued_prompt_height() + 1 else self.transcript)
-        inspection_visible = Condition(lambda: self._inspection_visible and self.output.get_size().columns >= 60)
-        self._scrollbar = TranscriptScrollbar(lambda: None if self._editor_active else
-                                             self._viewer_window if self._viewer_active else
-                                             self.context_window if self.context_visible else self.transcript)
+        inspection_visible = Condition(lambda: self.main_area.inspector_visible)
+        self._scrollbar = TranscriptScrollbar(lambda: self.main_area.scroll_target())
         return Layout(HSplit([
-            VSplit([DynamicContainer(lambda: self._editor_container if self._editor_active else self._viewer_container if self._viewer_active else
-                                     context if self.context_visible else transcript),
+            VSplit([DynamicContainer(lambda: self.main_area.container(context, transcript)),
                     ConditionalContainer(Window(self._scrollbar, width=1, style="class:scroll-track"), inspection_visible),
                     ConditionalContainer(self._inspection_panel, inspection_visible)], style="class:content"),
             ConditionalContainer(VSplit([Window(TranscriptControl(self._queued_prompt_content),
@@ -318,12 +313,10 @@ class TerminalUI:
         self._files_window: TranscriptWindow = self._touched_panel.window
         self._calls_window: TranscriptWindow = self._calls_panel.window
         self._inspection_panel: HSplit = HSplit([
-            HSplit([FocusCoordinator.header(FormattedTextControl("Touched"), lambda: self._files_window, style="class:menu-title"),
-                    self._files_window]),
+            FocusCoordinator.panel(FormattedTextControl("Touched"), self._files_window, lambda: self._files_window, style="class:menu-title"),
             Window(height=1),
-            HSplit([FocusCoordinator.header(FormattedTextControl("Calls"), lambda: self._calls_window, style="class:menu-title"),
-                    self._calls_window]),
-        ], width=lambda: Dimension.exact(max(1, self.output.get_size().columns // 4)), style="class:menu")
+            FocusCoordinator.panel(FormattedTextControl("Calls"), self._calls_window, lambda: self._calls_window, style="class:menu-title"),
+        ], width=lambda: Dimension.exact(self.main_area.inspector_width), style="class:menu")
 
     def toggle_inspection(self) -> None:
         self._ensure_inspection()
@@ -335,16 +328,21 @@ class TerminalUI:
             self.notify("Widen terminal to show Inspect.")
         self.app.invalidate()
 
+    @property
+    def main_area(self) -> MainArea:
+        if "_main_area" not in self.__dict__:
+            self._main_area = MainArea(self)
+        return self._main_area
+
     def _primary_panel(self) -> FocusTarget:
-        return (self._editor_input if self._editor_active else self._viewer_window if self._viewer_active else
-                self.context_window if self.context_visible else self.transcript)
+        return self.main_area.focus_target()
 
     def _inspection_focused(self) -> bool:
-        return (self._inspection_visible and self.output.get_size().columns >= 60
+        return (self.main_area.inspector_visible
                 and self.app.layout.current_window in (self._files_window, self._calls_window))
 
     def _cycle_panel(self, direction: int = 1, *, components: bool = False) -> None:
-        self.__dict__["_navigation_tip_until"] = time.monotonic() + 15
+        self.status_line.navigation()
         self._focus.travel(direction, components=components)
         self.app.invalidate()
 
@@ -797,22 +795,25 @@ class TerminalUI:
 
     def notify(self, text: str) -> None:
         """Show a notice for 30 seconds, until replaced, or until cleared."""
-        text = " ".join(text.split())
-        self.__dict__["_status_changed_at"] = time.monotonic() if text else None
-        self.__dict__["_notification"] = text
+        self.status_line.notify(text)
         self.app.invalidate()
 
+    @property
+    def status_line(self) -> StatusLine:
+        if "_status_line" not in self.__dict__:
+            self._status_line = StatusLine.from_legacy(self.__dict__)
+        return self._status_line
+
+    @property
+    def _notification(self) -> str:
+        return self.status_line.notification
+
+    @property
+    def _status_changed_at(self) -> float | None:
+        return self.status_line.changed_at
+
     def _current_notification(self) -> str:
-        text = self.__dict__.get("_notification", "")
-        if text:
-            started = self.__dict__.get("_status_changed_at")
-            if started is None:
-                self.__dict__["_status_changed_at"] = time.monotonic()
-            elif time.monotonic() - started >= 30:
-                self.__dict__["_notification"] = ""
-                self.__dict__["_status_changed_at"] = None
-                return ""
-        return str(text)
+        return self.status_line.current_notification()
 
     def _notification_text(self, columns: int | None = None) -> str:
         notification = self._current_notification()
@@ -828,9 +829,7 @@ class TerminalUI:
                 tips.append("Click Commands to browse commands.")
             if self.__dict__.get("_folder_opener") is not None:
                 tips.append("Click directory links to open folders.")
-            now = time.monotonic()
-            started = self.__dict__.setdefault("_tips_started_at", now)
-            text = tips[int((now - started) // 15) % len(tips)]
+            text = self.status_line.tip(tips)
         if columns is None:
             columns = self._notice_width()
             if notification and display_width(text) > columns:
@@ -838,46 +837,10 @@ class TerminalUI:
         return fragment_list_to_text(self._marquee([("", text)], columns, "notice"))
 
     def _navigation_tip(self) -> str:
-        return ("Shift+Tab to select UI component."
-                if time.monotonic() < self.__dict__.get("_navigation_tip_until", 0) else "")
+        return self.status_line.navigation_tip()
 
     def _marquee(self, fragments: StyleAndTextTuples, columns: int, key: str) -> StyleAndTextTuples:
-        """Scroll overflowing text without splitting graphemes or losing handlers."""
-        text = fragment_list_to_text(fragments)
-        states = self.__dict__.setdefault("_marquee_states", {})
-        if columns <= 0 or display_width(text) <= columns:
-            states.pop(key, None)
-            return fragments if columns > 0 else []
-        # The working spinner changes every frame; it must not restart scrolling.
-        identity = text
-        for frame in PULSE_FRAMES:
-            if identity.startswith(frame):
-                identity = identity[len(frame):]
-                break
-        signature = (identity, columns)
-        now = time.monotonic()
-        if key not in states or states[key][0] != signature:
-            states[key] = (signature, now)
-        expanded = explode_text_fragments([*fragments, ("", "   ")])
-        clusters = []
-        position = 0
-        for cluster in iter_graphemes(text + "   "):
-            end = position + len(cluster)
-            clusters.append((max(0, display_width(cluster)), expanded[position:end]))
-            position = end
-        elapsed = (now - states[key][1]) % (1 + len(clusters) * .2)
-        offset = int(max(0, elapsed - 1) / .2)
-        result: StyleAndTextTuples = []
-        remaining = columns
-        for width, parts in clusters[offset:] + clusters[:offset]:
-            if width > remaining:
-                result.append(("", " " * remaining))
-                break
-            result.extend(parts)
-            remaining -= width
-            if not remaining:
-                break
-        return result
+        return self.status_line.marquee(fragments, columns, key)
 
     def _menu_fragments(self) -> StyleAndTextTuples:
         return self._choice_panel.fragments()
@@ -908,7 +871,6 @@ class TerminalUI:
             raise RuntimeError("A menu is already open.")
         if not options or self._eof:
             return None
-        previous = self.app.layout.current_control
         future: asyncio.Future[str | None] = asyncio.get_running_loop().create_future()
         self._menu_future = future
         self._menu_title = title
@@ -916,16 +878,13 @@ class TerminalUI:
                               for value, label in options]
         self._menu_index = 0
         self._menu_window.vertical_scroll = self._menu_window.vertical_scroll_2 = 0
-        try:
-            self._focus.focus(self._menu_window)
-            self.app.invalidate()
-            return await future
-        finally:
+
+        def cleanup() -> None:
             self._menu_future = None
             self._menu_options = []
-            self.notify("")
-            self._focus.restore(previous)
-            self.app.invalidate()
+
+        with MenuLifecycle(self).opened(self._menu_window, cleanup):
+            return await future
 
     def _move_menu(self, rows: int) -> None:
         self._choice_panel.move(rows)
@@ -997,10 +956,10 @@ class TerminalUI:
         if opener is None:
             return
         self.notify("Opening file manager")
-        notification_started = self.__dict__.get("_status_changed_at")
+        notification_started = self.status_line.changed_at
         opened = await asyncio.to_thread(open_folder, directory, opener)
-        if (self.__dict__.get("_notification") == "Opening file manager"
-                and self.__dict__.get("_status_changed_at") == notification_started):
+        if (self.status_line.notification == "Opening file manager"
+                and self.status_line.changed_at == notification_started):
             self.notify("")
         if not opened:
             self._folder_opener = None
@@ -1132,9 +1091,7 @@ class TerminalUI:
     def _pinned_prompt_height(self, columns: int | None = None) -> int:
         size = self.output.get_size()
         if columns is None:
-            columns = size.columns
-            if self.__dict__.get("_inspection_visible") and columns >= 60:
-                columns -= columns // 4 + 1
+            columns = self.main_area.width
         self._transcript_content(columns)
         assert self._flow is not None
         self._pinned_prompt = self._flow.prompt_at(self.transcript.vertical_scroll)
@@ -1206,10 +1163,7 @@ class TerminalUI:
                 blocks.append(("", field + ":\n" + json.dumps(value, ensure_ascii=False, indent=2)))
         self._context_blocks = blocks
         self._context_columns = 0
-        self.context_window.vertical_scroll = 0
-        self.context_window.vertical_scroll_2 = 0
-        self.context_window._pending_scroll = 0
-        self.context_window._following = False
+        self.context_window.seek()
         self.app.invalidate()
 
     def _formatted_context(self) -> StyleAndTextTuples:
@@ -1229,8 +1183,9 @@ class TerminalUI:
         if self._menu_future is not None:
             self._move_menu(rows)
             return
-        window = self._viewer_window if self._viewer.active else self.context_window if self.context_visible else self.transcript
-        window.scroll(rows)
+        window = self.main_area.scroll_target()
+        if window is not None:
+            window.scroll(rows)
         self.app.invalidate()
 
     def _bindings(self) -> KeyBindings:
@@ -1286,8 +1241,7 @@ class TerminalUI:
         @bindings.add("end", filter=in_feed)
         def edge_feed(event: KeyPressEvent) -> None:
             self.transcript.content.__dict__.pop("_keyboard_key", None)
-            self.transcript._following = event.key_sequence[-1].key == Keys.End
-            self.transcript.vertical_scroll = self.transcript.vertical_scroll_2 = self.transcript._pending_scroll = 0
+            self.transcript.seek(following=event.key_sequence[-1].key == Keys.End)
             self.app.invalidate()
 
         @bindings.add("up", filter=in_inspection)
@@ -1395,9 +1349,7 @@ class TerminalUI:
         @bindings.add("home", filter=in_viewer)
         @bindings.add("end", filter=in_viewer)
         def edge_view(event: KeyPressEvent) -> None:
-            self._viewer_window._following = event.key_sequence[-1].key == Keys.End
-            self._viewer_window.vertical_scroll = self._viewer_window.vertical_scroll_2 = 0
-            self._viewer_window._pending_scroll = 0
+            self._viewer_window.seek(following=event.key_sequence[-1].key == Keys.End)
             self.app.invalidate()
 
         @bindings.add("f2", filter=~in_menu & ~in_viewer & ~in_editor & ~in_setting)
@@ -1453,10 +1405,7 @@ class TerminalUI:
 
         @bindings.add("home", filter=in_context)
         def context_top(event: KeyPressEvent) -> None:
-            self.context_window._following = False
-            self.context_window.vertical_scroll = 0
-            self.context_window.vertical_scroll_2 = 0
-            self.context_window._pending_scroll = 0
+            self.context_window.seek()
             self.app.invalidate()
 
         @bindings.add("end", filter=in_context)
@@ -1543,7 +1492,7 @@ class TerminalUI:
                     self._move_menu(-1 if event.event_type == MouseEventType.SCROLL_UP else 1)
                     return None
                 if self._editor_active and event.position.y < size.rows - self._footer_rows() - self._queued_prompt_height() and self._menu_future is None:
-                    if not (self._inspection_visible and size.columns >= 60 and event.position.x >= size.columns - size.columns // 4):
+                    if not self.main_area.in_inspector(event.position.x):
                         self._editor_panel.move_cursor(-3 if event.event_type == MouseEventType.SCROLL_UP else 3)
                         app.invalidate()
                         return None
@@ -1555,7 +1504,7 @@ class TerminalUI:
                         window.scroll(-3 if event.event_type == MouseEventType.SCROLL_UP else 3)
                     app.invalidate()
                     return None
-                if self.__dict__.get("_inspection_visible") and size.columns >= 60 and event.position.x >= size.columns - size.columns // 4 and event.position.y < size.rows - self._footer_rows() - self._queued_prompt_height() and self._menu_future is None:
+                if self.main_area.in_inspector(event.position.x) and event.position.y < size.rows - self._footer_rows() - self._queued_prompt_height() and self._menu_future is None:
                     screen = app.renderer._last_screen
                     if screen is not None:
                         for pane in (self._files_window, self._calls_window):
@@ -1667,52 +1616,37 @@ class TerminalUI:
         if text:
             if display_width(fragment_list_to_text(fragments)) + 2 + display_width(text) > available:
                 fragments = []
-            style = "class:status"
-            changed_at = self.__dict__.get("_status_changed_at")
-            if notification and changed_at is not None:
-                elapsed = time.monotonic() - changed_at
-                if 0 <= elapsed < .9 and int(elapsed / .15) % 2 == 0:
-                    style += " class:status-flash"
+            style = self.status_line.notice_style(bool(notification))
             if fragments:
                 fragments = [*fragments, ("", "  ")]
             fragments = [*fragments, (style, text)]
         return [*self._marquee(fragments, available, "activity"), *suffix]
 
     def _activity_status(self, *, compact: bool = False) -> StyleAndTextTuples:
-        if self._editor_active:
-            return [("class:idle", "Agent Held")]
-        retry_status = self.__dict__.get("_retry_status", "")
-        if retry_status and not self.stopping:
-            return [("class:retry", retry_status)]
-        command_status = self.__dict__.get("_command_status", "")
-        if command_status:
-            return [("class:idle", command_status)]
-        if not self.working:
-            fragments: StyleAndTextTuples = [("class:idle", "Ready")]
-            if self._input_label == "> " and not self._viewer_active and not compact:
-                # Window maps clicks past text onto its last character.
-                fragments.extend([("", "  "), *self._task_link("Commands", "commands", self._choose_command), ("", " ")])
-            return fragments
         frame = self.__dict__.get("_activity_frame", PULSE_FRAMES[int(time.monotonic() * 4) % len(PULSE_FRAMES)])
-        label = "Stopping After This Step" if self.stopping else "Working" if self._viewer_active or compact else "Working (esc to interrupt)"
-        return [("class:pulse", f"{frame} {label}")]
+        style, text, ready = self.status_line.activity(held=self._editor_active, working=self.working,
+            stopping=self.stopping, concise=self._viewer_active or compact, frame=frame)
+        fragments: StyleAndTextTuples = [(style, text)]
+        if ready and self._input_label == "> " and not self._viewer_active and not compact:
+            fragments.extend([("", "  "), *self._task_link("Commands", "commands", self._choose_command), ("", " ")])
+        return fragments
 
     def set_retry_status(self, text: str) -> None:
         """Show transient retry progress without appending a line each second."""
-        self.__dict__["_retry_status"] = text
+        self.status_line.retry = text
         self.app.invalidate()
 
     def set_working(self, working: bool, *, stopping: bool = False) -> None:
         self.working = working
         self.stopping = stopping
         if not working:
-            self.__dict__["_retry_status"] = ""
+            self.status_line.retry = ""
         self._update_title()
         self.app.invalidate()
 
     def set_command_status(self, text: str) -> None:
         """Distinguish settings changes from active model work."""
-        self.__dict__["_command_status"] = text
+        self.status_line.command = text
         self.app.invalidate()
 
     def set_title(self, title: str) -> None:
@@ -2091,7 +2025,7 @@ class TerminalUI:
         layouts.update(state, len(self._raw_output), self._append_transcript_record)
         self._wrapped_count = len(self._raw_output)
         full = self.output.get_size().columns
-        narrow = full - full // 4 - 1
+        narrow = MainArea.split_width(full)
         if full >= 60 and columns in (full, narrow):
             layouts.warm(narrow if columns == full else full, len(self._raw_output), create,
                          self._append_transcript_record, self.app.create_background_task)

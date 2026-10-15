@@ -98,7 +98,7 @@ class UserEdits(WorkCoordinator):
         self.release()
 
     def _clear_opening_notification(self) -> None:
-        if self.terminal.__dict__.get("_notification") == "Opening editor after this turn":
+        if getattr(self.terminal, "_notification", "") == "Opening editor after this turn":
             self.terminal.notify("")
 
     async def aclose(self) -> None:

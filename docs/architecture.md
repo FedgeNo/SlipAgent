@@ -944,6 +944,23 @@ sizes toward the quota. Even incomplete attempt files reserve their numbers.
 
 ## Terminal Components and Invocation Identity
 
+`StatusLine` retains notification expiry and flashing, retry and command status,
+navigation hints, rotating-tip timing, and marquee positions independently of
+layout rebuilds. `TerminalUI` supplies contextual tip choices and clickable
+actions. Older terminals migrate their existing status fields on first use.
+
+`MainArea` selects the editor, viewer, context, or feed and supplies its focus
+and scroll targets. It owns inspector visibility and split-width calculations,
+shared by the layout, queued prompts, editor header, pointer routing, and
+transcript cache warming. Pane buffers and viewer resources retain their existing
+owners. `FocusCoordinator.panel` builds their common title/body structure.
+
+`MenuLifecycle` builds footer menus and restores focus, clears notifications,
+and invalidates the display on acceptance, cancellation, or failure. List choices
+and settings fields retain their own pending futures across layout refreshes.
+`TranscriptWindow.seek` resets viewport position and pending scrolling for feed,
+viewer, and context navigation.
+
 Slash-command definitions live in `commands.py`. Each `Command` descendant
 owns syntax, help, menu insertion text, aliases, execution, and argument-dependent
 scheduling policy. Shared presentation and saved-session bases supply common

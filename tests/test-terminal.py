@@ -29,6 +29,56 @@ async def wait_until(predicate) -> None:
             await asyncio.sleep(.02)
 
 
+def test_status_owner_migrates_retained_state_and_survives_refresh(display, monkeypatch):
+    sink, _, output, _, _ = display
+    clock = [100.0]
+    monkeypatch.setattr("slipagent.statusline.time.monotonic", lambda: clock[0])
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        try:
+            ui.__dict__.pop("_status_line", None)
+            ui.__dict__.update(_notification="Saved", _status_changed_at=90.0,
+                               _retry_status="Retry in 5s", _command_status="",
+                               _navigation_tip_until=0.0, _tips_started_at=80.0)
+            assert ui._current_notification() == "Saved"
+            assert "Retry in 5s" in "".join(part[1] for part in ui._activity_status())
+            owner = ui.status_line
+            ui.input.text = "Retained draft"
+            ui.refresh()
+            assert ui.status_line is owner
+            assert ui.input.text == "Retained draft"
+            assert ui._current_notification() == "Saved"
+            clock[0] = 120.0
+            assert ui._current_notification() == ""
+            assert ui.status_line.retry == "Retry in 5s"
+        finally:
+            ui.close()
+
+
+@pytest.mark.parametrize("setting", [False, True])
+async def test_menu_lifetime_survives_refresh_and_cancellation(display, setting):
+    sink, _, output, _, _ = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        ui.input.text = "Retained draft"
+        task = asyncio.create_task(ui._options_panel.command() if setting else ui.choose("Choose", [("a", "First")]))
+        try:
+            await wait_until(lambda: ui._options_field_active if setting else ui._menu_future is not None)
+            ui.notify("Event while menu is open")
+            ui.refresh()
+            assert not task.done()
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            assert ui._menu_future is None and not ui._options_field_active
+            assert not ui._current_notification()
+            assert ui.app.layout.current_control is ui.input.control
+            assert ui.input.text == "Retained draft"
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            ui.close()
+
+
 @pytest.mark.parametrize("color", [False, True])
 @pytest.mark.parametrize("kind", ["reasoning_delta", "warning", "notice", "retry", "user_message", "tool_end", "tool_output"])
 def test_renderer_displays_untrusted_controls_literally(color, kind):
@@ -596,7 +646,7 @@ async def test_repeated_wrap_toggles_and_saves_preserve_long_lines_and_diff(
                 assert panel.input.text == previous_text
                 ui.notify("")
                 pipe.send_text("\x13")
-                await wait_until(lambda: ui.__dict__.get("_notification") == "File saved." and not panel.busy)
+                await wait_until(lambda: ui._notification == "File saved." and not panel.busy)
                 assert path.read_bytes() == expected.encode()
                 entries = registry.context_notes["user_edits"]
                 if edit:
@@ -2477,7 +2527,7 @@ async def test_directory_launch_notifies_without_replacing_agent_status(display,
             assert "Opening file manager" not in snapshot()[23]
             assert fragment_list_to_text(ui._activity_status()) == "Existing status"
             assert "Opening file manager" in fragment_list_to_text(ui._activity())
-            assert ui.__dict__["_notification"] == "Opening file manager"
+            assert ui._notification == "Opening file manager"
             if new_notice:
                 ui.notify("New notice")
         finally:
@@ -2487,7 +2537,7 @@ async def test_directory_launch_notifies_without_replacing_agent_status(display,
             await app
         assert fragment_list_to_text(ui._activity_status()) == "Existing status"
         assert fragment_list_to_text(ui._status_fragments()) == "status"
-        assert ui.__dict__["_notification"] == ("Could not open folder." if not opened else
+        assert ui._notification == ("Could not open folder." if not opened else
                                                 "New notice" if new_notice else "")
 
 

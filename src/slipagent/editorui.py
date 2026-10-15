@@ -10,7 +10,7 @@ from typing import Any
 from prompt_toolkit.document import Document
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import StyleAndTextTuples
-from prompt_toolkit.layout import HSplit, Window
+from prompt_toolkit.layout import Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.widgets import TextArea
 from wcwidth import iter_graphemes, width as display_width
@@ -33,7 +33,7 @@ class EditorPanel:
         self.input = TextArea(multiline=True, wrap_lines=True,
                               read_only=Condition(lambda: self.busy or self.read_only))
         self.ensure_control()
-        self.container = HSplit([FocusCoordinator.header(FormattedTextControl(self.header), lambda: self.input, style="class:status class:footer"), self.input])
+        self.container = FocusCoordinator.panel(FormattedTextControl(self.header), self.input, lambda: self.input, style="class:status class:footer")
         self.controls = Window(ActionControl(self.actions), height=5)
 
     @property
@@ -92,9 +92,7 @@ class EditorPanel:
     def header(self) -> StyleAndTextTuples:
         if self.file is None:
             return []
-        columns = self.terminal.output.get_size().columns
-        if self.terminal.__dict__.get("_inspection_visible") and columns >= 60:
-            columns -= columns // 4 + 1
+        columns = self.terminal.main_area.width
         text = str(self.file.path)
         if self.read_only:
             text = "Read-Only: Unsupported Control Characters — " + text

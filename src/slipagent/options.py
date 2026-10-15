@@ -11,6 +11,7 @@ from prompt_toolkit.widgets import TextArea
 
 from .config import ConfigError
 from .explorer import folder_opener
+from .menulifecycle import MenuLifecycle
 from .uipreferences import load_ui_preferences, save_ui_preference, configured_folder_opener
 
 
@@ -27,7 +28,7 @@ class OptionsPanel:
                 terminal._folder_opener = configured
         except (ConfigError, ValueError) as exc:
             self.values = {}
-            terminal.__dict__["_notification"] = str(exc)
+            terminal.status_line.notify(str(exc))
 
     def accept(self, buffer: Any) -> bool:
         if self.field_future is not None and not self.field_future.done():
@@ -39,21 +40,17 @@ class OptionsPanel:
             self.field_future.set_result(None)
 
     async def command(self) -> str | None:
-        previous = self.terminal.app.layout.current_control
         self.field.buffer.set_document(Document(self.values.get("folder_opener", "")))
         self.field_future = asyncio.get_running_loop().create_future()
         self.terminal._options_field_active = True
-        self.terminal.notify("Use {path}, or the directory is appended.")
-        self.terminal._focus.focus(self.field)
-        self.terminal.app.invalidate()
-        try:
-            return await self.field_future
-        finally:
+        future = self.field_future
+
+        def cleanup() -> None:
             self.field_future = None
             self.terminal._options_field_active = False
-            self.terminal.notify("")
-            self.terminal._focus.restore(previous)
-            self.terminal.app.invalidate()
+
+        with MenuLifecycle(self.terminal).opened(self.field, cleanup, "Use {path}, or the directory is appended."):
+            return await future
 
     async def show(self) -> None:
         if self.active or self.terminal._menu_future is not None:

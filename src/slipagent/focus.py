@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterable
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.layout import Layout, Window
+from prompt_toolkit.layout.containers import AnyContainer, HSplit
 from prompt_toolkit.layout.layout import walk
 from prompt_toolkit.layout.controls import UIControl
 from prompt_toolkit.data_structures import Point
@@ -54,6 +55,12 @@ class FocusCoordinator:
         window = Window(control, height=1, style=style)
         window.__dict__["_focus_target"] = target
         return window
+
+    @classmethod
+    def panel(cls, title: UIControl, body: AnyContainer, target: Callable[[], FocusTarget],
+              *, style: str = "class:status") -> HSplit:
+        """Build a titled region whose title focuses its retained body."""
+        return HSplit([cls.header(title, target, style=style), body])
 
     def click(self, point: Point) -> None:
         """Focus before dispatch so native input handlers also place the cursor."""

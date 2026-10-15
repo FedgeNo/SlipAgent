@@ -9,7 +9,6 @@ from collections.abc import Callable, Coroutine
 from pathlib import Path
 from typing import Any
 
-from prompt_toolkit.layout import HSplit
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 
 from .inspection import IndexedText
@@ -78,9 +77,7 @@ class ViewerDeck:
         self.request = 0
         self.window = TranscriptWindow(self.panel.control)
         self.window._following = False
-        self.container = HSplit([
-            FocusCoordinator.header(ActionControl(header), lambda: self.window, style="class:status"), self.window,
-        ])
+        self.container = FocusCoordinator.panel(ActionControl(header), self.window, lambda: self.window)
 
     def next_request(self) -> int:
         self.request += 1
@@ -92,9 +89,7 @@ class ViewerDeck:
         self.panel = panel
         self.window.content = panel.control
         lines = panel.control.lines
-        self.window.vertical_scroll = lines.line_index(line) if isinstance(lines, IndexedText) else max(0, line - 1)
-        self.window.vertical_scroll_2 = self.window._pending_scroll = 0
-        self.window._following = False
+        self.window.seek(lines.line_index(line) if isinstance(lines, IndexedText) else line - 1)
         self.active = True
 
     def close(self) -> None:

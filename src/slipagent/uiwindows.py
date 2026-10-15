@@ -19,6 +19,13 @@ class TranscriptWindow(Window):
     def scroll(self, rows: int) -> None:
         self._pending_scroll += rows
 
+    def seek(self, row: int = 0, *, following: bool = False) -> None:
+        """Set a new viewport origin and discard pending scroll gestures."""
+        self.vertical_scroll = max(0, row)
+        self.vertical_scroll_2 = self._pending_scroll = 0
+        self._following = following
+        self.__dict__.pop("_reveal_row", None)
+
     def reveal_row(self, row: int) -> None:
         self.__dict__["_reveal_row"] = row
         self._following = False

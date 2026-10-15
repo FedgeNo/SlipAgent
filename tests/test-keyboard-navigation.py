@@ -263,7 +263,7 @@ async def test_tabbing_shows_component_tip_without_flashing_or_losing_notificati
     press(terminal, key)
     assert terminal._notification_text(100) == 'Shift+Tab to select UI component.'
     assert not any('status-flash' in style for style, *_ in terminal._activity_notice([]))
-    assert terminal.__dict__['_notification'] == 'Saved notification'
+    assert terminal._notification == 'Saved notification'
     clock[0] += 16
     assert terminal._notification_text(100) == 'Saved notification'
 

@@ -544,6 +544,58 @@ async def test_repeated_wrap_toggles_and_saves_preserve_long_lines_and_diff(
             await store.aclose()
 
 
+@pytest.mark.parametrize("exit_action", ["cancel", "accept", "interrupt", "new_notice"])
+async def test_options_command_hint_clears_on_exit(display, exit_action):
+    sink, _, output, _, _ = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        command = asyncio.create_task(ui._options_panel.command())
+        try:
+            await wait_until(lambda: ui._options_field_active)
+            assert ui._notification_text(200) == "Use {path}, or the directory is appended."
+            if exit_action == "interrupt":
+                command.cancel()
+            elif exit_action == "accept":
+                ui._options_panel.accept(ui._options_panel.field.buffer)
+            else:
+                if exit_action == "new_notice":
+                    ui.notify("Tool finished.")
+                ui._options_panel.cancel()
+            await asyncio.gather(command, return_exceptions=True)
+            assert not ui._options_field_active
+            assert not ui._notification
+            assert ui._notification_text(200) == "Select and right-click for text options."
+            assert ui._status_changed_at is None
+        finally:
+            command.cancel()
+            await asyncio.gather(command, return_exceptions=True)
+            ui.close()
+
+
+@pytest.mark.parametrize("save", [False, True])
+async def test_options_save_cancel_links(display, save):
+    sink, _, output, screen, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        task = asyncio.create_task(ui.run())
+        command = asyncio.create_task(ui._options_panel.command())
+        try:
+            await wait_until(lambda: "Save [Enter]" in snapshot()[23])
+            ui._options_panel.field.text = "opener {path}"
+            label = "Save" if save else "Cancel"
+            column = snapshot()[23].index(label)
+            assert screen.buffer[23][column].underscore
+            pipe.send_text(f"\x1b[<0;{column + 1};24M\x1b[<0;{column + 1};24m")
+            assert await asyncio.wait_for(command, 3) == ("opener {path}" if save else None)
+            assert not ui._notification
+            assert ui._lines.empty()
+        finally:
+            command.cancel()
+            await asyncio.gather(command, return_exceptions=True)
+            ui.close()
+            await task
+
+
 async def test_options_field_isolated_from_prompt_queue_and_draft(display, monkeypatch):
     from slipagent import options
     from unittest.mock import Mock
@@ -572,6 +624,7 @@ async def test_options_field_isolated_from_prompt_queue_and_draft(display, monke
             await wait_until(lambda: ui._menu_future is not None)
             ui._finish_menu("done")
             await wait_until(lambda: not ui._options_panel.active)
+            assert not ui._notification
             assert ui.input.text == "keep this draft"
             assert ui._lines.empty()
             assert ui._folder_opener == ("/test/opener",)
@@ -1579,7 +1632,8 @@ async def test_notifications_remain_visible_in_menu_context_and_after_resize(dis
             ui.app.invalidate()
             await wait_until(lambda: "Context" in snapshot()[0])
             assert screen.buffer[10][99].bg == "000000"
-            assert "Saved changes." in snapshot()[17]
+            assert not ui._notification
+            ui.notify("Saved changes.")
             size[0] = Size(rows=24, columns=12)
             screen.resize(lines=24, columns=12)
             output.get_size = lambda: size[0]

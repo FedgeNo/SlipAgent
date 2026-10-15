@@ -51,6 +51,7 @@ class OptionsPanel:
         finally:
             self.field_future = None
             self.terminal._options_field_active = False
+            self.terminal.notify("")
             self.terminal._focus.restore(previous)
             self.terminal.app.invalidate()
 

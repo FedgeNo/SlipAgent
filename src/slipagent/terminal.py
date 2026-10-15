@@ -785,9 +785,14 @@ class TerminalUI:
 
     def _bottom_row(self, *, menu: bool) -> VSplit:
         return VSplit([
-            Window(ActionControl(lambda: self._menu_hint() if menu else ANSI("Enter: Save | Esc: Cancel") if self._options_field_active else self._status_fragments()),
+            Window(ActionControl(lambda: self._menu_hint() if menu else self._options_hint() if self._options_field_active else self._status_fragments()),
                    height=1, style="class:status"),
         ], height=1)
+
+    def _options_hint(self) -> StyleAndTextTuples:
+        return [*self._action_link("Save", "option-save", lambda: self._options_panel.accept(self._options_panel.field.buffer)),
+                ("", " [Enter] | "), *self._action_link("Cancel", "option-cancel", self._options_panel.cancel),
+                ("", " [Esc]")]
 
     def notify(self, text: str) -> None:
         """Show a notice until replaced or explicitly cleared with an empty string."""
@@ -905,6 +910,7 @@ class TerminalUI:
         finally:
             self._menu_future = None
             self._menu_options = []
+            self.notify("")
             self._focus.restore(previous)
             self.app.invalidate()
 

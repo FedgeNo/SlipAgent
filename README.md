@@ -1216,7 +1216,8 @@ model request together, after the current tool batch finishes. Their previews
 stay just above the bottom controls until their request is sent. Each
 preview occupies one line within the main pane, stopping at the visible
 inspection sidebar and adding an ellipsis when it is too long. Each queued prompt
-or command has a red X at the right: click it, or focus it and press Enter, to
+or command has a Cancel link at the right, separated from the preview by a space:
+click it, or focus it and press Enter, to
 remove that specific item. API keys are hidden in command previews. On submission,
 the full prompts enter the feed in arrival order before that request's output.
 If context preparation fails or `/stop` prevents that request, the previews stay.

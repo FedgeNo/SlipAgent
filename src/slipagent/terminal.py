@@ -1618,7 +1618,8 @@ class TerminalUI:
                 return []
             prompt, identifier, discard = prompts[index]
             text = "> " + " ".join(literal(prompt).splitlines())
-            text_width = max(0, width - 2) if discard is not None else width
+            cancel_label = "Cancel"[:width]
+            text_width = max(0, width - len(cancel_label) - 1) if discard is not None else width
             if display_width(text) > text_width:
                 prefix = ""
                 for cluster in iter_graphemes(text):
@@ -1628,8 +1629,8 @@ class TerminalUI:
                 text = prefix.rstrip() + "…" if text_width else ""
             result: StyleAndTextTuples = [("class:user", text)]
             if discard is not None:
-                result.append(("class:user", " " * max(0, width - display_width(text) - 1)))
-                result.extend(self._action_link("X", ("discard-input", identifier), discard, style="fg:#ff5555 bold"))
+                result.append(("class:user", " " * max(0, width - display_width(text) - len(cancel_label))))
+                result.extend(self._action_link(cancel_label, ("discard-input", identifier), discard))
             return result
 
         content = UIContent(get_line=get_line, line_count=height, show_cursor=False)

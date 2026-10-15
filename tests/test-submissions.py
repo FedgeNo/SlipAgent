@@ -142,16 +142,18 @@ async def test_delete_agent_pending_and_hide_key(display, monkeypatch):
         rows = ui._queued_prompt_content(40)
         assert "dummy-secret" not in str([rows.get_line(i) for i in range(rows.line_count)])
         line = rows.get_line(1)
-        assert line[-1][1] == "X"
+        assert line[-1][1] == "Cancel"
+        narrow_line = ui._queued_prompt_content(12).get_line(1)
+        assert "".join(fragment[1] for fragment in narrow_line) == "> sa… Cancel"
         line[-1][2](MouseEvent(Point(39, 1), MouseEventType.MOUSE_UP, MouseButton.LEFT, frozenset()))
         assert input_queue(agent).snapshot() == entries[:1]
         assert agent.pending == ["same"]
-        # A reset replaces InputQueue; new X actions must use the replacement.
+        # A reset replaces InputQueue; new Cancel actions must use the replacement.
         agent.reset()
         agent.enqueue("after reset")
         ui._queued_items()[0][2]()
         assert not agent.pending
-        # The previously painted X follows a submission across its handoff.
+        # The previously painted Cancel link follows a submission across its handoff.
         ui._submit("transferred")
         submitted = ui.__dict__["_submissions"][-1]
         remove = ui._queued_items()[-1][2]

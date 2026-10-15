@@ -229,6 +229,8 @@ does not depend on Google's opaque native function-call signatures.
 Gemini is excluded from the Nemotron compression rotation.
 SlipAgent requests thought summaries from Google's thinking models and displays
 them in the reasoning stream, using the model's default thinking level.
+Leading `<thought>…</thought>` blocks are separated from response content before
+tool-call JSON parsing, including when their tags span streaming chunks.
 
 Model lists put free models first. The interactive picker uses a green background
 and a matching `= free` legend on the right. `/models free` includes models with

@@ -25,6 +25,7 @@ from .types import Completion, KeyInfo, Message, ModelInfo, ToolSpec, Usage
 from .capabilities import RequestProfile
 from .protocol import ResponseFormatError, normalize_calls, combine_calls
 from .prompts import model_prompt_profile
+from .thoughts import ThoughtStream
 
 DEFAULT_TIMEOUT = 180.0
 DEFAULT_MAX_RETRIES = 3
@@ -274,8 +275,8 @@ class APIClient:
                         completion = _parse_completion(raw)
                         wire = raw["choices"][0]["message"]
                         try:
-                            for text in _reasoning_text(wire):
-                                on_delta("reasoning", text)
+                            if completion.message.reasoning:
+                                on_delta("reasoning", completion.message.reasoning)
                         except APIResponseError as exc:
                             exc.usage = completion.usage
                             exc.partial_response = json.dumps(wire, ensure_ascii=False)
@@ -514,6 +515,7 @@ class _StreamCompletion:
         self.index_mode = index_mode
         self.active_slots: dict[int, int] = {}
         self.content = ""
+        self.thoughts = ThoughtStream(self._text_delta)
         self.calls: dict[int, dict[str, Any]] = {}
         self.model = ""
         self.finish_reason: str | None = None
@@ -592,9 +594,7 @@ class _StreamCompletion:
                 if content is not None:
                     content, blocks = _content_parts(content)
                     self.tool_blocks.extend(blocks)
-                    self.content += content
-                    if content:
-                        self.on_delta("content", content)
+                    self.thoughts.add(content)
                 fragments = delta.get("tool_calls") or []
                 if isinstance(fragments, dict):
                     fragments = [fragments]
@@ -657,9 +657,20 @@ class _StreamCompletion:
         except (ValueError, TypeError, AttributeError, OverflowError) as exc:
             raise APIResponseError(f"Malformed API provider stream: {exc}") from exc
 
+    def _text_delta(self, kind: str, text: str) -> None:
+        if kind == "reasoning":
+            self.reasoning.append(text)
+        else:
+            self.content += text
+        self.on_delta(kind, text)
+
     def completion(self) -> Completion:
         if self.finish_reason is None:
             raise APITransportError("API provider stream ended before a complete response")
+        try:
+            self.thoughts.finish()
+        except ValueError as exc:
+            raise APIResponseError(str(exc)) from exc
         return _parse_completion({
             "model": self.model, "usage": self.usage,
             "choices": [{"finish_reason": self.finish_reason, "message": {
@@ -869,7 +880,11 @@ def _parse_completion(raw: dict[str, Any]) -> Completion:
             response_excerpt = json.dumps(
                 {"invalid_message_prefix": json.dumps(wire, ensure_ascii=True)[:1500]}, indent=2,
             )
-        message = Message.assistant(content or None, calls)
+        separated: dict[str, list[str]] = {"content": [], "reasoning": []}
+        thoughts = ThoughtStream(lambda kind, text: separated[kind].append(text))
+        thoughts.add(content)
+        thoughts.finish()
+        message = Message.assistant("".join(separated["content"]) or None, calls)
         details = wire.get("reasoning_details")
         if details is not None:
             if not isinstance(details, list) or any(not isinstance(detail, dict) for detail in details):
@@ -878,7 +893,7 @@ def _parse_completion(raw: dict[str, Any]) -> Completion:
             # in the local original; outgoing requests exclude both forms.
             if any(detail.get("signature") or detail.get("type") == "reasoning.encrypted" for detail in details):
                 message.reasoning_details = copy.deepcopy(details)
-        message.reasoning = "".join(_reasoning_text(wire)) or None
+        message.reasoning = "".join([*_reasoning_text(wire), *separated["reasoning"]]) or None
         return Completion(
             message=message,
             model=raw.get("model", ""),

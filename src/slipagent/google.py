@@ -91,3 +91,9 @@ class GoogleClient(APIClient):
 
     def prepare_payload(self, payload: dict[str, Any], profile: RequestProfile | None) -> None:
         payload.pop("session_id", None)
+        model = payload["model"]
+        properties = getattr(self, "_model_properties", {}).get(model, {})
+        if properties.get("thinking") is True or model.startswith(("gemini-2.5-", "gemini-3")):
+            # Request Google's visible summaries while retaining its default thinking level.
+            extra = payload.setdefault("extra_body", {}).setdefault("google", {})
+            extra.setdefault("thinking_config", {})["include_thoughts"] = True

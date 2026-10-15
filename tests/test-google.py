@@ -67,3 +67,26 @@ async def test_compatible_stream():
         result = await client.chat(model="gemini-3.8-flash", messages=[Message.user("Hello")],
                                    on_delta=lambda kind, text: deltas.append((kind, text)))
     assert result.message.content == "Hello" and deltas
+
+
+@pytest.mark.parametrize("stream", [False, True])
+async def test_thought_summaries_requested_and_received(stream):
+    def handle(request):
+        body = json.loads(request.content)
+        assert body["extra_body"]["google"]["thinking_config"] == {"include_thoughts": True}
+        assert "reasoning_effort" not in body
+        message = {"role": "assistant", "content": "Answer", "reasoning_content": "Considering the problem."}
+        if stream:
+            chunks = [{"choices": [{"delta": {"reasoning_content": "Considering the problem."}}]},
+                      {"choices": [{"delta": {"content": "Answer"}, "finish_reason": "stop"}]}]
+            return httpx.Response(200, text="".join("data: " + json.dumps(c) + "\n\n" for c in chunks) + "data: [DONE]\n\n",
+                                  headers={"content-type": "text/event-stream"})
+        return httpx.Response(200, json={"choices": [{"message": message, "finish_reason": "stop"}]})
+    deltas = []
+    async with GoogleClient("dummy", transport=httpx.MockTransport(handle)) as client:
+        result = await client.chat(model="gemini-3.8-flash", messages=[Message.user("Explain")],
+                                   on_delta=(lambda kind, text: deltas.append((kind, text))) if stream else None)
+    assert result.message.content == "Answer"
+    assert result.message.reasoning == "Considering the problem."
+    if stream:
+        assert deltas == [("reasoning", "Considering the problem."), ("content", "Answer")]

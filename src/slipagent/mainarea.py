@@ -32,7 +32,7 @@ class MainArea:
     @property
     def width(self) -> int:
         columns = self.terminal.output.get_size().columns
-        return self.split_width(columns) if self.inspector_visible else columns
+        return self.split_width(columns) if self.inspector_visible else max(1, columns - 1)
 
     def in_inspector(self, column: int) -> bool:
         return self.inspector_visible and column >= self.terminal.output.get_size().columns - self.inspector_width

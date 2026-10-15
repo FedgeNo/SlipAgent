@@ -94,12 +94,12 @@ def build_layout(ui: TerminalUI) -> Layout:
     ui._scrollbar = TranscriptScrollbar(lambda: ui.main_area.scroll_target())
     return Layout(HSplit([
         VSplit([DynamicContainer(lambda: ui.main_area.container(context, transcript)),
-                ConditionalContainer(Window(ui._scrollbar, width=1, style="class:scroll-track"), inspection_visible),
+                Window(ui._scrollbar, width=1, style="class:scroll-track"),
                 ConditionalContainer(ui._inspection_panel, inspection_visible)], style="class:content"),
         ConditionalContainer(VSplit([Window(TranscriptControl(ui._queued_prompt_content),
                                     height=ui._queued_prompt_height, dont_extend_height=True,
                                     style="class:user"),
-                                     ConditionalContainer(Window(width=1, style="class:scroll-track"), inspection_visible),
+                                     Window(width=1, style="class:scroll-track"),
                                      ConditionalContainer(Window(width=ui._inspection_panel.width, style="class:menu"), inspection_visible)],
                                     height=ui._queued_prompt_height),
                              Condition(lambda: ui._queued_prompt_height() > 0)),

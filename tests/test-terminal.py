@@ -386,7 +386,7 @@ async def test_user_prompt_background_fills_feed_without_copy_padding(display, i
                 size[0] = Size(rows=24, columns=columns)
                 screen.resize(lines=24, columns=columns)
                 ui.app.invalidate()
-                width = columns - columns // 4 - 1 if inspect else columns
+                width = columns - columns // 4 - 1 if inspect else columns - 1
                 await wait_until(lambda: ui._wrapped_columns == width)
                 await asyncio.sleep(.05)
                 lines = snapshot()
@@ -436,6 +436,14 @@ async def test_feed_scrollbar_click_drag_and_follow(display):
             assert screen.buffer[16][74].bg == "17232d"
             assert screen.buffer[16][75].bg == "272334"
             ui.clear_queued_prompts()
+            ui.toggle_inspection()
+            await wait_until(lambda: ui._wrapped_columns == 99)
+            await wait_until(lambda: snapshot() and all(screen.buffer[row][99].bg == "17232d" for row in range(17)))
+            pipe.send_text("\x1b[<0;100;1M\x1b[<0;100;1m")
+            await wait_until(lambda: snapshot()[0].startswith("row 000"))
+            pipe.send_text("\x1b[<0;100;17M\x1b[<0;100;17m")
+            await wait_until(lambda: ui.transcript._following)
+            ui.toggle_inspection()
             ui.open_viewer("Viewer", "plain text")
             await wait_until(lambda: snapshot()[1].startswith("plain text"))
             assert screen.buffer[1][73].bg == "000000"
@@ -891,7 +899,7 @@ async def test_editor_mouse_places_cursor_on_text_and_at_line_end_in_blank_space
             await ui._open_editor_now(path)
             await wait_until(lambda: snapshot()[1].startswith("first line"))
             assert all(screen.buffer[row][column].bg == "111c20"
-                       for row in (1, 9) for column in range(100))
+                       for row in (1, 9) for column in range(99))
             pipe.send_text("\x1b[<0;4;2M\x1b[<0;4;2m")
             await wait_until(lambda: ui._editor_input.buffer.cursor_position == 3)
             pipe.send_text("\x1b[<0;40;2M\x1b[<0;40;2m")
@@ -1070,7 +1078,7 @@ async def test_right_click_keeps_selection_and_no_selection_shows_notice(display
         try:
             ui.write("select this text")
             await wait_until(lambda: ui.app.is_running)
-            ui._transcript_content(100)
+            ui._transcript_content(ui.main_area.width)
             for kind, x in [(MouseEventType.MOUSE_DOWN, 0), (MouseEventType.MOUSE_UP, 6)]:
                 ui._select_transcript(MouseEvent(Point(x=x, y=0), kind, MouseButton.LEFT, frozenset()))
             selected = ui.selected_text()
@@ -1836,7 +1844,7 @@ async def test_notifications_remain_visible_in_menu_context_and_after_resize(dis
             ui.context_visible = True
             ui.app.invalidate()
             await wait_until(lambda: "Context" in snapshot()[0])
-            assert screen.buffer[10][99].bg == "000000"
+            assert screen.buffer[10][98].bg == "000000"
             assert not ui._notification
             ui.notify("Saved changes.")
             size[0] = Size(rows=24, columns=12)
@@ -2859,12 +2867,12 @@ async def test_pinned_prompt_follows_scrollback_in_both_directions(display):
             for prompt in ("First task\nFirst details", "Second task", "Third task\nThird details"):
                 renderer.user_prompt(prompt)
                 ui.write("\n".join(f"{prompt.splitlines()[0]} output {i}" for i in range(40)))
-            await wait_until(lambda: snapshot()[0].rstrip() == "> Third task")
+            await wait_until(lambda: snapshot()[0][:ui.main_area.width].rstrip() == "> Third task")
             pipe.send_text("unfinished draft")
             await wait_until(lambda: "unfinished draft" in snapshot()[18])
 
             async def scroll_to(text, offset=0):
-                content = ui.transcript.content.create_content(size[0].columns, 17)
+                content = ui.transcript.content.create_content(ui.main_area.width, 17)
                 row = next(i for i in range(content.line_count)
                            if "".join(part[1] for part in content.get_line(i)).rstrip() == text) + offset
                 ui._scroll_output(row - ui.transcript.vertical_scroll)
@@ -2880,27 +2888,27 @@ async def test_pinned_prompt_follows_scrollback_in_both_directions(display):
                 ("> Third task", 0, "> Third task"),
             ):
                 await scroll_to(text, offset)
-                await wait_until(lambda: snapshot()[0].rstrip() == pinned)
+                await wait_until(lambda: snapshot()[0][:ui.main_area.width].rstrip() == pinned)
                 assert "unfinished draft" in snapshot()[18]
                 assert "readout" in snapshot()[23]
 
             # A wheel event on the header crosses back into the previous task.
             pipe.send_text("\x1b[<64;1;1M")
-            await wait_until(lambda: snapshot()[0].rstrip() == "> Second task")
+            await wait_until(lambda: snapshot()[0][:ui.main_area.width].rstrip() == "> Second task")
             assert screen.buffer[0][0].fg == "ffffff"
             pipe.send_text("\x1b[<65;1;1M")
-            await wait_until(lambda: snapshot()[0].rstrip() == "> Third task")
+            await wait_until(lambda: snapshot()[0][:ui.main_area.width].rstrip() == "> Third task")
 
             # Narrowing doubles many output rows; lookup must use the new file offsets.
             size[0] = Size(rows=24, columns=15)
             screen.resize(lines=24, columns=15)
             ui.app.invalidate()
-            await wait_until(lambda: ui._wrapped_columns == 15)
+            await wait_until(lambda: ui._wrapped_columns == 14)
             await scroll_to("> Second task", -1)
-            await wait_until(lambda: snapshot()[0].rstrip() == "> First task")
+            await wait_until(lambda: snapshot()[0][:ui.main_area.width].rstrip() == "> First task")
             ui.refresh()
             await scroll_to("> Third task")
-            await wait_until(lambda: snapshot()[0].rstrip() == "> Third task")
+            await wait_until(lambda: snapshot()[0][:ui.main_area.width].rstrip() == "> Third task")
         finally:
             ui.close()
             await task
@@ -3091,7 +3099,7 @@ async def test_restored_transcript_replaces_output_and_scrolls_to_end(display):
             ui.context_visible = True
             await renderer.restore_transcript(messages, [])
             await wait_until(lambda: "Saved final answer" in "\n".join(snapshot()[:17]))
-            assert snapshot()[0].rstrip() == "> Saved next task"
+            assert snapshot()[0][:ui.main_area.width].rstrip() == "> Saved next task"
             assert "unfinished draft" in snapshot()[18]
             assert "readout" in snapshot()[23]
             recorded = "\n".join(ui._raw_output)
@@ -3105,7 +3113,7 @@ async def test_restored_transcript_replaces_output_and_scrolls_to_end(display):
             assert [message.to_api() for message in messages] == original
             ui._scroll_output(-1000)
             await wait_until(lambda: "Saved first answer" in "\n".join(snapshot()[:17]))
-            assert snapshot()[0].rstrip() == "> Saved first task"
+            assert snapshot()[0][:ui.main_area.width].rstrip() == "> Saved first task"
             assert screen.buffer[0][0].fg == "ffffff"
             await renderer.restore_transcript(messages, ["Queued correction"])
             await wait_until(lambda: "> Queued correction" in "\n".join(snapshot()[:17]))
@@ -3675,7 +3683,7 @@ async def test_wheel_scrolls_inside_wrapped_lines_and_survives_resize(display) -
         ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
         task = asyncio.create_task(ui.run())
         try:
-            ui.write("".join(f"{number:02d}" + "x" * 38 for number in range(30)))
+            ui.write("".join(f"{number:02d}" + "x" * 37 for number in range(30)))
             await wait_until(lambda: any(row.startswith("29xxx") for row in snapshot()[:9]))
             pipe.send_text("\x1b[<64;1;5M" * 3)
             await wait_until(lambda: any(row.startswith("20xxx") for row in snapshot()[:9]))

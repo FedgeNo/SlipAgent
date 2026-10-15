@@ -33,6 +33,7 @@ CORE_MODULES = frozenset({"", "runtime", "config", "types", "data_text", "worksp
 CORE_MODULES |= frozenset({"semantic", "semantic.cpu", "semantic.embed", "semantic.indexer",
                            "semantic.retrieval", "semantic.search", "semantic.storage",
                            "semantic.watcher", "semantic.service"})
+CORE_MODULES |= frozenset({"sources"})
 POLL_INTERVAL = .5
 _CLASS_INTERNALS = frozenset({
     "__dict__", "__weakref__", "__slots__", "__module__", "__classcell__",

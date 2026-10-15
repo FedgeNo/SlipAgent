@@ -6,6 +6,25 @@ import json
 import re
 from dataclasses import dataclass
 from typing import Any
+from collections.abc import Iterator
+
+from .sources import FileText, TextSource, json_chunks, text_chunks
+
+
+@dataclass
+class RenderedContent(TextSource):
+    value: Any
+
+    def chunks(self) -> Iterator[str]:
+        yield from content_chunks(self.value)
+
+
+@dataclass
+class RenderedJSON(TextSource):
+    value: Any
+
+    def chunks(self) -> Iterator[str]:
+        yield from json_chunks(self.value)
 
 
 @dataclass
@@ -23,8 +42,14 @@ class JSONInput:
 
 
 def render_content(value: Any) -> str:
-    if isinstance(value, JSONInput):
-        blocks: list[str] = []
+    return "".join(content_chunks(value))
+
+
+def content_chunks(value: Any) -> Iterator[str]:
+    if isinstance(value, TextSource):
+        yield from value.chunks()
+    elif isinstance(value, JSONInput):
+        blocks: list[Any] = []
 
         payload = dict(value.data)
         if "history" in payload:
@@ -41,53 +66,58 @@ def render_content(value: Any) -> str:
                         if key not in call:
                             continue
                         child = call[key]
-                        text = child if isinstance(child, str) else json.dumps(child, ensure_ascii=False, indent=2)
+                        text = child if isinstance(child, (str, FileText)) else child
                         blocks.append(text)
-                        result[key] = {"tool_result_block": len(blocks), "characters": len(text),
-                                       "format": "text" if isinstance(child, str) else "json"}
+                        characters = len(text) if isinstance(text, (str, FileText)) else sum(map(len, json_chunks(text)))
+                        result[key] = {"tool_result_block": len(blocks), "characters": characters,
+                                       "format": "text" if isinstance(child, (str, FileText)) else "json"}
                     calls.append(result)
                 projected["tool_calls"] = calls
                 history.append(projected)
             payload["history"] = history
-        metadata = json.dumps(payload, ensure_ascii=False, indent=2)
-        return metadata + "".join(f"\n\nTool Result Block {index} ({len(text)} characters):\n{text}"
-                                  for index, text in enumerate(blocks, 1))
-    if isinstance(value, MessageSections):
-        return "".join(render_content(part) for part in value.parts)
-    if value is None:
-        return ""
-    return value if isinstance(value, str) else render_data(value)
+        yield from json_chunks(payload)
+        for index, text in enumerate(blocks, 1):
+            characters = len(text) if isinstance(text, (str, FileText)) else sum(map(len, json_chunks(text)))
+            yield f"\n\nTool Result Block {index} ({characters} characters):\n"
+            yield from text_chunks(text) if isinstance(text, (str, FileText)) else json_chunks(text)
+    elif isinstance(value, MessageSections):
+        for part in value.parts:
+            yield from content_chunks(part)
+    elif value is not None:
+        yield from text_chunks(value) if isinstance(value, (str, FileText)) else data_chunks(value)
 
 
 def render_data(value: Any, indent: int = 0) -> str:
-    """Use labelled, indented records with literal text blocks.
+    return "".join(data_chunks(value, indent))
 
-    Text is never parsed as JSON or interpreted as escape sequences. Added
-    indentation belongs to the presentation; original values remain untouched.
-    """
+
+def data_chunks(value: Any, indent: int = 0) -> Iterator[str]:
+    """Stream labelled records without assembling their text values."""
     pad = " " * indent
-    if isinstance(value, str):
-        # Length makes trailing newlines and embedded record-like text unambiguous.
-        return f"text ({len(value)} characters):\n" + "\n".join(
-            pad + "  " + line for line in value.split("\n")
-        )
-    if isinstance(value, dict):
-        lines = [f"object ({len(value)} fields):"]
+    if isinstance(value, (str, FileText)):
+        yield f"text ({len(value)} characters):\n" + pad + "  "
+        for chunk in text_chunks(value):
+            yield chunk.replace("\n", "\n" + pad + "  ")
+    elif isinstance(value, dict):
+        yield f"object ({len(value)} fields):"
         for key, item in value.items():
             if isinstance(key, str) and re.fullmatch(r"[A-Za-z_][A-Za-z_0-9-]*", key):
-                lines.append(pad + "  " + key + ": " + render_data(item, indent + 2))
+                yield "\n" + pad + "  " + key + ": "
             else:
-                lines.append(pad + "  ? " + render_data(key, indent + 2))
-                lines.append(pad + "  : " + render_data(item, indent + 2))
-        return "\n".join(lines)
-    if isinstance(value, (list, tuple)):
-        return f"list ({len(value)} items):" + "".join(
-            "\n" + pad + "  - " + render_data(item, indent + 2) for item in value
-        )
-    if value is None:
-        return "null"
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (int, float)):
-        return str(value)
-    raise TypeError(f"Unsupported model-input value: {type(value).__name__}")
+                yield "\n" + pad + "  ? "
+                yield from data_chunks(key, indent + 2)
+                yield "\n" + pad + "  : "
+            yield from data_chunks(item, indent + 2)
+    elif isinstance(value, (list, tuple)):
+        yield f"list ({len(value)} items):"
+        for item in value:
+            yield "\n" + pad + "  - "
+            yield from data_chunks(item, indent + 2)
+    elif value is None:
+        yield "null"
+    elif isinstance(value, bool):
+        yield "true" if value else "false"
+    elif isinstance(value, (int, float)):
+        yield str(value)
+    else:
+        raise TypeError(f"Unsupported model-input value: {type(value).__name__}")

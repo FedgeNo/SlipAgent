@@ -47,9 +47,38 @@ and frozen compaction inputs remain dictionaries or lists internally. External J
 text is decoded at entry. File contents and command output remain literal string
 fields. Working-model user input serializes one complete, indented JSON object; system data
 sections, compression inputs, and terminal output use labelled literal text.
-Journals and HTTP transport encode JSON only at their destination boundaries. The request callback carries a
-dictionary to diagnostics and token accounting. Complete history selections return
-structured content without character paging. Resume
+Journals and HTTP transport encode JSON only at their destination boundaries.
+Completed turns have three disk representations: `NNNNNNNN.raw.json`, an
+individual `NNNNNNNN.compressed.json`, and an occasional
+`FIRST-LAST.grouped.json` narrative made from individual summary files. Grouped
+records retain covered turn numbers, call IDs, and artifact references. The
+append-only session journal remains the recovery authority; resume rebuilds the
+file-backed indexes, including for older sessions. Completed Calls inspector
+records also use file-backed strings; opening a call streams its fields into
+the viewer, and clearing the feed releases that inspector storage.
+
+`turnstore.py` retains small metadata and file ranges in memory. Large strings
+are read on demand by explicit history retrieval or streamed during selection
+and serialization. Private hard links pin immutable versions while summaries
+and late artifact metadata update their canonical files. Session teardown drains
+background jobs before removing these temporary pins. Session deletion also
+removes its turn files.
+
+`sources.py` provides bounded text and JSON iterators. `requestbody.py` serializes
+selected history and rendered prompt sections into one immutable temporary
+request file before transport. Its small index references strings in that file;
+HTTP sends chunks of at most 64 KiB with an exact Content-Length. Retries replay
+the same snapshot. This disk spool prevents prompt edits or completed summaries
+from changing an in-flight request. Dynamic templates and active input still
+use memory while being rendered; the complete serialized request does not.
+Request and viewer spools live under the application's data directory,
+avoiding RAM-backed system temporary space.
+
+The internal request callback passes this snapshot to diagnostics, token
+accounting, and the context viewer. An explicit legacy `on_request` callback can
+still request a materialized dictionary. Token estimates count serialized UTF-8
+bytes incrementally, preserving the existing selection policy and calibration.
+Complete history selections return structured content without character paging. Resume
 accepts both legacy text observations and structured journal observations.
 
 The transport sends one explicit list of messages plus tool definitions and

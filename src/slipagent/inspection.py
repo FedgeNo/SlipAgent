@@ -14,6 +14,7 @@ from threading import RLock
 from typing import Any, TextIO, overload
 from wcwidth import iter_graphemes, grapheme_boundary_before
 from .fileio import open_regular
+from .sources import FileText, spool_directory, text_chunks
 
 CHUNK_SIZE = 4096
 _OFFSET = struct.Struct("QQ")
@@ -40,9 +41,9 @@ class IndexedText(Sequence[str]):
 
     def __init__(self) -> None:
         self._snapshot_lock = RLock()
-        self.text = tempfile.TemporaryFile(mode="w+", encoding="utf-8", newline="\n", errors="surrogatepass")
-        self._index = tempfile.TemporaryFile(mode="w+b")
-        self.logical = tempfile.TemporaryFile(mode="w+b")
+        self.text = tempfile.TemporaryFile(mode="w+", encoding="utf-8", newline="\n", errors="surrogatepass", dir=spool_directory())
+        self._index = tempfile.TemporaryFile(mode="w+b", dir=spool_directory())
+        self.logical = tempfile.TemporaryFile(mode="w+b", dir=spool_directory())
         self._count = 0
         self.logical_count = 0
 
@@ -165,10 +166,10 @@ def write_fields(target: TextIO, value: Any, indent: int = 0) -> None:
                 target.write("\n\n")
             target.write(pad + (str(key) + ":" if isinstance(value, dict) else f"[{key}]") + "\n")
             write_fields(target, item, indent + 2)
-    elif isinstance(value, str):
+    elif isinstance(value, (str, FileText)):
         target.write(pad)
-        for start in range(0, len(value), CHUNK_SIZE):
-            target.write(value[start:start + CHUNK_SIZE].replace("\n", "\n" + pad))
+        for chunk in text_chunks(value):
+            target.write(chunk.replace("\n", "\n" + pad))
     else:
         target.write(pad + json.dumps(value, ensure_ascii=False))
 
@@ -310,7 +311,7 @@ def artifact_snapshot(path: Path, metadata: dict[str, Any]) -> IndexedText:
     result = IndexedText()
     try:
         with ExitStack() as stack:
-            fields: dict[str, TextIO] = {key: stack.enter_context(tempfile.TemporaryFile(mode="w+", encoding="utf-8", newline="", errors="surrogatepass"))
+            fields: dict[str, TextIO] = {key: stack.enter_context(tempfile.TemporaryFile(mode="w+", encoding="utf-8", newline="", errors="surrogatepass", dir=spool_directory()))
                       for key in ("command", "output", "error", "call_id", "step_id", "kind")}
             string_fields = record_fields(path, metadata, fields)
             for key in ("command", "call_id", "step_id", "kind"):

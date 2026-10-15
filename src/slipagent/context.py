@@ -39,6 +39,7 @@ from .protocol import COMPRESSED_FIELDS, ResponseRecord, response_format
 from .task import TaskMemory
 from .records import linked_tool_results, record_message, step_record
 from .data_text import JSONInput, MessageSections, render_data
+from .sources import FileText, materialize
 
 DEFAULT_CONTEXT_LENGTH = 1_000_000
 HISTORY_PART_NAMES = ("prompt", "response", "reasoning", "tool_calls", "tool_results", "user_edits")
@@ -88,7 +89,8 @@ def history_guidance(records: list[dict[str, Any]] | None) -> str:
 
 
 def message_tokens(messages: list[Message]) -> int:
-    return sum(estimate_tokens(json.dumps(message.to_api(), ensure_ascii=False)) for message in messages)
+    from .requestbody import value_tokens, wire_message
+    return sum(value_tokens(wire_message(message)) for message in messages)
 
 
 def tool_history_as_text(messages: list[Message]) -> list[Message]:
@@ -262,6 +264,34 @@ class CompletedStep(HistoryStep):
     """
 
     user_edits: list[dict[str, Any]]
+    _disk: dict[str, Any]
+    _disk_summary: dict[str, Any]
+    _disk_summary_state: Any
+    _disk_group: dict[str, Any]
+    _disk_group_state: Any
+
+    @property
+    def request(self) -> str:
+        if "_request" in self.__dict__:
+            return str(self.__dict__["_request"])
+        return str(materialize(self._disk["request"]))
+
+    @request.setter
+    def request(self, value: str) -> None:
+        self.__dict__["_request"] = value
+
+    def __getattr__(self, name: str) -> Any:
+        disk = self.__dict__.get("_disk")
+        if disk is not None:
+            if name == "user_prompt":
+                return self.request
+            if name in {"agent_response", "reasoning"}:
+                return materialize(disk["parts"]["response" if name == "agent_response" else name])
+            if name == "tool_results":
+                return [message for message in self.messages if message.role == "tool"]
+            if name == "tool_calls":
+                return next((message.tool_calls or [] for message in self.messages if message.role == "assistant"), [])
+        raise AttributeError(name)
 
     def __init__(self, step_id: int, request: str, messages: list[Message]) -> None:
         super().__init__(step_id, request, messages)
@@ -276,7 +306,9 @@ class CompletedStep(HistoryStep):
         self.reasoning_summary: str | None = None
         self.observed = not self.has_results
 
-    def parts(self) -> dict[str, Any]:
+    def parts(self, *, stream: bool = False) -> dict[str, Any]:
+        if "_disk" in self.__dict__:
+            return dict(self._disk["parts"]) if stream else materialize(self._disk["parts"])
         parts = {"prompt": self.user_prompt, "response": self.agent_response,
                 "reasoning": getattr(self, "reasoning", ""),
                 "tool_calls": [call.to_record() for call in self.tool_calls],
@@ -289,7 +321,7 @@ class CompletedStep(HistoryStep):
         return parts
 
     def compaction_input(self) -> dict[str, Any]:
-        parts = self.parts()
+        parts = self.parts(stream=True)
         source = {"user_prompt": parts["prompt"],
                 "agent_response": parts["response"], "tool_calls": parts["tool_calls"],
                 "tool_results": parts["tool_results"], "reasoning": parts["reasoning"]}
@@ -306,6 +338,25 @@ class CompletedStep(HistoryStep):
         return load_prompt("summary-unavailable.md", status=self.compaction_status)
 
     def context_messages(self, *, compressed: bool = False) -> list[Message]:
+        if "_disk" in self.__dict__:
+            original = self._disk["model"]
+            if not compressed:
+                return [record_message(dict(original))]
+            state = (self.summary, getattr(self, "reasoning_summary", None), self.compaction_status, self.compaction_error)
+            if self.__dict__.get("_disk_summary_state") == state:
+                return [record_message(dict(self._disk_summary["model"]))]
+            record: dict[str, Any] = {"record_type": "history_step", "representation": "compressed",
+                      "step_id": self.id, "compressed_summary": self.compressed_text()}
+            for name in ("artifacts", "user_edits", "request_failure"):
+                if name in original:
+                    record[name] = original[name]
+            if "user_edits" in record:
+                record["user_edits"] = [{key: value for key, value in edit.items() if key != "diff"}
+                                         for edit in record["user_edits"]]
+            if "request_failure" in record:
+                record["request_failure"] = {key: value for key, value in record["request_failure"].items()
+                                             if key != "response_excerpt"}
+            return [record_message(record)]
         part = super().context_messages(compressed=compressed)
         edits = getattr(self, "user_edits", None)
         if edits:
@@ -358,8 +409,12 @@ class ConversationHistory:
     digest_through: int = 0
     _request: str = ""
     task: TaskMemory = field(default_factory=TaskMemory)
+    store: Any = None
 
     def clear(self) -> None:
+        if self.store is not None:
+            self.store.close()
+            self.store = None
         self.steps.clear()
         self.cursor = 0
         self.digest = ""
@@ -567,8 +622,8 @@ class ConversationHistory:
             if not compressed and include_summary and step.summary is not None:
                 part = [record_message({**part[0].content, "compressed_summary": step.compressed_text()})]
             if overthinking and index >= len(self.steps) - reasoning_history_steps:
-                reasoning = next((message.reasoning for message in step.messages
-                                  if message.role == "assistant"), None)
+                reasoning = (step._disk["parts"].get("reasoning") if isinstance(step, CompletedStep) and "_disk" in step.__dict__
+                             else next((message.reasoning for message in step.messages if message.role == "assistant"), None))
                 filtered = getattr(step, "reasoning_summary", None) if filtered_thoughts else None
                 if filtered is not None:
                     reasoning = filtered

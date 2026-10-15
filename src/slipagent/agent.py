@@ -124,11 +124,29 @@ class Agent:
         journal = self.registry.resources.journal
         if journal is not None:
             journal.record(self)
+        self._archive_history()
+
+    def _archive_history(self) -> None:
+        from .turnstore import TurnStore
+        if not self.history.steps:
+            return
+        journal = self.registry.resources.journal
+        if self.history.store is None:
+            directory = journal.directory / (journal.session_id + "-turns") if journal is not None and journal.path is not None else None
+            self.history.store = TurnStore(directory)
+            self.registry.resources.turns = self.history.store
+        for step in self.history.steps:
+            if isinstance(step, CompletedStep):
+                self.history.store.archive(step, self.messages)
+        if journal is not None and self.messages:
+            journal.last_message = journal._message(self.messages[-1])
 
     def _persist_step(self, step: CompletedStep) -> None:
         journal = self.registry.resources.journal
         if journal is not None:
             journal.step(step)
+        if self.history.store is not None:
+            self.history.store.summarized(step)
 
     def _compaction_usage(self, usage: Usage) -> None:
         self.usage = self.usage + usage
@@ -270,10 +288,13 @@ class Agent:
         for message in self.history.steps[step_id - 1].messages:
             if message.role != "tool" or message.tool_call_id != reference["call_id"] or not isinstance(message.content, dict):
                 continue
-            references = message.content.setdefault("artifacts", [])
+            content = message._stored["content"] if hasattr(message, "_stored") else message.content
+            references = content.setdefault("artifacts", [])
             if any(saved["record_id"] == reference["record_id"] for saved in references):
                 return
             references.append(reference)
+            if self.history.store is not None:
+                self.history.store.attach_artifact(self.history.steps[step_id - 1], reference["call_id"], reference)
             journal = self.registry.resources.journal
             if journal is not None:
                 for index, original in enumerate(self.messages):

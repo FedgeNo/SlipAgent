@@ -13,8 +13,9 @@ import tempfile
 from array import array
 from bisect import bisect_right
 from collections import OrderedDict
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from typing import overload
+from .sources import spool_directory
 
 from prompt_toolkit.formatted_text import ANSI, StyleAndTextTuples
 from wcwidth import width as display_width, wrap
@@ -29,13 +30,16 @@ class TranscriptFile(Sequence[str]):
     """Indexed UTF-8 records; embedded newlines need no special treatment."""
 
     def __init__(self) -> None:
-        self._file = tempfile.TemporaryFile(mode="w+b")
+        self._file = tempfile.TemporaryFile(mode="w+b", dir=spool_directory())
         self._offsets = array("Q", [0])
 
     def append(self, text: str) -> None:
-        data = text.encode("utf-8", errors="surrogatepass")
+        self.append_chunks(iter([text]))
+
+    def append_chunks(self, chunks: Iterable[str]) -> None:
         self._file.seek(self._offsets[-1])
-        self._file.write(data)
+        for text in chunks:
+            self._file.write(text.encode("utf-8", errors="surrogatepass"))
         self._offsets.append(self._file.tell())
         if hasattr(self, "_ends"):
             self._ends.append(self._file.tell())

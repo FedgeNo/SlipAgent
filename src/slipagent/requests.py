@@ -124,16 +124,16 @@ class RequestDriver:
                 run_step += 1
                 step_usage = Usage()
                 start_next_step = True
-            def request_sent(request: dict[str, Any]) -> None:
+            def request_sent(request: Any) -> None:
                 nonlocal request_estimate, diagnostic_id
-                request_estimate = self.budget.estimate(request)
+                request_estimate = request.estimate
                 self.hooks.delivered()
                 if diagnostics is not None:
                     diagnostic_id = diagnostics.begin(request, step=run_step, step_id=step)
                 instructions = self.registry.resources.instructions
                 if instructions is not None:
                     instructions.presented(self.registry.services.get("instruction_snapshot", {}))
-                self.hooks.emit(AgentEvent(kind="context", step=step, text=json.dumps(request, ensure_ascii=False)))
+                self.hooks.emit(AgentEvent(kind="context", step=step, request_body=request))
             def delta(kind: str, chunk: str) -> None:
                 nonlocal received_content
                 if kind == "content":
@@ -151,7 +151,7 @@ class RequestDriver:
             stream_guard = StreamLoopGuard()
             options: dict[str, Any] = {
                 "on_delta": delta,
-                "on_request": request_sent,
+                "on_request_body": request_sent,
                 "on_response": response_received,
                 "single_attempt": True,
             } if isinstance(self.client, APIClient) else {}

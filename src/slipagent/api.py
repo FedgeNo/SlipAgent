@@ -152,6 +152,7 @@ class APIClient:
         extra_body: dict[str, Any] | None = None,
         on_delta: Callable[[str, str], None] | None = None,
         on_request: Callable[[dict[str, Any]], None] | None = None,
+        on_request_body: Callable[[Any], None] | None = None,
         on_response: Callable[[dict[str, Any]], None] | None = None,
         request_profile: RequestProfile | None = None,
         single_attempt: bool = False,
@@ -168,9 +169,10 @@ class APIClient:
         if not self.api_key:
             raise APIConfigError(f"Set {self.key_env} before using {self.provider} inference.")
 
+        from .requestbody import RequestBody, wire_message
         payload: dict[str, Any] = {
             "model": model,
-            "messages": [message.to_api() for message in messages],
+            "messages": [wire_message(message) for message in messages],
         }
         # Also cover direct callers and older archived messages. These are new
         # payload dictionaries; the recorded originals remain untouched.
@@ -214,17 +216,22 @@ class APIClient:
             payload["stream"] = True
             payload["stream_options"] = {"include_usage": True}
         self.prepare_payload(payload, capabilities)
+        body = RequestBody(payload)
         if on_request is not None:
             # Capture the final request body before transport, without headers.
-            on_request(copy.deepcopy(payload))
+            on_request(body.read())
+        if on_request_body is not None:
+            on_request_body(body)
         if on_delta is not None:
-            return await self._stream_request(payload, on_delta, single_attempt=single_attempt, disable_timeout=disable_timeout, on_response=on_response)
+            return await self._stream_request(payload, on_delta, single_attempt=single_attempt, disable_timeout=disable_timeout, on_response=on_response, request_body=body)
         transport_options: dict[str, Any] = {"timeout": None} if disable_timeout else {}
-        raw = await self._request("POST", "/chat/completions", single_attempt=single_attempt, json=payload, on_response=on_response, **transport_options)
+        raw = await self._request("POST", "/chat/completions", single_attempt=single_attempt, content=body, headers={"Content-Length": str(body.size)}, on_response=on_response, **transport_options)
         return _parse_completion(raw)
 
     async def _stream_request(self, payload: dict[str, Any], on_delta: Callable[[str, str], None], *, single_attempt: bool = False, disable_timeout: bool = False,
-                              on_response: Callable[[dict[str, Any]], None] | None = None) -> Completion:
+                              on_response: Callable[[dict[str, Any]], None] | None = None, request_body: Any = None) -> Completion:
+        from .requestbody import RequestBody
+        body = request_body if request_body is not None else RequestBody(payload)
         transport_options: dict[str, Any] = {"timeout": None} if disable_timeout else {}
         observed = False
         attempt = 0
@@ -245,7 +252,7 @@ class APIClient:
                 else:
                     captured.setdefault("unparsed_events", []).append(value)
             try:
-                async with self._client.stream("POST", f"{self.base_url}/chat/completions", json=payload, **transport_options) as response:
+                async with self._client.stream("POST", f"{self.base_url}/chat/completions", content=body, headers={"Content-Length": str(body.size)}, **transport_options) as response:
                     if response.status_code >= 400:
                         await response.aread()
                         captured = _response_body(response)

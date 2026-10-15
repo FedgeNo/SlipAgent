@@ -104,6 +104,9 @@ class StepCompactor:
                 continue
             client, model, capabilities, max_tokens, history, conversation, frozen = request
             source = copy.deepcopy(frozen.compaction_input())
+            if not isinstance(client, APIClient):
+                from .sources import materialize
+                source = materialize(source)
             source['history'] = copy.deepcopy([prior.context_messages(compressed=prior.summary is not None)[0].content
                                               for prior in history if prior.id < step.id])
             source['history_omitted'] = 0

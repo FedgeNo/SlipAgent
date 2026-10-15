@@ -100,13 +100,20 @@ class SessionJournal:
     def _append(self, kind: str, **data: Any) -> None:
         if self.path is None or self.failed:
             raise SessionError("Session journal is unavailable; no further actions can be recorded.")
-        record = json.dumps({"type": kind, **data}, ensure_ascii=False, allow_nan=False) + "\n"
+        from .sources import json_chunks
         try:
-            # Each event has one writer.
-            with self.path.open("a", encoding="utf-8") as target:
-                target.write(record)
-                target.flush()
-                os.fsync(target.fileno())
+            # Validate and serialize before appending; partial serialization must
+            # not corrupt the append-only journal.
+            with tempfile.SpooledTemporaryFile(max_size=65536, mode="w+t", encoding="utf-8", dir=str(self.directory)) as record:
+                for chunk in json_chunks({"type": kind, **data}, indent=None, allow_nan=False):
+                    record.write(chunk)
+                record.write("\n")
+                record.seek(0)
+                with self.path.open("a", encoding="utf-8") as target:
+                    while chunk := record.read(65536):
+                        target.write(chunk)
+                    target.flush()
+                    os.fsync(target.fileno())
         except OSError as exc:
             self.failed = True
             raise SessionError(f"Could not save session {self.session_id}: {exc}. Inspect its journal before resuming.") from exc
@@ -200,6 +207,9 @@ class SessionJournal:
     def _message(message: Message) -> dict[str, Any]:
         # Preserve reasoning independently of working-context retention and
         # compaction. Keep its originating model as well.
+        stored = getattr(message, "_stored", None)
+        if stored is not None:
+            return {**stored, "reasoning": stored.get("reasoning"), "reasoning_model": stored.get("reasoning_model")}
         return {**message.to_record(), "reasoning": message.reasoning, "reasoning_model": message.reasoning_model}
 
     def record(self, agent: Agent) -> None:
@@ -294,7 +304,7 @@ class SessionJournal:
         if self.path is None:
             raise SessionError("No current saved session to delete.")
         try:
-            for suffix in ("-logs", "-requests", "-checkpoints", "-artifacts"):
+            for suffix in ("-logs", "-requests", "-checkpoints", "-artifacts", "-turns"):
                 directory = self.directory / (self.session_id + suffix)
                 if directory.exists():
                     shutil.rmtree(directory)
@@ -566,6 +576,7 @@ class SessionJournal:
                 _private_directory(directory)
                 archive.use_directory(directory, self.log)
             self.record(agent)
+        agent._archive_history()
         archive = agent.registry.services.get("command_archive")
         if archive is not None:
             for log_id, metadata in data["logs"].items():

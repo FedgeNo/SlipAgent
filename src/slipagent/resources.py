@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from .tools.output import CommandArchive
     from .useredits import UserEdits
     from .workspace import Workspace
+    from .turnstore import TurnStore
 
 T = TypeVar("T")
 
@@ -79,11 +80,12 @@ class SessionResources(ResourceOwner):
     budget = ResourceRef["ContextBudget"]("context_budget")
     repository_map = ResourceRef["RepositoryMap"]("repository_map")
     user_edits = ResourceRef["UserEdits"]("user_edits")
+    turns = ResourceRef["TurnStore"]("turn_store")
 
     # Editing and producers settle before durable stores they can still write.
     shutdown_keys = (
         "user_edits", "step_compactor", "command_jobs", "language_servers",
         "request_diagnostics", "session_journal", "file_checkpoints",
-        "artifact_store", "command_archive", "project_instructions",
+        "artifact_store", "command_archive", "turn_store", "project_instructions",
         "project_environment", "workspace",
     )

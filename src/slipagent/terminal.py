@@ -425,6 +425,11 @@ class TerminalUI:
             store = self.__dict__.get("_artifact_store")
             if store is not None:
                 saved["artifacts"] = store.references(step, call.id)
+            from .turnstore import TurnStore
+            records = self.__dict__.get("_inspection_store")
+            if records is None:
+                records = self.__dict__["_inspection_store"] = TurnStore()
+            self._inspection_calls[(step, call.id)] = records.write(f"call-{records.sequence + 1}.json", saved)
         self.app.invalidate()
 
     def has_diff(self, call_id: str) -> bool:
@@ -1080,11 +1085,11 @@ class TerminalUI:
         self._ensure_context()
         return self._context_view
 
-    def set_context(self, request: str) -> None:
+    def set_context(self, request: Any) -> None:
         """Replace the disk-backed snapshot of the actual request."""
         from .contextview import ContextView
         self._ensure_context()
-        replacement = ContextView.from_request(request)
+        replacement = ContextView.from_request(request) if isinstance(request, str) else ContextView.from_body(request)
         previous = self._context_view
         self._context_view = replacement
         previous.close()
@@ -1258,6 +1263,9 @@ class TerminalUI:
         self.__dict__.setdefault("_suggestion_links", {}).clear()
         self.__dict__.setdefault("_touched_items", {}).clear()
         self.__dict__.setdefault("_inspection_calls", {}).clear()
+        records = self.__dict__.pop("_inspection_store", None)
+        if records is not None:
+            records.close()
         if self._viewer.active:
             self.close_viewer()
         self._continuation_indents.clear()
@@ -1748,6 +1756,9 @@ class TerminalUI:
         context = self.__dict__.get("_context_view")
         if context is not None:
             context.close()
+        records = self.__dict__.pop("_inspection_store", None)
+        if records is not None:
+            records.close()
         self._raw_output.close()
         layouts = self.__dict__.get("_transcript_layouts")
         if layouts is not None:

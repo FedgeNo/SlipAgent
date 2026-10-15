@@ -5,12 +5,15 @@ from __future__ import annotations
 import json
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator
+from typing import Any
 
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 from prompt_toolkit.layout.controls import UIContent, UIControl
 from wcwidth import wrap
 
 from .transcript import TranscriptFile
+from .sources import json_chunks
+from .data_text import MessageSections, RenderedContent, RenderedJSON
 
 
 class ContextControl(UIControl):
@@ -27,14 +30,14 @@ class ContextControl(UIControl):
 
 
 class ContextView:
-    def __init__(self, blocks: Iterable[tuple[str, str]]) -> None:
+    def __init__(self, blocks: Iterable[tuple[str, Any]]) -> None:
         self.blocks = TranscriptFile()
         self.rows = TranscriptFile()
         self.columns = 0
         self.cache: OrderedDict[int, StyleAndTextTuples] = OrderedDict()
         try:
             for style, text in blocks:
-                self.blocks.append(json.dumps([style, text], ensure_ascii=False))
+                self.blocks.append_chunks(json_chunks([style, text]))
         except BaseException:
             self.close()
             raise
@@ -43,6 +46,23 @@ class ContextView:
         for block in self.blocks:
             style, text = json.loads(block)
             yield style, text
+
+    @classmethod
+    def from_body(cls, body: Any) -> ContextView:
+        def blocks() -> Iterator[tuple[str, Any]]:
+            for field, value in body.index.items():
+                if field != "messages":
+                    yield "", RenderedContent(MessageSections([field + ":\n", RenderedJSON(value)]))
+                    continue
+                yield "", "Messages — sent order"
+                for index, message in enumerate(value, 1):
+                    role = message.get("role", "unknown")
+                    parts = [f"[{index:02}] {role.upper()}\n", message.get("content") or "null"]
+                    extra = {key: item for key, item in message.items() if key not in {"role", "content"}}
+                    if extra:
+                        parts.extend(["\n", RenderedJSON(extra)])
+                    yield "class:context-system" if role == "system" else "", RenderedContent(MessageSections(parts))
+        return cls(blocks())
 
     @classmethod
     def from_request(cls, request: str) -> ContextView:

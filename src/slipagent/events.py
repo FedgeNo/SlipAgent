@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from .tools.base import ToolResult
 from .types import ToolCall, Usage
@@ -40,6 +40,7 @@ class AgentEvent:
     tool_call: ToolCall | None = None
     result: ToolResult | None = None
     usage: Usage | None = None
+    request_body: Any = None
 
 
 EventHandler = Callable[[AgentEvent], None]

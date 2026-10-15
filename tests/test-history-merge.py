@@ -60,6 +60,33 @@ class MergeClient:
         return Completion(Message.assistant(text), "test", usage=Usage(prompt_tokens=100, completion_tokens=30))
 
 
+async def test_grouped_history_reads_individual_summary_files(tmp_path):
+    from slipagent.sources import FileText
+    from slipagent.turnstore import TurnStore
+
+    history, messages = history_with_posts(32)
+    store = TurnStore(tmp_path)
+    for step in history.steps:
+        store.archive(step, messages)
+    client = MergeClient()
+    errors = []
+    owner = StepCompactor(lambda usage: None, errors.append)
+    owner.on_step = store.summarized
+    schedule(owner, history, client)
+    await owner.wait()
+    assert not errors
+    source = client.calls[0]["messages"][1].content
+    for item in source["steps"]:
+        assert isinstance(item["compressed_summary"], FileText)
+        assert item["compressed_summary"].read() == history.steps[item["step_id"] - 1].summary
+    saved = list(tmp_path.glob("*.grouped.json"))
+    assert len(saved) == 1
+    record = json.loads(saved[0].read_text())
+    assert record["step_ids"] == [item["step_id"] for item in source["steps"]]
+    assert record["sources"][0]["tool_calls"][0]["call_id"] == "read-1"
+    store.close()
+
+
 def schedule(owner, history, client):
     schedule_history_merge(owner, history.steps, client, "test", None, None)
 

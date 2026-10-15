@@ -68,7 +68,7 @@ async def test_agent_snapshots_include_retry_prompt_and_matching_tool_results():
     async with OpenRouterClient("test", transport=httpx.MockTransport(transport)) as client:
         agent = Agent(client, ToolRegistry([tool]), "test", system_prompt="PINNED SYSTEM", on_event=events.append)
         assert await agent.run("Inspect.") == "Done."
-    snapshots = [json.loads(event.text) for event in events if event.kind == "context"]
+    snapshots = [event.request_body.read() for event in events if event.kind == "context"]
     assert snapshots == requests
     assert "last response was rejected" in snapshots[1]["messages"][0]["content"]
     assert "last response was rejected" not in snapshots[2]["messages"][0]["content"]
@@ -98,7 +98,7 @@ async def test_snapshot_uses_selected_compacted_context_and_stays_immutable():
         agent = Agent(client, ToolRegistry(), "test", context_steps=1, on_event=events.append)
         for prompt in ["First task.", *[f"Next task {index}." for index in range(6)]]:
             await agent.run(prompt)
-        snapshots = [json.loads(event.text) for event in events if event.kind == "context"]
+        snapshots = [event.request_body.read() for event in events if event.kind == "context"]
         assert snapshots == requests
         assert original not in json.dumps(snapshots[-1])
         assert agent.history.steps[0].summary == context_records(snapshots[-1]["messages"])[0]["compressed_summary"]

@@ -23,7 +23,7 @@ MERGE_MAX_CHARS = 12_000
 
 
 def historical_records(steps: list[HistoryStep]) -> list[dict[str, Any]]:
-    return [record for step in steps
+    return [getattr(step, "_disk_group", record) for step in steps
             if (record := getattr(step, "historical_summary", None)) is not None]
 
 
@@ -85,17 +85,19 @@ def schedule_history_merge(owner: StepCompactor, steps: list[HistoryStep], clien
     for step in steps[:boundary]:
         if step.id in covered or step.summary is None:
             continue
-        original = step_record(step.messages)
+        original = step._disk["model"] if hasattr(step, "_disk") else step_record(step.messages)
         metadata = {"step_id": step.id,
                     "tool_calls": [{"call_id": call["call_id"], "tool_name": call["tool_name"]}
                                    for call in original["tool_calls"]],
                     "artifacts": step.context_messages(compressed=True)[0].content.get("artifacts", [])}
-        source["steps"].append({**metadata, "compressed_summary": step.summary})
+        summary = step._disk_summary["summary"] if hasattr(step, "_disk_summary") else step.summary
+        source["steps"].append({**metadata, "compressed_summary": summary})
         if message_tokens([system, Message.user(source)]) + reserve > int(limit * .85):
             source["steps"].pop()
             break
         batch.append(step)
-    if len(batch) < MERGE_INTERVAL or estimate_tokens(json.dumps(source, ensure_ascii=False)) < MERGE_MIN_TOKENS:
+    from .requestbody import value_tokens
+    if len(batch) < MERGE_INTERVAL or value_tokens(source) < MERGE_MIN_TOKENS:
         return
     # Record attempts, including failures, so retries cannot turn this into an
     # every-turn request. The marker and source summaries survive session resume.

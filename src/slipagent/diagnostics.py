@@ -73,15 +73,39 @@ class RequestDiagnostics:
             if os.path.exists(temporary):
                 os.unlink(temporary)
 
-    def begin(self, request: dict[str, Any] | str, *, step: int, step_id: int) -> int | None:
+    def begin(self, request: Any, *, step: int, step_id: int) -> int | None:
         if self.error:
             return None
         try:
-            encoded = (request if isinstance(request, str) else json.dumps(request, ensure_ascii=False)).encode("utf-8")
-            digest = hashlib.sha256(encoded).hexdigest()
-            snapshot = self.directory / (digest + ".json.gz")
+            from .requestbody import RequestBody
+            if isinstance(request, RequestBody):
+                chunks = request.chunks
+            else:
+                encoded = (request if isinstance(request, str) else json.dumps(request, ensure_ascii=False)).encode("utf-8")
+                chunks = lambda: iter([encoded])
+            digest = hashlib.sha256()
+            for chunk in chunks():
+                digest.update(chunk)
+            snapshot = self.directory / (digest.hexdigest() + ".json.gz")
             if not snapshot.exists():
-                self._write(snapshot, gzip.compress(encoded, mtime=0))
+                fd, temporary = tempfile.mkstemp(prefix=".request-", dir=self.directory)
+                try:
+                    with os.fdopen(fd, "wb") as target:
+                        with gzip.GzipFile(fileobj=target, mode="wb", mtime=0, filename="") as compressed:
+                            for chunk in chunks():
+                                compressed.write(chunk)
+                                if self.used + target.tell() > self.quota:
+                                    raise OSError(f"Request diagnostic quota of {self.quota} bytes reached; existing records are preserved")
+                        target.flush()
+                        os.fsync(target.fileno())
+                    size = os.path.getsize(temporary)
+                    if self.used + size > self.quota:
+                        raise OSError(f"Request diagnostic quota of {self.quota} bytes reached; existing records are preserved")
+                    os.replace(temporary, snapshot)
+                    self.used += size
+                finally:
+                    if os.path.exists(temporary):
+                        os.unlink(temporary)
             self.sequence += 1
             record = {"version": 1, "attempt": self.sequence, "step": step, "step_id": step_id, "request": snapshot.name,
                       "created": datetime.now(timezone.utc).isoformat(), "outcome": "pending"}

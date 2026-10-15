@@ -421,7 +421,7 @@ class Renderer:
         if event.kind == "context":
             self.__dict__["_reply_preview"] = []
             if self.terminal is not None:
-                self.terminal.set_context(event.text)
+                self.terminal.set_context(event.request_body if event.request_body is not None else event.text)
 
         elif event.kind == "step_start":
             self._finish_stream()

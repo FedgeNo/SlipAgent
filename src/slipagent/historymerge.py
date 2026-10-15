@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import json
 from typing import TYPE_CHECKING, Any
 
 from .capabilities import RequestProfile, model_context_limit
@@ -115,6 +114,7 @@ async def _merge(owner: StepCompactor, batch: list[HistoryStep], source: dict[st
                  capabilities: RequestProfile | None, reserve: int,
                  created_at: int, generation: int) -> None:
     from .api import APIClient
+    from .compaction import decode_summary
     from .context import message_tokens
 
     try:
@@ -143,9 +143,7 @@ async def _merge(owner: StepCompactor, batch: list[HistoryStep], source: dict[st
         if generation != owner.generation:
             return
         owner.on_usage(completion.usage)
-        if completion.response_error or completion.tool_calls or completion.finish_reason == "length":
-            raise ValueError(completion.response_error or "the historical summary was incomplete or requested tools")
-        value = json.loads(completion.text)
+        value = decode_summary(completion)
         if not isinstance(value, dict) or set(value) != {"summary"}:
             raise ValueError("the historical compactor must return only summary")
         record = {"record_type": "history_step", "representation": "historical_summary",

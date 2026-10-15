@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import re
 from collections import deque
 from itertools import chain
 from collections.abc import Callable
@@ -21,7 +22,7 @@ from typing import Any
 from .capabilities import RequestProfile, model_context_limit
 from .context import SUMMARY_MAX_CHARS, CompletedStep, HistoryStep, message_tokens
 from .api import APIClient, APIResponseError, APITransportError, RETRYABLE_STATUS
-from .types import Message, Usage
+from .types import Completion, Message, Usage
 from .prompts import load_prompt
 
 COMPACTION_TIMEOUT = 20 * 60
@@ -31,6 +32,26 @@ COMPACTION_QUEUE_SIZE = 32
 
 class CompactionBudgetError(ValueError):
     """The step cannot fit the compaction request; another attempt gives the same answer."""
+
+
+def decode_summary(completion: Completion) -> Any:
+    """Accept a complete JSON answer, including a single Markdown code fence."""
+    if completion.response_error or completion.tool_calls or completion.finish_reason == "length":
+        raise ValueError(completion.response_error or "the compactor returned tools or an incomplete summary")
+    text = completion.text.strip().removeprefix("\ufeff").strip()
+    if not text:
+        reasoning = len(completion.message.reasoning or "")
+        raise ValueError(f"the compactor returned no answer text (finish: {completion.finish_reason or 'unknown'}; "
+                         f"reasoning: {reasoning} characters)")
+    fence = re.fullmatch(r"```(?:json)?[ \t]*\r?\n(.*?)\r?\n```", text, re.DOTALL | re.IGNORECASE)
+    if fence:
+        text = fence[1].strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        preview = json.dumps(text[:80], ensure_ascii=True)
+        raise ValueError(f"the compactor returned invalid JSON at line {exc.lineno}, column {exc.colno}; "
+                         f"answer starts with {preview}") from exc
 
 
 def _frozen_step(step: HistoryStep) -> HistoryStep:
@@ -192,9 +213,7 @@ class StepCompactor:
             if generation != self.generation:
                 return
             self.on_usage(completion.usage)
-            if completion.response_error or completion.tool_calls or completion.finish_reason == "length":
-                raise ValueError(completion.response_error or "the compactor returned tools or an incomplete summary")
-            value = json.loads(completion.text)
+            value = decode_summary(completion)
             if not isinstance(value, dict) or set(value) != {'summary', 'reasoning_summary'}:
                 raise ValueError('the compactor must return summary and reasoning_summary as separate JSON fields')
             summary = value['summary']

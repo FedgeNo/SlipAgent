@@ -50,6 +50,43 @@ def reply(text=None, calls=None):
     return Completion(Message.assistant(text, calls), "test", usage=Usage(prompt_tokens=20, completion_tokens=10))
 
 
+@pytest.mark.parametrize("wrapper", ["{}", "```json\n{}\n```", "```\n{}\n```", "\ufeff{}"])
+async def test_summary_accepts_complete_json_wrapped_in_markdown(monkeypatch, wrapper):
+    client = Client([reply("Done.")])
+    chat = client.chat
+
+    async def wrapped(**kwargs):
+        completion = await chat(**kwargs)
+        if content_text(kwargs["messages"][0].content).startswith("# Summarizing"):
+            completion.message.content = wrapper.format(completion.text)
+        return completion
+
+    monkeypatch.setattr(client, "chat", wrapped)
+    agent = Agent(client, ToolRegistry(), "test")
+    await agent.run("Do the work")
+    await agent.wait_for_compaction()
+    assert agent.history.steps[0].summary == "Inspected the project; tools returned their recorded results."
+    assert len(client.summary_requests) == 1
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("", "no answer text"),
+    ("Here is a summary", 'answer starts with "Here is a summary"'),
+    ('{"summary":', "invalid JSON"),
+    ('```json\n{}\n``` extra', "invalid JSON"),
+])
+def test_summary_failures_describe_the_actual_answer(text, expected):
+    from slipagent.compaction import decode_summary
+    completion = reply(text)
+    completion.message.reasoning = "thinking"
+    completion.finish_reason = "stop"
+    with pytest.raises(ValueError) as caught:
+        decode_summary(completion)
+    assert expected in str(caught.value)
+    if not text:
+        assert "reasoning: 8 characters" in str(caught.value)
+
+
 @pytest.mark.parametrize("recover", [True, False])
 @pytest.mark.parametrize("failure", ["overload", "bad-gzip", "rate-limit", "timeout"])
 async def test_summary_retries_transient_failures_until_recovery_or_reset(monkeypatch, recover, failure):

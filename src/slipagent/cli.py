@@ -2136,6 +2136,7 @@ async def _list_models(args: argparse.Namespace) -> int:
     renderer = Renderer(Style(_use_color(sys.stderr, args.no_color)), sys.stderr, args.verbose)
     results = await asyncio.gather(*(fetch_catalog(name, base_url=(args.base_url if name == selected else None)
                                     or os.environ.get(provider_class(name).base_url_env),
+                                    api_key=args.api_key if name == selected else None,
                                     on_retry=renderer.retry_countdown) for name in names),
                                    return_exceptions=True)
     models: list[ModelInfo] = []

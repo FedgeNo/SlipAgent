@@ -488,7 +488,15 @@ def _reasoning_text(delta: dict[str, Any]) -> list[str]:
         value = delta.get(key)
         if isinstance(value, str) and value:
             return [value]
-    texts = []
+    texts: list[str] = []
+    content = delta.get("content")
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "thinking":
+                parts = block.get("thinking")
+                if isinstance(parts, list):
+                    texts.extend(part["text"] for part in parts if isinstance(part, dict)
+                                 and part.get("type") == "text" and isinstance(part.get("text"), str))
     for detail in delta.get("reasoning_details") or []:
         if isinstance(detail, dict) and detail.get("type") in {"reasoning.text", "reasoning.summary"}:
             value = detail.get("text") or detail.get("summary")
@@ -766,6 +774,19 @@ def _merge_response(target: dict[str, Any], incoming: dict[str, Any]) -> None:
     for key, value in incoming.items():
         if value is None and key in target:
             continue
+        if key == "content" and (isinstance(value, list) or isinstance(target.get(key), list)):
+            # Content can switch from strings to thinking blocks and back.
+            # Preserve ordered fragments rather than merging unrelated block positions.
+            previous = target.get(key)
+            if not isinstance(previous, list):
+                target[key] = [{"type": "text", "text": previous}] if isinstance(previous, str) and previous else []
+            if isinstance(value, list):
+                target[key].extend(copy.deepcopy(value))
+            elif isinstance(value, str):
+                target[key].append({"type": "text", "text": value})
+            else:
+                target[key].append(copy.deepcopy(value))
+            continue
         if isinstance(value, dict):
             if not isinstance(target.get(key), dict):
                 target[key] = {}
@@ -809,6 +830,11 @@ def _content_parts(content: Any) -> tuple[str, list[dict[str, Any]]]:
             texts.append(block["text"])
         elif block.get("type") == "tool_use":
             calls.append(block)
+        elif block.get("type") == "thinking":
+            parts = block.get("thinking")
+            if not isinstance(parts, list) or any(not isinstance(part, dict)
+                    or part.get("type") != "text" or not isinstance(part.get("text"), str) for part in parts):
+                raise ResponseFormatError("Thinking content must contain text blocks.")
         else:
             raise ResponseFormatError("Unsupported assistant content block; expected text or tool_use.")
     return "".join(texts), calls

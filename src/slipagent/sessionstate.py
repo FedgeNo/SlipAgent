@@ -87,7 +87,7 @@ class Session:
                 if provider == self.client.provider:
                     return await self.client.list_models()
                 implementation = provider_class(provider)
-                return await fetch_catalog(provider, base_url=os.environ.get(implementation.base_url_env),
+                return await fetch_catalog(provider, api_key=keys.get(provider), base_url=os.environ.get(implementation.base_url_env),
                                            on_retry=self.renderer.retry_countdown)
             results = await asyncio.gather(*(catalog_for(name) for name in names), return_exceptions=True)
             catalog: list[ModelInfo] = []

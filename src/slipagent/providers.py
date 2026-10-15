@@ -10,7 +10,7 @@ from typing import Any
 from .api import APIClient, APIConfigError
 from .types import ModelInfo
 
-PROVIDERS = {"openrouter": "OpenRouterClient", "nvidia": "NvidiaClient", "kilo": "KiloClient"}
+PROVIDERS = {"openrouter": "OpenRouterClient", "nvidia": "NvidiaClient", "kilo": "KiloClient", "mistral": "MistralClient"}
 
 
 def provider_class(provider: str) -> type[APIClient]:
@@ -38,7 +38,14 @@ def active_providers(environ: Mapping[str, str] | None = None, *,
 
 
 async def fetch_catalog(provider: str, *, base_url: str | None = None,
+                        api_key: str | None = None,
                         on_retry: Callable[[str, int], None] | None = None) -> list[ModelInfo]:
-    """Read a provider's public catalog without requiring or sending a key."""
-    async with create_client(provider, api_key="", base_url=base_url, catalog_only=True, on_retry=on_retry) as client:
+    """Authenticate catalogs only when the provider requires it."""
+    implementation = provider_class(provider)
+    key = ""
+    if getattr(implementation, "catalog_requires_auth", False):
+        key = api_key if api_key is not None else os.environ.get(implementation.key_env, "")
+        if not key.strip():
+            raise APIConfigError(f"Set {implementation.key_env} to list {provider} models.")
+    async with create_client(provider, api_key=key, base_url=base_url, catalog_only=True, on_retry=on_retry) as client:
         return await client.list_models()

@@ -7,9 +7,10 @@ from typing import Any
 
 from .api import APIClient
 from .capabilities import RequestProfile
-from .providers import PROVIDERS, create_client
+from .providers import create_client
 
 ULTRA_MODEL = "nvidia/nemotron-3-ultra-550b-a55b"
+COMPRESSION_PROVIDERS = ("openrouter", "nvidia", "kilo")
 
 
 class CompressionUnavailableError(ValueError):
@@ -25,7 +26,7 @@ class CompressionProviders:
 
     async def select(self) -> tuple[APIClient, str, RequestProfile | None, int]:
         options = self.options()
-        available = [name for name in PROVIDERS if name != self.selected()
+        available = [name for name in COMPRESSION_PROVIDERS if name != self.selected()
                      and options.get(name, {}).get("api_key", "").strip()]
         if not available:
             raise CompressionUnavailableError("compression needs an API key for a provider other than the selected provider")

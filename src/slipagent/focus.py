@@ -43,6 +43,10 @@ class FocusCoordinator:
     def focus(self, target: FocusTarget) -> None:
         self.prompt_active = target is self.prompt
         self.app().layout.focus(target)
+        control = self.control(target)
+        if control.__dict__.get("_keyboard_links", False):
+            control.__dict__.pop("_keyboard_key", None)
+            control.__dict__.pop("_keyboard_point", None)
         if target in self.sidebars:
             self.reveal()
 
@@ -158,6 +162,7 @@ class FocusCoordinator:
                 start = max(0, content.line_count - height) if getattr(window, "_following", False) else window.vertical_scroll
                 rows = range(start, min(content.line_count, start + height))
             seen: list[object] = []
+            link_start = len(stops)
             for row in rows:
                 column = 0
                 cells = 0
@@ -171,6 +176,8 @@ class FocusCoordinator:
                             stops.append((window, key, Point(column, row), handler))
                     column += len(fragment[1])
                     cells += max(0, display_width(fragment[1]))
+            if not actions:
+                stops[link_start:] = reversed(stops[link_start:])
         prompt_visible = any(window.content is self.prompt.control for window, _, _, _ in stops)
         if self.editor() is not None or prompt_visible:
             # Keep the draft at one stable position when editor actions replace

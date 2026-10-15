@@ -230,7 +230,7 @@ async def test_tab_reveals_each_selected_feed_link_and_shift_tab_leaves_feed(ui)
     terminal._focus.focus(terminal.input)
     press(terminal, Keys.Tab)
     assert terminal.app.layout.current_window is terminal.transcript
-    for expected in [0, 61, 122]:
+    for expected in [122, 61, 0]:
         press(terminal, Keys.Tab)
         assert selected(terminal)[1] == ('feed', f'class:suggestion-{expected}')
         point = terminal.transcript.content.__dict__['_keyboard_point']
@@ -240,6 +240,18 @@ async def test_tab_reveals_each_selected_feed_link_and_shift_tab_leaves_feed(ui)
         assert terminal.transcript.vertical_scroll == scroll
     press(terminal, Keys.BackTab)
     assert terminal.app.layout.current_window is terminal._files_window
+    terminal._focus.focus(terminal.input)
+    press(terminal, Keys.Tab)
+    press(terminal, Keys.Tab)
+    assert selected(terminal)[1] == ('feed', 'class:suggestion-122')
+    press(terminal, Keys.Tab)
+    terminal._focus.focus(terminal.transcript)
+    press(terminal, Keys.Tab)
+    assert selected(terminal)[1] == ('feed', 'class:suggestion-122')
+    press(terminal, Keys.Tab)
+    click(terminal, terminal.transcript)
+    press(terminal, Keys.Tab)
+    assert selected(terminal)[1] == ('feed', 'class:suggestion-122')
 
 
 async def test_shift_tab_skips_feed_links_and_still_focuses_feed_component(ui):

@@ -837,8 +837,9 @@ Click a file to edit it, or a call
 to inspect its decoded arguments and result as labelled fields with literal text
 and line breaks. The mouse wheel scrolls the section under
 the pointer. **Tab** moves forward through the prompt, active
-feed/editor/viewer/context, links, lists, and footer controls. Each selected feed
-link scrolls into view, including links earlier in the conversation.
+feed/editor/viewer/context, links, lists, and footer controls. Within the feed,
+Tab starts at the last link and moves upward, scrolling each selection into view.
+Clicking or refocusing the feed resets traversal to start at the last link again.
 **Shift+Tab** selects the next UI component, skipping individual feed links.
 Links receive a visible focus highlight; **Enter** activates them. Tabbing shows
 the tip “Shift+Tab to select UI component.” without flashing.

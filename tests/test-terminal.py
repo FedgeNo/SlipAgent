@@ -214,7 +214,7 @@ async def test_user_prompt_background_fills_feed_without_copy_padding(display, i
                     if inspect:
                         assert screen.buffer[row][columns - 1].bg != "004000"
                 ordinary = next(i for i, line in enumerate(lines) if "ordinary output" in line)
-                assert screen.buffer[ordinary][width - 1].bg == "default"
+                assert screen.buffer[ordinary][width - 1].bg == "000000"
                 content = ui._transcript_content(width)
                 ui._selection_start = Point(0, first)
                 ui._selection_end = Point(width - 1, content.line_count - 1)
@@ -245,7 +245,7 @@ async def test_footer_background_separates_controls_from_feed(display):
             assert screen.buffer[17][99].bg == "000040"
             assert screen.buffer[23][99].bg == "000040"
             assert screen.buffer[18][99].bg == "004000"
-            assert screen.buffer[16][0].bg == "default"
+            assert screen.buffer[16][0].bg == "000000"
             assert screen.buffer[16][99].bg == "400040"
         finally:
             ui.close()
@@ -608,7 +608,7 @@ def test_editor_header_shows_path_and_keeps_help_and_disk_warning_in_footer(disp
 async def test_editor_mouse_places_cursor_on_text_and_at_line_end_in_blank_space(display, tmp_path):
     path = tmp_path / "file.txt"
     path.write_text("first line\nsecond line")
-    sink, _, output, _, snapshot = display
+    sink, _, output, screen, snapshot = display
     with create_pipe_input() as pipe:
         ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
         task = asyncio.create_task(ui.run())
@@ -616,6 +616,8 @@ async def test_editor_mouse_places_cursor_on_text_and_at_line_end_in_blank_space
             await wait_until(lambda: ui.app.is_running)
             await ui._open_editor_now(path)
             await wait_until(lambda: snapshot()[1].startswith("first line"))
+            assert all(screen.buffer[row][column].bg == "000000"
+                       for row in (1, 9) for column in range(100))
             pipe.send_text("\x1b[<0;4;2M\x1b[<0;4;2m")
             await wait_until(lambda: ui._editor_input.buffer.cursor_position == 3)
             pipe.send_text("\x1b[<0;40;2M\x1b[<0;40;2m")

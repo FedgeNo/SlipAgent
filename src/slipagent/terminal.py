@@ -38,7 +38,7 @@ from .uiwindows import TranscriptWindow
 from .focus import FocusCoordinator, FocusTarget
 from .links import ActionControl, ActionLink, CallbackLink, TaskLink, LinkHover, keyboard_content
 from .listpanels import TouchedPanel, CallsPanel, ChoicePanel, ListActions
-from .palette import FOOTER_BACKGROUND_COLOR, MENU_BACKGROUND_COLOR, MUTED_COLOR, USER_BACKGROUND_COLOR, USER_PROMPT_STYLE
+from .palette import CONTENT_BACKGROUND_COLOR, FOOTER_BACKGROUND_COLOR, MENU_BACKGROUND_COLOR, MUTED_COLOR, USER_BACKGROUND_COLOR, USER_PROMPT_STYLE
 from .markdown import THEMES, MarkdownRenderer, code_blocks, literal
 from .clipboard import clipboard_sequence, copy_to_clipboard
 from .explorer import folder_opener, open_folder
@@ -199,6 +199,7 @@ class TerminalUI:
         self._title_pulse_bound = True
 
     def _layout(self) -> Layout:
+        self.transcript.style = "class:content"
         self.__dict__.setdefault("_diff_reference", None)
         for processor in self.input.control.input_processors or []:
             if isinstance(processor, BeforeInput):
@@ -558,6 +559,7 @@ class TerminalUI:
             self._editor_input = self._editor_panel.input
             self._editor_container = self._editor_panel.container
         self._editor_panel.ensure_control()
+        self._editor_input.window.style = "class:text-area class:content"
 
     async def _open_editor_now(self, path: Path, *, line: int = 1) -> None:
         self._ensure_editor()
@@ -1448,6 +1450,7 @@ class TerminalUI:
             "status": MUTED_COLOR, "pulse": "bold ansicyan", "idle": "ansicyan", "user": USER_PROMPT_STYLE,
             "context-system": "#ffff00", "retry": "ansired",
             "footer": "bg:" + FOOTER_BACKGROUND_COLOR,
+            "content": "bg:" + CONTENT_BACKGROUND_COLOR,
             "menu": "bg:" + MENU_BACKGROUND_COLOR,
             "status-flash": "bold reverse",
             "keyboard-focus": "bold reverse",

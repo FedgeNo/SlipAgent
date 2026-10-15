@@ -42,7 +42,7 @@ class ActionLink(ABC):
         return None
 
     def fragments(self) -> StyleAndTextTuples:
-        style = self.style + " class:clickable"
+        style = "class:link " + self.style + " class:clickable"
         if self.hover.current() == self.key:
             style += " class:hover"
         return [(style.strip(), self.label, self.mouse)]

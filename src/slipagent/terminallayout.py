@@ -13,7 +13,12 @@ from prompt_toolkit.styles import Style
 from .focus import FocusCoordinator
 from .links import ActionControl
 from .menulifecycle import MenuLifecycle
-from .palette import CONTENT_BACKGROUND_COLOR, FOOTER_BACKGROUND_COLOR, MENU_BACKGROUND_COLOR, MUTED_COLOR, USER_PROMPT_STYLE
+from .palette import (
+    CONTENT_BACKGROUND_COLOR, FOOTER_BACKGROUND_COLOR, MENU_BACKGROUND_COLOR,
+    MUTED_COLOR, USER_PROMPT_STYLE, TEXT_COLOR, LINK_COLOR, TOOL_COLOR,
+    SUCCESS_COLOR, WARNING_COLOR, ERROR_COLOR, PANEL_HEADER_BACKGROUND_COLOR,
+    EDITOR_BACKGROUND_COLOR, DIFF_ADDED_BACKGROUND_COLOR, DIFF_REMOVED_BACKGROUND_COLOR,
+)
 from .uiwindows import TranscriptScrollbar
 
 if TYPE_CHECKING:
@@ -105,18 +110,28 @@ def build_layout(ui: TerminalUI) -> Layout:
 
 def build_style() -> Style:
     return Style.from_dict({
-        "status": MUTED_COLOR, "pulse": "bold ansicyan", "idle": "bold ansicyan", "user": USER_PROMPT_STYLE,
-        "context-system": "#ffff00", "retry": "bold ansired",
-        "footer": "bg:" + FOOTER_BACKGROUND_COLOR,
-        "content": "bg:" + CONTENT_BACKGROUND_COLOR,
-        "scroll-track": "#aaaaaa bg:" + FOOTER_BACKGROUND_COLOR,
-        "menu": "bg:" + MENU_BACKGROUND_COLOR,
+        "": TEXT_COLOR,
+        "status": MUTED_COLOR, "pulse": "bold " + WARNING_COLOR, "idle": "bold " + SUCCESS_COLOR,
+        "held": "bold " + TOOL_COLOR, "user": USER_PROMPT_STYLE,
+        "context-system": TOOL_COLOR, "retry": "bold " + WARNING_COLOR,
+        "footer": TEXT_COLOR + " bg:" + FOOTER_BACKGROUND_COLOR,
+        "content": TEXT_COLOR + " bg:" + CONTENT_BACKGROUND_COLOR,
+        "editor": TEXT_COLOR + " bg:" + EDITOR_BACKGROUND_COLOR,
+        "scroll-track": LINK_COLOR + " bg:" + FOOTER_BACKGROUND_COLOR,
+        "menu": TEXT_COLOR + " bg:" + MENU_BACKGROUND_COLOR,
+        "panel-title": "bold " + TOOL_COLOR + " bg:" + PANEL_HEADER_BACKGROUND_COLOR,
         "status-flash": "bold reverse",
         "keyboard-focus": "bold reverse",
-        "menu-title": "bold", "menu-selected": "reverse bold",
+        "menu-title": "bold " + TOOL_COLOR, "menu-selected": "reverse bold " + LINK_COLOR,
+        "link": LINK_COLOR,
         "clickable": "underline", "hover": "reverse",
         "diff-number": MUTED_COLOR,
-        "menu-item": "#999999",
-        "diff-added": "#66dd88", "diff-removed": "#ff6666",
-        "diff-header": "bold #ffdd66", "diff-hunk": "#66ccff",
+        "menu-item": MUTED_COLOR,
+        "call-running": WARNING_COLOR, "call-completed": SUCCESS_COLOR, "call-error": ERROR_COLOR,
+        "diff-added": SUCCESS_COLOR + " bg:" + DIFF_ADDED_BACKGROUND_COLOR,
+        "diff-removed": ERROR_COLOR + " bg:" + DIFF_REMOVED_BACKGROUND_COLOR,
+        "diff-header": "bold " + TOOL_COLOR, "diff-hunk": LINK_COLOR,
+        "search": "reverse " + WARNING_COLOR, "search.current": "bold reverse " + WARNING_COLOR,
+        "selected-text": "reverse " + LINK_COLOR,
+        "line-number": MUTED_COLOR, "line-number.current": LINK_COLOR,
     })

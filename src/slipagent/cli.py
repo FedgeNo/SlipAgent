@@ -52,7 +52,7 @@ from .tools import build_default_registry
 from .types import KeyInfo, Message, ModelInfo, ToolCall
 from .workspace import Workspace, WorkspaceError
 from .terminal import TerminalUI, SuggestedPrompt
-from .palette import ERROR_COLOR, MUTED_COLOR, THOUGHT_COLOR, USER_BACKGROUND_COLOR, USER_COLOR, USER_TEXT_COLOR, foreground_code
+from .palette import ERROR_COLOR, MUTED_COLOR, THOUGHT_COLOR, USER_BACKGROUND_COLOR, USER_COLOR, USER_TEXT_COLOR, TOOL_COLOR, LINK_COLOR, WARNING_COLOR, foreground_code
 from .runtime import RuntimeFrame
 from .repomap import RepositoryMap
 from .tools.blocking import run_blocking
@@ -124,10 +124,13 @@ class Style:
         return self._wrap(foreground_code(USER_TEXT_COLOR) + ";" + background, text)
 
     def magenta(self, text: str) -> str:
-        return self._wrap("38;2;255;0;255", text)
+        return self._wrap(foreground_code(TOOL_COLOR), text)
 
     def cyan(self, text: str) -> str:
-        return self._wrap("36", text)
+        return self._wrap(foreground_code(LINK_COLOR), text)
+
+    def warning(self, text: str) -> str:
+        return self._wrap(foreground_code(WARNING_COLOR), text)
 
 
 def _use_color(stream: TextIO, force_off: bool) -> bool:
@@ -453,7 +456,7 @@ class Renderer:
 
         elif event.kind == "retry":
             self.__dict__["_reply_preview"] = []
-            self.emit(self.style.red(f"  ✗ {event.text}"))
+            self.emit(self.style.warning(f"  ✗ {event.text}"))
 
         elif event.kind == "retry_wait":
             self.__dict__["_reply_preview"] = []
@@ -529,7 +532,7 @@ class Renderer:
                 self.terminal.finish_call(event.tool_call, event.step, result.content, result.is_error)
             if self.terminal is not None and event.tool_call is not None and event.tool_call.name in COMMAND_OUTPUT_TOOLS:
                 body = "Command failed; see Calls." if result.is_error else "Command completed."
-                color = self.style.red if result.is_error else self.style.dim
+                color = self.style.red if result.is_error else self.style.green
                 self.emit(color(f"  {'✗' if result.is_error else '✓'} {body}"), block=self._model_block, tool=True)
             elif result.is_error:
                 # Errors are the most useful signal; always surface them.
@@ -568,7 +571,7 @@ class Renderer:
             if event.text == STOP_NOTICE and getattr(self, '_queued_settings_pause', False):
                 self.emit(self.style.dim("  Current step finished; applying queued commands."))
             else:
-                self.emit(self.style.red(f"  Warning: {event.text}"), block=self._model_block)
+                self.emit(self.style.warning(f"  Warning: {event.text}"), block=self._model_block)
         elif event.kind == "notice":
             self.emit(self.style.dim(f"  {event.text}"))
 
@@ -707,7 +710,7 @@ async def _initialize_session(session: Session, args: argparse.Namespace, config
             return "MCP: disabled."
         def report(state: Any) -> None:
             if state.status == "error":
-                renderer.emit(renderer.style.red(f"  Warning: mcp: {state.line()}"), separate=False)
+                renderer.emit(renderer.style.warning(f"  Warning: mcp: {state.line()}"), separate=False)
             else:
                 notice(f"MCP: {state.line()}")
         try:
@@ -719,7 +722,7 @@ async def _initialize_session(session: Session, args: argparse.Namespace, config
             other = len(states) - connected - failed
             return f"MCP: {connected} connected; {failed} failed." + (f" {other} disconnected." if other else "")
         except MCPError as exc:
-            renderer.emit(renderer.style.red(f"  Warning: mcp: {exc}"), separate=False)
+            renderer.emit(renderer.style.warning(f"  Warning: mcp: {exc}"), separate=False)
             return "MCP: connection failed."
 
     async def repository() -> None:
@@ -1947,7 +1950,7 @@ async def _mcp_command(
             )
 
     if state.status == "error":
-        print(style.red(f"  Warning: {state.line()}"), file=out)
+        print(style.warning(f"  Warning: {state.line()}"), file=out)
         return
 
     print(f"  {style.green('connected')} {literal(state.spec.name)} — {literal(state.detail)}", file=out)

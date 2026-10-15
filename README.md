@@ -1587,6 +1587,10 @@ code has a continuation marker that is excluded from copied text. Narrow tables
 become header/value records. Links display `label (destination)`.
 
 Choose `--theme dark|light|monochrome|ironbow`, or `/theme NAME` in the REPL.
+The default feed is white on black. Teal marks user input and success, violet
+marks tools and panel titles, cyan marks navigation, amber marks activity and
+warnings, and coral marks errors. Menus, the footer, and the editor use distinct
+dark backgrounds. Reasoning stays grey, with a subtle background on inline code.
 `/markdown [source|rendered]` toggles the view. `/copy` copies the latest reply,
 automatically choosing exact code when it contains one code block; source view
 copies Markdown. `/copy text`, `/copy markdown`, and `/copy code [number]`

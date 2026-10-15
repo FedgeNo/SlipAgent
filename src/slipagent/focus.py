@@ -58,7 +58,7 @@ class FocusCoordinator:
 
     @classmethod
     def panel(cls, title: UIControl, body: AnyContainer, target: Callable[[], FocusTarget],
-              *, style: str = "class:status") -> HSplit:
+              *, style: str = "class:panel-title") -> HSplit:
         """Build a titled region whose title focuses its retained body."""
         return HSplit([cls.header(title, target, style=style), body])
 

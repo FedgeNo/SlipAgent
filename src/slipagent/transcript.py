@@ -251,13 +251,13 @@ class WrappedTranscript:
         if not self._pending or self._pending[0][1] != ">":
             return False
         styles = set(self._pending[0][0].lower().split())
-        # Recognize both historical greens and the explicit white-on-green pair.
+        # Keep historical prompt colors recognizable when reopening sessions.
         return bool({"#66ff66", "#00ff00"}.intersection(styles)
                     or USER_TEXT_COLOR in styles
-                    and {"bg:" + USER_BACKGROUND_COLOR, "bg:#005000"}.intersection(styles))
+                    and {"bg:" + USER_BACKGROUND_COLOR, "bg:#004000", "bg:#005000"}.intersection(styles))
 
     def prompt_at(self, row: int) -> tuple[int, int] | None:
-        """Nearest preceding green > line, including all its wrapped rows."""
+        """Nearest preceding user > line, including all its wrapped rows."""
         tail = self.content_rows()
         complete = len(self.rows)
         if not self._continued and self._starts_prompt() and complete <= row:

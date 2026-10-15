@@ -239,9 +239,9 @@ class TerminalUI:
         self._files_window: TranscriptWindow = self._touched_panel.window
         self._calls_window: TranscriptWindow = self._calls_panel.window
         self._inspection_panel: HSplit = HSplit([
-            FocusCoordinator.panel(FormattedTextControl("Touched"), self._files_window, lambda: self._files_window, style="class:menu-title"),
+            FocusCoordinator.panel(FormattedTextControl("Touched"), self._files_window, lambda: self._files_window, style="class:panel-title"),
             Window(height=1),
-            FocusCoordinator.panel(FormattedTextControl("Calls"), self._calls_window, lambda: self._calls_window, style="class:menu-title"),
+            FocusCoordinator.panel(FormattedTextControl("Calls"), self._calls_window, lambda: self._calls_window, style="class:panel-title"),
         ], width=lambda: Dimension.exact(self.main_area.inspector_width), style="class:menu")
 
     def toggle_inspection(self) -> None:
@@ -494,7 +494,7 @@ class TerminalUI:
             self._editor_input = self._editor_panel.input
             self._editor_container = self._editor_panel.container
         self._editor_panel.ensure_control()
-        self._editor_input.window.style = "class:text-area class:content"
+        self._editor_input.window.style = "class:text-area class:editor"
 
     async def _open_editor_now(self, path: Path, *, line: int = 1) -> None:
         self._ensure_editor()
@@ -861,7 +861,7 @@ class TerminalUI:
             style, part = fragment[:2]
             length = min(remaining, len(part))
             if length:
-                link_style = style + " class:clickable"
+                link_style = style + " class:link class:clickable"
                 if self.__dict__.get("_hovered_control") == "folder":
                     link_style += " class:hover"
                 result.append((link_style, part[:length], self._folder_mouse))
@@ -1664,22 +1664,22 @@ class TerminalUI:
                 for token in style.split():
                     if token.startswith("class:suggestion-"):
                         suggestion = self.__dict__.get("_suggestion_links", {}).get(int(token.removeprefix("class:suggestion-")))
-                        style += " class:clickable"
+                        style += " class:link class:clickable"
                         if self.__dict__.get("_hovered_control") == ("suggestion", suggestion):
                             style += " class:hover"
                     if token.startswith("class:file-"):
                         file = self.__dict__.get("_file_links", {}).get(int(token.removeprefix("class:file-")))
-                        style += " class:clickable"
+                        style += " class:link class:clickable"
                         if self.__dict__.get("_hovered_control") == ("file", file):
                             style += " class:hover"
                     if token.startswith("class:artifact-"):
                         identifier = self.__dict__.get("_artifact_links", {}).get(int(token.removeprefix("class:artifact-")))
-                        style += " class:clickable"
+                        style += " class:link class:clickable"
                         if self.__dict__.get("_hovered_control") == ("artifact", identifier):
                             style += " class:hover"
                     if token.startswith("class:directory-") and self.__dict__.get("_folder_opener") is not None:
                         directory = self.__dict__.get("_directory_links", {}).get(int(token.removeprefix("class:directory-")))
-                        style += " class:clickable"
+                        style += " class:link class:clickable"
                         if self.__dict__.get("_hovered_control") == ("directory", directory):
                             style += " class:hover"
                 link = self._feed_link(style, text)

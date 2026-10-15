@@ -156,6 +156,11 @@ class CallsPanel(ListPanel[tuple[int, str]]):
         item = self.items[key]
         return f"{item['tool']} [{item['status']}]"
 
+    def item_style(self, key: tuple[int, str]) -> str:
+        status = self.items[key]["status"]
+        role = {"running": "call-running", "completed": "call-completed", "error": "call-error"}.get(status)
+        return super().item_style(key) + (" class:" + role if role else "")
+
 
 class ChoicePanel(ListPanel[int]):
     """Modal choices share selection behavior with persistent sidebar lists."""

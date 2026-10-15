@@ -40,6 +40,18 @@ def test_calls_keep_distinct_step_keys_and_mouse_opens_the_clicked_item():
     assert panel.selection == (1, "same")
 
 
+def test_call_statuses_have_distinct_semantic_colors():
+    from slipagent.terminallayout import build_style
+    from slipagent.palette import SUCCESS_COLOR, WARNING_COLOR, ERROR_COLOR
+
+    items = {(1, status): {"tool": "read_file", "status": status}
+             for status in ("running", "completed", "error")}
+    panel = CallsPanel(items, actions([]))
+    styles = build_style()
+    for status, color in (("running", WARNING_COLOR), ("completed", SUCCESS_COLOR), ("error", ERROR_COLOR)):
+        assert styles.get_attrs_for_style_str(panel.item_style((1, status))).color == color[1:]
+
+
 def test_directories_need_an_opener_for_keyboard_and_mouse(tmp_path: Path):
     opened = []
     panel = TouchedPanel({".": "read"}, lambda: tmp_path, lambda: False, actions(opened))

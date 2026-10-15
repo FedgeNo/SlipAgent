@@ -14,17 +14,21 @@ from pygments.lexers import get_lexer_by_name
 from pygments.token import Token as SyntaxToken
 from pygments.util import ClassNotFound
 from wcwidth import iter_graphemes, width as display_width
-from .palette import THOUGHT_COLOR, THOUGHT_CODE_BACKGROUND_COLOR
+from .palette import (
+    THOUGHT_COLOR, THOUGHT_CODE_BACKGROUND_COLOR, TEXT_COLOR, LINK_COLOR,
+    TOOL_COLOR, SUCCESS_COLOR, WARNING_COLOR, ERROR_COLOR, MUTED_COLOR,
+    CODE_BACKGROUND_COLOR, INLINE_BACKGROUND_COLOR,
+)
 
 
 # Foreground roles use separated hues; body and strong deliberately share a color.
 THEMES: dict[str, dict[str, str]] = {
     "dark": {
-        "body": "#e6e6e6", "heading": "#ffffff", "code": "#8be9fd",
-        "code-bg": "#20252d", "inline-bg": "#26343e", "link": "#82aaff",
-        "quote": "#c4a7e7", "marker": "#8fbc8f", "keyword": "#c4a7e7",
-        "string": "#a6e3a1", "number": "#f9c784", "comment": "#a6adb8",
-        "name": "#8be9fd", "operator": "#f38ba8", "syntax": "#e6e6e6",
+        "body": TEXT_COLOR, "heading": TEXT_COLOR, "code": LINK_COLOR,
+        "code-bg": CODE_BACKGROUND_COLOR, "inline-bg": INLINE_BACKGROUND_COLOR, "link": LINK_COLOR,
+        "quote": TOOL_COLOR, "marker": SUCCESS_COLOR, "keyword": TOOL_COLOR,
+        "string": SUCCESS_COLOR, "number": WARNING_COLOR, "comment": MUTED_COLOR,
+        "name": LINK_COLOR, "operator": ERROR_COLOR, "syntax": TEXT_COLOR,
     },
     "light": {
         "body": "#404040", "heading": "#101010", "code": "#005f73",

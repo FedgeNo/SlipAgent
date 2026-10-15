@@ -76,11 +76,11 @@ class StatusLine:
                  concise: bool, frame: str) -> tuple[str, str, bool]:
         """Return style, text, and whether the idle Commands action is available."""
         if held:
-            return "class:idle", "Agent Held", False
+            return "class:held", "Agent Held", False
         if self.retry and not stopping:
             return "class:retry", self.retry, False
         if self.command:
-            return "class:idle", self.command, False
+            return "class:pulse", self.command, False
         if not working:
             return "class:idle", "Ready", True
         label = "Stopping After This Step" if stopping else "Working" if concise else "Working (esc to interrupt)"

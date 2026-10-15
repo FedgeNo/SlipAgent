@@ -361,9 +361,9 @@ async def test_user_prompt_background_fills_feed_without_copy_padding(display, i
                 first = next(i for i, line in enumerate(lines) if "> wide" in line)
                 last = next(i for i, line in enumerate(lines) if "Final prompt line" in line)
                 for row in range(first, last + 1):
-                    assert all(screen.buffer[row][x].bg == "004000" for x in range(width)), row
+                    assert all(screen.buffer[row][x].bg == "153c35" for x in range(width)), row
                     if inspect:
-                        assert screen.buffer[row][columns - 1].bg != "004000"
+                        assert screen.buffer[row][columns - 1].bg != "153c35"
                 ordinary = next(i for i, line in enumerate(lines) if "ordinary output" in line)
                 assert screen.buffer[ordinary][width - 1].bg == "000000"
                 content = ui._transcript_content(width)
@@ -386,7 +386,7 @@ async def test_feed_scrollbar_click_drag_and_follow(display):
         try:
             await wait_until(lambda: "row 299" in "\n".join(snapshot()))
             assert ui._wrapped_columns == 74
-            assert all(screen.buffer[row][74].bg == "000040" for row in range(17))
+            assert all(screen.buffer[row][74].bg == "17232d" for row in range(17))
             assert screen.buffer[16][74].data == "┃"
             pipe.send_text("\x1b[<0;75;1M\x1b[<0;75;1m")
             await wait_until(lambda: snapshot()[0].startswith("row 000"))
@@ -400,9 +400,9 @@ async def test_feed_scrollbar_click_drag_and_follow(display):
             assert ui.app.layout.current_control is ui.input.control
             ui.queue_prompt("queued " * 20)
             await wait_until(lambda: snapshot()[16].startswith("> queued"))
-            assert screen.buffer[16][73].bg == "004000"
-            assert screen.buffer[16][74].bg == "000040"
-            assert screen.buffer[16][75].bg == "400040"
+            assert screen.buffer[16][73].bg == "153c35"
+            assert screen.buffer[16][74].bg == "17232d"
+            assert screen.buffer[16][75].bg == "272334"
             ui.clear_queued_prompts()
             ui.open_viewer("Viewer", "plain text")
             await wait_until(lambda: snapshot()[1].startswith("plain text"))
@@ -430,11 +430,11 @@ async def test_footer_background_separates_controls_from_feed(display):
             assert ui.transcript.render_info.window_height == 17
             assert "output 29" in "\n".join(snapshot()[:17])
             assert "readout" in snapshot()[23]
-            assert screen.buffer[17][99].bg == "000040"
-            assert screen.buffer[23][99].bg == "000040"
-            assert screen.buffer[18][99].bg == "004000"
+            assert screen.buffer[17][99].bg == "17232d"
+            assert screen.buffer[23][99].bg == "17232d"
+            assert screen.buffer[18][99].bg == "153c35"
             assert screen.buffer[16][0].bg == "000000"
-            assert screen.buffer[16][99].bg == "400040"
+            assert screen.buffer[16][99].bg == "272334"
         finally:
             ui.close()
             await task
@@ -858,7 +858,7 @@ async def test_editor_mouse_places_cursor_on_text_and_at_line_end_in_blank_space
             await wait_until(lambda: ui.app.is_running)
             await ui._open_editor_now(path)
             await wait_until(lambda: snapshot()[1].startswith("first line"))
-            assert all(screen.buffer[row][column].bg == "000000"
+            assert all(screen.buffer[row][column].bg == "111c20"
                        for row in (1, 9) for column in range(100))
             pipe.send_text("\x1b[<0;4;2M\x1b[<0;4;2m")
             await wait_until(lambda: ui._editor_input.buffer.cursor_position == 3)
@@ -1569,8 +1569,8 @@ async def test_artifact_link_opens_colored_diff_without_desktop_and_preserves_no
             assert snapshot()[2].strip() == ""
             assert "1        │ -old" in snapshot()[6]
             assert "1 │ +new" in snapshot()[7]
-            assert screen.buffer[6][16].fg == "ff6666"
-            assert screen.buffer[7][16].fg == "66dd88"
+            assert screen.buffer[6][16].fg == "ff929b"
+            assert screen.buffer[7][16].fg == "82d9ae"
             assert "Saved diff." in snapshot()[17]
             pipe.send_text("\x1b")
             await wait_until(lambda: "View Diff" in snapshot()[0])
@@ -1697,8 +1697,8 @@ async def test_sidebar_wheel_scrolls_each_pane_and_uses_menu_colors(display):
             ui.toggle_inspection()
             await wait_until(lambda: "file29" in snapshot()[1])
             assert snapshot()[8][75:].strip() == ""
-            assert screen.buffer[1][75].fg == "999999"
-            assert screen.buffer[0][75].fg != "999999"
+            assert screen.buffer[1][75].fg == "a5adb8"
+            assert screen.buffer[0][75].fg != "a5adb8"
             calls = [row[75:] for row in snapshot()[9:17]]
             pipe.send_text("\x1b[<65;80;2M" * 3)
             await wait_until(lambda: "file29" not in snapshot()[1])
@@ -2316,9 +2316,9 @@ async def test_menu_uses_footer_and_scrolls_selection_through_refresh_and_resize
             assert snapshot()[23].startswith("↑/↓ or wheel = move | Enter or click = select | Esc = back")
             assert "› Option 0" in snapshot()[18]
             assert "Option 4" in snapshot()[22]
-            assert screen.buffer[19][0].fg == "999999"
-            assert screen.buffer[19][99].bg == "400040"
-            assert screen.buffer[17][0].fg != "999999"
+            assert screen.buffer[19][0].fg == "a5adb8"
+            assert screen.buffer[19][99].bg == "272334"
+            assert screen.buffer[17][0].fg != "a5adb8"
             pipe.send_text("\x1b[A" + "\x1b[B" * 8)
             await wait_until(lambda: "› Option 8" in "\n".join(snapshot()[18:23]))
             assert "Option 0" not in "\n".join(snapshot()[18:23])
@@ -2628,7 +2628,7 @@ async def test_danger_status_suffix_is_red_last_and_survives_resize(display, tmp
             await wait_until(lambda: " | Danger Mode" in snapshot()[23])
             assert snapshot()[23].index("Free: 42") < snapshot()[23].index("Danger Mode")
             start = snapshot()[23].index("Danger Mode")
-            assert all(screen.buffer[23][column].fg == "ff6666" for column in range(start, start + len("Danger Mode")))
+            assert all(screen.buffer[23][column].fg == "ff929b" for column in range(start, start + len("Danger Mode")))
             choice = asyncio.create_task(ui.choose("Commands", [("one", "One")]))
             await wait_until(lambda: snapshot()[17].strip() == "Commands")
             assert " | Danger Mode" in snapshot()[23]
@@ -2788,7 +2788,7 @@ async def test_latest_user_prompt_stays_pinned_until_next_prompt_reaches_top(dis
             await wait_until(lambda: snapshot()[0].rstrip() == "> Keep the original task visible")
             assert "result 49" in "\n".join(snapshot()[1:17])
             assert screen.buffer[0][0].fg == "ffffff"
-            assert screen.buffer[0][0].bg == "004000"
+            assert screen.buffer[0][0].bg == "153c35"
             assert "unfinished draft" in snapshot()[18]
             assert "readout" in snapshot()[23]
 
@@ -3068,8 +3068,8 @@ async def test_restored_transcript_replaces_output_and_scrolls_to_end(display):
             assert "Saved readable thoughts" in recorded and "Saved first answer" in recorded
             assert "read_file" in recorded and "Saved tool failure" in recorded
             assert '{"status": [], "data": "Legacy tool output"}' in recorded
-            assert "\x1b[38;2;255;0;255m" in recorded
-            assert "\x1b[38;2;255;102;102m" in recorded
+            assert "\x1b[38;2;196;167;239m" in recorded
+            assert "\x1b[38;2;255;146;155m" in recorded
             assert [message.to_api() for message in messages] == original
             ui._scroll_output(-1000)
             await wait_until(lambda: "Saved first answer" in "\n".join(snapshot()[:17]))
@@ -3285,7 +3285,7 @@ def test_title_animation_matches_working_and_stops_when_ready(display, monkeypat
             assert all(width(frame) == 2 for frame in PULSE_FRAMES)
             ready = ui.app.style.get_attrs_for_style_str("class:idle")
             working = ui.app.style.get_attrs_for_style_str("class:pulse")
-            assert ready.color == working.color
+            assert ready.color != working.color
         finally:
             ui.close()
 
@@ -3496,7 +3496,7 @@ async def test_context_toggle_shows_ordered_system_prompts_and_preserves_draft(d
             for text in ["SYSTEM ONE", "SYSTEM TWO"]:
                 rows = snapshot()
                 row = next(index for index, value in enumerate(rows) if text in value)
-                assert screen.buffer[row][rows[row].index(text)].fg == ("ffff00" if color else "default")
+                assert screen.buffer[row][rows[row].index(text)].fg == ("c4a7ef" if color else "default")
             assert "unfinished draft" in snapshot()[20]
             assert "readout" in snapshot()[25]
             ui.refresh()
@@ -3770,7 +3770,7 @@ async def test_streaming_chunks_wrap_reflow_and_keep_the_footer_and_draft(displa
             await wait_until(lambda: "Starting again." in "\n".join(snapshot()[:17]))
             rows = snapshot()
             row = next(index for index, value in enumerate(rows) if "Response rejected" in value)
-            assert screen.buffer[row][2].fg == "ff6666"
+            assert screen.buffer[row][2].fg == "f0c674"
             assert "draft" in rows[18]
             assert ui._notification_text() in rows[17]
             assert "readout" in rows[23]
@@ -3798,9 +3798,9 @@ async def test_requested_colors_apply_to_user_input_tool_calls_and_errors(displa
             pipe.send_text("draft")
             await wait_until(lambda: "draft" in snapshot()[18])
             for text, expected in [
-                ("> request", "ffffff"), ("list_dir", "ff00ff"),
-                ("tool failed", "ff6666"), ("request failed", "ff6666"), ("draft", "ffffff"),
-                ("muted detail", "aaaaaa"), ("readout", "aaaaaa"), ("white detail", "default"),
+                ("> request", "ffffff"), ("list_dir", "c4a7ef"),
+                ("tool failed", "ff929b"), ("request failed", "f0c674"), ("draft", "ffffff"),
+                ("muted detail", "a5adb8"), ("readout", "a5adb8"), ("white detail", "ffffff"),
             ]:
                 rows = snapshot()
                 row = next(index for index, value in enumerate(rows) if text in value)

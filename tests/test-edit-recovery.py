@@ -7,6 +7,35 @@ import pytest
 from slipagent.tools.files import EditFileTool
 
 
+@pytest.mark.parametrize("restored", [False, True])
+async def test_nearby_source_is_model_only(workspace, restored):
+    import io
+    from slipagent.cli import Renderer, Style
+    from slipagent.agent import AgentEvent
+    from slipagent.types import Message, ToolCall
+
+    (workspace.root / "app.py").write_text("value = 2\n")
+    call = ToolCall("edit", "edit_file", {
+        "path": "app.py", "old_string": "value = 3", "new_string": "value = 4",
+    })
+    result = await EditFileTool(workspace).invoke(call.arguments)
+    sink = io.StringIO()
+    renderer = Renderer(Style(False), sink, verbose=True)
+    if restored:
+        await renderer.restore_transcript([
+            Message.assistant("", tool_calls=[call]),
+            Message.tool_result(call.id, {"status": "error", "content": result.content}),
+        ], [])
+    else:
+        renderer.handle(AgentEvent(kind="tool_end", tool_call=call, result=result))
+    assert "Nearby actual source" not in sink.getvalue()
+    assert "value = 2" not in sink.getvalue()
+    assert "No match for old_string" in sink.getvalue()
+    assert "No changes were made." in sink.getvalue()
+    assert "Nearby actual source" in result.text()
+    assert "value = 2" in result.text()
+
+
 async def test_missing_match_reports_actual_numbered_source_without_writing(workspace):
     target = workspace.root / "app.py"
     original = "def compute(value):\n    return value * 2\n"

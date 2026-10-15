@@ -141,6 +141,18 @@ def _literal_tool_output(text: str) -> str:
     return literal(text)
 
 
+def _display_tool_result(result: ToolResult, call: ToolCall | None) -> ToolResult:
+    """Keep edit recovery source in model history, outside user-facing output."""
+    if result.is_error and call is not None and call.name == "edit_file":
+        text = re.sub(
+            r"(?m)^Nearby actual source \(line numbers are not part of the file\):\n"
+            r"(?:[ ]*\d+\t[^\n]*\n)*",
+            "", result.text(),
+        )
+        return ToolResult.error(text)
+    return result
+
+
 COMMAND_OUTPUT_TOOLS = frozenset({
     "run_command", "read_command_output", "command_jobs", "monitor_command",
     "git_status", "git_diff", "git_log", "git_add", "git_commit",
@@ -325,6 +337,7 @@ class Renderer:
                         and "content" in saved):
                     result = ToolResult(saved["content"], saved["status"] == "error")
                 restored_call = restored_calls.get(message.tool_call_id or "")
+                result = _display_tool_result(result, restored_call)
                 saved_diff = (self.terminal is not None and restored_call is not None
                               and restored_call.name in {"write_file", "edit_file", "edit_hashlines"} and not result.is_error
                               and isinstance(saved, dict)
@@ -508,6 +521,7 @@ class Renderer:
             result = event.result
             if result is None:
                 return
+            result = _display_tool_result(result, event.tool_call)
             if self.terminal is not None and event.tool_call is not None and event.tool_call.name == "grep":
                 self._tool_heading(event.tool_call)
             if self.terminal is not None and event.tool_call is not None:

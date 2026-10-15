@@ -1,4 +1,4 @@
-"""Keep originals in session memory; compact only the view sent to the model.
+"""Retain archived originals; compact only the view sent to the model.
 
 A step stores its active prompt, assistant response, and complete tool batch.
 Recent steps include originals and available compressed analysis. Older steps

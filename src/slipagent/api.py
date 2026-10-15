@@ -481,7 +481,8 @@ def _parse_retry_after(value: str | None) -> float | None:
     if not value:
         return None
     try:
-        return max(0.0, float(value.strip()))
+        seconds = float(value.strip())
+        return max(0.0, seconds) if math.isfinite(seconds) else None
     except ValueError:
         try:
             date = parsedate_to_datetime(value)

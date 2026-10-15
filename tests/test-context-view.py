@@ -8,6 +8,7 @@ import pytest
 
 from slipagent.contextview import ContextView
 from slipagent.budget import ContextBudget
+from slipagent.requestbody import RequestBody
 
 
 def test_context_rows_styles_and_resize():
@@ -40,6 +41,20 @@ def test_context_preserves_message_metadata_and_request_fields():
             ("", 'tools:\n[\n  {\n    "name": "example"\n  }\n]'), ("", "stream:\ntrue")]
     finally:
         view.close()
+
+
+@pytest.mark.parametrize("content", ["", None, [], [{"type": "text", "text": "Hello"}]])
+def test_streamed_request_inspection_matches_json_inspection(content):
+    request = {"messages": [{"role": "user", "content": content}]}
+    body = RequestBody(request)
+    streamed = ContextView.from_body(body)
+    direct = ContextView.from_request(json.dumps(request))
+    try:
+        assert list(streamed) == list(direct)
+    finally:
+        streamed.close()
+        direct.close()
+        body.temporary.cleanup()
 
 
 def test_large_context_retains_only_indexes_and_a_bounded_row_cache():

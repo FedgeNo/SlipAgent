@@ -169,7 +169,6 @@ def structured_message(message: dict[str, Any], messages: list[dict[str, Any]], 
             return {**message, "content": json.dumps({"response": text})}
         return {**message, "content": text}
     current_id, previous_id = context_step_ids(messages)
-    messages = unpack_api_context(messages)
     text = message.get("content") or ""
     try:
         existing = json.loads(text)
@@ -181,6 +180,7 @@ def structured_message(message: dict[str, Any], messages: list[dict[str, Any]], 
     step_id = current_id or 1
     if include_memory:
         text = inline_memory(text, messages)
+    messages = unpack_api_context(messages)
     memory, calls = tool_response_memory(text, [ToolCall.from_api(call) for call in message.get("tool_calls") or []], step_id, previous_id)
     request = next((context_body(m.get("content")) for m in reversed(messages) if m["role"] == "user"), "continuation")
     results = " ".join(context_body(m.get("content")) for m in messages if m["role"] == "tool")
@@ -188,7 +188,7 @@ def structured_message(message: dict[str, Any], messages: list[dict[str, Any]], 
         "task": task_record(messages),
         "response": memory.text,
         "tool_calls": [{"id": call.id, "name": call.name, "arguments": json.dumps(call.arguments)} for call in calls],
-        "previous_tool_responses_compressed": (memory.previous or results[:1000] or "Previous tools returned their results.") if previous else "",
+        "previous_tool_responses_compressed": (memory.previous or results[:1000] or "Previous tools returned their results.") if previous_id is not None else "",
         "user_prompt_compressed": "User requested " + request[:1000],
         "agent_response_compressed": memory.summary,
     }

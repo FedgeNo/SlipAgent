@@ -15,6 +15,7 @@ from collections import defaultdict
 
 from .workspace import IGNORED_DIRS, Workspace, WorkspaceError
 from .symbols import outline
+from .fileio import open_regular
 
 SOURCE_SUFFIXES = frozenset({".py", ".pyi", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".c", ".h", ".cpp", ".hpp", ".java", ".php", ".rb", ".cs", ".swift", ".kt", ".sh", ".sql", ".html", ".css", ".md", ".toml"})
 MAX_FILES = 100_000
@@ -55,7 +56,7 @@ class RepositoryMap:
 
     def _outline(self, path: Path) -> tuple[str, set[str]]:
         try:
-            with self.workspace.resolve(path).open("rb") as source:
+            with open_regular(self.workspace.resolve(path)) as source:
                 raw = source.read(MAX_SOURCE_BYTES + 1)
             if len(raw) > MAX_SOURCE_BYTES:
                 return "[outline omitted: large file]", set()

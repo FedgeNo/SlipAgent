@@ -12,6 +12,7 @@ from .embed import Embedder
 from .indexer import DEFAULT_EXCLUDE_DIRS, DEFAULT_INDEX_EXTS, chunk_text, walk_files
 from .retrieval import RETRIEVAL, source_header
 from .storage import Store
+from ..fileio import read_regular
 
 
 @dataclass
@@ -112,7 +113,7 @@ class Searcher:
                         and old["size"] == before.st_size):
                     stats.unchanged_files += 1
                     continue
-                data = source.read_bytes()
+                data = read_regular(source)
                 after = source.stat()
                 if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
                     raise OSError(f"File changed while indexing; retry: {source}")

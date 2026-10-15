@@ -2,6 +2,7 @@
 
 import slipagent.sessionstate as sessionstate
 
+import asyncio
 import io
 import json
 from unittest.mock import AsyncMock
@@ -208,6 +209,26 @@ async def test_provider_switch_is_atomic_and_key_replacement_keeps_provider(tmp_
         assert session.client.provider == "nvidia" and session.api_key == "another-dummy"
         await session.client.aclose()
         assert all(replacement._client.is_closed for replacement in replacements)
+
+
+async def test_key_replacement_cancels_pending_background_compaction(tmp_path):
+    async with OpenRouterClient("dummy", transport=transport_for("openrouter", [])) as client:
+        session = session_for(client, tmp_path)
+        session.transport = transport_for("openrouter", [])
+        compactor = session.agent._compactor()
+        job = asyncio.create_task(asyncio.Event().wait())
+        compactor.jobs.add(job)
+        job.add_done_callback(compactor.jobs.discard)
+        try:
+            await asyncio.wait_for(session.use_api_key("replacement-dummy"), 1)
+            assert job.cancelled()
+            assert session.api_key == "replacement-dummy"
+            assert session.agent.client is session.client
+            assert client._client.is_closed
+        finally:
+            compactor.reset()
+            await compactor.wait()
+            await session.client.aclose()
 
 
 async def test_failed_candidate_closes_itself_and_preserves_active_model(tmp_path, monkeypatch):

@@ -152,17 +152,19 @@ async def test_delayed_save_does_not_steal_a_later_focus_choice(ui, tmp_path, mo
     path = tmp_path / "file"
     path.write_text("old\n")
     await terminal._editor_panel.open(path, 1)
-    started, release = threading.Event(), threading.Event()
+    started, release = asyncio.Event(), threading.Event()
+    loop = asyncio.get_running_loop()
     original = FileEditor.save
     def slow(file, **options):
-        started.set()
-        assert release.wait(3)
+        loop.call_soon_threadsafe(started.set)
+        assert release.wait(10)
         original(file, **options)
+    monkeypatch.setattr(FileEditor, "diff", lambda file: "")
     monkeypatch.setattr(FileEditor, "save", slow)
     terminal._editor_input.text = "new\n"
     task = asyncio.create_task(terminal._editor_panel.save())
     try:
-        assert await asyncio.to_thread(started.wait, 1)
+        await asyncio.wait_for(started.wait(), 10)
         terminal._focus.focus(terminal.input)
         release.set()
         assert await task

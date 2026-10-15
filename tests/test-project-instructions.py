@@ -11,6 +11,7 @@ import pytest
 from slipagent.agent import Agent, build_system_prompt
 from slipagent.instructions import load_project_instructions
 from slipagent.instructions import ProjectInstructions
+from slipagent.fileio import read_regular
 from slipagent.tools.files import ReadFileTool, WriteFileTool
 from slipagent.tools import ToolRegistry
 from slipagent.workspace import Workspace, WorkspaceError
@@ -114,12 +115,11 @@ def test_unreadable_instruction_file_reports_its_path(workspace, monkeypatch, fa
         path.write_bytes(b"\xff")
     else:
         path.write_text("a rule", encoding="utf-8")
-        original = Path.read_text
-        def read_text(self, *args, **kwargs):
-            if self == path:
+        def denied_read(target, *args, **kwargs):
+            if target == path:
                 raise PermissionError("permission denied")
-            return original(self, *args, **kwargs)
-        monkeypatch.setattr(Path, "read_text", read_text)
+            return read_regular(target, *args, **kwargs)
+        monkeypatch.setattr("slipagent.instructions.read_regular", denied_read)
     with pytest.raises(WorkspaceError, match="cannot read project instructions AGENTS.md"):
         load_project_instructions(workspace)
 

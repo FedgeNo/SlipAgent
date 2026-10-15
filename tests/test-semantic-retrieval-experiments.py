@@ -5,6 +5,8 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -14,12 +16,31 @@ import numpy as np
 from tokenizers import Tokenizer, models, pre_tokenizers, processors
 
 from slipagent.semantic.embed import ONNXEmbedder
+from test_cli_e2e import cli_environment
 
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("retrieval_experiments", ROOT / "benchmarks/semantic/retrieval-experiments.py")
 experiment = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(experiment)
+
+
+def test_empty_anchor_fails_instead_of_looping(tmp_path):
+    for relative in ("codeindex/__init__.py", "tests/test-quality.py"):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("sample source\n")
+    catalog = {"query_styles": ["task"], "validation_files": [], "cases": [
+        {"id": "empty", "path": "Dots/codeindex/__init__.py", "anchor": "", "queries": ["Find sample"]}
+    ]}
+    result = subprocess.run(
+        [sys.executable, "-c", "import json, runpy, sys; from pathlib import Path; "
+         "runpy.run_path(sys.argv[1])['freeze'](json.loads(sys.argv[2]), {'Dots': Path(sys.argv[3])})",
+         str(ROOT / "benchmarks/semantic/freeze-realistic.py"), json.dumps(catalog), str(tmp_path)],
+        env=cli_environment(), capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode != 0
+    assert "ValueError: Empty source anchor: empty" in result.stderr
 
 
 def fixture():
@@ -238,6 +259,12 @@ class EncoderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "no truncation"):
             encoder.both(["world " * 20])
         self.assertEqual(self.feeds, [])
+
+    def test_matrix_uses_the_two_threads_recorded_in_its_report(self):
+        with patch("slipagent.semantic.embed.default_threads", return_value=7):
+            encoder = experiment.ExperimentEncoder(self.root, self.root / "full.onnx")
+        encoder.both(["hello"])
+        self.assertEqual(self.loader.call_args.kwargs["sess_options"].intra_op_num_threads, 2)
 
     def test_explicit_missing_weights_fail_without_fallback(self):
         encoder = experiment.ExperimentEncoder(self.root, self.root / "absent.onnx")

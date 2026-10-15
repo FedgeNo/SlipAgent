@@ -7,7 +7,7 @@ import json
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from .context import ConversationHistory
+from .context import CompletedStep, ConversationHistory
 from .events import AgentEvent
 from .task import TaskMemory
 from .submissions import Submission
@@ -98,9 +98,15 @@ class InputQueue:
         refreshed.sync(self.agent.messages)
         # An unsent message can belong to a locally recorded request failure.
         # Preserve step identities, summaries, metadata, and compaction owners.
+        affected = False
         for saved, current in zip(history.steps, refreshed.steps, strict=True):
+            affected = affected or len(saved.messages) != len(current.messages)
+            if not affected:
+                continue
             saved.messages = current.messages
             saved.request = current.request
+            if history.store is not None and isinstance(saved, CompletedStep) and "_disk" in saved.__dict__:
+                history.store.refresh_input(saved)
         history.cursor = refreshed.cursor
         history._request = refreshed._request
         task.start_message = refreshed.task.start_message

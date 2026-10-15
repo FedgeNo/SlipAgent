@@ -172,6 +172,27 @@ async def test_grep_does_not_read_through_an_escaping_symlink(
     assert "No matches" in content_text(result.content)
 
 
+def test_grep_rejects_a_file_replaced_by_a_symlink_after_resolution(tmp_path, monkeypatch):
+    root = tmp_path / "project"
+    root.mkdir()
+    workspace = Workspace(root)
+    target = root / "sample.txt"
+    target.write_text("original")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("private outside text")
+    resolve = Workspace.resolve
+
+    def swapped(owner, path):
+        resolved = resolve(owner, path)
+        if resolved == target:
+            target.unlink()
+            target.symlink_to(outside)
+        return resolved
+
+    monkeypatch.setattr(Workspace, "resolve", swapped)
+    assert GrepTool(workspace)._read_file(target) is None
+
+
 async def test_glob_does_not_enumerate_an_escaping_symlink(
     workspace: Workspace, tmp_path: Path
 ) -> None:

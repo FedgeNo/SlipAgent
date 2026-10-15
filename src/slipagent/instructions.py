@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .workspace import Workspace, WorkspaceError
+from .fileio import read_regular
 
 INSTRUCTION_FILES = (
     "CLAUDE.md", "AGENTS.md", "AGENTS.override.md", ".cursorrules", ".clinerules",
@@ -53,7 +54,7 @@ def load_project_instructions(workspace: Workspace, scope: str = ".") -> str:
                 raise WorkspaceError("instruction path must be a regular file")
             if path in seen:
                 return
-            content = path.read_text(encoding="utf-8")
+            content = read_regular(path).decode("utf-8")
         except (OSError, UnicodeError, RuntimeError, WorkspaceError) as exc:
             raise WorkspaceError(f"cannot read project instructions {relative}: {exc}") from exc
         seen.add(path)

@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from slipagent.semantic import Chunk, Searcher, Store
+from slipagent.fileio import read_regular
 
 
 class FakeEmbedder:
@@ -53,7 +54,7 @@ class IndexTests(unittest.TestCase):
         self.assertEqual(self.index(), 1)
         original_id = self.searcher.search("auth")[0]["id"]
         self.embedder.batches.clear()
-        with patch.object(Path, "read_bytes", side_effect=AssertionError("source read")):
+        with patch("slipagent.semantic.search.read_regular", side_effect=AssertionError("source read")):
             self.assertEqual(self.index(), 0)
         self.assertEqual(self.embedder.batches, [])
         self.assertEqual(self.searcher.last_index_stats.unchanged_files, 1)
@@ -119,7 +120,7 @@ class IndexTests(unittest.TestCase):
         self.store.conn.set_trace_callback(statements.append)
         self.addCleanup(lambda: self.store.conn.set_trace_callback(None))
         with patch("slipagent.semantic.search.walk_files", side_effect=AssertionError("workspace walk")), \
-                patch.object(Path, "read_bytes", side_effect=AssertionError("source read")):
+                patch("slipagent.semantic.search.read_regular", side_effect=AssertionError("source read")):
             result = self.searcher.search("auth")[0]
         self.assertEqual(result["path"], str(self.source))
         self.assertEqual((result["start_line"], result["end_line"]), (1, 2))
@@ -172,12 +173,11 @@ class IndexTests(unittest.TestCase):
     def test_file_changing_during_read_aborts_update(self):
         self.index()
         self.source.write_text("def auth(): return 'updated'\n")
-        read_bytes = Path.read_bytes
         def changing_read(path):
-            data = read_bytes(path)
+            data = read_regular(path)
             path.write_bytes(data + b"# changed again\n")
             return data
-        with patch.object(Path, "read_bytes", changing_read):
+        with patch("slipagent.semantic.search.read_regular", changing_read):
             with self.assertRaisesRegex(OSError, "File changed while indexing"):
                 self.index()
         self.assertEqual(self.searcher.search("auth")[0]["text"], self.original)
@@ -284,6 +284,29 @@ class IndexTests(unittest.TestCase):
         (self.workspace / "linked.py").symlink_to(outside)
         self.index()
         self.assertEqual(set(self.store.file_records()), {str(self.source)})
+
+    @unittest.skipUnless(os.name == "posix", "Descriptor-based no-follow traversal")
+    def test_file_swapped_to_symlink_during_indexing_is_rejected(self):
+        outside = self.root / "outside.py"
+        outside.write_text("def evil():\n    return True\n")
+        metadata = self.source.stat()
+        os.utime(outside, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
+        original_stat = Path.stat
+        replaced = False
+
+        def swapped(path, *args, **kwargs):
+            nonlocal replaced
+            result = original_stat(path, *args, **kwargs)
+            if path == self.source and kwargs.get("follow_symlinks", True) and not replaced:
+                replaced = True
+                self.source.unlink()
+                self.source.symlink_to(outside)
+            return result
+
+        with patch.object(Path, "stat", swapped), self.assertRaises(OSError):
+            self.index()
+        self.assertTrue(replaced)
+        self.assertEqual(self.store.file_records(), {})
 
 
 if __name__ == "__main__":

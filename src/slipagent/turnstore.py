@@ -112,6 +112,21 @@ class TurnStore:
             step._disk_group = self.write(f"{first:08d}-{last:08d}.grouped.json", grouped)
             step._disk_group_state = grouped
 
+    def refresh_input(self, step: CompletedStep) -> None:
+        """Replace archived input after a durable unsent-message discard."""
+        source = {**step._disk, "request": step.request,
+                  "messages": [message._stored if isinstance(message, ArchivedMessage)
+                               else {**message.to_record(), "reasoning_model": message.reasoning_model}
+                               for message in step.messages],
+                  "parts": {**step._disk["parts"], "prompt": step.request},
+                  "model": {**step._disk["model"], "user_prompts": [
+                      message.content or "" for message in step.messages if message.role == "user"]}}
+        step._disk = self.write(f"{step.id:08d}.raw.json", source)
+        step.__dict__.pop("_request", None)
+        for message, record in zip(step.messages, step._disk["messages"]):
+            if isinstance(message, ArchivedMessage):
+                message._stored = record
+
     def close(self) -> None:
         self.snapshots.cleanup()
         if self.temporary is not None:

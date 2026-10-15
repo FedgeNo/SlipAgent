@@ -267,7 +267,7 @@ async def test_three_invalid_actions_stop_without_spending_the_200_request_budge
 
 
 @pytest.mark.parametrize("envelope", [False, True])
-async def test_invalid_stream_reports_red_error_and_restarts_before_running_tools(envelope):
+async def test_invalid_stream_reports_warning_and_restarts_before_running_tools(envelope):
     sink = io.StringIO()
     renderer = Renderer(Style(True), sink, False)
     requests, events = [], []
@@ -301,7 +301,7 @@ async def test_invalid_stream_reports_red_error_and_restarts_before_running_tool
         assert await agent.run("work") == "Accepted response."
     retries = [event for event in events if event.kind == "retry"]
     assert len(retries) == 1 and "from the start" in retries[0].text
-    assert renderer.style.red("  ✗ " + retries[0].text) in sink.getvalue()
+    assert renderer.style.warning("  ✗ " + retries[0].text) in sink.getvalue()
     assert "Thinking: Starting again." in sink.getvalue()
     assert "Rejected plan." in sink.getvalue()
     assert "Response preview was not accepted" in sink.getvalue()
@@ -315,7 +315,7 @@ async def test_invalid_stream_reports_red_error_and_restarts_before_running_tool
     corrections = retry.pop("user_prompts")
     assert first.pop("user_prompts") == ["work"]
     assert len(corrections) == 1 and corrections[0].startswith("Harness tool-use correction:")
-    assert "No tools were executed and no reply text was displayed" in corrections[0]
+    assert "No tools were executed. Any streamed text was an unaccepted preview." in corrections[0]
     assert retry.pop('request_retry')['consecutive_failures'] == 1
     assert retry['step_id'] == first['step_id'] + 1
     assert tool.seen == []

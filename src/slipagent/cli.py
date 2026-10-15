@@ -542,7 +542,7 @@ class Renderer:
                 self.emit(self.style.red(f"  ✗ {result.text()}"), block=self._model_block, tool=True)
             elif event.tool_call is not None and event.tool_call.name == "answer":
                 self.handle(AgentEvent(kind="assistant_text", step=event.step, text=result.content["text"]))
-            elif self.terminal is not None and event.tool_call is not None and event.tool_call.name in {"write_file", "edit_file"} and self.terminal.has_diff(event.tool_call.id):
+            elif self.terminal is not None and event.tool_call is not None and event.tool_call.name in {"write_file", "edit_file"} and self.terminal.has_diff(event.tool_call.id, event.step):
                 self.emit(self.style.dim("    " + result.text().splitlines()[0]), block=self._model_block, tool=True)
             elif getattr(self, "_tool_streamed", False):
                 self.emit(self.style.dim("  ✓ Command completed."), block=self._model_block, tool=True)
@@ -2107,9 +2107,10 @@ def _describe_mcp(session: Session, style: Style, out: io.TextIOBase) -> None:
         return
 
     if configured:
+        connected = sum(name in configured and state.status == "connected" for name, state in live.items())
         print(
             style.dim(
-                f"  {len(live)}/{len(configured)} configured server(s) connected "
+                f"  {connected}/{len(configured)} configured server(s) connected "
                 f"({config_path(manager.workspace)})"
             ),
             file=out,

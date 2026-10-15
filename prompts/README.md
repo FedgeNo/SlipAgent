@@ -60,7 +60,7 @@ The `z-ai/glm-5.3` profile uses `models/glm-5.3.md`, embedded calls, and XML com
 | `user-edits.md` | Bounded saved-edit notifications, revision acknowledgement and full-diff retrieval; included only with pending or selected historical edit observations |
 | `diff-comment.md` | Whole-diff target and retrieval guidance, included only while the current user turn carries saved-diff references |
 | `monitor-setup.md`, `monitor-active.md`, `monitor-results.md` | Available command-monitor setup, active reminders, and inline ready results with initialization turns; omitted when the tool is unavailable |
-| `working-plan.md`, `working-plan-record.md`, `working-plan-empty.md` | Persistent plan guidance and last successful update step, subordinate to user instructions |
+| `working-plan.md`, `working-plan-record.md` | Persistent plan guidance and last successful update step, subordinate to user instructions |
 | `json-tools.md`, `native-tools.md`, `response-*.md` | Response formats and tool-calling protocols |
 | `history-records.md`, `history-excerpt.md`, `summary-unavailable.md` | History interpretation and retrieval |
 | `user-request.md`, `new-user-request.md`, `tool-result-response.md`, `continuation.md` | Current request, new input, automatic return after tools, and continuation without new input |

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from ..workspace import Workspace, WorkspaceError
+from ..fileio import read_regular
 from .base import Tool, ToolResult
 from .blocking import run_blocking
 from .shell import _kill
@@ -162,12 +163,7 @@ class GrepTool(Tool):
     def _read_file(self, candidate: Path) -> str | None:
         try:
             candidate = self.workspace.resolve(candidate)
-            if candidate.stat().st_size > MAX_GREP_FILE_BYTES:
-                return None
-            with candidate.open("rb") as source:
-                raw = source.read(MAX_GREP_FILE_BYTES + 1)
-            if len(raw) > MAX_GREP_FILE_BYTES:
-                return None
+            raw = read_regular(candidate, MAX_GREP_FILE_BYTES)
         except (OSError, WorkspaceError):
             return None
         if _looks_binary(raw[:4096]):

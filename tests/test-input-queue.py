@@ -15,6 +15,7 @@ from slipagent.inputqueue import input_queue
 from slipagent.sessions import SessionError, SessionJournal
 from slipagent.terminal import TerminalUI
 from slipagent.tools.base import ToolRegistry
+from slipagent.types import content_text
 from test_agent import StubClient, completion, unpack_context
 from test_cli_e2e import metadata_server
 
@@ -69,6 +70,12 @@ async def test_discard_unsent_input_in_recorded_failure_keeps_step_metadata(tmp_
     assert agent.history.steps[-1] is failed
     assert failed.summary == summary and failed.request_failure == failure
     assert failed.request == 'Accepted request'
+    assert failed.parts()['prompt'] == 'Accepted request'
+    assert 'Discard this unsent correction' not in content_text(failed.context_messages()[0].content)
+    raw = json.loads((agent.history.store.directory / '00000002.raw.json').read_text())
+    assert raw['request'] == raw['parts']['prompt'] == 'Accepted request'
+    assert raw['model']['user_prompts'] == []
+    assert all(message['role'] != 'user' for message in raw['messages'])
     assert 'Discard this unsent correction' not in str(agent.history.task.sources)
     data = journal.load(journal.session_id)
     assert len(data['history'].steps) == 2

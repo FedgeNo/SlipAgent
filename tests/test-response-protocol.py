@@ -1,4 +1,4 @@
-"""One structured response carries actions and three separately stored records."""
+"""Current response execution and legacy response-record validation."""
 
 import asyncio
 import json
@@ -14,6 +14,28 @@ from slipagent.tools.base import ToolRegistry
 from slipagent.openrouter import OpenRouterClient
 from slipagent.protocol import ResponseFormatError, parse_response
 from test_agent import RecordingTool, task_record
+
+
+@pytest.mark.parametrize("previous_tools", [False, True])
+@pytest.mark.parametrize("include_memory", [False, True])
+async def test_embedded_fixture_builds_legacy_reply_with_previous_results(previous_tools, include_memory):
+    from slipagent.context import ConversationHistory
+    from slipagent.types import Message, ToolCall
+    from test_agent import structured_message
+
+    messages = [Message.system("Test"), Message.user("Inspect")]
+    if previous_tools:
+        messages.extend([Message.assistant("Reading", [ToolCall("read", "record", {"value": "A"})]),
+                         Message.tool_result("read", "ACTUAL RESULT")])
+    view = await ConversationHistory().view(messages, [], keep_steps=50,
+                                            context_length=100000, max_output=1024, native_tools=False)
+    reply = structured_message({"role": "assistant", "content": "Done"},
+                               [message.to_api() for message in view], include_memory=include_memory)
+    record = json.loads(reply["content"])
+    assert record["response"] == "Done"
+    assert bool(record["previous_tool_responses_compressed"]) == previous_tools
+    if previous_tools:
+        assert "ACTUAL RESULT" in record["previous_tool_responses_compressed"]
 
 
 def record(response="Done.", calls=None, previous="", user="User asked to inspect the project.", agent="Assistant reports completion."):

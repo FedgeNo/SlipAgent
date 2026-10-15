@@ -439,9 +439,9 @@ class TerminalUI:
             self._inspection_calls[(step, call.id)] = records.write(f"call-{records.sequence + 1}.json", saved)
         self.app.invalidate()
 
-    def has_diff(self, call_id: str) -> bool:
+    def has_diff(self, call_id: str, step: int) -> bool:
         store = self.__dict__.get("_artifact_store")
-        return store is not None and any(record["kind"] == "diff" and record["call_id"] == call_id for record in store.records.values())
+        return store is not None and any(record["kind"] == "diff" for record in store.references(step, call_id))
 
     def _inspection_entries(self, *, files: bool) -> StyleAndTextTuples:
         return self._touched_panel.fragments() if files else self._calls_panel.fragments()
@@ -1097,7 +1097,7 @@ class TerminalUI:
         self.__dict__.pop("_context_blocks", None)
         self.__dict__.pop("_context_fragments", None)
         self.__dict__.pop("_context_columns", None)
-        control = ContextControl(lambda width: self._context_view.content(self.output.get_size().columns))
+        control = ContextControl(lambda width: self._context_view.content(width))
         if hasattr(self, "context_window"):
             self.context_window.content = control
         else:
@@ -1716,9 +1716,10 @@ class TerminalUI:
         self._wrapped_columns = columns
         layouts.update(state, len(self._raw_output), self._append_transcript_record)
         self._wrapped_count = len(self._raw_output)
-        full = self.output.get_size().columns
-        narrow = MainArea.split_width(full)
-        if full >= 60 and columns in (full, narrow):
+        terminal_columns = self.output.get_size().columns
+        full = max(1, terminal_columns - 1)
+        narrow = MainArea.split_width(terminal_columns)
+        if terminal_columns >= 60 and columns in (full, narrow):
             layouts.warm(narrow if columns == full else full, len(self._raw_output), create,
                          self._append_transcript_record, self.app.create_background_task)
         preview = flow.content_rows()

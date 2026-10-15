@@ -26,6 +26,8 @@ def freeze(catalog: dict, roots: dict[str, Path]) -> dict:
     for case in catalog["cases"]:
         source = sources[case["path"]]
         anchor = case["anchor"]
+        if not anchor:
+            raise ValueError(f"Empty source anchor: {case['id']}")
         positions = []
         start = 0
         while (found := source.find(anchor, start)) >= 0:

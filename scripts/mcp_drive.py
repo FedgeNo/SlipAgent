@@ -6,14 +6,13 @@ Usage:
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 import tempfile
 import threading
 import shlex
 from pathlib import Path
-from demo_run import make_server
+from demo_run import demo_environment, make_server
 
 ROOT = Path(__file__).resolve().parents[1]
 STUB = ROOT / "tests" / "mcp_stub_server.py"
@@ -55,14 +54,14 @@ def run_demo(workspace: Path, py: str, commands: list[str], port: int) -> None:
         capture_output=True,
         text=True,
         timeout=180,
-        env={**os.environ, "OPENROUTER_API_KEY": "sk-or-v1-test",
-             "PYTHONPATH": str(ROOT / "src"), "NO_COLOR": "1", "SLIPAGENT_NO_DOTENV": "1"},
+        env={**demo_environment(workspace), "NO_COLOR": "1"},
     )
     print(proc.stderr)
     print(f"--- exit {proc.returncode}")
-    print("--- .mcp.json ---")
-    if (workspace / ".mcp.json").exists():
-        print((workspace / ".mcp.json").read_text())
+    print("--- demo MCP configuration ---")
+    configuration = workspace / ".demo-state" / "mcp.json"
+    if configuration.exists():
+        print(configuration.read_text())
     raise SystemExit(proc.returncode)
 
 

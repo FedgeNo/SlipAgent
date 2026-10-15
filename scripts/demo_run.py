@@ -20,6 +20,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+
+def demo_environment(workspace: Path) -> dict[str, str]:
+    """Keep stub runs independent of real provider credentials and user storage."""
+    prefixes = ("OPENROUTER_", "NVIDIA_", "KILO_", "MISTRAL_", "GEMINI_", "SLIPAGENT_", "EXA_")
+    environment = {name: value for name, value in os.environ.items() if not name.startswith(prefixes)}
+    environment.update({
+        "OPENROUTER_API_KEY": "demo-key",
+        "SLIPAGENT_PROVIDER": "openrouter",
+        "SLIPAGENT_STATE_DIR": str(workspace / ".demo-state"),
+        "SLIPAGENT_NO_DOTENV": "1",
+        "PYTHONPATH": os.pathsep.join([str(ROOT / "src"), *os.environ.get("PYTHONPATH", "").split(os.pathsep)]),
+    })
+    return environment
+
+
 SCRIPT: list[dict[str, object]] = [
     {
         "message": {
@@ -178,12 +193,7 @@ def main() -> None:
     print(f"--- demo workspace: {project}")
     print(f"--- stub OpenRouter on port {port}\n")
 
-    env = {
-        **os.environ,
-        "OPENROUTER_API_KEY": "demo-key",
-        "PYTHONPATH": str(ROOT / "src"),
-        "SLIPAGENT_NO_DOTENV": "1",
-    }
+    env = demo_environment(project)
     try:
         result = subprocess.run(args, env=env, cwd=project, timeout=120)
     finally:

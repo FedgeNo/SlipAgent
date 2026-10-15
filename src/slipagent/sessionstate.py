@@ -112,7 +112,6 @@ class Session:
 
     async def use_api_key(self, key: str) -> None:
         """Swap in a new API key, rebuilding the transport that holds it."""
-        await self.agent.wait_for_compaction()
         replacement = create_client(
             self.client.provider,
             api_key=key,
@@ -122,13 +121,20 @@ class Session:
             transport=self.transport,
             **self.client.replacement_options(),
         )
-        await self.client.aclose()
+        try:
+            self.agent._compactor().reset()
+            await self.agent.wait_for_compaction()
+        except BaseException:
+            await finish_cleanup(asyncio.create_task(replacement.aclose()))
+            raise
+        previous = self.client
         self.client = replacement
         self.agent.client = replacement
         self.api_key = key
         self._catalog = None
         self.free_calls = None
         self.quota_checked_at = None
+        await finish_cleanup(asyncio.create_task(previous.aclose()))
 
     async def select_model(self, model: ModelInfo) -> None:
         """Preflight the candidate before replacing any active provider state."""

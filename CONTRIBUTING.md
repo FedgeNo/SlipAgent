@@ -167,8 +167,10 @@ valid recovery using disposable package copies when modifying this machinery.
   analysis in one record. Older steps use a whole-step summary when it costs
   fewer tokens than the original representation; otherwise they include originals
   and available analysis. Budget the combined record. Use the model allowance,
-  subject to an explicit `--context-tokens` cap. Omit older records before reducing
-  the recent window, whose minimum target is five steps. Reconsider
+  subject to an explicit `--context-tokens` cap. Keep the newest third of selected
+  individual posts full and offer smaller summaries for the older two thirds.
+  Retain eligible grouped narratives while reducing the individual-post window;
+  preserve unseen tool results, using labelled excerpts when necessary. Reconsider
   omitted records on each request so they can return when space becomes available.
 - Summarize each completed step in a separate background request containing its
   prompt, reply, calls, results and thoughts, plus up to 25 preceding steps for

@@ -57,7 +57,7 @@ async def test_thoughts_are_budgeted_and_oversized_turn_is_excerpted():
     assert history.steps[0].reasoning == answer.reasoning
 
 
-async def test_recent_thoughts_survive_summary_selection_but_never_enter_compaction():
+async def test_recent_thoughts_survive_summary_selection_and_remain_compaction_input():
     history = ConversationHistory()
     messages = [Message.system("Guidance")]
     for index in range(5):
@@ -71,7 +71,9 @@ async def test_recent_thoughts_survive_summary_selection_but_never_enter_compact
     records = context_records(view)[:-1]
     assert any(record["representation"] == "compressed" for record in records)
     assert all(record["reasoning"] == f"Thought {record['step_id'] - 1}" for record in records)
-    assert all("Thought" not in step.compaction_input() for step in history.steps)
+    assert [step.compaction_input()["reasoning"] for step in history.steps] == [
+        f"Thought {index}" for index in range(5)
+    ]
 
 
 async def test_agent_passes_mode_to_working_requests():

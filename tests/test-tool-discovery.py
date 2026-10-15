@@ -11,7 +11,7 @@ from slipagent.mcp import MCPManager
 from slipagent.openrouter import OpenRouterClient
 from slipagent.tools import build_default_registry
 from slipagent.tools.base import ToolRegistry
-from slipagent.tools.discovery import CORE_TOOLS, LoadToolsTool, tool_catalog
+from slipagent.tools.discovery import CORE_TOOLS, UNAVAILABLE_BATCH, LoadToolsTool, ToolCatalog, tool_catalog
 from slipagent.types import Message, ToolCall
 from slipagent.workspace import Workspace
 from test_agent import RecordingTool, StubClient, completion
@@ -255,3 +255,22 @@ async def test_reset_clears_loading_and_saved_history_restores_it():
         assert "optional_record" in {spec.name for spec in agent._visible_specs(tools.specs())}
     finally:
         await tools.aclose()
+
+
+@pytest.mark.parametrize("rejected_first", [False, True])
+def test_restoring_tool_use_scopes_rejected_call_ids_to_their_batch(rejected_first):
+    accepted = [
+        Message.assistant(None, [ToolCall("call_1", "optional_record", {"value": "saved"})]),
+        Message.tool_result("call_1", {"tool": "optional_record", "status": "success", "content": "saved"}),
+    ]
+    rejected = [
+        Message.assistant(None, [ToolCall("call_1", "unloaded_record", {})]),
+        Message.tool_result("call_1", {"tool": "unloaded_record", "status": "error",
+                                      "content": UNAVAILABLE_BATCH + "on this request: unloaded_record"}),
+    ]
+    unloaded = OptionalTool()
+    unloaded.name = "unloaded_record"
+    catalog = ToolCatalog()
+    messages = rejected + accepted if rejected_first else accepted + rejected
+    selected = catalog.select([OptionalTool().spec, unloaded.spec], messages)
+    assert selected == {"optional_record"}

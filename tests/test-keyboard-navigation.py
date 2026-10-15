@@ -176,6 +176,20 @@ async def test_click_main_area_focuses_it(ui, tmp_path, view):
     assert terminal.app.layout.current_window is window
 
 
+@pytest.mark.parametrize("inspection", [False, True])
+async def test_context_rows_fit_the_visible_main_area(ui, inspection):
+    terminal, _ = ui
+    terminal.set_context(json.dumps({"messages": [{"role": "user", "content": "word " * 80}]}))
+    terminal.context_visible = True
+    if inspection:
+        terminal.toggle_inspection()
+    render(terminal)
+    info = terminal.context_window.render_info
+    assert info is not None
+    assert all(len("".join(part[1] for part in info.ui_content.get_line(row))) <= info.window_width
+               for row in range(info.ui_content.line_count))
+
+
 @pytest.mark.parametrize("kind", ["file", "directory", "artifact"])
 async def test_feed_links_activate_their_existing_operations(ui, tmp_path, monkeypatch, kind):
     terminal, _ = ui
@@ -386,10 +400,10 @@ async def test_editor_tab_indents_but_other_traversal_keys_leave_editor(ui, tmp_
     assert terminal.app.layout.current_control is not terminal._editor_input.control
     reach(terminal, lambda: selected(terminal)[1] == ("editor-action", "Save File [Ctrl+S]"), Keys.BackTab)
     press(terminal, Keys.Enter)
-    for _ in range(100):
-        if path.read_text() == text:
-            break
-        await asyncio.sleep(.01)
+    await asyncio.sleep(0)
+    save = terminal._editor_panel.saving_task
+    assert save is not None
+    assert await asyncio.wait_for(save, 10)
     assert path.read_text() == text
     reach(terminal, lambda: terminal.app.layout.current_control is terminal.input.control)
     assert terminal.input.text == ""

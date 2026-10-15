@@ -12,7 +12,7 @@ from prompt_toolkit.layout.controls import UIContent, UIControl
 from wcwidth import wrap
 
 from .transcript import TranscriptFile
-from .sources import json_chunks
+from .sources import TextSource, json_chunks
 from .data_text import MessageSections, RenderedContent, RenderedJSON
 
 
@@ -57,7 +57,9 @@ class ContextView:
                 yield "", "Messages — sent order"
                 for index, message in enumerate(value, 1):
                     role = message.get("role", "unknown")
-                    parts = [f"[{index:02}] {role.upper()}\n", message.get("content") or "null"]
+                    content = message.get("content")
+                    parts = [f"[{index:02}] {role.upper()}\n",
+                             content if isinstance(content, (str, TextSource)) else RenderedJSON(content)]
                     extra = {key: item for key, item in message.items() if key not in {"role", "content"}}
                     if extra:
                         parts.extend(["\n", RenderedJSON(extra)])

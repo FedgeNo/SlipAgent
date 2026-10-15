@@ -94,7 +94,10 @@ def apply_edits(text: str, edits: Sequence[tuple[str, str, bool]]) -> tuple[str,
 
 def edit_diff(path: str, before: str, after: str, *, limit: int | None = MAX_DIFF_CHARS) -> str:
     """Bound model/UI feedback; full file contents stay available to read_file."""
-    lines = difflib.unified_diff(before.splitlines(), after.splitlines(), fromfile=path, tofile=path, lineterm="")
+    diff = difflib.unified_diff(before.splitlines(keepends=True), after.splitlines(keepends=True),
+                                fromfile=path, tofile=path)
+    lines = (line.removesuffix("\n") if line.endswith("\n")
+             else line + "\n\\ No newline at end of file" for line in diff)
     if limit is None:
         return "\n".join(lines)
     chunks = []

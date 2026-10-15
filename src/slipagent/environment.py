@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import ConfigError
+from .fileio import open_regular
 from .workspace import Workspace
 
 DEFAULT_LOG_QUOTA_BYTES = 1024 * 1024 * 1024
@@ -44,7 +45,7 @@ class ProjectSettings:
 def load_project_options(workspace: Workspace) -> dict[str, Any]:
     path = workspace.resolve(PROJECT_SETTINGS_PATH)
     try:
-        with path.open("rb") as source:
+        with open_regular(path) as source:
             raw = source.read(16385)
     except FileNotFoundError:
         return {}

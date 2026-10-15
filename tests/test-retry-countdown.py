@@ -74,6 +74,21 @@ async def test_persistent_retries_honor_long_retry_after_and_remain_bounded(monk
         assert not await client.wait_retry(10000, error)
 
 
+@pytest.mark.parametrize("header", ["inf", "Infinity", "-Infinity", "nan", "1e1000"])
+async def test_nonfinite_retry_after_uses_normal_finite_backoff(monkeypatch, header):
+    waits = []
+    async def sleep(delay):
+        waits.append(delay)
+    monkeypatch.setattr("slipagent.api.asyncio.sleep", sleep)
+    monkeypatch.setattr("slipagent.api.random.uniform", lambda low, high: high)
+    async with OpenRouterClient("dummy", transport=httpx.MockTransport(lambda r: httpx.Response(503))) as client:
+        assert client.retry_delay(0, header) == 1
+        error = APIResponseError("limited", 429)
+        error.retry_after = header
+        assert await client.wait_retry(10000, error, persistent=True)
+    assert waits == [60]
+
+
 async def test_stop_interrupts_visible_countdown_and_clears_it():
     notices = []
     stop = asyncio.Event()

@@ -49,7 +49,7 @@ def make_agent(responses, *, include_memory=True, **kwargs):
 
 
 def add_intermediate_posts(agent):
-    """Age a record past the five-call retention target without extra inference fixtures."""
+    """Age a record into older history without extra inference fixtures."""
     agent.extend([Message.assistant("Intermediate response") for _ in range(4)])
 
 

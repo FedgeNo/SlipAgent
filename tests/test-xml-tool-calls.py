@@ -145,7 +145,7 @@ async def test_dots_retries_malformed_xml_before_executing_any_calls(model, stre
         assert len(router.requests) == 3
         correction = router.requests[1]["messages"][0]["content"]
         assert 'Invalid tool-call XML' in correction
-        assert 'No tools were executed and no reply text was displayed' in correction
+        assert 'No tools were executed. Any streamed text was an unaccepted preview.' in correction
         assert any(e.kind == 'retry' for e in events)
         assert all('<tool_calls>' not in e.text for e in events if e.kind in {'assistant_text', 'assistant_delta'})
     finally:

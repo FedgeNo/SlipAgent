@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from .lifecycle import Lifetime, finish_cleanup
+from .fileio import open_regular
 from .tools.base import Tool, ToolResult
 from .tools.shell import kill_and_drain
 from .workspace import Workspace, WorkspaceError
@@ -212,7 +213,7 @@ class LanguageServer:
 def _document(path: Path) -> str:
     if not path.is_file():
         raise LSPError("Navigation requires an existing regular file")
-    with path.open("rb") as source:
+    with open_regular(path) as source:
         raw = source.read(MAX_DOCUMENT_BYTES + 1)
     if len(raw) > MAX_DOCUMENT_BYTES or b"\0" in raw:
         raise LSPError("Navigation requires a UTF-8 text file no larger than 32 MB")

@@ -4,7 +4,8 @@ from slipagent.types import content_text
 
 import pytest
 
-from slipagent.tools.files import EditFileTool
+from slipagent.tools.files import EditFileTool, WriteFileTool
+from slipagent.artifacts import ArtifactStore
 
 
 @pytest.mark.parametrize("restored", [False, True])
@@ -115,3 +116,24 @@ async def test_diagnostic_preserves_long_source_lines(workspace):
     result = await EditFileTool(workspace).invoke({"path": "app.py", "old_string": "value = y", "new_string": "value = z"})
     assert result.is_error
     assert "value = " + "x" * 50000 in result.content
+
+
+@pytest.mark.parametrize("tool", [EditFileTool, WriteFileTool])
+@pytest.mark.parametrize("before,after", [("value", "value\n"), ("value\n", "value")])
+async def test_newline_only_change_retains_a_complete_diff(workspace, tool, before, after):
+    target = workspace.root / "newline.txt"
+    target.write_text(before)
+    store = ArtifactStore(1_000_000)
+    try:
+        arguments = {"path": "newline.txt"}
+        arguments.update({"content": after} if tool is WriteFileTool else {"old_string": before, "new_string": after})
+        result = await tool(workspace, store).invoke(arguments)
+        assert not result.is_error
+        assert target.read_text() == after
+        assert len(store.records) == 1
+        record = store.read(next(iter(store.records)))
+        assert record["kind"] == "diff"
+        assert "-value" in record["output"] and "+value" in record["output"]
+        assert record["output"].count("\\ No newline at end of file") == 1
+    finally:
+        await store.aclose()

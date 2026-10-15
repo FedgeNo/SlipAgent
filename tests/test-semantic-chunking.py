@@ -1,11 +1,21 @@
 """Keep every source character inside a chunk that fits the encoder budget."""
 
 import unittest
+import tempfile
+from pathlib import Path
 
-from slipagent.semantic.indexer import chunk_text
+from slipagent.semantic.indexer import chunk_text, walk_files
 
 
 class TokenChunkingTests(unittest.TestCase):
+    def test_empty_extension_filter_indexes_all_nonhidden_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("source.py", "custom.extension", "extensionless", ".hidden"):
+                (root / name).write_text("text")
+            self.assertEqual({Path(path).name for path in walk_files(directory, index_exts=[])},
+                             {"source.py", "custom.extension", "extensionless"})
+
     def chunks(self, text, **kwargs):
         return chunk_text("source.py", text, token_count=lambda value: len(value) + 2,
                           max_tokens=kwargs.pop("max_tokens", 10), **kwargs)

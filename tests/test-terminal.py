@@ -333,6 +333,28 @@ def test_calls_with_reused_ids_keep_artifacts_in_their_own_step(display, tmp_pat
             ui.close()
 
 
+async def test_reused_call_id_does_not_hide_an_unarchived_later_diff(display, tmp_path):
+    from slipagent.artifacts import ArtifactStore
+
+    sink, _, output, _, _ = display
+    store = ArtifactStore(1_000_000)
+    store.use_directory(tmp_path / "artifacts")
+    store.save("first edit", "first diff", kind="diff", step_id=1, call_id="same")
+    ui = TerminalUI(lambda width: "status", sink, output=output)
+    ui.__dict__["_artifact_store"] = store
+    renderer = Renderer(Style(False), sink, verbose=True)
+    renderer.terminal = ui
+    call = ToolCall("same", "write_file", {"path": "second.txt"})
+    result = "Updated second.txt.\n--- second.txt\n+++ second.txt\n@@ -1 +1 @@\n-old\n+new second"
+    try:
+        renderer.handle(AgentEvent("tool_start", tool_call=call, step=2))
+        renderer.handle(AgentEvent("tool_end", tool_call=call, step=2, result=ToolResult.ok(result)))
+        assert "+new second" in "\n".join(ui._raw_output)
+    finally:
+        ui.close()
+        await store.aclose()
+
+
 async def test_shift_tab_cycles_panels_without_changing_draft(display, tmp_path):
     sequence = "\x1b[Z"
     sink, _, output, _, snapshot = display

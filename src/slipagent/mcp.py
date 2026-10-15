@@ -657,10 +657,10 @@ class MCPClient:
             if "error" in response:
                 raise MCPError(self._describe_error("tools/list", response))
 
-            result = response.get("result") or {}
-            if not isinstance(result, dict):
-                break
-            for entry in result.get("tools") or []:
+            result = response.get("result")
+            if not isinstance(result, dict) or not isinstance(result.get("tools"), list):
+                raise MCPError("tools/list returned a malformed result; expected an object with a tools array")
+            for entry in result["tools"]:
                 if not isinstance(entry, dict):
                     continue
                 name = entry.get("name")
@@ -884,7 +884,7 @@ class MCPManager:
         return registered
 
     async def connect_all(self, *, on_state: Callable[[ServerState], None] | None = None) -> list[ServerState]:
-        """Connect up to four servers concurrently, returning configuration order."""
+        """Connect up to four servers concurrently, returning server-name order."""
         limit = asyncio.Semaphore(4)
 
         async def connect(name: str, spec: ServerSpec) -> ServerState:

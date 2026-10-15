@@ -65,7 +65,7 @@ def summarize(report: dict) -> str:
                   f"The development-selected configuration is `{winner['name']}`. "
                   "The controlled tables below expose other settings' validation outcomes without "
                   "retroactively using those scores to select a different configuration. "
-                  "See the [recorded interpretation](README.md#recorded-retrieval-findings) for the original run's findings.", "",
+                  "See the [recorded interpretation](historical-notes.md#recorded-retrieval-findings) for the original run's findings.", "",
                   "The experimental AST splitter keeps interstitial source as separate chunks, including "
                   "whitespace-only segments. Its results describe that specific implementation and do not "
                   "rule out improved function chunking that attaches gaps to neighboring code while retaining coverage.", "",

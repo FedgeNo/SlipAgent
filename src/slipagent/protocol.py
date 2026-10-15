@@ -749,7 +749,7 @@ def _response_object(text: str, *, tools: list[ToolSpec] | None = None, xml_tool
         else:
             raise ResponseFormatError("Multiple response JSON objects are ambiguous; return one record.")
     if record is None:
-        raise ResponseFormatError("Missing response JSON object with the required compressed fields and task.")
+        raise ResponseFormatError("Missing response JSON object.")
     # IDs must also be unique across separately delimited calls.
     if len({call.id for call in calls}) != len(calls):
         raise ResponseFormatError("Tool IDs must be unique within the response.")

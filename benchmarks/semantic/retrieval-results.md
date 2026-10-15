@@ -26,7 +26,7 @@ Each row below is chosen using development MRR@10, then Hit@5 and Hit@1. Validat
 
 The development-selected combination finds an answer first for 28 of 78 validation queries versus 15 for the baseline, and within five for 61 versus 46. Its first-answer rank improves on 47 queries and worsens on 13.
 
-The development-selected configuration is `q8/lines-512-path/mean/plain/hybrid-25`. The controlled tables below expose other settings' validation outcomes without retroactively using those scores to select a different configuration. See the [recorded interpretation](README.md#recorded-retrieval-findings) for the original run's findings.
+The development-selected configuration is `q8/lines-512-path/mean/plain/hybrid-25`. The controlled tables below expose other settings' validation outcomes without retroactively using those scores to select a different configuration. See the [recorded interpretation](historical-notes.md#recorded-retrieval-findings) for the original run's findings.
 
 The experimental AST splitter keeps interstitial source as separate chunks, including whitespace-only segments. Its results describe that specific implementation and do not rule out improved function chunking that attaches gaps to neighboring code while retaining coverage.
 

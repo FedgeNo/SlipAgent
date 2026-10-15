@@ -19,13 +19,17 @@ class ToolCatalog:
     def select(self, specs: list[ToolSpec], messages: list[Message]) -> set[str]:
         self.available = {spec.name: spec for spec in specs}
         # Ordinary history restores discovery after resume, fork, or rewind.
-        rejected = {message.tool_call_id for message in messages
-                    if message.role == "tool" and isinstance(message.content, dict)
+        # Call IDs are local to one assistant batch, including older sessions
+        # whose executed tools restore loading without a load_tools result.
+        rejected: set[str | None] = set()
+        for message in reversed(messages):
+            if (message.role == "tool" and isinstance(message.content, dict)
                     and message.content.get("status") == "error"
-                    and str(message.content.get("content", "")).startswith(UNAVAILABLE_BATCH)}
-        for message in messages:
+                    and str(message.content.get("content", "")).startswith(UNAVAILABLE_BATCH)):
+                rejected.add(message.tool_call_id)
             if message.role == "assistant":
                 self.loaded.update(call.name for call in message.tool_calls or [] if call.id not in rejected)
+                rejected.clear()
             if (message.role == "tool" and isinstance(message.content, dict)
                     and message.content.get("tool") == "load_tools"):
                 content = message.content.get("content")

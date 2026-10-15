@@ -133,7 +133,7 @@ def walk_files(
             if fname.startswith("."):
                 continue
             ext = os.path.splitext(fname)[1].lower()
-            if ext in exts:
+            if not exts or ext in exts:
                 yield os.path.join(dirpath, fname)
 
 

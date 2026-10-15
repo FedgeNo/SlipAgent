@@ -7,7 +7,6 @@ captured plain-text transcript; this does not exercise interactive redraws.
 from __future__ import annotations
 
 import json
-import os
 import socket
 import subprocess
 import sys
@@ -17,7 +16,7 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-from demo_run import metadata_response, structured_message, summary_response
+from demo_run import demo_environment, metadata_response, structured_message, summary_response
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -105,8 +104,7 @@ def main() -> None:
             capture_output=True,
             text=True,
             timeout=120,
-            env={**os.environ, "OPENROUTER_API_KEY": "sk-or-v1-test",
-                 "PYTHONPATH": str(ROOT / "src"), "NO_COLOR": "1", "SLIPAGENT_NO_DOTENV": "1"},
+            env={**demo_environment(workspace), "NO_COLOR": "1"},
         )
         time.sleep(0.2)
         print(proc.stderr)

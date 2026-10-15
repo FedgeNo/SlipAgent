@@ -67,7 +67,7 @@ The installer compares SHA-256 hashes against `installed-file-hashes.json` in th
 
 Linux and macOS use a symlink. Windows also uses a symlink when permitted, with an executable launcher fallback that does not require elevation. Persistent PATH entries are added to bash, zsh, sh, ksh, or fish configuration on Linux/macOS, or to the Windows user PATH. Open a new terminal when PATH changes; other shells receive instructions to add the directory manually. Use `--dry-run` to inspect the destinations, or `--install-dir`, `--bin-dir`, and `--python` to override them.
 
-The installer replaces recognized SlipAgent launchers and saves a backup; it refuses unrelated commands or nonempty unmanaged installation directories. The permanent working checkout lives at `source` inside the installation directory, with its own `.venv`. Initial copies include application files, uncommitted edits, and Git metadata, but exclude existing virtual environments, caches, and secrets. Updates from another checkout replace the application directories and supplied root files while preserving installed Git metadata, the virtual environment, and configuration. Removed application directory contents are removed during updates too. Existing Git history is retained, so new downloaded files appear as working-tree changes. A failed update can leave changed source files or dependencies; the installer does not roll these back. Older release directories are retained during migration. On Linux/macOS, `current` points to `source`; `installation.json` records the source, interpreter, and launcher on all platforms. Edit the permanent checkout for live changes and normal Git development.
+The installer replaces recognized SlipAgent launchers and saves a backup; it refuses unrelated commands or nonempty unmanaged installation directories. The permanent working checkout lives at `source` inside the installation directory, with its own `.venv`. Initial copies include application files, uncommitted edits, and Git metadata, but exclude existing virtual environments, caches, and secrets. Updates from another checkout replace the application directories and supplied root files while preserving installed Git metadata, the virtual environment, and configuration. Removed application directory contents are removed during updates too. Existing Git history is retained, so new downloaded files appear as working-tree changes. Failed updates restore the previous application and dependencies as described below. Older release directories are retained during migration. On Linux/macOS, `current` points to `source`; `installation.json` records the source, interpreter, and launcher on all platforms. Edit the permanent checkout for live changes and normal Git development.
 
 An existing checkout `.env` is copied to the private user data directory on the first install, with owner-only file permissions on Linux/macOS. Subsequent installs preserve that configuration. Project `.env` files take precedence over the global user-data `.env`; old installation `.env` files remain a compatibility fallback. The installer does not move or delete the original checkout or project sessions.
 
@@ -478,7 +478,8 @@ for you or the agent to correct.
 
 The persistent frame and shared contracts require a restart:
 `runtime.py`, `config.py`, `types.py`, `data_text.py`, `workspace.py`, `tools/base.py`,
-`mcp.py`, `lifecycle.py`, and the package's root `__init__.py`. Changing startup/lifecycle setup
+`mcp.py`, `lifecycle.py`, `resources.py`, `work.py`, `sources.py`, the `semantic/`
+package, and the package's root `__init__.py`. Changing startup/lifecycle setup
 or a constructor does not reinitialize existing persistent objects. Class
 removals and changes to inheritance, slots, or dataclass field layouts also
 require a restart. Use `session.extensions` for additional persistent component
@@ -850,7 +851,9 @@ and model names shorten to fit narrow terminals.
 
 Short notices share the activity area beside **Ready** and remain visible while
 browsing selectors or the context view. Changed event notices flash three times,
-then stay steady until replaced or cleared. Only the notice text flashes; activity
+then stay steady for the remainder of their 30-second lifetime, unless replaced
+or cleared earlier. After expiry, rotating tips and the Commands link return.
+Only the notice text flashes; activity
 indicators, the Commands link, and rotating tips do not flash. Overflowing status
 messages and notices pause briefly, then scroll horizontally in a loop so the
 complete text can be read. Text that fits stays still. When no notice is
@@ -899,9 +902,9 @@ lines use bounded display segments; source line links still target logical lines
 An open file that changes, is replaced, or disappears on disk keeps its snapshot
 and offers **Reload [Ctrl+R]**. Reload failure leaves the snapshot available.
 Notifications and your input draft remain visible. Diffs use distinct
-colors for headers, hunks, additions, and deletions, with old/new line numbers;
-short edit diffs also appear
-in the feed. No editing or saving is enabled in these viewers.
+colors for headers, hunks, additions, and deletions, with old/new line numbers.
+The feed supplies links to saved edit diffs. No editing or saving is enabled in
+these viewers.
 
 ### Built-In Text Editor
 
@@ -909,9 +912,9 @@ File links open the built-in editor at the linked line. An active agent finishes
 its current tool batch first. While the editor is open, the agent makes no new
 working-model requests or tool calls, including read-only tools. Existing managed
 background commands and history compression continue independently. Agent work
-resumes when the editor closes. While queued, the animated status reads
+resumes when the editor closes. Queuing the editor flashes the notification
 **Opening editor after this turn**, with a **Cancel Opening Editor** link beside
-it in place of the status notice. Cancelling releases the queued editor hold so
+it. Cancelling releases the queued editor hold so
 the agent continues working. Read-only viewers open immediately while the
 agent continues working. **Ctrl+S** saves; **Esc** or **Close Text Editor**
 closes, showing **Save**, **Don't Save**, and **Cancel** in the bottom menu when
@@ -1350,8 +1353,10 @@ When native calls are unavailable, requests ask for a JSON object containing
 `response` and `tool_calls`. Response parsing independently detects plain replies,
 JSON envelopes (including complete JSON code fences), legacy summary envelopes,
 tagged JSON calls, and Qwen3-Coder's `<tool_call><function=...><parameter=...>`
-format, plus `<tool_call><answer>text</answer></tool_call>`. Omitted trailing
-XML closing tags are accepted when the provider reports a completed response;
+format, plus `<tool_call><answer>text</answer></tool_call>`. Complete tagged JSON
+may omit its outer closing tag. Answer carriers also tolerate omitted trailing
+tags; executable Qwen calls require their parameter and function closing tags.
+These forms require a provider-completed response;
 incomplete JSON arguments and provider-reported truncation still reject the batch.
 API `tool_calls`, legacy `function_call`, and `tool_use` content blocks
 are also recognized. No per-model response-format record is needed.
@@ -1537,8 +1542,9 @@ Compaction failures show a warning and preserve the originals; they do not
 regenerate or repeat the agent's work. Normal compaction is silent. `/reset`
 cancels outstanding jobs and prevents late results from entering the new
 conversation. Session shutdown cancels remaining jobs; one-shot mode waits for
-its summaries before shutting down. These additional requests use the same API
-key and contribute to quota use, session tokens, and reported cost.
+its summaries before shutting down. These additional requests use their selected
+compression provider's key and contribute to its quota use, session tokens, and
+reported cost.
 
 The model's `recall_history` tool searches captured originals or reads a step
 by ID, returning the complete selected object without character limits or paging.
@@ -1554,7 +1560,7 @@ for larger output. The full
 decoded streams are retained separately within the session log quota and are
 retrieved with `read_command_output`. Timeout results preserve partial output and
 state that effects may be partial. Both history versions are journaled for
-resume by default; `--no-session` keeps them only in memory until reset/exit.
+resume by default; `--no-session` uses temporary files removed on reset/exit.
 The terminal transcript continues to show the full conversation.
 
 Token counts use a UTF-8 size estimate rather than a model-specific tokenizer.
@@ -1630,7 +1636,7 @@ Useful flags:
 | `--python` | Explicit project interpreter, overriding project-file settings and discovery. |
 | `--temperature`, `--max-tokens` | Sampling controls. |
 | `-v, --verbose` | Show full tool output and per-step token usage. |
-| `--provider` | Select `openrouter`, `nvidia`, or `kilo`. |
+| `--provider` | Select `openrouter`, `nvidia`, `kilo`, `mistral`, or `google`. |
 | `--list-models` | Print catalogs for providers with configured API keys and qualified model selectors. |
 | `--api-key` | Override the API key for this process; an environment variable avoids putting it in shell history. |
 | `--base-url` | Override the API base URL, for example for a local test gateway. |

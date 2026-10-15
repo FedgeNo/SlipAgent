@@ -284,7 +284,7 @@ class ExperimentEncoder(ONNXEmbedder):
     """Get mean and CLS from one forward pass over exactly the same weights."""
 
     def __init__(self, model_dir: Path, weights: Path, batch_size: int = 8):
-        super().__init__(model_dir=model_dir, batch_size=batch_size)
+        super().__init__(model_dir=model_dir, batch_size=batch_size, threads=2)
         self.weights = weights
 
     def _files(self) -> dict[str, Path]:

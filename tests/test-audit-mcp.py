@@ -160,3 +160,32 @@ async def test_malformed_tool_schema_is_rejected_during_discovery():
     client._request = response
     with pytest.raises(MCPError, match="schema|Schema"):
         await client.list_tools()
+
+
+@pytest.mark.parametrize("result", [None, [], "tools", {"tools": "wrong"}, {"tools": 3}])
+async def test_malformed_tool_listing_is_reported(result):
+    client = MCPClient(stub_spec())
+    async def response(*args, **kwargs):
+        return {"result": result}
+    client._request = response
+    with pytest.raises(MCPError, match="tools/list"):
+        await client.list_tools()
+
+
+def test_mcp_connected_count_excludes_failed_disconnected_and_unsaved_servers(tmp_path):
+    import io
+    from types import SimpleNamespace
+    from slipagent.cli import Style, _describe_mcp
+    from slipagent.mcp import ServerState, save_servers
+
+    specs = {name: stub_spec(name) for name in ("good", "failed", "stopped")}
+    save_servers(tmp_path, specs)
+    manager = MCPManager(tmp_path)
+    for name, status in (("good", "connected"), ("failed", "error"),
+                         ("stopped", "disconnected"), ("unsaved", "connected")):
+        spec = stub_spec(name)
+        manager.servers[name] = ServerState(spec, MCPClient(spec), status=status)
+    out = io.StringIO()
+    _describe_mcp(SimpleNamespace(mcp=manager), Style(False), out)
+    assert "1/3 configured server(s) connected" in out.getvalue()
+    assert "unsaved: connected" in out.getvalue()

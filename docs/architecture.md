@@ -18,8 +18,9 @@ the workspace having a copy of SlipAgent's own `AGENTS.md`.
 The built-in model instructions and tool descriptions live in the checkout's top-level `prompts/` folder. Wheel builds include that folder as `slipagent/prompts`. `prompts.py` locates the application resources independently of the working project and reads UTF-8 text at use time. `agent.py` renders the main template's workspace and interpreter and refreshes it before each CLI model request, including with live reload disabled. Other dynamic templates use explicit `${name}` substitutions without interpreting inserted data as templates. The reload frame monitors these resources along with Python sources; compatible source reloads preserve their service owners. Missing resources and invalid templates report errors.
 File reads and edits, command-output recovery, background jobs, Git previews,
 and language-server navigation are described in their respective tool definitions.
-All working requests include those contracts in the system's Available Tool
-Definitions section. Native-tool requests also carry the same definitions in
+Working requests include complete contracts for core and loaded tools in the
+system's Available Tool Definitions section; other eligible tools appear in a
+short discovery catalog. Native-tool requests also carry the selected definitions in
 the API tool field required for native calls.
 
 The background-summary prompt is in `prompts/background-summary-prompt.md`. `compaction.py` reads it when building each isolated summary request. Protocol, history, environment, recovery, and tool guidance use the same loader. Tool specs read descriptions and argument-description mappings on each access; argument schemas and behavior remain in Python. See `prompts/README.md` for the editable file map.
@@ -566,7 +567,7 @@ tools run during merging. Originals and individual summaries are never rewritten
 Reset increments the compactor generation and cancels all jobs. Late transport
 results cannot publish summaries, errors, or usage into a new session. Shutdown
 cancels and awaits jobs before closing the client; one-shot completion drains
-its summaries first. Replacing the API key drains jobs before retiring their
+its summaries first. Replacing the API key cancels and drains jobs before retiring their
 client. The shared service survives behavior reloads. Its lazy initialization
 is an explicit migration for sessions created before the service existed.
 
@@ -582,7 +583,7 @@ with `section="tool_calls"`. A batch ID is not session-unique: use
 tool error. The schema and direct `run` path share the allowed original-part
 names; unknown singular or plural selectors are rejected before accessing the
 record. CLI sessions journal these records by default; `--no-session` keeps them
-only in memory until reset/exit. Embedded Agent callers opt in by attaching a
+in temporary files until reset/exit. Embedded Agent callers opt in by attaching a
 `SessionJournal` to registry services.
 
 `TaskMemory` owns original user inputs and their source step references. The latest user input remains available verbatim until new input replaces it. Queued inputs received together share a source step. `/task` displays original prompts, and `/task new` changes the source boundary without deleting history. Session resume reconstructs prompt retention from original messages and ignores legacy model-maintained task snapshots.
@@ -827,7 +828,8 @@ explicitly even if excluded from recursive traversal. Configuration requests are
 answered from explicit settings. Server-originated workspace edits are refused.
 Locations and symlinks follow `Workspace.resolve`: confinement permits the project
 and configured system temp directory, while danger mode permits other paths.
-Hover and location pages are bounded. Errors retire the failed client
+Hover text and locations fit within the incoming message limit; locations from
+the requested offset onward are returned without a separate page-size cap. Errors retire the failed client
 so later explicit calls can start cleanly.
 
 ## Edit Recovery, Checks and Loop Detection
@@ -1011,8 +1013,9 @@ refresh while retaining the context window. Full request contents remain
 inspectable, including message metadata and provider options.
 
 Request accounting retains a scalar token estimate during inference rather
-than a second payload tree. The request callback still receives its isolated
-copy, and exact diagnostics and context snapshots are captured before transport.
+than a second payload tree. Internal request callbacks receive the file-backed
+body; legacy dictionary callbacks materialize an isolated copy. Exact diagnostics
+and context snapshots are captured before transport.
 
 Slash-command definitions live in `commands.py`. Each `Command` descendant
 owns syntax, help, menu insertion text, aliases, execution, and argument-dependent
@@ -1258,10 +1261,10 @@ to the model along with the active generation number.
   A focused menu
   control owns navigation; the input buffer, history, queue, and transcript stay
   intact. It returns the selected value or `None` on Escape, Ctrl-D, or
-  terminal closure. Cancellation restores input focus, and refresh preserves an
-  open menu's selection. `/menu` dispatches complete command strings through the
-  normal handlers, retaining busy-state checks and background execution for
-  read-only network commands during a step.
+  terminal closure. Cancellation restores the invoking region if it is available,
+  and refresh preserves an open menu's selection. `/menu` inserts the selected
+  command into the prompt draft for submission. Submitted commands and prompts
+  share the ordered queue; stop and exit retain their immediate cancellation paths.
   Feed dragging retains a selection. Copying and highlighting share the same
   bounds, including the last selected cell in reading order; a click without a
   drag leaves no text selected. Right-click uses the same selector for

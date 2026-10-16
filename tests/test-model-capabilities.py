@@ -331,7 +331,8 @@ async def test_failed_reselection_retains_cached_working_properties(tmp_path):
 async def test_startup_fetches_model_properties_and_remembers_explicit_choice(tmp_path, monkeypatch, selected):
     from slipagent.config import Config
     params = ["tools", "response_format", "reasoning", "reasoning_effort"]
-    models = [{"id": selected, "supported_parameters": params, "reasoning": {"supported_efforts": ["low", "high"]}}]
+    models = [{"id": selected, "supported_parameters": params, "reasoning": {"supported_efforts": ["low", "high"]},
+               "pricing": {"prompt": "0", "completion": "0"}}]
     requests, gets = [], []
     transport = transport_for(models, {selected: [endpoint(params, context=128000)]}, requests, gets)
     original = OpenRouterClient

@@ -27,6 +27,7 @@ async def test_startup_reports_failed_metadata_and_mcp_outcomes(tmp_path, monkey
     monkeypatch.setattr(RepositoryMap, "snapshot", AsyncMock(return_value=""))
     args = cli.build_parser().parse_args([
         "--workspace", str(tmp_path), "--api-key", "dummy", "--no-session", "--no-reload", "--no-mcp",
+        "--model", "test/manual",
     ])
     session = await cli.build_session(args, defer_startup=True)
     session.renderer.stream = io.StringIO()
@@ -107,6 +108,7 @@ async def test_deferred_startup_overlaps_services_before_context(tmp_path, monke
     monkeypatch.setattr(Agent, "_context_view", preview)
     args = cli.build_parser().parse_args([
         "--workspace", str(tmp_path), "--api-key", "dummy", "--no-session", "--no-reload",
+        "--model", "test/manual",
     ])
     session = await cli.build_session(args, defer_startup=True)
     assert not entered

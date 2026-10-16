@@ -95,7 +95,8 @@ class StubOpenRouter:
                 self._send({"data": [{"id": "stub/one", "context_length": 128000, "supported_parameters": params},
                                      {"id": "stub/two", "context_length": 64000, "supported_parameters": params},
                                      {"id": "stub/model", "context_length": 128000, "supported_parameters": params},
-                                     {"id": DEFAULT_MODEL, "context_length": 128000, "supported_parameters": params}]})
+                                     {"id": DEFAULT_MODEL, "context_length": 128000, "supported_parameters": params,
+                                      "pricing": {"prompt": "0", "completion": "0"}}]})
 
         return Handler
 

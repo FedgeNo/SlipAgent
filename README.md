@@ -110,8 +110,9 @@ source .venv/bin/activate
 python -m pip install -e ".[dev]"
 ```
 
-Create an ignored `.env` file containing `OPENROUTER_API_KEY=your-key`. Start with
-NVIDIA Nemotron 3 Ultra (free), the default model, selected explicitly:
+Create an ignored `.env` file containing `OPENROUTER_API_KEY=your-key`. Run
+`slipagent` to select the highest-ranked eligible free model automatically, or
+select NVIDIA Nemotron 3 Ultra (free) explicitly:
 
 ```bash
 slipagent --model nvidia/nemotron-3-ultra-550b-a55b:free
@@ -136,9 +137,8 @@ explicitly without needing pip inside it. See the
 
 ## Using Free Models
 
-**Use `/optimal on` for ranked automatic selection, or choose a model explicitly.**
-The default remains NVIDIA Nemotron 3 Ultra. Optimal mode selects from known,
-ranked free coding models with configured API keys. General-purpose routers such
+**Optimal mode is enabled by default.** It selects from known, ranked free
+coding models with configured API keys. General-purpose routers such
 as `openrouter/free` and `kilo-auto/free` remain manual choices because their
 underlying model changes.
 A large context window gives the agent room for project instructions, source,
@@ -147,12 +147,14 @@ own harness.
 
 | Example Free Model | OpenRouter Model ID |
 | --- | --- |
-| [NVIDIA Nemotron 3 Ultra (free)](https://openrouter.ai/nvidia/nemotron-3-ultra-550b-a55b:free) (default) | `nvidia/nemotron-3-ultra-550b-a55b:free` |
+| [NVIDIA Nemotron 3 Ultra (free)](https://openrouter.ai/nvidia/nemotron-3-ultra-550b-a55b:free) | `nvidia/nemotron-3-ultra-550b-a55b:free` |
 | [NVIDIA Nemotron 3 Super (free)](https://openrouter.ai/nvidia/nemotron-3-super-120b-a12b:free) | `nvidia/nemotron-3-super-120b-a12b:free` |
 
 ### Optimal Mode
 
-`/optimal on` selects the highest-ranked eligible free model. Rankings are
+Ordinary startup selects the highest-ranked eligible free model. Explicit
+`--model` or `--provider` launch options start in manual mode. `/optimal on`
+enables automatic selection again. Rankings are
 manually reviewed from published coding benchmarks; only one overall rank is
 stored with model metadata. Smaller numbers are better. The same model/version
 shares its rank across providers, and model lists display the rank beside it.
@@ -169,8 +171,10 @@ The replacement remains selected until another failure, manual selection, or
 reset. Both `/optimal on` and `/optimal reset` clear failed coding/compression
 routes and retry from the highest rank. `/optimal off` keeps the current model
 under manual control; `/optimal` reports the state. Successful manual model or
-provider selection also disables optimal mode. Optimal mode is session-only;
-ordinary saved model preferences remain unchanged by automatic fallback.
+provider selection through `/model`, `/models`, or `/provider` also disables
+optimal mode. Opening or cancelling a picker leaves the mode unchanged. Optimal
+mode is session-only; ordinary saved model preferences remain unchanged by
+automatic selection and remain available when launching with `--provider`.
 
 When every eligible model fails, coding stops with an explanation. Another
 prompt cannot reuse an excluded model: use `/optimal reset`, update credentials,
@@ -532,7 +536,7 @@ for the implementation workflow, state ownership, and failure behavior.
 
 ## Configure
 
-Successful `--model` and `/model` selections remember the provider and its model separately in `preferences.json` under `SLIPAGENT_STATE_DIR` (default platform data directory; Linux: `$XDG_DATA_HOME/slipagent` or `~/.local/share/slipagent`). Provider selection uses `--provider`, then `SLIPAGENT_PROVIDER`, the saved provider if its key is present, and finally the first provider with a key (OpenRouter takes precedence). Model selection uses CLI flags first, then the selected provider's exported model variable, its remembered model, `.env`, and its built-in default.
+Successful `--model` and `/model` selections remember the provider and its model separately in `preferences.json` under `SLIPAGENT_STATE_DIR` (default platform data directory; Linux: `$XDG_DATA_HOME/slipagent` or `~/.local/share/slipagent`). Initial provider selection uses `--provider`, then `SLIPAGENT_PROVIDER`, the saved provider if its key is present, and finally the first provider with a key (OpenRouter takes precedence). Initial model selection uses CLI flags first, then the selected provider's exported model variable, its remembered model, `.env`, and its built-in default. Without explicit `--model` or `--provider` flags, optimal mode replaces this initial choice with the best eligible free rank during startup.
 
 The selected provider requires its own API key. In addition to `.env`,
 you can supply it through the process environment:
@@ -1678,7 +1682,7 @@ Useful flags:
 | --- | --- |
 | `-h, --help` | Show all command-line options and examples. |
 | `-p, --prompt` | Supply a one-shot task instead of positional task text. |
-| `-m, --model` | Select and remember a model slug for future launches. |
+| `-m, --model` | Select and remember a model slug; start in manual mode. |
 | `-w, --workspace` | Project root and default path boundary. |
 | `--danger` | Disable workspace path confinement at startup, including unattended one-shot tasks; no confirmation prompt. |
 | `--max-steps` | Cap working model requests per run, including response retries (default 200); background summaries are separate. |
@@ -1691,7 +1695,7 @@ Useful flags:
 | `--python` | Explicit project interpreter, overriding project-file settings and discovery. |
 | `--temperature`, `--max-tokens` | Sampling controls. |
 | `-v, --verbose` | Show full tool output and per-step token usage. |
-| `--provider` | Select `openrouter`, `nvidia`, `kilo`, `mistral`, or `google`. |
+| `--provider` | Select `openrouter`, `nvidia`, `kilo`, `mistral`, or `google`; start in manual mode. |
 | `--list-models` | Print catalogs for providers with configured API keys and qualified model selectors. |
 | `--api-key` | Override the API key for this process; an environment variable avoids putting it in shell history. |
 | `--base-url` | Override the API base URL, for example for a local test gateway. |

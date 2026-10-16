@@ -2,6 +2,7 @@
 
 from importlib import import_module
 from unittest.mock import AsyncMock
+from types import SimpleNamespace
 import json
 
 import httpx
@@ -162,8 +163,10 @@ async def test_reset_clears_both_purposes_and_provider_failures(optimal_session)
             await _handle_command(session, command)
             assert session.agent.model == "first"
             assert not any(routing.failed.values()) and not routing.failed_providers
+        await routing.fallback(APIResponseError("unavailable", status_code=400))
         await _handle_command(session, "/optimal off")
-        assert not routing.enabled and session.agent.model == "first"
+        assert not routing.enabled and session.agent.model == "second"
+        assert routing.failed["working"] == {"openrouter::first"}
     finally:
         await session.client.aclose()
 
@@ -298,3 +301,94 @@ async def test_billed_google_account_is_excluded_from_free_automation(optimal_se
             assert all(m.provider != "google" for m in await session.model_routing().candidates(purpose))
     finally:
         await session.client.aclose()
+
+
+@pytest.mark.parametrize("selection", [None, "openrouter::paid"])
+@pytest.mark.parametrize("command", ["model", "models"])
+async def test_model_pickers_disable_optimal_only_after_selection(optimal_session, monkeypatch, command, selection):
+    from slipagent import cli
+    session, _, _ = optimal_session
+    monkeypatch.setattr(type(session), "catalog", AsyncMock(return_value=session._catalog))
+    try:
+        await session.model_routing().enable()
+        session.renderer.terminal = SimpleNamespace(choose=AsyncMock(return_value=selection))
+        handler = cli._model_command if command == "model" else cli._models_command
+        await handler(session, "", session.renderer.style, session.renderer.stream)
+        assert session.model_routing().enabled is (selection is None)
+        assert session.agent.model == ("first" if selection is None else "paid")
+    finally:
+        session.renderer.terminal = None
+        await session.client.aclose()
+
+
+@pytest.mark.parametrize("explicit", [[], ["--provider", "openrouter"],
+                                       ["--model", "nvidia/nemotron-3-ultra-550b-a55b:free"]])
+async def test_startup_defaults_to_best_rank_unless_explicitly_selected(tmp_path, monkeypatch, explicit):
+    from slipagent import cli
+    from slipagent.config import DEFAULT_MODEL
+    requests = []
+    best = "dots-studio/dots-3-note-preview:free"
+    properties = {"context_length": 1_000_000, "supported_parameters": ["tools", "max_tokens"],
+                  "pricing": {"prompt": "0", "completion": "0"}}
+
+    def handle(request):
+        requests.append(request)
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{**properties, "id": model} for model in (DEFAULT_MODEL, best)]})
+        if request.url.path.endswith("/endpoints"):
+            return httpx.Response(200, json={"data": {"endpoints": [{**properties, "tag": "stub"}]}})
+        return httpx.Response(200, json={"data": {"is_free_tier": True}})
+
+    monkeypatch.setattr(cli, "create_client", lambda provider, **options:
+                        create_client(provider, **options, transport=httpx.MockTransport(handle)))
+    monkeypatch.setattr("slipagent.environment.ProjectEnvironment.snapshot", AsyncMock(return_value={}))
+    monkeypatch.setattr(cli.RepositoryMap, "snapshot", AsyncMock(return_value=""))
+    args = cli.build_parser().parse_args(["--api-key", "dummy", "--workspace", str(tmp_path),
+                                        "--no-mcp", "--no-reload", "--no-session", *explicit])
+    session = await cli.build_session(args)
+    try:
+        assert session.model_routing().enabled is (not explicit)
+        assert session.agent.model == (DEFAULT_MODEL if explicit else best)
+        assert all(request.method == "GET" for request in requests)
+        assert sum(request.url.path.endswith("/models") for request in requests) == 1
+    finally:
+        await cli._shutdown(session)
+
+
+async def test_failed_startup_closes_automatically_selected_provider(tmp_path, monkeypatch):
+    from slipagent import cli, providers, sessionstate
+    from slipagent.config import DEFAULT_MODEL
+    clients = []
+
+    def client(provider, **options):
+        def handle(request):
+            assert request.method == "GET"
+            if provider == "google":
+                return httpx.Response(200, json={"models": [{
+                    "name": "models/gemini-3.8-flash", "supportedGenerationMethods": ["generateContent"],
+                    "inputTokenLimit": 1_000_000, "outputTokenLimit": 32_768,
+                }]})
+            return httpx.Response(200, json={"data": [{"id": DEFAULT_MODEL,
+                "pricing": {"prompt": "0", "completion": "0"}}]})
+
+        result = create_client(provider, **options, transport=httpx.MockTransport(handle))
+        clients.append(result)
+        return result
+
+    def fail(session, module):
+        assert session.client.provider == "google"
+        raise RuntimeError("reload startup failed")
+
+    for module in (cli, providers, sessionstate):
+        monkeypatch.setattr(module, "create_client", client)
+    monkeypatch.setattr(sessionstate, "fetch_catalog", providers.fetch_catalog)
+    monkeypatch.setattr(cli, "RuntimeFrame", fail)
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy-google")
+    monkeypatch.setattr("slipagent.environment.ProjectEnvironment.snapshot", AsyncMock(return_value={}))
+    monkeypatch.setattr(cli.RepositoryMap, "snapshot", AsyncMock(return_value=""))
+    args = cli.build_parser().parse_args(["--api-key", "dummy", "--workspace", str(tmp_path),
+                                        "--no-mcp", "--no-session"])
+    with pytest.raises(RuntimeError, match="reload startup failed"):
+        await cli.build_session(args)
+    assert {client.provider for client in clients} == {"openrouter", "google"}
+    assert all(client._client.is_closed for client in clients)

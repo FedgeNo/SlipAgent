@@ -668,6 +668,11 @@ async def build_session(args: argparse.Namespace, *, defer_startup: bool = False
             app_title=config.app_title,
             mcp=mcp,
         )
+        async def close_selected_client() -> None:
+            if session.client is not client:
+                await session.client.aclose()
+
+        resources.push_async_callback(close_selected_client)
         session.configure_compaction()
         if defer_startup:
             session.extensions["startup"] = lambda: _initialize_session(session, args, config, announce=True)
@@ -682,6 +687,8 @@ async def _initialize_session(session: Session, args: argparse.Namespace, config
     """Overlap independent startup work; build context only after its services settle."""
     renderer, registry, agent = session.renderer, session.registry, session.agent
     model_error: APIError | None = None
+    routing = session.model_routing()
+    routing.enabled = not (args.model or getattr(args, "provider", None))
 
     def notice(text: str) -> None:
         if announce:
@@ -700,8 +707,9 @@ async def _initialize_session(session: Session, args: argparse.Namespace, config
     async def metadata() -> str | None:
         nonlocal model_error
         try:
-            # Each provider fetches its catalog as part of capability discovery.
-            if await session.client.model_capabilities(config.model, refresh=True) is None:
+            if routing.enabled:
+                await routing.candidates("working")
+            elif await session.client.model_capabilities(config.model, refresh=True) is None:
                 raise APIConfigError("The API did not supply capabilities to verify the configured model's compatibility.")
         except APIError as exc:
             model_error = exc
@@ -779,7 +787,9 @@ async def _initialize_session(session: Session, args: argparse.Namespace, config
     if model_error is None:
         notice("Preparing model context…")
         try:
-            preview = asyncio.create_task(agent._context_view(registry.specs(), 0, preview=True))
+            # Selection preflights context after MCP, environment, and restored history settle.
+            preview = asyncio.ensure_future(routing.enable() if routing.enabled else
+                                            agent._context_view(registry.specs(), 0, preview=True))
             try:
                 await asyncio.shield(preview)
             except asyncio.CancelledError:
@@ -2165,7 +2175,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prompt-file", metavar="PATH", help="Read a UTF-8 one-shot prompt verbatim; use - for stdin.")
     parser.add_argument("--json-events", action="store_true",
                         help="One-shot automation: stream JSON Lines events and final status on stdout.")
-    parser.add_argument("-m", "--model", help="Select and remember a model (default: environment, saved choice, then Nemotron Ultra).")
+    parser.add_argument("-m", "--model", help="Select and remember a model in manual mode (default: optimal free-model selection).")
     parser.add_argument("-w", "--workspace", default=None,
                         help="Project root and default path boundary (lifted by --danger). Default: cwd.")
     parser.add_argument("--max-steps", type=int, default=None,
@@ -2179,7 +2189,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Deprecated compatibility option; history now targets the newest third of retained posts in full.")
     parser.add_argument("--python", default=None,
                         help="Project Python interpreter path, overriding .slipagent/project.json and venv discovery.")
-    parser.add_argument("--provider", choices=list(PROVIDERS), help="API provider (or set SLIPAGENT_PROVIDER).")
+    parser.add_argument("--provider", choices=list(PROVIDERS), help="Select an API provider in manual mode (or set SLIPAGENT_PROVIDER for the initial provider).")
     parser.add_argument("--api-key", help="Selected provider API key (or set its API_KEY environment variable).")
     parser.add_argument("--base-url", help="Override the API base URL.")
     parser.add_argument("--list-models", action="store_true",

@@ -296,6 +296,10 @@ are manual choices and do not trigger this notice.
 
 `Session.model_routing` owns optimal mode, purpose-specific route failures,
 provider authentication failures, credential identities, and catalog locking.
+CLI startup enables optimal mode unless `--model` or `--provider` explicitly
+selects manual mode. Fetch candidate catalogs alongside the other startup
+services, then preflight selection after MCP, environment, and history restore
+finish. Startup failure closes any provider client selected during this phase.
 Automatic eligibility requires a configured key, verified free pricing/tier,
 and a known rank. Billed Google accounts are excluded. `/optimal on` and
 `/optimal reset` clear all exclusions and preflight candidates in rank order;

@@ -341,7 +341,7 @@ async def test_startup_detects_protocol_without_an_inference_call(tmp_path, monk
     monkeypatch.setenv("SLIPAGENT_NO_DOTENV", "1")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test")
     monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
-    args = cli.build_parser().parse_args(["--no-mcp", "--no-reload", "-w", str(tmp_path)])
+    args = cli.build_parser().parse_args(["--model", DEFAULT_MODEL, "--no-mcp", "--no-reload", "-w", str(tmp_path)])
     session = await cli.build_session(args)
     try:
         profile = await session.client.model_capabilities(DEFAULT_MODEL)

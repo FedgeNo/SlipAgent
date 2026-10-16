@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
 DEFAULT_TIMEOUT = 180.0
 DEFAULT_MAX_RETRIES = 3
-DEFAULT_TEMPERATURE = 1.0
+DEFAULT_TEMPERATURE: float | None = None
 
 # Statuses worth another attempt: transient upstream and rate-limit conditions.
 RETRYABLE_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
@@ -150,7 +150,7 @@ class APIClient:
         messages: list[Message],
         tools: list[ToolSpec] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
-        temperature: float | None = None,
+        temperature: float | None = DEFAULT_TEMPERATURE,
         max_tokens: int | None = None,
         session_id: str | None = None,
         extra_body: dict[str, Any] | None = None,
@@ -203,9 +203,7 @@ class APIClient:
             from .inference import sampling_defaults
             for name, value in sampling_defaults(model, capabilities).items():
                 payload.setdefault(name, int(value) if name == "top_k" else value)
-            if "temperature" in capabilities.parameters:
-                payload.setdefault("temperature", DEFAULT_TEMPERATURE)
-            else:
+            if "temperature" not in capabilities.parameters:
                 payload.pop("temperature", None)
             try:
                 capabilities.validate_output_limit(max_tokens)

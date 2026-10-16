@@ -459,8 +459,8 @@ class TemperatureCommand(Command):
     name = 'temperature'
     banner = '/temperature [value]'
     help = (
-        CommandHelp('/temperature', 'show the current temperature and model support', '/temperature'),
-        CommandHelp('/temperature <value> set temperature from 0 to 2 when supported (model-specific default)', '', '/temperature '),
+        CommandHelp('/temperature', 'show the explicit temperature or provider default and model support', '/temperature'),
+        CommandHelp('/temperature <value> set working-model temperature from 0 to 2 when supported', '', '/temperature '),
     )
 
     def changes_session(self, argument: str) -> bool:

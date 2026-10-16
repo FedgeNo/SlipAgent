@@ -1741,10 +1741,10 @@ async def _temperature_command(
         return
     if argument:
         session.agent.temperature = value
-    from .inference import sampling_defaults
-    effective = sampling_defaults(session.agent.model, capabilities).get("temperature", DEFAULT_TEMPERATURE) if value is None else value
-    suffix = " (default)" if value is None else ""
-    print(f"  temperature: {effective:g}{suffix}", file=out)
+    if value is None:
+        print("  temperature: provider default", file=out)
+    else:
+        print(f"  temperature: {value:g}", file=out)
 
 
 async def _models_command(
@@ -2181,8 +2181,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-steps", type=int, default=None,
                         help="Cap on model requests per run, including response retries. "
                              "Default: 200.")
-    parser.add_argument("--temperature", type=float, default=None,
-                        help="Sampling temperature (default follows the known model profile, otherwise 1.0, when supported).")
+    parser.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE,
+                        help="Working-model temperature override when supported; omitted by default. Compression always omits it.")
     parser.add_argument("--max-tokens", type=int, default=None,
                         help="Cap on completion tokens per response.")
     parser.add_argument("--context-steps", type=int, default=None,

@@ -132,7 +132,6 @@ async def _merge(owner: StepCompactor, batch: list[HistoryStep], source: dict[st
         async with asyncio.timeout(COMPACTION_TIMEOUT):
             completion = await destination.chat(
                 model=selected, messages=[system, Message.user(source)], tools=None,
-                temperature=.2,
                 max_tokens=allowance if profile is not None and "max_tokens" in profile.parameters else None,
                 extra_body={}, **options,
             )

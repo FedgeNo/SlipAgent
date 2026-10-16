@@ -269,7 +269,7 @@ class StepCompactor:
                 options["single_attempt"] = True
             async with asyncio.timeout(COMPACTION_TIMEOUT):
                 completion = await client.chat(
-                    model=model, messages=messages, tools=None, temperature=.2,
+                    model=model, messages=messages, tools=None,
                     max_tokens=reserve if capabilities is not None and "max_tokens" in capabilities.parameters else None,
                     extra_body={},
                     **options,

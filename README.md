@@ -828,8 +828,8 @@ In the REPL:
 | `/models free` | Select from zero-cost models |
 | `/optimal [on\|off\|reset]` | Show automatic free-model routing; on/reset clears failures and selects the top rank; off keeps the current model under manual control |
 | `/provider <provider>` | Select and remember a free default: OpenRouter/NVIDIA Nemotron 3 Ultra, or Kilo Auto Free; refuse missing models or nonzero/unknown pricing |
-| `/temperature` | Show the effective temperature and whether the selected model supports changing it |
-| `/temperature <value>` | Set the session temperature from 0 to 2; unsupported changes report an error |
+| `/temperature` | Show the explicit temperature or provider default, and whether the selected model supports changing it |
+| `/temperature <value>` | Set the working-model temperature from 0 to 2; unsupported changes report an error |
 | `/key show`, `/key status` | Show the masked current key, spend limit, and reported free quota |
 | `/key` | Enter a different key with hidden input; verify through account metadata when supported |
 | `/key <sk-or-v1-...>` | Use a specific key for this session |
@@ -1350,16 +1350,16 @@ Runtime guidance distinguishes exploratory questions from authorized implementat
 At startup and every model selection, including reselection, SlipAgent refreshes the selected provider's capabilities. OpenRouter uses live endpoint metadata; NVIDIA uses explicit model profiles because its catalog omits those fields. Subsequent calls reuse the profile until another selection. A failed or incompatible selection reports an error and keeps the current provider, model, and conversation.
 Startup model-check failures display a warning and leave the interface available, so users can select another model with `/models` or `/model <slug>`. A model that fails its startup check is not saved as a new preference.
 
-Temperature follows documented defaults for recognized model checkpoints:
-original Qwen3 hybrid models use **0.6**, Nemotron 3.5 Lightning uses **1.0**,
-and other models retain **1.0**. Supported top-p/top-k/min-p defaults are also
-applied for those recognized checkpoints; explicit request values take precedence.
-No unsupported sampling parameter is sent. Use
-`/temperature` to inspect it and `/temperature 0.1` to change it for subsequent
-steps. Unsupported changes display an error and preserve the existing setting;
-requests to unsupported endpoints omit temperature and use the provider default.
-`--temperature` overrides the default at startup. The explicit session setting carries
-across model switches and applies wherever the selected endpoints support it.
+Temperature is omitted unless explicitly set with `/temperature <value>` or
+`--temperature`, leaving each provider to choose its default. `/temperature`
+shows the explicit value or `provider default`. An explicit session setting
+carries across model switches and applies wherever the selected endpoints
+support it. Unsupported changes report an error and preserve that setting;
+requests to unsupported endpoints omit it. Individual-turn and grouped-history
+compression always omit temperature, including when the working model has an override.
+
+Supported top-p/top-k/min-p defaults remain model-specific for original Qwen3
+hybrid checkpoints and Nemotron 3.5 Lightning; explicit request values take precedence.
 
 SlipAgent uses [OpenRouter's native tool-call format](https://openrouter.ai/docs/guides/features/tool-calling)
 when the selected endpoints advertise `tools`. Tool definitions go in the API's
@@ -1712,7 +1712,7 @@ Useful flags:
 | `--planning` / `--no-planning` | Planning is enabled by default. The latest successful plan is injected on subsequent turns and recovered from journaled results on resume. Use `--no-planning` to start with it disabled. |
 | `--tools` | Explicit comma-separated tool allowlist, useful for focused tasks or large MCP installations. History retrieval and enabled planning remain available. Unlisted calls are rejected. |
 | `--python` | Explicit project interpreter, overriding project-file settings and discovery. |
-| `--temperature`, `--max-tokens` | Sampling controls. |
+| `--temperature`, `--max-tokens` | Explicit temperature and output limits; temperature applies only to working-model requests. |
 | `-v, --verbose` | Show full tool output and per-step token usage. |
 | `--provider` | Select `openrouter`, `nvidia`, `kilo`, `mistral`, or `google`; start in manual mode. |
 | `--list-models` | Print catalogs for providers with configured API keys and qualified model selectors. |

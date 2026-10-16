@@ -15,8 +15,8 @@ from test_agent import StubClient, RecordingTool, completion, context_records
 
 
 @pytest.mark.parametrize('parameters,expected', [
-    ({'temperature', 'top_p', 'top_k', 'min_p'}, {'temperature': .6, 'top_p': .95, 'top_k': 20, 'min_p': 0}),
-    ({'temperature'}, {'temperature': .6}),
+    ({'temperature', 'top_p', 'top_k', 'min_p'}, {'top_p': .95, 'top_k': 20, 'min_p': 0}),
+    ({'temperature'}, {}),
     (set(), {}),
 ])
 async def test_sampling_filters_capabilities_and_preserves_overrides(parameters, expected):
@@ -30,6 +30,25 @@ async def test_sampling_filters_capabilities_and_preserves_overrides(parameters,
         assert {k:v for k,v in bodies[0].items() if k in {'temperature','top_p','top_k','min_p'}} == expected
         await client.chat(model='qwen/qwen3-4b', messages=[Message.user('hello')], request_profile=profile, temperature=.8)
         assert bodies[1].get('temperature') == (.8 if 'temperature' in parameters else None)
+
+
+@pytest.mark.parametrize('model', [
+    'dots-studio/dots-3-note-preview:free', 'nvidia/nemotron-3.5-lightning',
+    'nvidia/nemotron-3.5-lightning-30b-a3b', 'other/model',
+])
+async def test_models_omit_temperature_until_explicitly_set(model):
+    bodies = []
+
+    def transport(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={'choices': [{'message': {'role': 'assistant', 'content': 'Done'}}]})
+
+    async with APIClient('dummy', base_url='https://stub.invalid', transport=httpx.MockTransport(transport)) as client:
+        profile = RequestProfile(parameters={'temperature', 'top_p'}, context_length=32000)
+        await client.chat(model=model, messages=[Message.user('hello')], request_profile=profile)
+        await client.chat(model=model, messages=[Message.user('hello')], request_profile=profile, temperature=0)
+    assert 'temperature' not in bodies[0]
+    assert bodies[1]['temperature'] == 0
 
 
 async def test_plan_is_supplied_on_next_turn_restored_and_cleared():

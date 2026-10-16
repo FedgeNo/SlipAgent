@@ -576,8 +576,9 @@ protects the newest tool batch until an accepted working response has received
 it; a fast compactor cannot replace unseen results. No working actions are
 performed by the compactor. It does not emit context-inspector or reasoning
 stream events. Its reported usage contributes to session totals, independently
-of primary step accounting. It uses temperature 0.2 where supported, and the
-selected destination's reasoning/routing settings for each attempt.
+of primary step accounting. Both compactors omit temperature regardless of the
+working model's explicit setting, and use the selected destination's
+reasoning/routing settings for each attempt.
 
 `historymerge.py` schedules a separate narrative over original first-pass
 summaries. It requires 20 completed turns since the last attempt, 20 ready and

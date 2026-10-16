@@ -435,7 +435,8 @@ async def test_summary_uses_frozen_capabilities_and_does_not_overwrite_context_s
         agent._compactor().submit(history.steps[0], client, "test", old, None)
         await agent.wait_for_compaction()
     assert requests[0]["reasoning"]["effort"] == "high"
-    assert requests[0]["provider"]["only"] == ["old"] and requests[0]["temperature"] == .2
+    assert requests[0]["provider"]["only"] == ["old"]
+    assert "temperature" not in requests[0]
     assert not snapshots
     assert len(requests[0]["messages"]) == 2
 

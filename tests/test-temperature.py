@@ -16,7 +16,7 @@ from slipagent.workspace import Workspace
 from test_agent import task_record
 
 
-def transport(requests, *, broken_metadata=False):
+def transport(requests, *, broken_metadata=False, summary_requests=None):
     parameters = {
         "adjustable": ["tools", "response_format", "temperature"],
         "fixed": ["tools", "response_format"],
@@ -36,6 +36,8 @@ def transport(requests, *, broken_metadata=False):
             ]}})
         summary = summary_response(json.loads(request.content))
         if summary is not None:
+            if summary_requests is not None:
+                summary_requests.append(json.loads(request.content))
             return httpx.Response(200, json=summary)
         requests.append(json.loads(request.content))
         record = {
@@ -58,17 +60,21 @@ def session_for(client, tmp_path, model="adjustable"):
 
 
 async def test_default_and_command_change_actual_requests(tmp_path):
-    requests = []
-    async with OpenRouterClient("test", transport=transport(requests)) as client:
+    requests, summaries = [], []
+    async with OpenRouterClient("test", transport=transport(requests, summary_requests=summaries)) as client:
         session = session_for(client, tmp_path)
         await session.agent.run("First task")
         await _handle_command(session, "/temperature")
-        assert "temperature: 1 (default)" in session.renderer.stream.getvalue()
+        assert "temperature: provider default" in session.renderer.stream.getvalue()
         await _handle_command(session, "/temperature 0")
         await session.agent.run("Second task")
         await _handle_command(session, "/temperature 0.1")
         await session.agent.run("Third task")
-    assert [request["temperature"] for request in requests] == [1.0, 0, 0.1]
+        await session.agent.wait_for_compaction()
+    assert "temperature" not in requests[0]
+    assert [request["temperature"] for request in requests[1:]] == [0, 0.1]
+    assert len(summaries) == 3
+    assert all("temperature" not in request for request in summaries)
 
 
 async def test_model_switch_omits_unsupported_temperature_and_retains_setting(tmp_path):
@@ -126,4 +132,4 @@ async def test_temperature_changes_wait_for_idle_but_readout_stays_available(tmp
         assert "Queued /temperature" in session.renderer.stream.getvalue()
         assert session.extensions["deferred_commands"] == ["/temperature 0.5"]
         await _handle_command(session, "/temperature")
-        assert "temperature: 1 (default)" in session.renderer.stream.getvalue()
+        assert "temperature: provider default" in session.renderer.stream.getvalue()

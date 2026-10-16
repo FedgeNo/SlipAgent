@@ -92,6 +92,7 @@ async def test_turn_and_group_compression_share_rotation_and_own_limits(routing)
         assert [body["max_tokens"] for _, body in requests] == [4096, 8192, 4096]
         assert [body["model"] for _, body in requests] == [ULTRA_MODEL, ULTRA_MODEL + ":free", ULTRA_MODEL]
         assert all(not body.get("tools") for _, body in requests)
+        assert all("temperature" not in body for _, body in requests)
         assert getattr(history.steps[20], "historical_summary", None)
     finally:
         await owner.aclose()

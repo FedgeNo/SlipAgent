@@ -940,7 +940,7 @@ class TerminalUI:
         label = re.sub(r"[\x00-\x1f\x7f]", lambda match: f"\\x{ord(match[0]):02x}", str(directory))
         self.write(f"    {label}")
 
-    def write_file_reference(self, value: str, *, line: int = 1) -> None:
+    def write_file_reference(self, value: str, *, line: int = 1, show_line: bool = True) -> None:
         root = self.__dict__.get("_project_directory")
         if root is None:
             return
@@ -953,7 +953,8 @@ class TerminalUI:
         links = self.__dict__.setdefault("_file_links", {})
         links[len(self._raw_output)] = (path, line)
         label = re.sub(r"[\x00-\x1f\x7f]", lambda match: f"\\x{ord(match[0]):02x}", value)
-        self.write(f"    {label}:{line}")
+        location = f":{line}" if show_line else ""
+        self.write(f"    {label}{location}")
 
     def write_suggestion(self, prompt: str) -> None:
         """Display the entire prompt without changing the user's draft."""

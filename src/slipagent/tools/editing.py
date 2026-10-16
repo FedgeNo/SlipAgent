@@ -10,6 +10,7 @@ import difflib
 import heapq
 import re
 from collections.abc import Sequence
+from itertools import zip_longest
 
 MAX_DIFF_CHARS = 32_000_000
 
@@ -89,7 +90,31 @@ def apply_edits(text: str, edits: Sequence[tuple[str, str, bool]]) -> tuple[str,
     updated = "".join(chunks)
     if updated == text:
         raise ValueError("The replacements produce identical content; the file already has that text.")
-    return updated, len(planned), text.count("\n", 0, planned[0][0]) + 1
+    # Compare logical lines lazily so unchanged matching context is skipped
+    # without keeping two more copies of a large file in memory.
+    lines = re.compile(r"[^\r\n]*(?:\r\n?|\n|$)")
+    first_line = 1
+    for first_line, (before, after) in enumerate(zip_longest(lines.finditer(text), lines.finditer(updated)), 1):
+        if before is None or after is None or before.group() != after.group():
+            break
+    return updated, len(planned), first_line
+
+
+def edit_result_line(result: str) -> int | None:
+    """Locate the first change in the new file, including archived edit results."""
+    hunk = re.search(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@[^\n]*\n", result, re.MULTILINE)
+    if hunk is None:
+        return None
+    line = max(1, int(hunk[1]))
+    for row in re.compile(r"[^\n]*(?:\n|$)").finditer(result, hunk.end()):
+        text = row.group()
+        if text.startswith(("-", "+")):
+            return line
+        if text.startswith(" "):
+            line += 1
+        elif not text.startswith("\\ No newline at end of file"):
+            break
+    return None
 
 
 def edit_diff(path: str, before: str, after: str, *, limit: int | None = MAX_DIFF_CHARS) -> str:

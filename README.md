@@ -982,7 +982,10 @@ these viewers.
 
 ### Built-In Text Editor
 
-File links open the built-in editor at the linked line. An active agent finishes
+File links open the built-in editor at the linked line. A completed single
+`edit_file` replacement links to its first changed line, skipping unchanged
+matching context. Multiple replacements show just the filename and open at the
+first change; **View Diff** shows all changes. An active agent finishes
 its current tool batch first. While the editor is open, the agent makes no new
 working-model requests or tool calls, including read-only tools. Existing managed
 background commands and history compression continue independently. Agent work

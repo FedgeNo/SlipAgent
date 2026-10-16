@@ -49,6 +49,7 @@ from .providers import PROVIDERS, active_providers, create_client, provider_clas
 from .model_catalog import coding_models
 from .modelpricing import free_label, model_order, price_label
 from .tools.base import ToolRegistry, ToolResult
+from .tools.editing import edit_result_line
 from .tools import build_default_registry
 from .types import KeyInfo, Message, ModelInfo, ToolCall
 from .workspace import Workspace, WorkspaceError
@@ -365,7 +366,9 @@ class Renderer:
                         self.emit(self.style.red(f"  ✗ {body}"), block=self._model_block, tool=True)
                     else:
                         self.emit(self.style.dim(body), block=self._model_block, tool=True)
-                if saved_diff and self.terminal is not None and restored_call is not None:
+                if restored_call is not None and restored_call.name == "edit_file":
+                    self._edit_file_reference(restored_call, result)
+                elif saved_diff and self.terminal is not None and restored_call is not None:
                     path = restored_call.arguments.get("path")
                     if isinstance(path, str):
                         self.terminal.write_file_reference(path)
@@ -428,7 +431,7 @@ class Renderer:
 
     def _tool_heading(self, call: ToolCall) -> None:
         self.emit(self.style.magenta(f"  ⚙ {call.brief()}"), block=self._model_block, tool=True)
-        if self.terminal is not None:
+        if self.terminal is not None and call.name != "edit_file":
             path = call.arguments.get("path")
             if path is None and call.name == "list_dir":
                 path = "."
@@ -436,6 +439,20 @@ class Renderer:
                 self.terminal.write_directory_reference(path)
                 offset = call.arguments.get("offset", 1)
                 self.terminal.write_file_reference(path, line=offset if isinstance(offset, int) and offset > 0 else 1)
+
+    def _edit_file_reference(self, call: ToolCall, result: ToolResult) -> None:
+        if self.terminal is None or result.is_error:
+            return
+        path = call.arguments.get("path")
+        if not isinstance(path, str):
+            return
+        text = result.text()
+        line = edit_result_line(text)
+        occurrences = re.match(r"Replaced (\d+) occurrence\(s\) in ", text)
+        edits = call.arguments.get("edits")
+        multiple = (occurrences is not None and int(occurrences[1]) > 1
+                    or isinstance(edits, list) and len(edits) > 1)
+        self.terminal.write_file_reference(path, line=line or 1, show_line=line is not None and not multiple)
 
     def handle(self, event: AgentEvent) -> None:
         if event.kind == "context":
@@ -551,7 +568,9 @@ class Renderer:
                 for line in body.splitlines():
                     self.emit(self.style.dim(f"    {line}"), block=self._model_block, tool=True)
             if self.terminal is not None and event.tool_call is not None and not result.is_error:
-                if event.tool_call.name in {"write_file", "edit_file", "edit_hashlines", "copy_path", "move_path"}:
+                if event.tool_call.name == "edit_file":
+                    self._edit_file_reference(event.tool_call, result)
+                elif event.tool_call.name in {"write_file", "edit_hashlines", "copy_path", "move_path"}:
                     for key in ("path", "destination"):
                         target = event.tool_call.arguments.get(key)
                         if isinstance(target, str):

@@ -1326,7 +1326,11 @@ to the model along with the active generation number.
   File-reference, saved-output, and diff links underline and accept mouse events
   only over their labels, excluding indentation and trailing feed space. Saved
   edit diffs stay in the viewer; their links follow file links on the same line,
-  including in restored transcripts. Tool calls and result
+  including in restored transcripts. `edit_file` emits its file link after
+  successful completion, using the first changed new-file line from its retained
+  unified diff. Multiple replacements omit the displayed line number while
+  retaining that first-change target. A result without a recoverable location
+  links to the file without a line label. Tool calls and result
   links stay together; the next non-tool entry supplies or receives a blank line.
   `editor.py` owns file snapshots, bounded pages, changed-page files, and atomic
   publication with disk-signature checks. Each `IndexedText` snapshot serializes

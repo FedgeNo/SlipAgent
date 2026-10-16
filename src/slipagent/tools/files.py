@@ -376,7 +376,7 @@ class EditFileTool(Tool):
         except (OSError, UnicodeError) as exc:
             return ToolResult.error(f"Could not write file: {exc}")
 
-        location = f" at line {first_line}" if first_line else ""
+        location = f" at line {first_line}" if replaced == 1 else ""
         diff = edit_diff(self.workspace.relative(target), text, updated,
                          limit=None if self.__dict__.get("artifacts") is not None else MAX_DIFF_CHARS)
         artifact_notice = _save_diff(self.__dict__.get("artifacts"), f"edit_file {path!r}", diff)

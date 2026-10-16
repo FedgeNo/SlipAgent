@@ -1530,7 +1530,7 @@ async def _shutdown(session: Session) -> None:
 def _mask_key(key: str) -> str:
     if len(key) <= 12:
         return "*" * len(key)
-    return f"{key[:10]}...{key[-4:]}"
+    return f"{key[:10]}…{key[-4:]}"
 
 
 def _price_cell(pricing: dict[str, Any]) -> str:

@@ -66,7 +66,7 @@ class ToolCall:
         """Short human-readable summary used by the CLI event renderer."""
         rendered = json.dumps(self.arguments, separators=(",", ": "))
         if len(rendered) > 120:
-            rendered = rendered[:117] + "..."
+            rendered = rendered[:119] + "…"
         return f"{self.name}({rendered})"
 
 

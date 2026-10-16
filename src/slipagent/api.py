@@ -349,8 +349,10 @@ class APIClient:
             if not isinstance(data, list) or any(not isinstance(entry, dict) for entry in data):
                 raise ValueError("data must be a list of model objects")
             models = [ModelInfo.from_api(entry) for entry in data]
+            from .modelranks import model_rank
             for model in models:
                 model.provider = self.provider
+                model.rank = model_rank(model.provider, model.id)
             self._model_properties = {entry["id"]: entry for entry in data}
             return models
         except (KeyError, ValueError, TypeError, AttributeError, OverflowError) as exc:

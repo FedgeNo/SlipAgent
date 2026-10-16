@@ -287,6 +287,34 @@ Native routes without schemas request plain reply text. JSON-only routes request
 `response` and `tool_calls` on every step, including final answers.
 Selection preflight publishes neither the model nor its profile on failure.
 
+`modelranks.py` stores manually reviewed overall coding ranks; `ModelInfo.rank`
+exposes the same model/version rank across providers. Unknown IDs have no rank.
+Catalog views sort free entries before paid entries and rank known entries
+within that ordering. Catalog discovery announces newly encountered unranked
+free models once, asking the user to update SlipAgent. Generic model routers
+are manual choices and do not trigger this notice.
+
+`Session.model_routing` owns optimal mode, purpose-specific route failures,
+provider authentication failures, credential identities, and catalog locking.
+Automatic eligibility requires a configured key, verified free pricing/tier,
+and a known rank. Billed Google accounts are excluded. `/optimal on` and
+`/optimal reset` clear all exclusions and preflight candidates in rank order;
+manual selection or `/optimal off` disables working fallback. This mode and
+failure state are process-local; automatic selection does not save preferences.
+Credential/endpoint changes clear that provider's exclusions; conversation reset
+clears all exclusions. Rank metadata changes in `types.py` require a restart.
+
+`Agent._step` checks current eligibility before requesting a response. Normal
+request recovery happens first. When a working request exhausts recovery,
+optimal mode excludes its route and selects the next rank, rebuilding context
+with retained task/history and durable failed attempts. A provider HTTP 401
+excludes all its models for both purposes. If no route remains, further prompts
+stay stopped until a reset, credential change, or manual selection. The fallback
+boundary encloses model requests only: accepted tool batches and test failures
+do not trigger it or replay tools. The replacement stays selected; rank alone
+does not move it back to a previously failed model. Stop and request limits still
+take precedence.
+
 `prompts/model-profiles.json` applies exact-model prompt sections, optional
 tool-channel overrides, and a boolean `structured_output` switch at request
 construction. `protocol.model_response_format` supplies the same effective
@@ -509,12 +537,17 @@ After archiving a complete batch, `Agent._archive_step` submits it to
 at most 32 original-step references. Further steps retain deferred request
 metadata on their originals and refill the queue as it drains. Only the active
 request copies its immutable original prompt, response, calls, results, thoughts,
-and up to 25 earlier steps. CLI sessions attach `CompressionProviders`, which
-rotates both compactors through configured providers other than the current
-working provider. Each attempt uses free Nemotron 3 Ultra and its destination's
-own profile; retries advance the shared rotation. The compactor owns and closes
-these separate clients. Without another configured provider, originals remain
-available and a notification reports compression unavailable. Direct embedded
+and up to 25 earlier steps. CLI sessions attach `CompressionProviders` and the
+session-owned `ModelRouting` service. Both compactors use one selection/retry
+loop, rotating through each configured provider's best ranked free model.
+The free working provider is excluded when alternatives exist; a paid working
+provider may also supply a free compression model. A sole provider does both,
+with a notice encouraging more keys. Each attempt uses its destination's own
+profile; every failure advances rotation, including failures during capability
+lookup, context checking, and response validation. Concurrent jobs also avoid
+their own last failed provider when alternatives remain. The compactor owns
+and closes these separate clients. Without an eligible free route, originals
+remain available and a notification reports compression unavailable. Direct embedded
 callers without routing retain their explicitly supplied model/profile.
 The working loop does not wait. A reply without tools is scheduled the same way. The
 compaction request contains exactly two messages: summarization instructions
@@ -540,16 +573,21 @@ it; a fast compactor cannot replace unseen results. No working actions are
 performed by the compactor. It does not emit context-inspector or reasoning
 stream events. Its reported usage contributes to session totals, independently
 of primary step accounting. It uses temperature 0.2 where supported, and the
-frozen profile's reasoning/routing settings even after model reselection.
+selected destination's reasoning/routing settings for each attempt.
 
 `historymerge.py` schedules a separate narrative over original first-pass
 summaries. It requires 20 completed turns since the last attempt, 20 ready and
 unmerged source turns outside the newest third, and 12,000 estimated source
 tokens. A frozen bounded batch must fit the selected provider/model context.
-Only one merge job runs at a time. Both compactors call the same retry method:
-transient transport failures retry persistently, while invalid replies receive
-up to five retries after the initial attempt. Validation stays inside the retry
-loop and publication follows validation. A final failure retains the initial
+Only one merge job runs at a time. Both compactors call `StepCompactor.request`:
+transient transport failures retry persistently with shared API backoff. Other
+failures advance providers and exclude that route for compression; a context
+fit failure excludes it only from this job. Failures are scoped to provider/model,
+except HTTP 401, which excludes the provider for both uses. Failed routes are
+reused only after healthy candidates run out. Stop after more than the greater
+of five or the remaining ranked free candidate count nontransient failures.
+Explicitly unrouted embedded callers retain five invalid-response retries.
+Validation stays inside the retry loop and publication follows validation. A final failure retains the initial
 attempt marker; another merge job requires 20 further turns since that marker.
 Small turns need not cross the size threshold for many
 more turns. One response contains only a narrative `summary`, capped at 12,000
@@ -1357,8 +1395,8 @@ these explanatory guides separately from local operational conventions.
 
 The agent and compactor use the common `RequestProfile` contract, not a provider class or routing format. `ModelCapabilities` selects OpenRouter routes from live metadata. NVIDIA's explicit profiles describe verified hosted models; unsupported catalog entries stay visible without invented capabilities. Compression profiles come from the background destination rather than the working model. Provider request preparation runs before diagnostics so the inspector sees the final body.
 
-`ModelInfo.selector` is `provider::model-id`. Search combines catalogs only for providers with a nonblank environment or session key, preserves duplicate IDs, and reports partial failures. Missing-key providers are not queried or listed. Changes to the active provider set refresh the catalog cache. `Session.select_model` preflights capabilities and context. Same-provider changes preserve pending summaries; provider changes cancel and drain them before closing their client. Originals survive cancellation. Preflight failures close candidate resources and preserve active state. Credentials, URLs, and remembered models are provider-specific. `/key` uses authoritative metadata where available and explicitly reports when verification must wait for inference.
+`ModelInfo.selector` is `provider::model-id`. Search combines catalogs only for providers with a nonblank environment or session key, preserves duplicate IDs, and reports partial failures. Missing-key providers are not queried or listed. Changes to the active provider set refresh the catalog cache. `Session.select_model` preflights capabilities and context. Independent routed summaries continue across working-provider changes; embedded summaries borrowing the working client cancel and drain before it closes. Originals survive cancellation. Preflight failures close candidate resources and preserve active state. Credentials, URLs, and remembered models are provider-specific. `/key` cancels pending compaction, replaces credentials, and clears that provider's routing failures; it uses authoritative metadata where available and explicitly reports when verification must wait for inference.
 
 Provider behavior files participate in the existing reload transaction. Shared state contracts in `types.py`, configuration, package exports, and changes to class inheritance require restart. Adding a provider requires a module, registry entry, documented configuration, and offline wire/selection tests.
 
-Common transport and agent recovery share one retry schedule. Working requests remain `single_attempt=True`, so each attempt consumes exactly one working request. Three retries are silent; subsequent waits update the terminal activity row once per second, clearing it after success, stop, or cancellation. Noninteractive output retains the error and periodic countdown notices. Working recovery stops before an interval exceeds one minute. Both background compactors use the same transient-error schedule with persistent recovery: after the working retry limit, waits continue at the configured ceiling (at most 60 seconds), honoring longer provider `Retry-After` cooldowns. Reset and shutdown cancel these waits. Malformed individual and grouped summaries share a five-retry repair limit. HTTP 200 overload envelopes and SSE errors are retryable; partial tool calls never execute before a complete accepted response.
+Common transport and agent recovery share one retry schedule. Working requests remain `single_attempt=True`, so each attempt consumes exactly one working request. Three retries are silent; subsequent waits update the terminal activity row once per second, clearing it after success, stop, or cancellation. Noninteractive output retains the error and periodic countdown notices. Working recovery stops before an interval exceeds one minute. Both background compactors use the same transient-error schedule with persistent recovery: after the working retry limit, waits continue at the configured ceiling (at most 60 seconds), honoring longer provider `Retry-After` cooldowns. Reset and shutdown cancel these waits. Malformed individual and grouped summaries share the bounded repair budget described above, expanded when needed to cover ranked candidates. HTTP 200 overload envelopes and SSE errors are retryable; partial tool calls never execute before a complete accepted response.

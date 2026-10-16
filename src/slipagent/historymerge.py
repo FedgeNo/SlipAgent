@@ -120,53 +120,42 @@ async def _merge(owner: StepCompactor, batch: list[HistoryStep], source: dict[st
     from .compaction import COMPACTION_TIMEOUT, CompactionBudgetError, decode_summary
     from .context import message_tokens
 
-    try:
+    async def summarize(destination: APIClient, selected: str, profile: RequestProfile | None,
+                        allowance: int | None) -> dict[str, Any]:
         options: dict[str, Any] = {}
-        if isinstance(client, APIClient):
-            options.update(request_profile=capabilities, disable_timeout=True, single_attempt=True)
-        attempt = 0
-        while generation == owner.generation:
-            try:
-                routing = getattr(owner, "routing", None)
-                if routing is not None:
-                    client, model, capabilities, reserve = await routing.select()
-                    options.update(request_profile=capabilities, disable_timeout=True, single_attempt=True)
-                    limit = min(capabilities.context_length, capabilities.max_prompt_tokens or capabilities.context_length) if capabilities else 128_000
-                    limit = model_context_limit(model, capabilities, limit)
-                    if message_tokens([system, Message.user(source)]) + reserve > int(limit * .85):
-                        raise CompactionBudgetError("the grouped summaries exceed the compression provider's context budget")
-                async with asyncio.timeout(COMPACTION_TIMEOUT):
-                    completion = await client.chat(
-                        model=model, messages=[system, Message.user(source)], tools=None,
-                        temperature=.2,
-                        max_tokens=reserve if capabilities is not None and "max_tokens" in capabilities.parameters else None,
-                        extra_body={}, **options,
-                    )
-                if generation != owner.generation:
-                    return
-                owner.on_usage(completion.usage)
-                value = decode_summary(completion)
-                if not isinstance(value, dict) or set(value) != {"summary"}:
-                    raise ValueError("the historical compactor must return only summary")
-                record = {"record_type": "history_step", "representation": "historical_summary",
-                          "step_id": batch[-1].id, "step_ids": [step.id for step in batch],
-                          "sources": [{key: item[key] for key in ("step_id", "tool_calls", "artifacts")}
-                                      for item in source["steps"]],
-                          "compressed_summary": value["summary"], "created_at_step": created_at}
-                validate_historical_record(record, batch[-1].id, created_at)
-                originals = [Message.user(step.context_messages(compressed=True)[0].content) for step in batch]
-                if message_tokens([Message.user(record)]) >= message_tokens(originals):
-                    raise ValueError("the historical narrative did not reduce the supplied summaries")
-                break
-            except Exception as exc:
-                if generation != owner.generation:
-                    return
-                if not await owner.wait_request_retry(client, attempt, exc):
-                    raise
-                attempt += 1
-        else:
-            return
+        if isinstance(destination, APIClient):
+            options.update(request_profile=profile, disable_timeout=True, single_attempt=True)
+        limit = min(profile.context_length, profile.max_prompt_tokens or profile.context_length) if profile else 128_000
+        limit = model_context_limit(selected, profile, limit)
+        if message_tokens([system, Message.user(source)]) + (allowance or 8192) > int(limit * .85):
+            raise CompactionBudgetError("the grouped summaries exceed the compression provider's context budget")
+        async with asyncio.timeout(COMPACTION_TIMEOUT):
+            completion = await destination.chat(
+                model=selected, messages=[system, Message.user(source)], tools=None,
+                temperature=.2,
+                max_tokens=allowance if profile is not None and "max_tokens" in profile.parameters else None,
+                extra_body={}, **options,
+            )
         if generation != owner.generation:
+            return {}
+        owner.on_usage(completion.usage)
+        value = decode_summary(completion)
+        if not isinstance(value, dict) or set(value) != {"summary"}:
+            raise ValueError("the historical compactor must return only summary")
+        record = {"record_type": "history_step", "representation": "historical_summary",
+                  "step_id": batch[-1].id, "step_ids": [step.id for step in batch],
+                  "sources": [{key: item[key] for key in ("step_id", "tool_calls", "artifacts")}
+                              for item in source["steps"]],
+                  "compressed_summary": value["summary"], "created_at_step": created_at}
+        validate_historical_record(record, batch[-1].id, created_at)
+        originals = [Message.user(step.context_messages(compressed=True)[0].content) for step in batch]
+        if message_tokens([Message.user(record)]) >= message_tokens(originals):
+            raise ValueError("the historical narrative did not reduce the supplied summaries")
+        return record
+
+    try:
+        record = await owner.request(summarize, client, model, capabilities, reserve, generation)
+        if generation != owner.generation or record is None:
             return
         setattr(batch[-1], "historical_summary", record)
         if owner.on_step is not None:

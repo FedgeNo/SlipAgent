@@ -136,18 +136,54 @@ explicitly without needing pip inside it. See the
 
 ## Using Free Models
 
-**Choose a model explicitly.** We recommend free coding models with a **1M-token
-context window**, such as NVIDIA Nemotron 3 Ultra and NVIDIA Nemotron 3 Super.
-We do not recommend free-router: automatic selection can route to models
-unsuitable for coding, including classifiers.
+**Use `/optimal on` for ranked automatic selection, or choose a model explicitly.**
+The default remains NVIDIA Nemotron 3 Ultra. Optimal mode selects from known,
+ranked free coding models with configured API keys. General-purpose routers such
+as `openrouter/free` and `kilo-auto/free` remain manual choices because their
+underlying model changes.
 A large context window gives the agent room for project instructions, source,
 tool results, and a long-running conversation as it develops a project or its
 own harness.
 
-| Recommended Model | OpenRouter Model ID |
+| Example Free Model | OpenRouter Model ID |
 | --- | --- |
 | [NVIDIA Nemotron 3 Ultra (free)](https://openrouter.ai/nvidia/nemotron-3-ultra-550b-a55b:free) (default) | `nvidia/nemotron-3-ultra-550b-a55b:free` |
 | [NVIDIA Nemotron 3 Super (free)](https://openrouter.ai/nvidia/nemotron-3-super-120b-a12b:free) | `nvidia/nemotron-3-super-120b-a12b:free` |
+
+### Optimal Mode
+
+`/optimal on` selects the highest-ranked eligible free model. Rankings are
+manually reviewed from published coding benchmarks; only one overall rank is
+stored with model metadata. Smaller numbers are better. The same model/version
+shares its rank across providers, and model lists display the rank beside it.
+Different benchmark harnesses measure different tasks, so this order is a
+coding preference rather than a guarantee of results or availability.
+
+Working requests keep their ordinary retries for transient failures. An
+unusable model, permanent request failure, or exhausted recovery moves coding
+to the next eligible rank. The conversation, original task, failed request
+records, and completed tool results stay intact. Tool/test failures remain
+feedback for the current model. Each automatic selection is announced.
+
+The replacement remains selected until another failure, manual selection, or
+reset. Both `/optimal on` and `/optimal reset` clear failed coding/compression
+routes and retry from the highest rank. `/optimal off` keeps the current model
+under manual control; `/optimal` reports the state. Successful manual model or
+provider selection also disables optimal mode. Optimal mode is session-only;
+ordinary saved model preferences remain unchanged by automatic fallback.
+
+When every eligible model fails, coding stops with an explanation. Another
+prompt cannot reuse an excluded model: use `/optimal reset`, update credentials,
+or select a model manually. Failure exclusions are session-local and clear on
+a new conversation; a credential change clears that provider's exclusions.
+An authentication failure excludes that provider for both coding and compression;
+model-specific failures are tracked separately for those two uses.
+
+New free catalog models without a rank remain manually selectable. SlipAgent
+announces their release and asks you to update SlipAgent for updated rankings.
+Rankings are refreshed with software updates, without model calls or automatic
+benchmark collection at runtime. With `GEMINI_BILLING_TIER=paid`, Google models
+are excluded from automatic free selection because those same IDs are billed.
 
 Provider context limits and free availability can change. Check `/models` for
 live catalog information; selection also fetches endpoint properties and uses
@@ -215,9 +251,8 @@ For Mistral, add `MISTRAL_API_KEY=your-key` to your local `.env`, then run
 `/model mistral::<model-id>` selects one. Mistral's authenticated catalog supplies
 context limits, aliases, and native tool support. Leanstral 1.5.1 is labelled free;
 other prices remain unknown because the catalog does not identify your account's free allowance. Free-mode access
-and quotas are controlled by Mistral. Background compression continues to use
-Nemotron 3 Ultra on configured OpenRouter, NVIDIA, and Kilo providers; Mistral
-is excluded from that rotation. `/provider` switches only to defaults advertised
+and quotas are controlled by Mistral. Its ranked free models participate in
+background compression. `/provider` switches only to defaults advertised
 as free, so select Mistral models explicitly with `/model`, for example
 `/model mistral::labs-leanstral-1-5-1` when available in your account's catalog.
 
@@ -226,7 +261,7 @@ For Google Gemini, add `GEMINI_API_KEY=your-key` to your local `.env`, then run
 `/models google` lists compatible text models with Google's input and output
 limits. Tool calls use SlipAgent's embedded JSON protocol so compressed history
 does not depend on Google's opaque native function-call signatures.
-Gemini is excluded from the Nemotron compression rotation.
+Google's ranked free models participate in background compression on free-tier accounts.
 SlipAgent requests thought summaries from Google's thinking models and displays
 them in the reasoning stream, using the model's default thinking level.
 Leading `<thought>…</thought>` blocks are separated from response content before
@@ -240,7 +275,8 @@ allowance. Responses continue streaming at the provider's speed. Upload
 pacing does not guarantee that Google will accept a single prompt larger than
 its TPM quota; that depends on Google's server-side quota accounting.
 
-Model lists put free models first. The interactive picker uses a green background
+Model lists put free models first, ordered by overall rank, with unranked entries
+after ranked ones. The interactive picker uses a green background
 and a matching `= free` legend on the right. `/models free` includes models with
 a free tier; these retain a `free tier` label because account billing and quotas
 still apply. Unknown prices are shown as `-`.
@@ -767,6 +803,7 @@ In the REPL:
 | `/model <slug>` | Switch model and remember the choice for future launches |
 | `/models [filter]` | Select from the catalog with context and pricing; optionally filter by name |
 | `/models free` | Select from zero-cost models |
+| `/optimal [on\|off\|reset]` | Show automatic free-model routing; on/reset clears failures and selects the top rank; off keeps the current model under manual control |
 | `/provider <provider>` | Select and remember a free default: OpenRouter/NVIDIA Nemotron 3 Ultra, or Kilo Auto Free; refuse missing models or nonzero/unknown pricing |
 | `/temperature` | Show the effective temperature and whether the selected model supports changing it |
 | `/temperature <value>` | Set the session temperature from 0 to 2; unsupported changes report an error |
@@ -1462,7 +1499,7 @@ object, alongside the original fields. Compressed-only records use that same key
 Both originals and their accompanying analysis count toward the context budget;
 the representation comparison above uses the original before adding its summary.
 
-Each background compression attempt has a 20-minute timeout instead of the normal HTTP timeout. Single-turn and multi-turn compression keep retrying rate limits, transient provider errors, and transport failures until recovery or cancellation. They share the working request retry schedule, then continue with waits of up to 60 seconds, honoring longer provider `Retry-After` cooldowns. Both compactors use the same recovery method; malformed replies receive up to five retries after the initial attempt. Retry waits and additional attempts can extend the job beyond 20 minutes. Permanent failures preserve original steps for `recall_history`. Working requests retain their configured timeout and retry limit; reset and shutdown cancel pending summaries.
+Each background compression attempt has a 20-minute timeout instead of the normal HTTP timeout. Single-turn and multi-turn compression keep retrying rate limits, transient provider errors, and transport failures until recovery or cancellation. They share the working request retry schedule, then continue with waits of up to 60 seconds, honoring longer provider `Retry-After` cooldowns. Every retry selects the next available provider. Invalid replies and permanent failures use a bounded retry budget, expanded when needed to try the ranked candidates. Retry waits and additional attempts can extend the job beyond 20 minutes. Exhaustion preserves original steps for `recall_history`. Working requests retain their configured timeout and retry limit; reset and shutdown cancel pending summaries.
 
 Forking, resuming, deleting a session, and finishing a one-shot run give all pending
 compression up to two minutes to finish, including retries. At that deadline,
@@ -1512,22 +1549,27 @@ Oldest contextual records are omitted if needed to fit; the current step remains
 Tool arguments and structured results remain dictionaries or lists internally;
 the complete summary input is serialized once for the model. Complete history
 retrievals return complete objects or arrays without character paging.
-**Both individual-turn compression and grouped-history compression use free
-Nemotron 3 Ultra, independently of the working model.** Compression rotates
-between configured providers other than the currently selected working provider:
-NVIDIA uses `nvidia/nemotron-3-ultra-550b-a55b`; OpenRouter and Kilo use
-`nvidia/nemotron-3-ultra-550b-a55b:free`. For example, when OpenRouter is selected,
-compression alternates between NVIDIA and Kilo. Each attempt, including retries,
-takes the next available provider. Switching the working provider changes which
-provider is excluded. Each compression request uses its destination's own
-capabilities and context/output limits.
+**Both individual-turn and grouped-history compression round-robin through
+the best available ranked free model from each eligible provider.** Every job
+and retry uses one shared rotation, in both normal and optimal modes. Providers
+participate when their own API key and a ranked free model are available:
+OpenRouter, NVIDIA, Kilo, Mistral, and Google. Each attempt uses its destination's
+own capabilities and context/output limits.
 
-Providers need their own configured API keys (`OPENROUTER_API_KEY`,
-`NVIDIA_API_KEY`, or `KILO_API_KEY`); remembered session credentials also count.
-With one alternative provider, all compression uses that provider. With none,
-SlipAgent reports that compression is unavailable and retains originals; it
-does not fall back to the selected provider or a paid model. Background clients
-are separate from the working client and close with the session.
+A free working model's provider is reserved for coding when alternatives exist.
+A paid working model's provider can also supply a separate free compression
+model. Unknown working-model pricing keeps its provider reserved as well.
+If only one provider is available, it handles both coding and compression;
+SlipAgent encourages adding provider keys to improve availability.
+
+Any compression failure sends the retry to another provider when possible.
+Transient failures retain the model's eligibility. Permanent/model-format
+failures exclude that compression model, so its provider contributes the next
+ranked model on a later rotation. A request too large for one model tries another
+without disabling that model for smaller jobs. Failed candidates are reused only
+when no unfailed option remains. If no eligible free route exists, originals
+remain available and SlipAgent reports why compression is unavailable.
+Background clients are separate from the working client and close with the session.
 
 The summarizer returns a JSON object with separate factual `summary` and filtered
 `reasoning_summary` strings, each limited to 6,000 characters. Short steps

@@ -258,6 +258,12 @@ class ModelInfo:
     context_length: int | None = None
     pricing: dict[str, Any] = field(default_factory=dict)
     provider: str = "openrouter"
+    rank: int | None = None
+
+    def __post_init__(self) -> None:
+        from .modelranks import model_rank
+        if self.rank is None:
+            self.rank = model_rank(self.provider, self.id)
 
     @property
     def selector(self) -> str:

@@ -1,6 +1,7 @@
 """Mistral discovery, capabilities, and completion wire compatibility."""
 
 import json
+from importlib import import_module
 
 import httpx
 import pytest
@@ -10,7 +11,6 @@ from slipagent.config import Config
 from slipagent.mistral import MistralClient
 from slipagent.providers import active_providers, fetch_catalog
 from slipagent.types import Message, ToolSpec
-from slipagent.compressionproviders import CompressionProviders, CompressionUnavailableError
 
 
 def catalog():
@@ -83,14 +83,27 @@ async def test_mistral_stream_omits_unsupported_options():
     assert result.message.content == "Hello" and deltas
 
 
-async def test_mistral_activation_does_not_route_ultra_to_mistral():
+async def test_mistral_activation_routes_its_ranked_free_model(tmp_path):
     env = {"MISTRAL_API_KEY": "dummy"}
     assert active_providers(env) == ["mistral"]
     config = Config.from_env(provider="mistral", environ=env)
     assert config.model == "mistral-small-latest" and config.api_key == "dummy"
-    router = CompressionProviders(lambda: "openrouter", lambda: {"mistral": {"api_key": "dummy"}})
-    with pytest.raises(CompressionUnavailableError):
-        await router.select()
+    data = {"data": [{"id": "labs-leanstral-1-5-1", "aliases": ["leanstral-alias"],
+                      "max_context_length": 262144, "capabilities": {"completion_chat": True}}]}
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json=data))
+    async with MistralClient("dummy", transport=transport) as client:
+        session = import_module("test-providers").session_for(client, tmp_path)
+        session.transport = transport
+        session._catalog = await client.list_models()
+        assert session._catalog[0].rank is not None
+        assert session._catalog[1].rank == session._catalog[0].rank
+        session.configure_compaction()
+        router = session.agent._compactor().routing
+        try:
+            destination, model = await router.select(set())
+            assert destination.provider == "mistral" and model.id == "labs-leanstral-1-5-1"
+        finally:
+            await router.aclose()
 
 
 @pytest.mark.parametrize("stream", [True, False])

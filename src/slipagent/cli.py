@@ -1540,13 +1540,15 @@ def _model_label(model: ModelInfo) -> str:
     if price.startswith("$"):
         price += "/Mtok"
     context = f"{model.context_length:,}" if model.context_length else "unknown"
-    return f"{model.selector}{name}  {price}  context: {context}"
+    rank = f"  rank: {model.rank}" if model.rank is not None else ""
+    return f"{model.selector}{name}  {price}  context: {context}{rank}"
 
 
 def _model_table(session: Session, models: list[ModelInfo]) -> str:
     terminal = session.renderer.terminal
     columns = terminal.output.get_size().columns if terminal is not None else shutil.get_terminal_size((80, 24)).columns
-    rows = [[f"{model.provider}::\n{model.id}", f"{model.context_length:,}" if model.context_length else "-", _price_cell(model.pricing)] for model in models]
+    rows = [[f"{model.provider}::\n{model.id}" + (f"\nRank: {model.rank}" if model.rank is not None else ""),
+             f"{model.context_length:,}" if model.context_length else "-", _price_cell(model.pricing)] for model in models]
     headers = ["Model", "Context", "In/Out $/Mtok"]
     context_width = max(len(headers[1]), *(len(row[1]) for row in rows))
     price_width = max(len(headers[2]), *(len(row[2]) for row in rows))

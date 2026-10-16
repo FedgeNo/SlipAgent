@@ -23,6 +23,7 @@ from .work import SessionWork
 
 if TYPE_CHECKING:
     from .cli import Renderer
+    from .modelrouting import ModelRouting
 
 
 @dataclass(slots=True)
@@ -57,12 +58,28 @@ class Session:
         from .compressionproviders import CompressionProviders
         compactor = self.agent._compactor()
         if getattr(compactor, "routing", None) is None:
-            compactor.routing = CompressionProviders(lambda: self.client.provider, self.compression_options)
+            compactor.routing = CompressionProviders(self.model_routing())
+
+    def model_routing(self) -> ModelRouting:
+        from .modelrouting import ModelRouting
+        routing: ModelRouting | None = self.extensions.get("model_routing")
+        if routing is None:
+            routing = ModelRouting(self)
+            self.extensions["model_routing"] = routing
+            self.registry.services["model_fallback"] = routing.fallback
+            self.registry.services["prepare_model_request"] = routing.prepare_working
+            self.registry.services["reset_model_routing"] = routing.reset
+        return routing
 
     def compression_options(self) -> dict[str, dict[str, Any]]:
         """Include remembered session credentials and configured provider endpoints."""
         from .providers import PROVIDERS
         result = dict(self.extensions.get("provider_options", {}))
+        result[self.client.provider] = {
+            "api_key": self.api_key, "base_url": self.base_url, "transport": self.transport,
+            "http_referer": self.http_referer, "app_title": self.app_title,
+            **self.client.replacement_options(),
+        }
         for name in PROVIDERS:
             if name in result or name == self.client.provider:
                 continue
@@ -104,7 +121,11 @@ class Session:
                 raise APIError("; ".join(errors))
             self._catalog = catalog
             self.extensions["catalog_providers"] = names
-        return coding_models(self._catalog)
+        models = coding_models(self._catalog)
+        routing = self.extensions.get("model_routing")
+        if routing is not None:
+            routing.catalog_notice(models)
+        return models
 
     def use_model(self, slug: str) -> None:
         """Switch the model for subsequent steps."""
@@ -134,9 +155,10 @@ class Session:
         self._catalog = None
         self.free_calls = None
         self.quota_checked_at = None
+        self.model_routing().reset(self.client.provider)
         await finish_cleanup(asyncio.create_task(previous.aclose()))
 
-    async def select_model(self, model: ModelInfo) -> None:
+    async def select_model(self, model: ModelInfo, *, automatic: bool = False) -> None:
         """Preflight the candidate before replacing any active provider state."""
         replacement = self.client
         if model.provider != self.client.provider:
@@ -153,8 +175,8 @@ class Session:
                 raise APIConfigError("The API did not supply capabilities to verify this model's compatibility.")
             await self.agent._context_view(self.registry.specs(), 0, capabilities=capabilities, preview=True,
                                            candidate_model=model.id)
-            if replacement is not self.client:
-                # Pending jobs use the old client; originals survive cancellation.
+            if replacement is not self.client and self.agent._compactor().routing is None:
+                # Embedded callers can still use the working client for summaries.
                 self.agent._compactor().reset()
                 await self.agent.wait_for_compaction()
         except BaseException:
@@ -174,6 +196,8 @@ class Session:
         self.api_key = replacement.api_key
         self.base_url = replacement.base_url
         self.use_model(model.id)
+        if not automatic:
+            self.model_routing().enabled = False
         if previous is not replacement:
             self.transport = None
             self.free_calls = None

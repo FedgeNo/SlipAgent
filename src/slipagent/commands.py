@@ -406,6 +406,37 @@ class ModelsCommand(ExclusiveCommand):
         return None
 
 
+class OptimalCommand(ExclusiveCommand):
+    name = 'optimal'
+    banner = '/optimal [on|off|reset]'
+    help = (
+        CommandHelp('/optimal', 'show automatic free-model selection state', '/optimal'),
+        CommandHelp('/optimal on', 'clear failed routes and select the best ranked free model', '/optimal on'),
+        CommandHelp('/optimal reset', 'retry from the top rank and clear coding/compression failures', '/optimal reset'),
+        CommandHelp('/optimal off', 'keep the current model under manual control', '/optimal off'),
+    )
+
+    async def run(self, context: CommandContext, argument: str) -> bool | None:
+        from .api import APIError
+        routing = context.session.model_routing()
+        action = argument.strip().lower()
+        if action in {'on', 'reset'}:
+            try:
+                await routing.enable()
+            except APIError as exc:
+                print(context.style.red(f"  {exc}"), file=context.out)
+        elif action == 'off':
+            routing.enabled = False
+            print("  Optimal off; the current model remains selected.", file=context.out)
+        elif not action:
+            session = context.session
+            print(f"  Optimal {'on' if routing.enabled else 'off'}: "
+                  f"{session.client.provider}::{session.agent.model}", file=context.out)
+        else:
+            print("  usage: /optimal [on|off|reset]", file=context.out)
+        return None
+
+
 class ProviderCommand(ExclusiveCommand):
     name = 'provider'
     help = (
@@ -951,6 +982,7 @@ COMMANDS: tuple[Command, ...] = (
     ToolsCommand(),
     ModelCommand(),
     ModelsCommand(),
+    OptimalCommand(),
     ProviderCommand(),
     TemperatureCommand(),
     KeyCommand(),

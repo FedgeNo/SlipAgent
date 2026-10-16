@@ -37,7 +37,8 @@ class MistralClient(APIClient):
                 if isinstance(alias, str) and alias not in self._model_properties:
                     self._model_properties[alias] = {**properties, "id": alias}
                     result.append(ModelInfo(id=alias, provider=self.provider,
-                                            context_length=model.context_length, pricing=model.pricing))
+                                            context_length=model.context_length, pricing=model.pricing,
+                                            rank=model.rank))
         return result
 
     async def model_capabilities(self, model: str, *, refresh: bool = False,

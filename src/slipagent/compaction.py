@@ -16,8 +16,8 @@ import json
 import re
 from collections import deque
 from itertools import chain
-from collections.abc import Callable
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import Any, TypeVar
 
 from .capabilities import RequestProfile, model_context_limit
 from .context import SUMMARY_MAX_CHARS, CompletedStep, HistoryStep, message_tokens
@@ -26,6 +26,9 @@ from .types import Completion, Message, Usage
 from .compressionproviders import CompressionProviders, CompressionUnavailableError
 from .lifecycle import finish_cleanup
 from .prompts import load_prompt
+from .modelrouting import transient_error
+
+T = TypeVar("T")
 
 COMPACTION_TIMEOUT = 20 * 60
 COMPACTION_RETRIES = 5
@@ -34,7 +37,7 @@ COMPACTION_GRACE_PERIOD = 120
 
 
 class CompactionBudgetError(ValueError):
-    """The step cannot fit the compaction request; another attempt gives the same answer."""
+    """The complete source cannot fit this route's context allowance."""
 
 
 def decode_summary(completion: Completion) -> Any:
@@ -143,40 +146,88 @@ class StepCompactor:
 
     async def _compact(self, step: CompletedStep, source: dict[str, Any], client: APIClient, model: str,
                        capabilities: RequestProfile | None, max_tokens: int | None, generation: int) -> None:
+        async def summarize(destination: APIClient, selected: str, profile: RequestProfile | None,
+                            reserve: int | None) -> None:
+            await self._compact_once(step, {**source, "history": list(source["history"])}, destination,
+                                     selected, profile, reserve, generation)
         try:
-            attempt = 0
-            while True:
-                try:
-                    routing = getattr(self, "routing", None)
-                    if routing is not None:
-                        client, model, capabilities, max_tokens = await routing.select()
-                        self.__dict__.pop("_routing_error", None)
-                    await self._compact_once(step, source, client, model, capabilities, max_tokens, generation)
-                    return
-                except Exception as exc:
-                    if generation != self.generation:
-                        return
-                    if await self.wait_request_retry(client, attempt, exc):
-                        attempt += 1
-                        continue
-                    step.compaction_status = "failed"
-                    step.compaction_error = f"{type(exc).__name__}: {exc}"
-                    if isinstance(exc, CompressionUnavailableError):
-                        if self.__dict__.get("_routing_error") != str(exc):
-                            self.__dict__["_routing_error"] = str(exc)
-                            self.on_error(f"Compression unavailable: {exc}. Original turns remain available through recall_history.")
-                    else:
-                        self.on_error(f"Could not summarize step {step.id}: {exc}. Its full original remains available through recall_history.")
-                    callback = getattr(self, "on_step", None)
-                    if callback is not None:
-                        callback(step)
-                    return
+            await self.request(summarize, client, model, capabilities, max_tokens, generation)
+        except Exception as exc:
+            if generation != self.generation:
+                return
+            step.compaction_status = "failed"
+            step.compaction_error = f"{type(exc).__name__}: {exc}"
+            if isinstance(exc, CompressionUnavailableError):
+                if self.__dict__.get("_routing_error") != str(exc):
+                    self.__dict__["_routing_error"] = str(exc)
+                    self.on_error(f"Compression unavailable: {exc}. Original turns remain available through recall_history.")
+            else:
+                self.on_error(f"Could not summarize step {step.id}: {exc}. Its full original remains available through recall_history.")
+            if self.on_step is not None:
+                self.on_step(step)
         except asyncio.CancelledError:
             step.compaction_status = "cancelled"
             raise
         finally:
             if generation != self.generation and step.compaction_status == "pending":
                 step.compaction_status = "cancelled"
+
+    async def request(self, operation: Callable[[APIClient, str, RequestProfile | None, int | None], Awaitable[T]],
+                      client: APIClient, model: str, capabilities: RequestProfile | None,
+                      max_tokens: int | None, generation: int) -> T | None:
+        """Run turn/group compression through the same selection and retry loop."""
+        attempt = 0
+        repairs = 0
+        excluded: set[str] = set()
+        failed_provider: str | None = None
+        revision = self.routing.models.revision if self.routing is not None else 0
+        while generation == self.generation:
+            routing = self.routing
+            selected = None
+            try:
+                if routing is not None:
+                    if revision != routing.models.revision:
+                        excluded.clear()
+                        failed_provider = None
+                        repairs = 0
+                    client, selected = await routing.select(excluded, failed_provider=failed_provider, revision=revision)
+                    if revision != routing.models.revision:
+                        repairs = 0
+                    revision = routing.models.revision
+                    model = selected.id
+                    capabilities = await client.model_capabilities(model)
+                    if capabilities is None:
+                        raise ValueError(f"{selected.selector} did not provide model capabilities")
+                    max_tokens = min(8192, capabilities.max_completion_tokens or 8192)
+                    self.__dict__.pop("_routing_error", None)
+                return await operation(client, model, capabilities, max_tokens)
+            except Exception as exc:
+                if generation != self.generation:
+                    return None
+                if routing is None:
+                    retry = await self.wait_request_retry(client, attempt, exc)
+                elif isinstance(exc, CompressionUnavailableError) or selected is None:
+                    raise
+                else:
+                    failed_provider = selected.provider
+                    if not transient_error(exc):
+                        excluded.add(selected.selector)
+                        if revision == routing.models.revision and not isinstance(exc, CompactionBudgetError):
+                            routing.models.reject(selected, "compression", exc)
+                        repairs += 1
+                    count = len(await routing.models.candidates("compression", include_failed=True))
+                    if not count or repairs > max(COMPACTION_RETRIES, count):
+                        raise
+                    if transient_error(exc):
+                        retry = await self.wait_request_retry(client, attempt, exc)
+                    else:
+                        # Reuse a failed route only when alternatives run out.
+                        await asyncio.sleep(min(2 ** min(repairs - 1, 5), 30))
+                        retry = True
+                if not retry:
+                    raise
+                attempt += 1
+        return None
 
     async def wait_request_retry(self, client: APIClient, attempt: int, error: Exception) -> bool:
         """Share transport and malformed-reply recovery across both compactors."""

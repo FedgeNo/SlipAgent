@@ -33,5 +33,5 @@ def price_label(pricing: dict[str, Any]) -> str:
     return f"${prompt:.2f}/${completion:.2f}"
 
 
-def model_order(model: ModelInfo) -> tuple[bool, str, str]:
-    return (free_label(model.pricing) is None, model.id, model.provider)
+def model_order(model: ModelInfo) -> tuple[bool, int, str, str]:
+    return (free_label(model.pricing) is None, model.rank or 1_000_000, model.id, model.provider)

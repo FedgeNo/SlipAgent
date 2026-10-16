@@ -18,7 +18,8 @@ from typing import Any
 
 from .events import AgentEvent as AgentEvent, EventKind as EventKind, EventHandler as EventHandler
 from .requests import ContextStepLimit as ContextStepLimit, MAX_MEMORY_ATTEMPTS as MAX_MEMORY_ATTEMPTS
-from .api import APIClient
+from .requests import RequestAccepted, RequestStopped
+from .api import APIClient, APIError
 from .config import DEFAULT_MAX_STEPS, DEFAULT_CONTEXT_STEPS
 from .context import (
     DEFAULT_CONTEXT_LENGTH,
@@ -207,6 +208,9 @@ class Agent:
         if diagnostics is not None:
             diagnostics.clear()
         self._compactor().reset()
+        reset_routing = self.registry.services.get("reset_model_routing")
+        if reset_routing is not None:
+            reset_routing()
         catalog = self.registry.services.get("tool_catalog")
         if catalog is not None:
             catalog.loaded.clear()
@@ -575,31 +579,13 @@ class Agent:
         names = catalog.select(self._filter_specs(self.registry.specs()), self.messages)
         return [spec for spec in filtered if spec.name in names]
 
-    async def _step(self, step: int) -> str | None:
-        """One response and its complete tool batch; behavior reloads between steps."""
-        run_step = self._requests + 1
-        # Run budgets restart; invocation identity follows the archived conversation.
-        step = len(self.history.steps) + 1
-        self._notify_jobs()
-        servers = self.registry.resources.servers
-        if servers is not None:
-            await servers.refresh()
-        specs = self._filter_specs(self.registry.specs())
-        self._emit(AgentEvent(kind="step_start", step=step))
-
-        try:
-            context = await self._queued_context(specs, step)
-        except ContextStopped:
-            return self._stop_notice(step)
-
-        visible_specs = self._visible_specs(specs)
-
+    async def _request_response(self, specs: list[ToolSpec], step: int,
+                                run_step: int) -> tuple[RequestAccepted | RequestStopped, RequestProfile | None, list[ToolSpec]]:
+        from .requests import RequestDriver, RequestHooks, RequestSettings
+        context = await self._queued_context(specs, step)
         capabilities = await self.client.model_capabilities(self.model) if isinstance(self.client, APIClient) else None
         native_tools = self._uses_native_tools(capabilities)
-        from .requests import RequestDriver, RequestHooks, RequestSettings, RequestStopped
-
         self.registry.services["request_failure_recorder"] = self._record_request_failure
-
         driver = RequestDriver(
             self.client, self.registry, self._budget(),
             RequestSettings(self.model, self.temperature, self.max_tokens, self.session_id),
@@ -613,7 +599,44 @@ class Agent:
                 stop_notice=self._stop_notice,
             ),
         )
-        outcome = await driver.run(context, visible_specs, step, run_step, capabilities, native_tools)
+        visible_specs = self._visible_specs(specs)
+        return await driver.run(context, visible_specs, step, run_step, capabilities, native_tools), capabilities, visible_specs
+
+    async def _step(self, step: int) -> str | None:
+        """One response and its complete tool batch; behavior reloads between steps."""
+        prepare_model = self.registry.services.get("prepare_model_request")
+        if prepare_model is not None:
+            await prepare_model()
+        # Run budgets restart; invocation identity follows the archived conversation.
+        step = len(self.history.steps) + 1
+        self._notify_jobs()
+        servers = self.registry.resources.servers
+        if servers is not None:
+            await servers.refresh()
+        specs = self._filter_specs(self.registry.specs())
+        self._emit(AgentEvent(kind="step_start", step=step))
+
+        while True:
+            try:
+                outcome, capabilities, visible_specs = await self._request_response(
+                    specs, len(self.history.steps) + 1, self._requests + 1)
+            except ContextStopped:
+                return self._stop_notice(step)
+            except (APIError, ContextError) as exc:
+                failure: Exception = exc
+            else:
+                if not isinstance(outcome, RequestStopped) or not outcome.loop_stopped:
+                    break
+                failure = ContextError(outcome.text)
+                fallback = self.registry.services.get("model_fallback")
+                if (self.stop_requested or self._requests >= self.max_steps or fallback is None
+                        or not await fallback(failure)):
+                    break
+                continue
+            fallback = self.registry.services.get("model_fallback")
+            if (self.stop_requested or self._requests >= self.max_steps or fallback is None
+                    or not await fallback(failure)):
+                raise failure
         for delivered in ("background_commands", "resume"):
             self.registry.context_notes.pop(delivered, None)
         step = len(self.history.steps) + 1

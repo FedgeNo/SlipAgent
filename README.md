@@ -160,6 +160,10 @@ stored with model metadata. Smaller numbers are better. The same model/version
 shares its rank across providers, and model lists display the rank beside it.
 Different benchmark harnesses measure different tasks, so this order is a
 coding preference rather than a guarantee of results or availability.
+The complete table is in [`src/slipagent/modelranks.py`](src/slipagent/modelranks.py).
+Provider-specific IDs, including Step 5's free promotional route and NVIDIA's
+longer Nemotron IDs, share the underlying model's rank. A rank does not make a
+paid endpoint free: automatic selection still checks that endpoint's pricing.
 
 Working requests keep their ordinary retries for transient failures. An
 unusable model, permanent request failure, or exhausted recovery moves coding
@@ -186,8 +190,11 @@ model-specific failures are tracked separately for those two uses.
 New free catalog models without a rank remain manually selectable. SlipAgent
 announces their release and asks you to update SlipAgent for updated rankings.
 Rankings are refreshed with software updates, without model calls or automatic
-benchmark collection at runtime. With `GEMINI_BILLING_TIER=paid`, Google models
-are excluded from automatic free selection because those same IDs are billed.
+benchmark collection at runtime. The October 15 catalog review covers 65 ranked
+models. SEA-LION 7B Instruct and Zamba2 7B Instruct remain unranked because that
+review found no verifiable coding results for them. With
+`GEMINI_BILLING_TIER=paid`, Google's billed Gemini IDs are excluded from automatic
+free selection; the always-free Gemma 4 models remain eligible.
 
 Provider context limits and free availability can change. Check `/models` for
 live catalog information; selection also fetches endpoint properties and uses
@@ -265,15 +272,16 @@ For Google Gemini, add `GEMINI_API_KEY=your-key` to your local `.env`, then run
 `/models google` lists compatible text models with Google's input and output
 limits. Tool calls use SlipAgent's embedded JSON protocol so compressed history
 does not depend on Google's opaque native function-call signatures.
-Google's ranked free models participate in background compression on free-tier accounts.
+Google's free Gemini tier and always-free Gemma 4 models participate in
+background compression when eligible.
 SlipAgent requests thought summaries from Google's thinking models and displays
 them in the reasoning stream, using the model's default thinking level.
 Leading `<thought>…</thought>` blocks are separated from response content before
 tool-call JSON parsing, including when their tags span streaming chunks.
 Google free-tier model uploads are paced at 200,000 estimated input tokens per
 minute, including retried uploads. Paid-only models upload at full speed.
-Set `GEMINI_BILLING_TIER=paid` for a billed Google account to upload all models
-at full speed; the default is `free`, since the catalog does not report account
+Set `GEMINI_BILLING_TIER=paid` for a billed Google account to upload billed models
+at full speed; always-free Gemma requests retain pacing. The default is `free`, since the catalog does not report account
 billing status. Concurrent paced uploads through the same client share the
 allowance. Responses continue streaming at the provider's speed. Upload
 pacing does not guarantee that Google will accept a single prompt larger than
@@ -287,7 +295,18 @@ still apply. Unknown prices are shown as `-`.
 Search matches every word against the displayed model row; for example,
 `/models google free` shows Google's free-tier models.
 
-NVIDIA's catalog does not publish tool/schema support or context limits. The built-in verified profile covers Nemotron 3 Ultra: native tools, plain replies, a conservative 1,000,000-token context budget, and at most 32,768 output tokens. Other NVIDIA models appear in search but require an explicit capability profile before use. Unknown prices and limits are not shown as free or unlimited. Free hosted availability and rate limits remain provider-controlled.
+NVIDIA's hosted trial catalog is free, including models developed by other
+companies. Its catalog omits tool support and context limits, so
+[`nvidiaprofiles.py`](src/slipagent/nvidiaprofiles.py) supplies reviewed endpoint
+profiles for Step 5, DeepSeek V4.1 Flash, GLM 5.3/Flash, Kimi K2.6, current
+Nemotron models, Muse Glimmer, Gemma 4, DiffusionGemma, Laguna XS 2.1, and
+GPT-OSS 20B. Native tools are used where the endpoint documents them; other
+profiles use embedded tool calls. Gemma endpoints that accept only user and
+assistant roles receive the system instructions at the start of the first user
+message, streamed from the same source files. Remaining NVIDIA entries require
+an explicit capability profile before use; automatic selection skips those
+whose capabilities cannot be established. Free availability and quotas remain
+provider-controlled.
 
 Python callers select the same modules programmatically:
 
@@ -559,7 +578,7 @@ export OPENROUTER_API_KEY="sk-or-..."
 | `MISTRAL_BASE_URL` | `https://api.mistral.ai/v1` | Mistral endpoint override. |
 | `GEMINI_API_KEY` | — | Required for Gemini inference and model discovery. |
 | `GEMINI_MODEL` | `gemini-3.8-flash` | Gemini model ID. |
-| `GEMINI_BILLING_TIER` | `free` | `paid` bypasses free-tier upload pacing for a billed Google account. |
+| `GEMINI_BILLING_TIER` | `free` | `paid` bypasses upload pacing for billed Gemini requests; always-free Gemma requests remain paced. |
 | `GEMINI_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta/openai` | Gemini endpoint override. |
 | `OPENROUTER_API_KEY` | — | Required for OpenRouter inference. |
 | `OPENROUTER_MODEL` | `nvidia/nemotron-3-ultra-550b-a55b:free` | Default model slug. |

@@ -16,8 +16,9 @@ from .upload import PacedRequestBody, UploadPacer
 # https://ai.google.dev/gemini-api/docs/pricing (2026-10-15)
 FREE_TIER_MODELS = {
     "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite",
-    "gemini-3.1-flash-lite", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+    "gemini-3-flash-preview", "gemini-3.1-flash-lite", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
 }
+FREE_MODELS = {"gemma-4-31b-it", "gemma-4-26b-a4b-it"}
 
 
 class GoogleClient(APIClient):
@@ -33,7 +34,7 @@ class GoogleClient(APIClient):
         tier = os.environ.get("GEMINI_BILLING_TIER", "free").strip().lower()
         if tier not in {"free", "paid"}:
             raise APIConfigError("GEMINI_BILLING_TIER must be free or paid.")
-        if tier == "paid" or payload["model"] not in FREE_TIER_MODELS:
+        if payload["model"] not in FREE_MODELS and (tier == "paid" or payload["model"] not in FREE_TIER_MODELS):
             return super().request_body(payload)
         pacer = getattr(self, "_upload_pacer", None)
         if pacer is None:
@@ -64,7 +65,8 @@ class GoogleClient(APIClient):
                 if not isinstance(name, str):
                     raise APIResponseError("Google returned a model without a name.")
                 model = name.removeprefix("models/")
-                if (not model.startswith("gemini-") or "generateContent" not in entry.get("supportedGenerationMethods", [])
+                if ((not model.startswith("gemini-") and model not in FREE_MODELS)
+                        or "generateContent" not in entry.get("supportedGenerationMethods", [])
                         or any(part in model for part in ("image", "audio", "tts", "live", "robotics", "computer-use"))):
                     continue
                 limit = entry.get("inputTokenLimit")
@@ -80,8 +82,8 @@ class GoogleClient(APIClient):
             seen.add(token)
         self._model_properties = properties
         return [ModelInfo(id=model, name=entry.get("displayName"), context_length=entry["context_length"],
-                          provider=self.provider, pricing={"prompt": "unknown", "completion": "unknown",
-                                                          "free_tier": model in FREE_TIER_MODELS})
+                          provider=self.provider, pricing=({"prompt": "0", "completion": "0"} if model in FREE_MODELS
+                              else {"prompt": "unknown", "completion": "unknown", "free_tier": model in FREE_TIER_MODELS}))
                 for model, entry in properties.items()]
 
     async def model_capabilities(self, model: str, *, refresh: bool = False,
@@ -96,10 +98,15 @@ class GoogleClient(APIClient):
             raise APIConfigError(f"Google does not list a compatible chat model {model!r}.")
         # Embedded tool calls fit SlipAgent's compressed history without losing
         # the opaque signatures required to replay Gemini native function calls.
-        profile = RequestProfile(parameters={"max_tokens", "temperature", "top_p", "response_format"},
+        parameters = {"max_tokens", "temperature", "top_p"}
+        response_format = None
+        if not model.startswith("gemma-"):
+            parameters.add("response_format")
+            response_format = "json_object"
+        profile = RequestProfile(parameters=parameters,
                                  context_length=entry["inputTokenLimit"],
                                  max_prompt_tokens=entry["inputTokenLimit"],
-                                 max_completion_tokens=entry["outputTokenLimit"], format="json_object")
+                                 max_completion_tokens=entry["outputTokenLimit"], format=response_format)
         if store:
             self.cache_capabilities(model, profile)
         return profile

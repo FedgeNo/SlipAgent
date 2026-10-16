@@ -106,6 +106,24 @@ async def test_mistral_activation_routes_its_ranked_free_model(tmp_path):
             await router.aclose()
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+async def test_listed_alias_inherits_free_price_and_rank(reverse):
+    from slipagent.modelrouting import eligible_free
+    data = {"data": [
+        {"id": "labs-leanstral-1-5-1", "aliases": ["labs-leanstral-1-5"],
+         "max_context_length": 262144, "capabilities": {"completion_chat": True}},
+        {"id": "labs-leanstral-1-5", "aliases": ["labs-leanstral-1-5-1"],
+         "max_context_length": 262144, "capabilities": {"completion_chat": True}},
+    ]}
+    if reverse:
+        data["data"].reverse()
+    async with MistralClient("dummy", transport=httpx.MockTransport(lambda r: httpx.Response(200, json=data))) as client:
+        models = await client.list_models()
+        assert len(models) == 2
+        assert all(eligible_free(model) and model.rank is not None for model in models)
+        assert models[0].rank == models[1].rank
+
+
 @pytest.mark.parametrize("stream", [True, False])
 async def test_thinking_chunks_and_text_transitions_preserve_reasoning(stream):
     thinking = {"type": "thinking", "thinking": [{"type": "text", "text": "Consider "}]}

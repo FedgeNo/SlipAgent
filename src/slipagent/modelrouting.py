@@ -23,7 +23,8 @@ def transient_error(error: Exception) -> bool:
 
 def eligible_free(model: ModelInfo) -> bool:
     # Google's free tier is account-specific; a paid key bills these same IDs.
-    if model.provider == "google" and os.environ.get("GEMINI_BILLING_TIER", "free").strip().lower() != "free":
+    if (model.provider == "google" and model.pricing.get("free_tier") is True
+            and os.environ.get("GEMINI_BILLING_TIER", "free").strip().lower() != "free"):
         return False
     return free_label(model.pricing) is not None
 

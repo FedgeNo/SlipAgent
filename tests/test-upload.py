@@ -108,7 +108,8 @@ async def test_other_providers_keep_unpaced_uploads():
 
 @pytest.mark.parametrize("tier,model,paced", [("free", "gemini-3.6-flash", True),
     ("free", "gemini-paid-only", False), ("paid", "gemini-3.6-flash", False),
-    ("paid", "gemini-paid-only", False)])
+    ("paid", "gemini-paid-only", False), ("free", "gemma-4-31b-it", True),
+    ("paid", "gemma-4-31b-it", True), ("paid", "gemma-4-26b-a4b-it", True)])
 async def test_google_pacing_only_applies_to_free_requests(tier, model, paced, monkeypatch):
     monkeypatch.setenv("GEMINI_BILLING_TIER", tier)
     waits = []

@@ -99,7 +99,7 @@ async def test_unknown_nvidia_capabilities_are_not_invented():
     async with NvidiaClient("dummy", transport=transport) as client:
         models = await client.list_models()
         assert models[0].context_length is None
-        assert cli._price_cell(models[0].pricing) != "free"
+        assert cli._price_cell(models[0].pricing) == "free"
         with pytest.raises(APIConfigError, match="No verified NVIDIA capability profile"):
             await client.model_capabilities("unknown/model")
 

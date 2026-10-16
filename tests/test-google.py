@@ -55,6 +55,34 @@ async def test_repeated_page_token_rejected():
             await client.list_models()
 
 
+@pytest.mark.parametrize("model", ["gemma-4-31b-it", "gemma-4-26b-a4b-it", "gemini-3-flash-preview"])
+async def test_additional_free_models_are_visible_ranked_and_compatible(model, monkeypatch):
+    from slipagent.modelrouting import eligible_free
+    gemma = model.startswith("gemma-")
+
+    def handle(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"models": [entry(model)]})
+        body = json.loads(request.content)
+        assert ("response_format" in body) == (not gemma)
+        assert "tools" not in body
+        if gemma:
+            assert "extra_body" not in body
+        return httpx.Response(200, json={"choices": [{"message": {"content": "Done"}, "finish_reason": "stop"}]})
+
+    async with GoogleClient("dummy", transport=httpx.MockTransport(handle)) as client:
+        models = await client.list_models()
+        assert len(models) == 1 and models[0].rank is not None
+        assert eligible_free(models[0])
+        monkeypatch.setenv("GEMINI_BILLING_TIER", "paid")
+        assert eligible_free(models[0]) == gemma
+        from slipagent.protocol import model_response_format
+        profile = await client.model_capabilities(model)
+        response_format = model_response_format(model, profile, native_tools=False)
+        await client.chat(model=model, messages=[Message.system("Instructions"), Message.user("Work")],
+                          extra_body={"response_format": response_format} if response_format is not None else {})
+
+
 async def test_compatible_stream():
     def handle(request):
         body = json.loads(request.content)

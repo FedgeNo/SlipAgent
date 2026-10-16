@@ -135,7 +135,7 @@ async def test_glm_53_requests_embedded_calls_and_executes_them(parameters, form
         if "structured_outputs" in parameters:
             assert "tool_calls" in request["response_format"]["json_schema"]["schema"]["required"]
         else:
-            assert request["response_format"] == {"type": "json_object"}
+            assert "response_format" not in request
     await registry.aclose()
 
 

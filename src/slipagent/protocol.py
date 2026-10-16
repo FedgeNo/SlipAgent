@@ -81,7 +81,7 @@ def model_response_format(model: str, capabilities: RequestProfile | None, *,
         return None
     if capabilities is not None and capabilities.format == "json_schema":
         return agent_response_format(native_tools=native_tools)
-    if not native_tools:
+    if not native_tools and (capabilities is None or capabilities.format == "json_object"):
         return {"type": "json_object"}
     return None
 

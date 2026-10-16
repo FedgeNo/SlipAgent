@@ -7,6 +7,8 @@ from typing import Any
 
 from .api import APIClient, APIConfigError
 from .capabilities import RequestProfile
+from .data_text import MessageSections, RenderedContent
+from .nvidiaprofiles import USER_INSTRUCTIONS, builtin_profile
 from .types import ModelInfo
 
 ULTRA_MODEL = "nvidia/nemotron-3-ultra-550b-a55b"
@@ -30,14 +32,7 @@ class NvidiaClient(APIClient):
         if reasoning_budget is not None and (isinstance(reasoning_budget, bool)
                 or not isinstance(reasoning_budget, int) or not -1 <= reasoning_budget <= 32768):
             raise APIConfigError("NVIDIA reasoning_budget must be -1 or 0–32768 tokens.")
-        # Catalog/model card: build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b.
-        # Output limit: docs.api.nvidia.com/nim/reference/nvidia-nemotron-3-ultra-550b-a55b-infer.
-        self.profiles = {ULTRA_MODEL: RequestProfile(
-            parameters={"tools", "tool_choice", "temperature", "max_tokens"},
-            context_length=1_000_000, max_completion_tokens=32768,
-        )}
-        if profiles:
-            self.profiles.update(copy.deepcopy(profiles))
+        self.profiles = copy.deepcopy(profiles or {})
         self.reasoning_effort = reasoning_effort
         self.reasoning_budget = reasoning_budget
         super().__init__(api_key, **options)
@@ -45,13 +40,15 @@ class NvidiaClient(APIClient):
     async def list_models(self) -> list[ModelInfo]:
         models = await super().list_models()
         for model in models:
-            model.pricing = {"prompt": "unknown", "completion": "unknown"}
+            # NVIDIA's hosted API catalog is available through its free trial.
+            # Pricing and endpoint capabilities are separate facts.
+            model.pricing = {"prompt": "0", "completion": "0"}
             profile = self.profiles.get(model.id)
+            if profile is None:
+                profile = builtin_profile(model.id)
             if profile is not None:
                 model.context_length = profile.context_length
                 self._model_properties[model.id]["context_length"] = profile.context_length
-            if model.id == ULTRA_MODEL:
-                model.pricing = {"prompt": "0", "completion": "0"}
         return models
 
     def replacement_options(self) -> dict[str, Any]:
@@ -69,16 +66,32 @@ class NvidiaClient(APIClient):
             await self.list_models()
         if model not in self._model_properties:
             raise APIConfigError(f"NVIDIA does not list model {model!r}.")
-        if model not in self.profiles:
+        profile = self.profiles.get(model)
+        if profile is None:
+            profile = builtin_profile(model)
+        if profile is None:
             raise APIConfigError(f"No verified NVIDIA capability profile for {model!r}. "
                                  "Supply a RequestProfile through NvidiaClient(profiles=...).")
-        profile = copy.deepcopy(self.profiles[model])
+        profile = copy.deepcopy(profile)
         if store:
             self.cache_capabilities(model, profile)
         return profile
 
     def prepare_payload(self, payload: dict[str, Any], profile: RequestProfile | None) -> None:
         payload.pop("session_id", None)
+        if payload.get("model") in USER_INSTRUCTIONS:
+            messages: list[dict[str, Any]] = []
+            for message in payload["messages"]:
+                message = dict(message)
+                if message["role"] == "system":
+                    message["role"] = "user"
+                if messages and message["role"] == messages[-1]["role"] == "user":
+                    messages[-1]["content"] = RenderedContent(MessageSections([
+                        messages[-1]["content"], "\n\n", message["content"],
+                    ]))
+                else:
+                    messages.append(message)
+            payload["messages"] = messages
         if payload.get("model") == ULTRA_MODEL:
             template = {"enable_thinking": self.reasoning_effort != "none"}
             if self.reasoning_effort == "medium":

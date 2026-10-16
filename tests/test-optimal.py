@@ -28,7 +28,32 @@ def test_rank_metadata_is_shared_across_hosts_and_unknowns_stay_unranked():
     hosted = ModelInfo(direct.id + ":free")
     assert direct.rank == hosted.rank and direct.rank is not None
     assert ModelInfo("new/model:free").rank is None
-    assert ModelInfo("gemini-3.8-flash", provider="google").rank == 1
+    assert ModelInfo("gemini-3.8-flash", provider="google").rank == ModelInfo("google/gemini-3.8-flash").rank
+
+
+@pytest.mark.parametrize("model", ["stepfun-ai/step-5-preview", "deepseek-ai/deepseek-v4.1-flash"])
+async def test_optimal_selects_ranked_nvidia_catalog_models_through_preflight(tmp_path, monkeypatch, model):
+    monkeypatch.delenv("OPENROUTER_API_KEY")
+    calls = []
+
+    def handle(request):
+        calls.append(request.method)
+        return httpx.Response(200, json={"data": [
+            {"id": "nvidia/nemotron-3-ultra-550b-a55b"}, {"id": model},
+        ]})
+
+    async with create_client("nvidia", api_key="dummy", transport=httpx.MockTransport(handle)) as client:
+        session = session_for(client, tmp_path)
+        try:
+            await session.model_routing().enable()
+            assert session.agent.model == model
+            assert session.client is client
+            assert session.model_routing().enabled
+            assert not session.model_routing().failed["working"]
+            assert set(calls) == {"GET"}
+            assert f"Optimal selected nvidia::{model}" in session.renderer.stream.getvalue()
+        finally:
+            await session.agent._compactor().aclose()
 
 
 async def test_optimal_reset_retries_best_and_manual_selection_disables(tmp_path, monkeypatch):

@@ -38,6 +38,26 @@ async def test_exact_filenames_and_no_overwrite(workspace):
     assert not (await DeletePathTool(workspace).run("empty")).is_error
 
 
+async def test_move_checks_destination_after_containment_validation(workspace, monkeypatch):
+    from pathlib import Path
+
+    source, destination = workspace.root / "source", workspace.root / "destination"
+    source.write_text("original")
+    is_relative_to = Path.is_relative_to
+
+    def create_destination(path, other):
+        result = is_relative_to(path, other)
+        if path == source and other == destination:
+            destination.write_text("concurrent file")
+        return result
+
+    monkeypatch.setattr(Path, "is_relative_to", create_destination)
+    result = await MovePathTool(workspace).run("source", "destination")
+    assert result.is_error and result.content["changes"] == []
+    assert source.read_text() == "original"
+    assert destination.read_text() == "concurrent file"
+
+
 @pytest.mark.parametrize("tool,args", [
     (CopyPathTool, {"source": ".", "destination": "copy"}),
     (MovePathTool, {"source": ".", "destination": "move"}),

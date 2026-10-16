@@ -121,11 +121,11 @@ class MovePathTool(CopyPathTool):
     def execute(self, changes: list[dict[str, str]], **arguments: Any) -> None:
         source, destination = self.target(arguments["source"]), self.target(arguments["destination"])
         entries = self.entries(source)
-        if destination.exists():
-            raise FileExistsError("Destination already exists; no replacement or directory merging is performed.")
         if destination.is_relative_to(source) or source.is_relative_to(destination):
             raise ValueError("Source and destination cannot contain one another.")
         # Rename keeps a same-filesystem move indivisible; cross-device moves fail.
+        if destination.exists():
+            raise FileExistsError("Destination already exists; no replacement or directory merging is performed.")
         source.rename(destination)
         for entry in entries:
             target = destination / entry.relative_to(source)

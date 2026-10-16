@@ -5,6 +5,7 @@ from slipagent.types import content_text
 from slipagent.types import decode_json_content
 
 import json
+import asyncio
 import os
 import shlex
 import sys
@@ -137,6 +138,46 @@ async def test_fork_preserves_parent_and_continues_in_new_session(tmp_path, meta
         assert parent_path.read_bytes() == original
         assert any(message.content == "New branch prompt" for message in journal.load(journal.session_id)["messages"])
         assert all(message.content != "New branch prompt" for message in journal.load(parent)["messages"])
+    finally:
+        await cli._shutdown(session)
+
+
+@pytest.mark.parametrize("operation", ["fork", "resume", "delete", "one-shot"])
+async def test_session_transition_finishes_after_compaction_grace(tmp_path, metadata_server, monkeypatch, operation):
+    from unittest.mock import AsyncMock
+    from slipagent import cli
+
+    monkeypatch.setattr("slipagent.compaction.COMPACTION_GRACE_PERIOD", .02)
+    monkeypatch.setattr("slipagent.commands.DeleteCommand.confirm", AsyncMock(return_value=True))
+    started = asyncio.Event()
+
+    class PausedSummaryClient(StubClient):
+        async def chat(self, **kwargs):
+            if content_text(kwargs["messages"][0].content).lstrip().startswith("# Summarizing the Previous Turn"):
+                started.set()
+                await asyncio.Event().wait()
+            return await super().chat(**kwargs)
+
+    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    session.agent.client = PausedSummaryClient([completion("Original answer")])
+    session.agent._compactor().routing = None
+    journal = session.registry.resources.journal
+    try:
+        if operation == "one-shot":
+            assert await asyncio.wait_for(cli.run_one_shot(session, "Original request"), 3) == 0
+        else:
+            await session.agent.run("Original request")
+            await asyncio.wait_for(started.wait(), 3)
+            command = "/resume latest" if operation == "resume" else f"/{operation}"
+            await asyncio.wait_for(cli._handle_command(session, command), 3)
+        assert started.is_set()
+        assert not session.agent._compactor().jobs
+        if operation == "delete":
+            assert journal.listing() == []
+        else:
+            saved = journal.load(journal.session_id)
+            assert any(message.content == "Original request" for message in saved["messages"])
+            assert saved["messages"][-1].content == "Original answer"
     finally:
         await cli._shutdown(session)
 

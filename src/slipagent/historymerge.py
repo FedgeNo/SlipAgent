@@ -117,7 +117,7 @@ async def _merge(owner: StepCompactor, batch: list[HistoryStep], source: dict[st
                  capabilities: RequestProfile | None, reserve: int,
                  created_at: int, generation: int) -> None:
     from .api import APIClient
-    from .compaction import decode_summary
+    from .compaction import COMPACTION_TIMEOUT, CompactionBudgetError, decode_summary
     from .context import message_tokens
 
     try:
@@ -134,14 +134,29 @@ async def _merge(owner: StepCompactor, batch: list[HistoryStep], source: dict[st
                     limit = min(capabilities.context_length, capabilities.max_prompt_tokens or capabilities.context_length) if capabilities else 128_000
                     limit = model_context_limit(model, capabilities, limit)
                     if message_tokens([system, Message.user(source)]) + reserve > int(limit * .85):
-                        raise ValueError("the grouped summaries exceed the compression provider's context budget")
-                async with asyncio.timeout(20 * 60):
+                        raise CompactionBudgetError("the grouped summaries exceed the compression provider's context budget")
+                async with asyncio.timeout(COMPACTION_TIMEOUT):
                     completion = await client.chat(
                         model=model, messages=[system, Message.user(source)], tools=None,
                         temperature=.2,
                         max_tokens=reserve if capabilities is not None and "max_tokens" in capabilities.parameters else None,
                         extra_body={}, **options,
                     )
+                if generation != owner.generation:
+                    return
+                owner.on_usage(completion.usage)
+                value = decode_summary(completion)
+                if not isinstance(value, dict) or set(value) != {"summary"}:
+                    raise ValueError("the historical compactor must return only summary")
+                record = {"record_type": "history_step", "representation": "historical_summary",
+                          "step_id": batch[-1].id, "step_ids": [step.id for step in batch],
+                          "sources": [{key: item[key] for key in ("step_id", "tool_calls", "artifacts")}
+                                      for item in source["steps"]],
+                          "compressed_summary": value["summary"], "created_at_step": created_at}
+                validate_historical_record(record, batch[-1].id, created_at)
+                originals = [Message.user(step.context_messages(compressed=True)[0].content) for step in batch]
+                if message_tokens([Message.user(record)]) >= message_tokens(originals):
+                    raise ValueError("the historical narrative did not reduce the supplied summaries")
                 break
             except Exception as exc:
                 if generation != owner.generation:
@@ -153,19 +168,6 @@ async def _merge(owner: StepCompactor, batch: list[HistoryStep], source: dict[st
             return
         if generation != owner.generation:
             return
-        owner.on_usage(completion.usage)
-        value = decode_summary(completion)
-        if not isinstance(value, dict) or set(value) != {"summary"}:
-            raise ValueError("the historical compactor must return only summary")
-        record = {"record_type": "history_step", "representation": "historical_summary",
-                  "step_id": batch[-1].id, "step_ids": [step.id for step in batch],
-                  "sources": [{key: item[key] for key in ("step_id", "tool_calls", "artifacts")}
-                              for item in source["steps"]],
-                  "compressed_summary": value["summary"], "created_at_step": created_at}
-        validate_historical_record(record, batch[-1].id, created_at)
-        originals = [Message.user(step.context_messages(compressed=True)[0].content) for step in batch]
-        if message_tokens([Message.user(record)]) >= message_tokens(originals):
-            raise ValueError("the historical narrative did not reduce the supplied summaries")
         setattr(batch[-1], "historical_summary", record)
         if owner.on_step is not None:
             owner.on_step(batch[-1])  # type: ignore[arg-type]

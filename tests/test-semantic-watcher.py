@@ -12,7 +12,7 @@ from unittest.mock import patch
 from watchdog.events import FileModifiedEvent
 
 from slipagent.semantic import IndexWatcher, Searcher, Store
-from slipagent.semantic.search import read_regular
+from slipagent.fileio import open_regular
 
 
 class Encoder:
@@ -63,10 +63,10 @@ class TargetedTests(unittest.TestCase):
         self.source.write_text("updated\n")
         def read(path):
             self.assertEqual(path, self.source)
-            return read_regular(path)
+            return open_regular(path)
 
         with patch("slipagent.semantic.search.walk_files", side_effect=AssertionError("full traversal")), \
-                patch("slipagent.semantic.search.read_regular", side_effect=read) as checked_read:
+                patch("slipagent.semantic.snapshot.open_regular", side_effect=read) as checked_read:
             self.assertEqual(self.update("a.py"), 1)
         checked_read.assert_called_once_with(self.source)
         self.assertEqual(len(self.encoder.batches), 1)
@@ -110,7 +110,7 @@ class TargetedTests(unittest.TestCase):
         self.assertEqual(set(self.store.file_records()), {str(self.source)})
 
     def test_outside_parent_event_does_not_read_tracked_files(self):
-        with patch("slipagent.semantic.search.read_regular", side_effect=AssertionError("outside event read source")):
+        with patch("slipagent.semantic.snapshot.open_regular", side_effect=AssertionError("outside event read source")):
             self.assertEqual(self.update(self.root), 0)
 
     def test_directory_replaced_with_external_symlink_removes_stale_descendants(self):
@@ -123,7 +123,7 @@ class TargetedTests(unittest.TestCase):
         outside.mkdir()
         (outside / "nested.py").write_text("secret\n")
         folder.symlink_to(outside, target_is_directory=True)
-        with patch("slipagent.semantic.search.read_regular", side_effect=AssertionError("read through symlink")):
+        with patch("slipagent.semantic.snapshot.open_regular", side_effect=AssertionError("read through symlink")):
             self.update(folder)
         self.assertEqual(set(self.store.file_records()), {str(self.source)})
 

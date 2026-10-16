@@ -546,8 +546,12 @@ frozen profile's reasoning/routing settings even after model reselection.
 summaries. It requires 20 completed turns since the last attempt, 20 ready and
 unmerged source turns outside the newest third, and 12,000 estimated source
 tokens. A frozen bounded batch must fit the selected provider/model context.
-Only one merge runs at a time. Failed attempts do not retry until 20 further
-turns have completed. Small turns need not cross the size threshold for many
+Only one merge job runs at a time. Both compactors call the same retry method:
+transient transport failures retry persistently, while invalid replies receive
+up to five retries after the initial attempt. Validation stays inside the retry
+loop and publication follows validation. A final failure retains the initial
+attempt marker; another merge job requires 20 further turns since that marker.
+Small turns need not cross the size threshold for many
 more turns. One response contains only a narrative `summary`, capped at 12,000
 characters and required to cost less than the source summaries plus metadata.
 It is a cross-turn account, not a list of per-step recaps. Its prompt preserves
@@ -566,8 +570,12 @@ tools run during merging. Originals and individual summaries are never rewritten
 
 Reset increments the compactor generation and cancels all jobs. Late transport
 results cannot publish summaries, errors, or usage into a new session. Shutdown
-cancels and awaits jobs before closing the client; one-shot completion drains
-its summaries first. Replacing the API key cancels and drains jobs before retiring their
+cancels and awaits jobs before closing the client. `Agent.wait_for_compaction`
+gives the entire queue a 120-second grace period for fork, resume, deletion, and
+one-shot completion. `StepCompactor.settle` shields the drain until the deadline,
+then invalidates the generation, cancels active/deferred jobs, and finishes their
+cleanup. Caller cancellation also drains cleanup before propagating. Originals
+survive even when no summary finishes. Replacing the API key cancels and drains jobs before retiring their
 client. The shared service survives behavior reloads. Its lazy initialization
 is an explicit migration for sessions created before the service existed.
 
@@ -905,13 +913,13 @@ selected journal, which resume reopens. Fork creates a child. Operating/project 
 model settings come from the current process. Interrupted summaries stay
 labelled; restoration itself performs no model calls.
 
-`/fork` drains compaction and stops jobs, checkpoints the current journal, and
+`/fork` settles compaction with the two-minute grace period and stops jobs, checkpoints the current journal, and
 uses the validated load/restore path to create a populated child. Its parent
 stays immutable after the fork; copied command output remains independently
 available. The transcript stays in place and subsequent work targets the child.
 
 `/delete` requires an interactive Enter/Escape chooser before any deletion.
-After confirmation it drains summaries and jobs, clears the conversation with
+After confirmation it settles summaries with the same grace period and stops jobs, clears the conversation with
 `reset(new_session=False)` to detach log/diagnostic owners, and removes only the
 current journal, title sidecar, logs, request diagnostics, and file checkpoints.
 The journal service returns to its pre-prompt state and the transcript is replaced
@@ -1353,4 +1361,4 @@ The agent and compactor use the common `RequestProfile` contract, not a provider
 
 Provider behavior files participate in the existing reload transaction. Shared state contracts in `types.py`, configuration, package exports, and changes to class inheritance require restart. Adding a provider requires a module, registry entry, documented configuration, and offline wire/selection tests.
 
-Common transport and agent recovery share one retry schedule. Working requests remain `single_attempt=True`, so each attempt consumes exactly one working request. Three retries are silent; subsequent waits update the terminal activity row once per second, clearing it after success, stop, or cancellation. Noninteractive output retains the error and periodic countdown notices. Working recovery stops before an interval exceeds one minute. Both background compactors use the same transient-error schedule with persistent recovery: after the working retry limit, waits continue at the configured ceiling (at most 60 seconds), honoring longer provider `Retry-After` cooldowns. Reset and shutdown cancel these waits. Malformed single-turn summaries retain a separate finite repair limit. HTTP 200 overload envelopes and SSE errors are retryable; partial tool calls never execute before a complete accepted response.
+Common transport and agent recovery share one retry schedule. Working requests remain `single_attempt=True`, so each attempt consumes exactly one working request. Three retries are silent; subsequent waits update the terminal activity row once per second, clearing it after success, stop, or cancellation. Noninteractive output retains the error and periodic countdown notices. Working recovery stops before an interval exceeds one minute. Both background compactors use the same transient-error schedule with persistent recovery: after the working retry limit, waits continue at the configured ceiling (at most 60 seconds), honoring longer provider `Retry-After` cooldowns. Reset and shutdown cancel these waits. Malformed individual and grouped summaries share a five-retry repair limit. HTTP 200 overload envelopes and SSE errors are retryable; partial tool calls never execute before a complete accepted response.

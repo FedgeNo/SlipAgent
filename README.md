@@ -1462,7 +1462,12 @@ object, alongside the original fields. Compressed-only records use that same key
 Both originals and their accompanying analysis count toward the context budget;
 the representation comparison above uses the original before adding its summary.
 
-Each background compression attempt has a 20-minute timeout instead of the normal HTTP timeout. Single-turn and multi-turn compression keep retrying rate limits, transient provider errors, and transport failures until recovery or cancellation. They share the working request retry schedule, then continue with waits of up to 60 seconds, honoring longer provider `Retry-After` cooldowns. Retry waits and additional attempts can extend the job beyond 20 minutes. Permanent failures preserve original steps for `recall_history`. Working requests retain their configured timeout and retry limit; reset and shutdown cancel pending summaries.
+Each background compression attempt has a 20-minute timeout instead of the normal HTTP timeout. Single-turn and multi-turn compression keep retrying rate limits, transient provider errors, and transport failures until recovery or cancellation. They share the working request retry schedule, then continue with waits of up to 60 seconds, honoring longer provider `Retry-After` cooldowns. Both compactors use the same recovery method; malformed replies receive up to five retries after the initial attempt. Retry waits and additional attempts can extend the job beyond 20 minutes. Permanent failures preserve original steps for `recall_history`. Working requests retain their configured timeout and retry limit; reset and shutdown cancel pending summaries.
+
+Forking, resuming, deleting a session, and finishing a one-shot run give all pending
+compression up to two minutes to finish, including retries. At that deadline,
+SlipAgent cancels and drains unfinished jobs before continuing. Original turns
+remain available unless the session itself is deleted.
 
 Each working request identifies the source step of the active requests in system guidance; their exact text belongs in the structured user-input object. Steps after tool batches explicitly explain that control returned automatically without a new user instruction: assess results against that goal and return an answer without tools when it is fulfilled. This guidance is assembled for the outgoing request only; it is not saved in conversation history or background summaries. Historical requests provide background rather than independently requesting more work.
 
@@ -1484,8 +1489,9 @@ Older summaries can also become **one historical narrative across many turns**.
 A separate background call requires at least **20 completed turns since the last
 merge attempt**, at least **20 eligible older summaries**, and at least **12,000
 estimated tokens** of source summaries and metadata. Small ordinary turns can
-therefore go much longer between merges. Only one merge runs at a time; a failed
-attempt also waits at least 20 turns before another call. Per-step summarization
+therefore go much longer between merges. Only one merge job runs at a time. Its
+retries belong to that job; after final failure, at least 20 turns must pass from
+its initial attempt before another job can start. Per-step summarization
 continues independently as described below.
 
 Each narrative is built from the original individual summaries, never a previous
@@ -1613,6 +1619,13 @@ symlinks, Git-ignored files, and the harness's data directory are excluded.
 The first build can take time on large projects. CPU inference uses one chunk
 per call and the physical core count, with a two-thread fallback. No model or
 indexing worker is loaded just to display the tool catalog.
+
+Source files are hashed into one temporary snapshot beside the index, then read
+in bounded blocks and chunked incrementally. Long lines are split into complete
+consecutive excerpts; no source is discarded to meet a file-size cutoff. The
+snapshot is removed when processing finishes or fails. Source/chunk buffers stay
+bounded independently of file size; the stored vector index still grows with the
+number of chunks.
 
 The [semantic retrieval benchmarks](benchmarks/semantic/README.md) retain the
 complete evaluation data and reproduction commands.

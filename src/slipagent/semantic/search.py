@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 from dataclasses import dataclass
+from io import TextIOWrapper
+from itertools import islice
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .embed import Embedder
-from .indexer import DEFAULT_EXCLUDE_DIRS, DEFAULT_INDEX_EXTS, chunk_text, walk_files
+from .indexer import DEFAULT_EXCLUDE_DIRS, DEFAULT_INDEX_EXTS, iter_chunks, walk_files
 from .retrieval import RETRIEVAL, source_header
+from .snapshot import source_snapshot
 from .storage import Store
-from ..fileio import read_regular
 
 
 @dataclass
@@ -113,36 +114,36 @@ class Searcher:
                         and old["size"] == before.st_size):
                     stats.unchanged_files += 1
                     continue
-                data = read_regular(source)
-                after = source.stat()
-                if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
-                    raise OSError(f"File changed while indexing; retry: {source}")
-                digest = hashlib.sha256(data).hexdigest()
-                text = data.decode("utf-8", errors="replace")
-                if old and old["digest"] == digest:
-                    self.store.save_file(name, digest, after.st_size, after.st_mtime_ns, old["line_count"])
-                    stats.unchanged_files += 1
-                    continue
-                header = source_header(source.relative_to(root).as_posix())
-                reserve = token_count(header) - token_count("") + 8 if token_count is not None else 0
-                if max_tokens is not None and reserve >= max_tokens:
-                    raise ValueError(f"Filename context leaves no room for source in {max_tokens} tokens: {source}")
-                chunks = chunk_text(name, text, max_lines=max_lines, overlap=overlap,
-                                    token_count=token_count,
-                                    max_tokens=max_tokens - reserve if max_tokens is not None else None)
-                self.store.remove_file(name)
-                batch_size = 1 if self.cancelled is not None else 64
-                for start in range(0, len(chunks), batch_size):
+                with source_snapshot(source, before, self._check_cancelled,
+                                     directory=Path(self.store.db_path).absolute().parent) as (snapshot, digest):
+                    if old and old["digest"] == digest:
+                        self.store.save_file(name, digest, before.st_size, before.st_mtime_ns, old["line_count"])
+                        stats.unchanged_files += 1
+                        continue
+                    header = source_header(source.relative_to(root).as_posix())
+                    reserve = token_count(header) - token_count("") + 8 if token_count is not None else 0
+                    if max_tokens is not None and reserve >= max_tokens:
+                        raise ValueError(f"Filename context leaves no room for source in {max_tokens} tokens: {source}")
+                    self.store.remove_file(name)
+                    line_count = 0
+                    with TextIOWrapper(snapshot, encoding="utf-8", errors="replace", newline="") as text:
+                        chunks = iter_chunks(name, text, max_lines=max_lines, overlap=overlap,
+                                             token_count=token_count,
+                                             max_tokens=max_tokens - reserve if max_tokens is not None else None,
+                                             check_cancelled=self._check_cancelled)
+                        batch_size = 1 if self.cancelled is not None else 64
+                        while batch := list(islice(chunks, batch_size)):
+                            self._check_cancelled()
+                            inputs = [header + chunk.text for chunk in batch]
+                            if token_count is not None and any(token_count(value) > max_tokens for value in inputs):
+                                raise ValueError(f"Filename context and source exceed the token limit: {source}")
+                            vectors = self.embedder.embed_batch(inputs)
+                            self.store.add_chunks(batch, vectors, keyword_texts=inputs)
+                            line_count = batch[-1].end_line
+                            stats.indexed_chunks += len(batch)
                     self._check_cancelled()
-                    batch = chunks[start:start + batch_size]
-                    inputs = [header + chunk.text for chunk in batch]
-                    if token_count is not None and any(token_count(value) > max_tokens for value in inputs):
-                        raise ValueError(f"Filename context and source exceed the token limit: {source}")
-                    vectors = self.embedder.embed_batch(inputs)
-                    self.store.add_chunks(batch, vectors, keyword_texts=inputs)
-                self.store.save_file(name, digest, after.st_size, after.st_mtime_ns, len(text.splitlines()))
-                stats.indexed_files += 1
-                stats.indexed_chunks += len(chunks)
+                    self.store.save_file(name, digest, before.st_size, before.st_mtime_ns, line_count)
+                    stats.indexed_files += 1
             removed = previous.keys() - seen
             if candidates is not None:
                 removed &= candidates

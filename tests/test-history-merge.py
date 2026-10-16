@@ -191,23 +191,55 @@ async def test_small_normal_turns_do_not_merge_just_because_twenty_turns_passed(
     assert not any(getattr(step, "history_merge_attempt", 0) for step in history.steps)
 
 
-async def test_failed_merge_waits_twenty_turns_before_another_model_call():
+async def test_failed_merge_exhausts_retries_then_waits_twenty_turns(monkeypatch):
+    from unittest.mock import AsyncMock
+    sleep = AsyncMock()
+    monkeypatch.setattr("slipagent.compaction.asyncio.sleep", sleep)
     history, messages = history_with_posts(30)
     client = MergeClient(malformed=True)
     errors = []
     owner = StepCompactor(lambda _: None, errors.append)
     schedule(owner, history, client)
     await owner.wait()
-    assert len(client.calls) == 1 and len(errors) == 1 and not historical_records(history.steps)
+    assert len(client.calls) == 6 and len(errors) == 1 and not historical_records(history.steps)
+    assert [call.args[0] for call in sleep.call_args_list] == [1, 2, 4, 8, 16]
     for _ in range(19):
         append_posts(history, messages, 1)
         schedule(owner, history, client)
     await owner.wait()
-    assert len(client.calls) == 1
+    assert len(client.calls) == 6
     append_posts(history, messages, 1)
     schedule(owner, history, client)
     await owner.wait()
-    assert len(client.calls) == 2
+    assert len(client.calls) == 12
+
+
+@pytest.mark.parametrize("invalid", ["bad json", '{}', '{"summary":""}',
+                                     json.dumps({"summary": "x" * 12001})],
+                         ids=["json", "fields", "empty", "oversized"])
+async def test_grouped_summary_retries_invalid_replies_before_publishing(monkeypatch, invalid):
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr("slipagent.compaction.asyncio.sleep", AsyncMock())
+    history, _ = history_with_posts(30)
+    originals = [step.full_text() for step in history.steps]
+    client = MergeClient()
+    chat = client.chat
+
+    async def respond(**kwargs):
+        completion = await chat(**kwargs)
+        if len(client.calls) == 1:
+            completion.message.content = invalid
+        return completion
+
+    client.chat = respond
+    usage, errors = [], []
+    owner = StepCompactor(usage.append, errors.append)
+    schedule(owner, history, client)
+    await owner.wait()
+    assert len(client.calls) == 2 and len(usage) == 2 and not errors
+    assert client.calls[0] == client.calls[1]
+    assert len(historical_records(history.steps)) == 1
+    assert [step.full_text() for step in history.steps] == originals
 
 
 async def test_inflight_merge_cannot_duplicate_or_publish_after_reset():
@@ -224,6 +256,28 @@ async def test_inflight_merge_cannot_duplicate_or_publish_after_reset():
     client.release.set()
     await owner.wait()
     assert not historical_records(history.steps) and not usage
+
+
+async def test_grouped_retry_wait_is_cancelled_at_session_grace_deadline(monkeypatch):
+    import httpx
+    from slipagent.openrouter import OpenRouterClient
+
+    monkeypatch.setattr("slipagent.compaction.COMPACTION_GRACE_PERIOD", .02)
+    history, _ = history_with_posts(30)
+    originals = [step.full_text() for step in history.steps]
+    requests, errors = [], []
+
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(429, headers={"Retry-After": "60"}, json={"error": "unavailable"})
+
+    owner = StepCompactor(lambda _: None, errors.append)
+    async with OpenRouterClient("dummy", transport=httpx.MockTransport(handle)) as client:
+        schedule(owner, history, client)
+        await asyncio.wait_for(owner.settle(), 1)
+    assert len(requests) == 1 and not owner.jobs and not errors
+    assert not historical_records(history.steps)
+    assert [step.full_text() for step in history.steps] == originals
 
 
 async def test_merge_fits_frozen_provider_budget_without_truncating_source_summaries():

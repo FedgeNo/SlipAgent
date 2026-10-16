@@ -2,9 +2,11 @@
 
 import unittest
 import tempfile
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
-from slipagent.semantic.indexer import chunk_text, walk_files
+from slipagent.semantic.indexer import chunk_text, iter_chunks, walk_files
 
 
 class TokenChunkingTests(unittest.TestCase):
@@ -58,6 +60,30 @@ class TokenChunkingTests(unittest.TestCase):
             chunk_text("source.py", "abc", token_count=len)
         with self.assertRaises(ValueError):
             chunk_text("source.py", "abc", max_tokens=10)
+
+    def test_streaming_preserves_every_character_and_line_number_across_read_boundaries(self):
+        source = "λ🌓" * 25 + "\r\n" + "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029".join(["ab"] * 4) + "\rfinal\r"
+        coordinates = [number for number, line in enumerate(source.splitlines(keepends=True), 1)
+                       for _ in line]
+        for size in (1, 2, 7, 13, 64):
+            with self.subTest(size=size), patch("slipagent.semantic.indexer.SOURCE_BLOCK_CHARS", size):
+                chunks = list(iter_chunks("source.py", StringIO(source), overlap=0,
+                                          token_count=lambda value: len(value) + 2, max_tokens=11))
+            self.assertEqual("".join(chunk.text for chunk in chunks), source)
+            offset = 0
+            for chunk in chunks:
+                self.assertEqual(chunk.start_line, coordinates[offset])
+                offset += len(chunk.text)
+                self.assertEqual(chunk.end_line, coordinates[offset - 1])
+
+    def test_iterator_produces_chunks_before_consuming_source(self):
+        source = StringIO("auth\n" * 100_000)
+        chunks = iter_chunks("source.py", source, max_lines=50, overlap=5)
+        first = next(chunks)
+        self.assertEqual(first.text, "auth\n" * 50)
+        self.assertLess(source.tell(), 500_000)
+        second = next(chunks)
+        self.assertEqual((second.start_line, second.end_line), (46, 95))
 
 
 if __name__ == "__main__":

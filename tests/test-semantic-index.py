@@ -2,12 +2,14 @@
 
 import os
 import tempfile
+import tracemalloc
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
 from slipagent.semantic import Chunk, Searcher, Store
-from slipagent.fileio import read_regular
+from slipagent.fileio import open_regular
 
 
 class FakeEmbedder:
@@ -54,7 +56,7 @@ class IndexTests(unittest.TestCase):
         self.assertEqual(self.index(), 1)
         original_id = self.searcher.search("auth")[0]["id"]
         self.embedder.batches.clear()
-        with patch("slipagent.semantic.search.read_regular", side_effect=AssertionError("source read")):
+        with patch("slipagent.semantic.snapshot.open_regular", side_effect=AssertionError("source read")):
             self.assertEqual(self.index(), 0)
         self.assertEqual(self.embedder.batches, [])
         self.assertEqual(self.searcher.last_index_stats.unchanged_files, 1)
@@ -120,7 +122,7 @@ class IndexTests(unittest.TestCase):
         self.store.conn.set_trace_callback(statements.append)
         self.addCleanup(lambda: self.store.conn.set_trace_callback(None))
         with patch("slipagent.semantic.search.walk_files", side_effect=AssertionError("workspace walk")), \
-                patch("slipagent.semantic.search.read_regular", side_effect=AssertionError("source read")):
+                patch("slipagent.semantic.snapshot.open_regular", side_effect=AssertionError("source read")):
             result = self.searcher.search("auth")[0]
         self.assertEqual(result["path"], str(self.source))
         self.assertEqual((result["start_line"], result["end_line"]), (1, 2))
@@ -173,11 +175,12 @@ class IndexTests(unittest.TestCase):
     def test_file_changing_during_read_aborts_update(self):
         self.index()
         self.source.write_text("def auth(): return 'updated'\n")
+        @contextmanager
         def changing_read(path):
-            data = read_regular(path)
-            path.write_bytes(data + b"# changed again\n")
-            return data
-        with patch("slipagent.semantic.search.read_regular", changing_read):
+            with open_regular(path) as stream:
+                yield stream
+            path.write_bytes(path.read_bytes() + b"# changed again\n")
+        with patch("slipagent.semantic.snapshot.open_regular", changing_read):
             with self.assertRaisesRegex(OSError, "File changed while indexing"):
                 self.index()
         self.assertEqual(self.searcher.search("auth")[0]["text"], self.original)
@@ -186,6 +189,72 @@ class IndexTests(unittest.TestCase):
         self.source.write_text("auth\n" * 150)
         self.assertEqual(self.index(max_lines=1, overlap=0), 150)
         self.assertEqual([len(batch) for batch in self.embedder.batches], [64, 64, 22])
+
+    def test_streaming_index_bounds_source_memory_even_for_one_long_line(self):
+        self.searcher.cancelled = lambda: False
+        self.embedder.token_count = lambda text: 2
+        self.embedder.max_tokens = 512
+        self.embedder.embed_batch = lambda texts: [self.embedder.embed(text) for text in texts]
+        self.index()
+        self.source.write_bytes(b" " * (8 * 1024 * 1024))
+        tracemalloc.start()
+        try:
+            self.index()
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        self.assertLess(peak, 4 * 1024 * 1024, f"Source processing peaked at {peak} bytes")
+        row = self.store.conn.execute(
+            "SELECT SUM(length(text)), MIN(start_line), MAX(end_line) FROM chunks"
+        ).fetchone()
+        self.assertEqual(tuple(row), (8 * 1024 * 1024, 1, 1))
+        self.assertEqual(self.store.file_records()[str(self.source)]["line_count"], 1)
+
+    def test_streamed_snapshot_preserves_raw_hash_and_decoded_coordinates(self):
+        import hashlib
+        data = ("λ🌓\r\n" * 20).encode() + b"\xff\rfinal"
+        self.source.write_bytes(data)
+        with patch("slipagent.semantic.snapshot.SOURCE_BLOCK_BYTES", 7), \
+                patch("slipagent.semantic.indexer.SOURCE_BLOCK_CHARS", 11):
+            self.index(overlap=0)
+        text = data.decode("utf-8", errors="replace")
+        rows = self.store.conn.execute("SELECT text FROM chunks ORDER BY id")
+        self.assertEqual("".join(row[0] for row in rows), text)
+        metadata = self.store.file_records()[str(self.source)]
+        self.assertEqual(metadata["digest"], hashlib.sha256(data).hexdigest())
+        self.assertEqual(metadata["line_count"], len(text.splitlines()))
+
+    def test_embedding_uses_snapshot_when_live_source_changes(self):
+        self.source.write_text("auth\n" * 150)
+        embed_batch = self.embedder.embed_batch
+
+        def change_after_first_batch(texts):
+            self.source.write_text("new source\n")
+            return embed_batch(texts)
+
+        with patch.object(self.embedder, "embed_batch", change_after_first_batch):
+            self.assertEqual(self.index(max_lines=1, overlap=0), 150)
+        rows = self.store.conn.execute("SELECT text FROM chunks ORDER BY id")
+        self.assertEqual("".join(row[0] for row in rows), "auth\n" * 150)
+        self.assertEqual(self.index(max_lines=1, overlap=0), 1)
+        self.assertEqual(self.searcher.search("auth")[0]["text"], "new source\n")
+
+    def test_cancelling_streamed_snapshot_retains_previous_index(self):
+        self.index()
+        previous = self.store.file_records()
+        self.source.write_text("updated\n" * 100_000)
+        checks = 0
+
+        def cancelled():
+            nonlocal checks
+            checks += 1
+            return checks == 5
+
+        self.searcher.cancelled = cancelled
+        with self.assertRaises(InterruptedError):
+            self.index()
+        self.assertEqual(self.store.file_records(), previous)
+        self.assertEqual(self.searcher.search("auth")[0]["text"], self.original)
 
     def test_changed_model_is_rejected_even_with_same_dimensions(self):
         self.index()

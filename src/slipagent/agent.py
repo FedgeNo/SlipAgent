@@ -177,8 +177,8 @@ class Agent:
         return budget
 
     async def wait_for_compaction(self) -> None:
-        """Drain completed-step summaries when a caller needs settled memory."""
-        await self._compactor().wait()
+        """Settle summaries within the session-transition grace period."""
+        await self._compactor().settle()
 
     async def _archive_step(self, capabilities: RequestProfile | None) -> None:
         self.history.sync(self.messages)

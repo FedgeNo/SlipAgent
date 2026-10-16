@@ -126,6 +126,61 @@ async def test_summary_retries_transient_failures_until_recovery_or_reset(monkey
     assert step.compaction_status == ("complete" if recover else "cancelled")
 
 
+@pytest.mark.parametrize("recover", [True, False])
+async def test_session_settlement_has_one_grace_period_for_pending_summaries(monkeypatch, recover):
+    monkeypatch.setattr("slipagent.compaction.COMPACTION_GRACE_PERIOD", .05, raising=False)
+    client = Client([reply("Done.")], pause_summary=not recover)
+    registry = ToolRegistry()
+    agent = Agent(client, registry, "test")
+    try:
+        await agent.run("Keep the original request")
+        original = agent.history.steps[0].full_text()
+        await asyncio.wait_for(agent.wait_for_compaction(), 1)
+        assert agent.history.steps[0].full_text() == original
+        assert agent.history.steps[0].compaction_status == ("complete" if recover else "cancelled")
+        assert bool(agent.history.steps[0].summary) == recover
+        assert not agent._compactor().jobs
+    finally:
+        await registry.aclose()
+
+
+@pytest.mark.parametrize("interrupt", [False, True])
+async def test_settlement_drains_active_and_deferred_summaries_without_late_results(monkeypatch, interrupt):
+    from slipagent.compaction import StepCompactor
+    monkeypatch.setattr("slipagent.compaction.COMPACTION_GRACE_PERIOD", .02)
+    history = ConversationHistory()
+    history.sync([message for index in range(40)
+                  for message in (Message.user(f"Request {index}"), Message.assistant(f"Response {index}"))])
+    originals = [step.full_text() for step in history.steps]
+    client = Client([], pause_summary=True)
+    chat = client.chat
+
+    async def late_response(**kwargs):
+        try:
+            return await chat(**kwargs)
+        except asyncio.CancelledError:
+            return reply(json.dumps({"summary": "Late result", "reasoning_summary": ""}))
+
+    client.chat = late_response
+    usage, errors = [], []
+    owner = StepCompactor(usage.append, errors.append)
+    for step in history.steps:
+        owner.submit(step, client, "test", None, None, conversation=history.steps)
+    await client.started.wait()
+    settling = asyncio.create_task(owner.settle())
+    await asyncio.sleep(0)
+    if interrupt:
+        settling.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(settling, 1)
+    else:
+        await asyncio.wait_for(settling, 1)
+    assert not usage and not errors and not owner.jobs
+    assert [step.full_text() for step in history.steps] == originals
+    assert all(step.summary is None and not hasattr(step, "_compaction_request") for step in history.steps)
+    assert all(step.compaction_status == "cancelled" for step in history.steps)
+
+
 async def test_plain_response_and_native_calls_do_not_require_memory_json():
     tool = RecordingTool("ACTUAL OBSERVATION")
     client = Client([reply("Reading.", [ToolCall("one", "record", {"value": "A"})]), reply("Done.")])

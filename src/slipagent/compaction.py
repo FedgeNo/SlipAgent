@@ -24,11 +24,13 @@ from .context import SUMMARY_MAX_CHARS, CompletedStep, HistoryStep, message_toke
 from .api import APIClient, APIResponseError, APITransportError, RETRYABLE_STATUS
 from .types import Completion, Message, Usage
 from .compressionproviders import CompressionProviders, CompressionUnavailableError
+from .lifecycle import finish_cleanup
 from .prompts import load_prompt
 
 COMPACTION_TIMEOUT = 20 * 60
 COMPACTION_RETRIES = 5
 COMPACTION_QUEUE_SIZE = 32
+COMPACTION_GRACE_PERIOD = 120
 
 
 class CompactionBudgetError(ValueError):
@@ -154,14 +156,7 @@ class StepCompactor:
                 except Exception as exc:
                     if generation != self.generation:
                         return
-                    if isinstance(client, APIClient) and isinstance(exc, (APIResponseError, TimeoutError)):
-                        if await self.wait_request_retry(client, attempt, exc):
-                            attempt += 1
-                            continue
-                    elif attempt < COMPACTION_RETRIES and not isinstance(exc, (CompactionBudgetError, CompressionUnavailableError)):
-                        delay = (client._backoff(attempt, getattr(exc, "retry_after", None))
-                                 if isinstance(client, APIClient) else min(2 ** attempt, 30))
-                        await asyncio.sleep(delay)
+                    if await self.wait_request_retry(client, attempt, exc):
                         attempt += 1
                         continue
                     step.compaction_status = "failed"
@@ -179,16 +174,23 @@ class StepCompactor:
         except asyncio.CancelledError:
             step.compaction_status = "cancelled"
             raise
+        finally:
+            if generation != self.generation and step.compaction_status == "pending":
+                step.compaction_status = "cancelled"
 
     async def wait_request_retry(self, client: APIClient, attempt: int, error: Exception) -> bool:
-        """Keep transient background requests pending until recovery or cancellation."""
-        if isinstance(error, TimeoutError):
-            error = APITransportError("Background compaction request timed out")
-        if isinstance(error, APIResponseError):
+        """Share transport and malformed-reply recovery across both compactors."""
+        if isinstance(client, APIClient) and isinstance(error, (APIResponseError, TimeoutError)):
+            if isinstance(error, TimeoutError):
+                error = APITransportError("Background compaction request timed out")
             transient = isinstance(error, APITransportError) or error.status_code in RETRYABLE_STATUS
-            if transient:
-                return await client.wait_retry(attempt, error, persistent=True)
-        return False
+            return transient and await client.wait_retry(attempt, error, persistent=True)
+        if attempt >= COMPACTION_RETRIES or isinstance(error, (CompactionBudgetError, CompressionUnavailableError)):
+            return False
+        delay = (client._backoff(attempt, getattr(error, "retry_after", None))
+                 if isinstance(client, APIClient) else min(2 ** attempt, 30))
+        await asyncio.sleep(delay)
+        return True
 
     async def _compact_once(self, step: CompletedStep, source: dict[str, Any], client: APIClient, model: str,
                             capabilities: RequestProfile | None, max_tokens: int | None, generation: int) -> None:
@@ -268,6 +270,19 @@ class StepCompactor:
             # Completed-task callbacks can still be queued when gather returns.
             # Remove this settled batch directly rather than spin before they run.
             self.jobs.difference_update(jobs)
+
+    async def settle(self) -> None:
+        """Allow one grace period before cancelling work for a session transition."""
+        waiter = asyncio.create_task(self.wait(), name="settle compaction")
+        try:
+            async with asyncio.timeout(COMPACTION_GRACE_PERIOD):
+                await asyncio.shield(waiter)
+        except TimeoutError:
+            pass
+        finally:
+            if not waiter.done():
+                self.reset()
+                await finish_cleanup(waiter)
 
     async def aclose(self) -> None:
         self.reset()

@@ -8,7 +8,12 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Callable, Iterator, List, Optional, Set
+from io import StringIO
+from typing import Callable, Iterator, List, Optional, Set, TextIO
+
+
+SOURCE_BLOCK_CHARS = 64 * 1024
+LINE_ENDINGS = ("\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029")
 
 
 @dataclass
@@ -161,71 +166,50 @@ def chunk_file(
     """
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
+            return list(iter_chunks(path, f, max_lines=max_lines, overlap=overlap))
     except (OSError, UnicodeDecodeError):
         return []
-
-    return chunk_text(path, "".join(lines), max_lines=max_lines, overlap=overlap)
 
 
 def chunk_text(path: str, text: str, max_lines: int = 50, overlap: int = 5, *,
                token_count: Callable[[str], int] | None = None,
                max_tokens: int | None = None) -> List[Chunk]:
-    """Chunk a source snapshot, optionally fitting the encoder's full token budget.
-
-    token_count includes special tokens. Whole lines are preferred; a line too
-    large by itself is split into consecutive excerpts with the same line number.
-    """
-    if (token_count is None) != (max_tokens is None):
-        raise ValueError("token_count and max_tokens must be supplied together")
-    if token_count is not None and max_tokens is not None:
-        if max_tokens < 1:
-            raise ValueError("max_tokens must be positive")
-        return _token_chunks(path, text, max_lines, overlap, token_count, max_tokens)
-    lines = text.splitlines(keepends=True)
-    if not lines:
-        return []
-
-    if max_lines <= 1:
-        max_lines = 1
-    if overlap < 0:
-        overlap = 0
-    if overlap >= max_lines:
-        overlap = max_lines - 1
-
-    chunks: List[Chunk] = []
-    start = 0
-    total = len(lines)
-    while start < total:
-        end = min(start + max_lines, total)
-        text = "".join(lines[start:end])
-        chunks.append(
-            Chunk(
-                path=path,
-                start_line=start + 1,  # 1-based
-                end_line=end,
-                text=text,
-            )
-        )
-        if end == total:
-            break
-        start = end - overlap
-
-    return chunks
+    """Materialize chunks for callers that already retain the complete source."""
+    return list(iter_chunks(path, StringIO(text), max_lines, overlap,
+                            token_count=token_count, max_tokens=max_tokens))
 
 
-def _token_chunks(path: str, text: str, max_lines: int, overlap: int,
-                  token_count: Callable[[str], int], max_tokens: int) -> List[Chunk]:
-    max_lines = max(1, max_lines)
-    overlap = min(max(0, overlap), max_lines - 1)
-    pieces: list[tuple[str, int]] = []
-    for number, line in enumerate(text.splitlines(keepends=True), 1):
+def _source_pieces(source: TextIO) -> Iterator[tuple[str, int]]:
+    """Retain splitlines coordinates and line endings using bounded reads."""
+    pending = ""
+    number = 1
+    while block := source.read(SOURCE_BLOCK_CHARS):
+        lines = (pending + block).splitlines(keepends=True)
+        pending = ""
+        # A trailing CR may be the first half of CRLF in the next read.
+        if lines and (not lines[-1].endswith(LINE_ENDINGS) or lines[-1].endswith("\r")):
+            pending = lines.pop()
+        for line in lines:
+            for start in range(0, len(line), SOURCE_BLOCK_CHARS):
+                yield line[start:start + SOURCE_BLOCK_CHARS], number
+            number += 1
+        while len(pending) > SOURCE_BLOCK_CHARS:
+            yield pending[:SOURCE_BLOCK_CHARS], number
+            pending = pending[SOURCE_BLOCK_CHARS:]
+    if pending:
+        yield pending, number
+
+
+def _token_pieces(source: TextIO, path: str, token_count: Callable[[str], int] | None,
+                  max_tokens: int | None, check_cancelled: Callable[[], None] | None) -> Iterator[tuple[str, int]]:
+    for line, number in _source_pieces(source):
         while line:
-            if token_count(line) <= max_tokens:
-                pieces.append((line, number))
+            if check_cancelled is not None:
+                check_cancelled()
+            if token_count is None or max_tokens is None or token_count(line) <= max_tokens:
+                yield line, number
                 break
-            # Count exact source prefixes, rather than decoding tokens, to retain
-            # whitespace, Unicode, and line endings byte-for-byte in each excerpt.
+            # Exact source prefixes preserve whitespace, Unicode and line endings.
             best = 1 if token_count(line[:1]) <= max_tokens else 0
             low, high = 2, len(line) - 1
             while low <= high:
@@ -237,30 +221,46 @@ def _token_chunks(path: str, text: str, max_lines: int, overlap: int,
                     high = middle - 1
             if not best:
                 raise ValueError(f"Cannot fit source text at {path}:{number} in {max_tokens} tokens")
-            pieces.append((line[:best], number))
+            yield line[:best], number
             line = line[best:]
 
-    def fits(start: int, end: int) -> bool:
-        return (pieces[end - 1][1] - pieces[start][1] + 1 <= max_lines
-                and token_count("".join(piece[0] for piece in pieces[start:end])) <= max_tokens)
 
-    chunks = []
-    start = 0
-    while start < len(pieces):
-        end = start + 1
-        while end < len(pieces) and fits(start, end + 1):
-            end += 1
-        chunks.append(Chunk(path, pieces[start][1], pieces[end - 1][1],
-                            "".join(piece[0] for piece in pieces[start:end])))
-        if end == len(pieces):
-            break
-        next_start = end
-        first_overlap_line = pieces[end - 1][1] - overlap + 1
-        while overlap and next_start > start + 1 and pieces[next_start - 1][1] >= first_overlap_line:
-            next_start -= 1
-        # Overlap must leave room for new source, otherwise it can emit repeated
-        # windows containing only material from the preceding chunk.
-        while next_start < end and not fits(next_start, end + 1):
-            next_start += 1
-        start = next_start
-    return chunks
+def iter_chunks(path: str, source: TextIO, max_lines: int = 50, overlap: int = 5, *,
+                token_count: Callable[[str], int] | None = None,
+                max_tokens: int | None = None,
+                check_cancelled: Callable[[], None] | None = None) -> Iterator[Chunk]:
+    """Yield bounded source excerpts, retaining all text and overlapping lines.
+
+    Token counts include special tokens. Whole lines are preferred; oversized
+    lines produce consecutive excerpts with the same line number. The character
+    bound also covers text, such as whitespace, that consumes very few tokens.
+    """
+    if (token_count is None) != (max_tokens is None):
+        raise ValueError("token_count and max_tokens must be supplied together")
+    if max_tokens is not None and max_tokens < 1:
+        raise ValueError("max_tokens must be positive")
+    max_lines = max(1, max_lines)
+    overlap = min(max(0, overlap), max_lines - 1)
+
+    def fits(pieces: list[tuple[str, int]]) -> bool:
+        if (pieces[-1][1] - pieces[0][1] + 1 > max_lines
+                or sum(len(piece[0]) for piece in pieces) > SOURCE_BLOCK_CHARS):
+            return False
+        return (token_count is None or max_tokens is None
+                or token_count("".join(piece[0] for piece in pieces)) <= max_tokens)
+
+    window: list[tuple[str, int]] = []
+    for piece in _token_pieces(source, path, token_count, max_tokens, check_cancelled):
+        if window and not fits([*window, piece]):
+            yield Chunk(path, window[0][1], window[-1][1], "".join(item[0] for item in window))
+            start = len(window)
+            first_overlap_line = window[-1][1] - overlap + 1
+            while overlap and start > 1 and window[start - 1][1] >= first_overlap_line:
+                start -= 1
+            # Overlap must leave room for new source, so each chunk advances.
+            while start < len(window) and not fits([*window[start:], piece]):
+                start += 1
+            window = window[start:]
+        window.append(piece)
+    if window:
+        yield Chunk(path, window[0][1], window[-1][1], "".join(item[0] for item in window))

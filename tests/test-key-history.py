@@ -21,6 +21,8 @@ def terminal():
 
 @pytest.mark.parametrize("command, retained", [
     ("/key FAKE-SECRET", False),
+    ("/key google FAKE-SECRET", False),
+    ("/key kilo FAKE-SECRET", False),
     ("  /KEY\tFAKE-SECRET  ", False),
     ("/key show extra", False),
     ("/key", True),

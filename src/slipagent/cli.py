@@ -45,7 +45,7 @@ from .api import (
     APIError,
     APILimitError,
 )
-from .providers import PROVIDERS, active_providers, create_client, provider_class, fetch_catalog
+from .providers import PROVIDERS, active_providers, create_client, provider_class, fetch_catalog, key_provider
 from .model_catalog import coding_models
 from .modelpricing import free_label, model_order, price_label
 from .tools.base import ToolRegistry, ToolResult
@@ -1865,8 +1865,15 @@ async def _key_command(
             _describe_key_info(info, style, out)
         return
 
-    # Anything else is treated as a key supplied directly.
-    await _replace_key(session, style, out, candidate=argument)
+    parts = argument.split(maxsplit=1)
+    provider = None
+    candidate = argument
+    if len(parts) == 2:
+        provider, candidate = parts[0].lower(), parts[1]
+        if provider not in PROVIDERS:
+            print(style.red("  usage: /key [provider] <key>; providers: " + ", ".join(PROVIDERS)), file=out)
+            return
+    await _replace_key(session, style, out, candidate=candidate, provider=provider)
 
 
 async def _replace_key(
@@ -1874,6 +1881,7 @@ async def _replace_key(
     style: Style,
     out: io.TextIOBase,
     candidate: str | None = None,
+    provider: str | None = None,
 ) -> None:
     if candidate is None:
         if not sys.stdin.isatty():
@@ -1885,7 +1893,7 @@ async def _replace_key(
                 file=out,
             )
             return
-        print(style.dim(f"  Enter a new {session.client.provider} API key (input hidden)."), file=out)
+        print(style.dim("  Enter an API key (input hidden; provider detected automatically)."), file=out)
         try:
             candidate = (await _ask_input(session, "  key: ", password=True)).strip()
         except (EOFError, KeyboardInterrupt):
@@ -1895,40 +1903,60 @@ async def _replace_key(
             print(style.dim("  cancelled"), file=out)
             return
 
-    previous = session.api_key
-    try:
-        await session.use_api_key(candidate)
-    except APIConfigError as exc:
-        print(style.red(f"  {exc}"), file=out)
+    candidate = candidate.strip()
+    if not candidate or not candidate.isascii() or any(character.isspace() or ord(character) < 32 or ord(character) == 127
+                                                      for character in candidate):
+        print(style.red("  API keys must be a single nonblank ASCII value."), file=out)
         return
-
-    # Verify through account metadata when the selected provider supports it.
+    detected = key_provider(candidate)
+    if provider is not None and detected is not None and provider != detected:
+        print(style.red(f"  Provider mismatch: selected {provider}, detected {detected}. Use /key {detected} <key>."), file=out)
+        return
+    provider = provider or detected
+    if provider is None:
+        if not sys.stdin.isatty():
+            print(style.red("  Could not identify the provider. Use /key <provider> <key>; providers: "
+                            + ", ".join(PROVIDERS)), file=out)
+            return
+        try:
+            provider = (await _ask_input(session, "  provider (" + ", ".join(PROVIDERS) + "; blank cancels): ")).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return
+        if not provider:
+            print(style.dim("  cancelled"), file=out)
+            return
+        if provider not in PROVIDERS:
+            print(style.red("  Choose a supported provider: " + ", ".join(PROVIDERS)), file=out)
+            return
+    implementation = provider_class(provider)
+    print(style.dim(f"  provider: {provider}"), file=out)
     try:
-        info = await session.client.key_info()
+        info = await session.use_api_key(candidate, provider=provider, verify=True)
     except (APIError, ConfigError) as exc:
-        await session.use_api_key(previous)
-        print(style.red(f"  rejected: {exc}"), file=out)
+        print(style.red(literal(f"  rejected: {str(exc).replace(candidate, '[key]')}")), file=out)
         return
 
-    if info is None:
-        print(style.dim("  key updated for this session; authentication will be checked on inference."), file=out)
+    if info is None and not getattr(implementation, "catalog_requires_auth", False):
+        print(style.dim(f"  {provider} key updated for this session; authentication will be checked on inference."), file=out)
     else:
-        print(f"  key accepted: {style.cyan(_mask_key(candidate))}", file=out)
-        _cache_quota(session, info)
-        _describe_key_info(info, style, out)
+        print(f"  {provider} key accepted: {style.cyan(_mask_key(candidate))}", file=out)
+        if info is not None:
+            if provider == session.client.provider:
+                _cache_quota(session, info)
+            _describe_key_info(info, style, out)
 
     # Persisting replaces a credential on disk, so require explicit consent.
     if not sys.stdin.isatty():
         print(style.dim("  not saved (no interactive terminal)"), file=out)
         return
-    answer = await _ask_input(session, "  save to .env for future runs? [y/N] ")
+    answer = await _ask_input(session, f"  save {provider} key to .env for future runs? [y/N] ")
     if answer.strip().lower() not in {"y", "yes"}:
         print(style.dim("  kept for this session only"), file=out)
         return
 
     path = dotenv_path()
     try:
-        save_dotenv_value(path, session.client.key_env, candidate)
+        save_dotenv_value(path, implementation.key_env, candidate)
         print(style.dim(f"  saved to {path}"), file=out)
     except (OSError, ConfigError) as exc:
         print(style.red(f"  could not save to {path}: {exc}"), file=out)

@@ -831,8 +831,9 @@ In the REPL:
 | `/temperature` | Show the explicit temperature or provider default, and whether the selected model supports changing it |
 | `/temperature <value>` | Set the working-model temperature from 0 to 2; unsupported changes report an error |
 | `/key show`, `/key status` | Show the masked current key, spend limit, and reported free quota |
-| `/key` | Enter a different key with hidden input; verify through account metadata when supported |
-| `/key <sk-or-v1-...>` | Use a specific key for this session |
+| `/key` | Enter a key with hidden input and detect its provider |
+| `/key <key>` | Detect the provider, install its key for this session, and offer to save it |
+| `/key <provider> <key>` | Install a key with an explicit provider when its format is ambiguous |
 | `/cost` | Session token usage and spend |
 | `/task` | Show retained original user prompts and their source steps |
 | `/queue` | Inspect pending user messages and choose one to view or discard |
@@ -860,9 +861,22 @@ In the REPL:
 | `/stop` | Finish the current model response and its tool batch, then stop before the next request |
 | `/exit`, `/quit` | Exit the session; cancel retry waits and let an active response/tool batch finish without another request |
 
-`/key` replaces the current provider's key. OpenRouter validates it against `GET /key`; NVIDIA has no equivalent account endpoint, so the interface labels a replacement unverified until inference. Neither uses a public model catalog as proof of authentication. Saving to `.env` still requires an explicit `y` at the prompt.
+`/key <key>` recognizes OpenRouter (`sk-or-v1-`), NVIDIA (`nvapi-`),
+Mistral (`mstrl_`), Google (`AIza` or `AQ.`), and Kilo JWTs identifying a Kilo
+user. Detection happens locally. An unrecognized format asks for the provider;
+you can also use `/key <provider> <key>` with `openrouter`, `nvidia`, `mistral`,
+`google`, or `kilo`. A detected key must agree with an explicitly named provider.
 
-Commands supplying a key with `/key <key>` are omitted from input history.
+The key becomes available to model selection, optimal fallback, and compression.
+Adding another provider keeps the current model selected. Replacing the active
+provider's key rebuilds its connection. OpenRouter verifies through `GET /key`;
+Google and Mistral use their authenticated model catalogs. NVIDIA and Kilo report
+that authentication will be checked on inference. Failed verification preserves
+existing credentials. Saving for future runs still requires `y` at the prompt
+and updates only the detected provider's entry in `.env`.
+
+Both forms supplying a key are omitted from input history, queued display text,
+model input, and session journals.
 
 Conversation titles default to `{full working directory} | SlipAgent`.
 `/rename Fix login` changes the saved conversation and terminal title to

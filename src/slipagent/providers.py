@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from importlib import import_module
+import base64
+import json
 import os
+import re
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -11,6 +14,29 @@ from .api import APIClient, APIConfigError
 from .types import ModelInfo
 
 PROVIDERS = {"openrouter": "OpenRouterClient", "nvidia": "NvidiaClient", "kilo": "KiloClient", "mistral": "MistralClient", "google": "GoogleClient"}
+
+
+def key_provider(key: str) -> str | None:
+    """Identify provider-specific key formats locally; authentication is separate."""
+    prefixes = {"openrouter": ("sk-or-v1-",), "nvidia": ("nvapi-",),
+                "mistral": ("mstrl_",), "google": ("AIza", "AQ.")}
+    for provider, values in prefixes.items():
+        if any(key.startswith(prefix) and len(key) > len(prefix) for prefix in values):
+            return provider
+    if len(key) > 16384 or not re.fullmatch(r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", key):
+        return None
+    try:
+        header, payload = [json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+                           for part in key.split(".")[:2]]
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        return None
+    # Kilo's signed user tokens carry kiloUserId and a version. Decoding these
+    # identifies the destination; only the provider can verify the signature.
+    if (isinstance(header, dict) and header.get("alg") == "HS256"
+            and isinstance(payload, dict) and isinstance(payload.get("kiloUserId"), str)
+            and payload["kiloUserId"] and type(payload.get("version")) is int):
+        return "kilo"
+    return None
 
 
 def provider_class(provider: str) -> type[APIClient]:

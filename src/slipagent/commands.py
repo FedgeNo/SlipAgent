@@ -478,12 +478,13 @@ class TemperatureCommand(Command):
 
 class KeyCommand(Command):
     name = 'key'
-    banner = '/key [show|status|key]'
+    banner = '/key [show|status|[provider] key]'
     help = (
-        CommandHelp('/key', 'enter a different key for the current provider (hidden input)', '/key'),
+        CommandHelp('/key', 'enter an API key with hidden input and detect its provider', '/key'),
         CommandHelp('/key show', 'show the current key, masked', '/key show'),
         CommandHelp('/key status', 'same as /key show', '/key status'),
-        CommandHelp('/key <key>', 'use a specific key for the current provider', '/key '),
+        CommandHelp('/key <key>', 'detect the provider, install its key, and offer to save it', '/key '),
+        CommandHelp('/key <provider> <key>', 'install a key with an explicit provider', '/key '),
     )
 
     def changes_session(self, argument: str) -> bool:

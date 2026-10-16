@@ -172,7 +172,7 @@ async def test_invalid_key_is_rejected_and_original_kept() -> None:
     session.api_key = GOOD_KEY
     out = io.StringIO()
 
-    await _key_command(session, BAD_KEY, Style(enabled=False), out)
+    await _key_command(session, f"openrouter {BAD_KEY}", Style(enabled=False), out)
 
     assert "rejected" in out.getvalue()
     assert session.api_key == GOOD_KEY
@@ -202,7 +202,7 @@ async def test_bad_key_never_reaches_disk(
     session.api_key = GOOD_KEY
     out = io.StringIO()
 
-    await _key_command(session, BAD_KEY, Style(enabled=False), out)
+    await _key_command(session, f"openrouter {BAD_KEY}", Style(enabled=False), out)
 
     assert env_file.read_text() == f"OPENROUTER_API_KEY={GOOD_KEY}\n"
 
@@ -259,7 +259,7 @@ async def test_stored_key_survives_a_failed_swap(
     session.api_key = GOOD_KEY
     out = io.StringIO()
 
-    await _key_command(session, BAD_KEY, Style(enabled=False), out)
+    await _key_command(session, f"openrouter {BAD_KEY}", Style(enabled=False), out)
 
     assert session.api_key == GOOD_KEY
     assert GOOD_KEY in env_file.read_text()

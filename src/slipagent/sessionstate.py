@@ -17,7 +17,7 @@ from .providers import active_providers, create_client, provider_class, fetch_ca
 from .resources import SessionResources
 from .runtime import RuntimeFrame
 from .tools.base import ToolRegistry
-from .types import ModelInfo
+from .types import KeyInfo, ModelInfo
 from .workspace import Workspace
 from .work import SessionWork
 
@@ -104,7 +104,9 @@ class Session:
                 if provider == self.client.provider:
                     return await self.client.list_models()
                 implementation = provider_class(provider)
-                return await fetch_catalog(provider, api_key=keys.get(provider), base_url=os.environ.get(implementation.base_url_env),
+                options = self.extensions.get("provider_options", {}).get(provider, {})
+                return await fetch_catalog(provider, api_key=keys.get(provider),
+                                           base_url=options.get("base_url", os.environ.get(implementation.base_url_env)),
                                            on_retry=self.renderer.retry_countdown)
             results = await asyncio.gather(*(catalog_for(name) for name in names), return_exceptions=True)
             catalog: list[ModelInfo] = []
@@ -131,32 +133,41 @@ class Session:
         """Switch the model for subsequent steps."""
         self.agent.model = slug.strip()
 
-    async def use_api_key(self, key: str) -> None:
-        """Swap in a new API key, rebuilding the transport that holds it."""
-        replacement = create_client(
-            self.client.provider,
-            api_key=key,
-            base_url=self.base_url,
-            http_referer=self.http_referer,
-            app_title=self.app_title,
-            transport=self.transport,
-            **self.client.replacement_options(),
-        )
+    async def use_api_key(self, key: str, *, provider: str | None = None,
+                          verify: bool = False) -> KeyInfo | None:
+        """Install a provider credential, preflighting before changing live state."""
+        provider = provider or self.client.provider
+        implementation = provider_class(provider)
+        options = self.compression_options().get(provider)
+        if options is None:
+            options = {"base_url": os.environ.get(implementation.base_url_env),
+                       "http_referer": self.http_referer, "app_title": self.app_title,
+                       "on_retry": self.client.on_retry}
+        options = {**options, "api_key": key}
+        replacement = create_client(provider, **options)
         try:
+            info = await replacement.key_info() if verify else None
+            if verify and info is None and getattr(implementation, "catalog_requires_auth", False):
+                await replacement.list_models()
             self.agent._compactor().reset()
             await self.agent.wait_for_compaction()
         except BaseException:
             await finish_cleanup(asyncio.create_task(replacement.aclose()))
             raise
         previous = self.client
-        self.client = replacement
-        self.agent.client = replacement
-        self.api_key = key
+        options.update(api_key=replacement.api_key, base_url=replacement.base_url)
+        self.extensions.setdefault("provider_options", {})[provider] = options
+        if provider == previous.provider:
+            self.client = replacement
+            self.agent.client = replacement
+            self.api_key = replacement.api_key
+            self.free_calls = None
+            self.quota_checked_at = None
         self._catalog = None
-        self.free_calls = None
-        self.quota_checked_at = None
-        self.model_routing().reset(self.client.provider)
-        await finish_cleanup(asyncio.create_task(previous.aclose()))
+        self.model_routing().reset(provider)
+        retired = previous if self.client is replacement else replacement
+        await finish_cleanup(asyncio.create_task(retired.aclose()))
+        return info
 
     async def select_model(self, model: ModelInfo, *, automatic: bool = False) -> None:
         """Preflight the candidate before replacing any active provider state."""

@@ -1098,6 +1098,15 @@ and settings fields retain their own pending futures across layout refreshes.
 `TranscriptWindow.seek` resets viewport position and pending scrolling for feed,
 viewer, and context navigation.
 
+`pixelmouse.PixelMouse` negotiates SGR pixel reporting and character-cell size
+with VT input/output adapters. Its parser consumes mode/size replies, preserves
+keyboard and bracketed-paste handling, and converts pixel reports to normal cell
+hit targets while attaching fractional positions to each mouse key. Scrollbar
+routing uses that precision directly. Pixel mode starts only after support,
+dimensions, and activation are confirmed; unsupported terminals retain ordinary
+mouse input. Resizing refreshes the dimensions, and shutdown disables pixel mode
+and restores the original parser.
+
 `ContextView` stores the latest request's display blocks and wrapped rows in
 private temporary files. Opening it builds rows once per width; repaint reads
 through a 128-row cache. Replacing the request closes the old snapshot, and

@@ -1870,6 +1870,9 @@ class TerminalUI:
             self._close_transcript()
 
     def _close_transcript(self) -> None:
+        pixel_mouse = self.__dict__.pop("_pixel_mouse", None)
+        if pixel_mouse is not None:
+            pixel_mouse.close()
         panel = self.__dict__.get("_editor_panel")
         if panel is not None:
             panel.dispose()

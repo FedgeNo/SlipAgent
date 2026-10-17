@@ -946,6 +946,12 @@ your draft and prompt history. Scrolling back pauses automatic scrolling until y
 return to the bottom. The CWD is the workspace where tools run; long paths
 and model names shorten to fit narrow terminals.
 
+The feed scrollbar uses pixel-accurate mouse positions when the terminal supports
+SGR pixel mouse reporting (mode 1016) and reports its character-cell dimensions.
+Dragging can then select positions between the scrollbar's character rows. Text
+still renders in whole rows. Terminals without that support retain cell-based
+scrollbar input.
+
 Short notices share the activity area beside **Ready** and remain visible while
 browsing selectors or the context view. Changed event notices flash three times,
 then stay steady for the remainder of their 30-second lifetime, unless replaced

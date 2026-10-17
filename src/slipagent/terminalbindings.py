@@ -8,12 +8,15 @@ from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.keys import Keys
 
+from .pixelmouse import bind_pixel_mouse
+
 if TYPE_CHECKING:
     from .terminal import TerminalUI
 
 
 def build_bindings(ui: TerminalUI) -> KeyBindings:
     bindings = KeyBindings()
+    bind_pixel_mouse(bindings, ui)
     in_menu = Condition(lambda: ui._menu_future is not None and ui.app.layout.current_window is ui._menu_window)
     in_setting = Condition(lambda: ui.__dict__.get("_options_field_active", False) and ui.app.layout.current_control is ui._options_panel.field.control)
     in_inspection = Condition(ui._inspection_focused) & ~in_menu & ~in_setting

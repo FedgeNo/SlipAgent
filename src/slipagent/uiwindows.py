@@ -94,7 +94,7 @@ class TranscriptScrollbar(UIControl):
     def __init__(self, target: Callable[[], TranscriptWindow | None]) -> None:
         self.target = target
         self.height = 0
-        self.drag_offset: int | None = None
+        self.drag_offset: float | None = None
 
     def geometry(self) -> tuple[int, int, int]:
         window = self.target()
@@ -116,17 +116,22 @@ class TranscriptScrollbar(UIControl):
         )
 
     def mouse_handler(self, mouse_event: MouseEvent) -> object:
+        return self.pointer(mouse_event, mouse_event.position.y)
+
+    def pointer(self, mouse_event: MouseEvent, row: float) -> object:
         window = self.target()
         if window is None:
             return None
         top, thumb, maximum = self.geometry()
-        row = mouse_event.position.y
         if mouse_event.event_type == MouseEventType.MOUSE_UP:
             self.drag_offset = None
             return None
         if mouse_event.event_type == MouseEventType.MOUSE_DOWN and mouse_event.button == MouseButton.LEFT:
             if top <= row < top + thumb:
-                self.drag_offset = row - top
+                # The painted thumb is cell-rounded; anchor dragging to the
+                # actual position so grabbing it does not quantize the viewport.
+                origin = (self.height - thumb) * min(window.vertical_scroll, maximum) / maximum if maximum else 0
+                self.drag_offset = row - origin
                 return None
             self.drag_offset = thumb // 2
         elif mouse_event.event_type != MouseEventType.MOUSE_MOVE or self.drag_offset is None:

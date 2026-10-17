@@ -10,6 +10,8 @@ from prompt_toolkit.formatted_text.utils import fragment_list_to_text
 from prompt_toolkit.layout.mouse_handlers import MouseHandlers
 from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 
+from .pixelmouse import PixelMouse
+
 if TYPE_CHECKING:
     from .terminal import TerminalUI
 
@@ -17,6 +19,12 @@ if TYPE_CHECKING:
 def route_mouse(ui: TerminalUI, app: Application[None]) -> None:
     from .terminal import FEED_LINK_PREFIXES, InputWindow
 
+    if app.is_running and not app.is_done:
+        if "_pixel_mouse" not in ui.__dict__:
+            ui.__dict__["_pixel_mouse"] = PixelMouse.attach(app)
+        pixel_mouse = ui.__dict__["_pixel_mouse"]
+        if pixel_mouse is not None:
+            pixel_mouse.refresh()
     original = app.renderer.mouse_handlers
 
     def mouse_handler(event: MouseEvent) -> object:
@@ -69,6 +77,15 @@ def route_mouse(ui: TerminalUI, app: Application[None]) -> None:
         try:
             screen = app.renderer._last_screen
             if screen is not None:
+                precise = ui.__dict__.get("_pixel_position")
+                if precise is not None:
+                    for hit_window, position in screen.visible_windows_to_write_positions.items():
+                        if hit_window.content is ui._scrollbar and (
+                            position.xpos <= event.position.x < position.xpos + position.width
+                            and position.ypos <= event.position.y < position.ypos + position.height
+                        ):
+                            return ui._scrollbar.pointer(event, precise[1] - position.ypos
+                                                         - app.renderer.rows_above_layout)
                 position = screen.visible_windows_to_write_positions.get(ui.transcript)
                 info = ui.transcript.render_info
                 if position is not None and info is not None and ui.transcript in app.layout.walk_through_modal_area() and (

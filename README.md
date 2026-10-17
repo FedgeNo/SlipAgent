@@ -213,6 +213,10 @@ Provider context limits and free availability can change. Check `/models` for
 live catalog information; selection also fetches endpoint properties and uses
 their more conservative limits. A model's advertised maximum does not guarantee
 that every free endpoint offers the same window.
+Automatic routing refreshes provider catalogs after five minutes. Removed models
+keep their stored rankings but are excluded from coding and compression until
+they return. A failed catalog connection retains that provider's last known
+inventory; a successful empty catalog removes its models from selection.
 
 Model listings hide a curated blacklist of dedicated non-coding models, maintained
 with reasons in `src/slipagent/model_catalog.py`. New model IDs remain visible by

@@ -302,6 +302,11 @@ Catalog views sort free entries before paid entries and rank known entries
 within that ordering. Catalog discovery announces newly encountered unranked
 free models once, asking the user to update SlipAgent. Generic model routers
 are manual choices and do not trigger this notice.
+Catalog inventory expires after five minutes; working and compression selection
+share the routing lock and refreshed inventory. Successful catalogs replace each
+provider's available IDs, including empty catalogs. Connection failures preserve
+that provider's cached entries. The curated rank table retains removed IDs so a
+returning model can be selected without another ranking update.
 
 `Session.model_routing` owns optimal mode, purpose-specific route failures,
 provider authentication failures, credential identities, and catalog locking.

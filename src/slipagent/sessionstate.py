@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from .agent import Agent
-from .api import APIClient, APIError, APIConfigError
+from .api import APIClient, APIError, APIConfigError, APIConnectionError
 from .config import Config, ConfigError
 from .lifecycle import finish_cleanup
 from .mcp import MCPManager
@@ -24,6 +25,8 @@ from .work import SessionWork
 if TYPE_CHECKING:
     from .cli import Renderer
     from .modelrouting import ModelRouting
+
+CATALOG_REFRESH_SECONDS = 300.0
 
 
 @dataclass(slots=True)
@@ -95,11 +98,16 @@ class Session:
         return self.registry.resources
 
     async def catalog(self, refresh: bool = False) -> list[ModelInfo]:
-        """Combined provider catalogs, refreshed on explicit model selection."""
+        """Current provider inventory, cached for at most five minutes."""
         keys = {name: options["api_key"] for name, options in self.extensions.get("provider_options", {}).items()}
         keys[self.client.provider] = self.client.api_key
         names = active_providers(keys=keys)
-        if self._catalog is None or refresh or self.extensions.get("catalog_providers", names) != names:
+        # Existing sessions acquire a cache timestamp on their first call after
+        # reload. Availability comes only from catalogs; the curated rank table
+        # keeps historical models without manufacturing selectable endpoints.
+        checked_at = self.extensions.setdefault("catalog_checked_at", time.monotonic())
+        expired = time.monotonic() - checked_at >= CATALOG_REFRESH_SECONDS
+        if self._catalog is None or refresh or expired or self.extensions.get("catalog_providers", names) != names:
             async def catalog_for(provider: str) -> list[ModelInfo]:
                 if provider == self.client.provider:
                     return await self.client.list_models()
@@ -116,6 +124,9 @@ class Session:
                     if not isinstance(result, (APIError, ConfigError)):
                         raise result
                     errors.append(f"{name}: {result}")
+                    if isinstance(result, APIConnectionError):
+                        # A broken connection supplies no evidence of removal.
+                        catalog.extend(model for model in self._catalog or [] if model.provider == name)
                 else:
                     catalog.extend(result)
             self.extensions["catalog_errors"] = errors
@@ -123,6 +134,7 @@ class Session:
                 raise APIError("; ".join(errors))
             self._catalog = catalog
             self.extensions["catalog_providers"] = names
+            self.extensions["catalog_checked_at"] = time.monotonic()
         models = coding_models(self._catalog)
         routing = self.extensions.get("model_routing")
         if routing is not None:

@@ -19,16 +19,17 @@ RecordingTool = import_module("test-background-compaction").RecordingTool
 
 
 def entry(provider, model, rank, *, free=True):
-    return ModelInfo(model, provider=provider, rank=rank,
+    # Fixtures specify an ordering; production uses higher-is-better scores.
+    return ModelInfo(model, provider=provider, score=None if rank is None else 100.0 - rank,
                      pricing={"prompt": "0" if free else "1", "completion": "0" if free else "1"})
 
 
-def test_rank_metadata_is_shared_across_hosts_and_unknowns_stay_unranked():
+def test_score_metadata_is_shared_across_hosts_and_unknowns_stay_unscored():
     direct = ModelInfo("nvidia/nemotron-3-ultra-550b-a55b", provider="nvidia")
     hosted = ModelInfo(direct.id + ":free")
-    assert direct.rank == hosted.rank and direct.rank is not None
-    assert ModelInfo("new/model:free").rank is None
-    assert ModelInfo("gemini-3.8-flash", provider="google").rank == ModelInfo("google/gemini-3.8-flash").rank
+    assert direct.score == hosted.score and direct.score is not None
+    assert ModelInfo("new/model:free").score is None
+    assert ModelInfo("gemini-3.8-flash", provider="google").score == ModelInfo("google/gemini-3.8-flash").score
 
 
 @pytest.mark.parametrize("model", ["stepfun-ai/step-5-preview", "deepseek-ai/deepseek-v4.1-flash"])
@@ -164,7 +165,8 @@ async def test_manual_selection_disables_optimal_and_paid_is_never_auto_selected
 async def test_unknown_notice_is_once_per_new_model_and_excludes_routers(optimal_session):
     session, _, _ = optimal_session
     router = session.model_routing()
-    session._catalog += [entry("openrouter", "openrouter/free", None)]
+    session._catalog += [entry("openrouter", "openrouter/free", None),
+                         entry("nvidia", "meta/llama-3.2-11b-vision-instruct", None)]
     try:
         await router.candidates("working")
         await router.candidates("compression")
@@ -172,6 +174,7 @@ async def test_unknown_notice_is_once_per_new_model_and_excludes_routers(optimal
         assert output.count("New free models") == 1
         assert "openrouter::unknown" in output and "Update SlipAgent" in output
         assert "openrouter/free" not in output
+        assert "llama-3.2" not in output
     finally:
         await session.client.aclose()
 

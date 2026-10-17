@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from slipagent.model_catalog import coding_models
-from slipagent.modelranks import MODEL_ROUTERS, model_rank
+from slipagent.modelscores import MODEL_ROUTERS, SCORES, model_score, reviewed_model
 from slipagent.modelrouting import eligible_free
 from slipagent.nvidia import NvidiaClient
 from slipagent.protocol import model_response_format
@@ -19,11 +19,11 @@ from slipagent.types import Message, ModelInfo, ToolSpec
     ("openrouter", "stepfun/step-5-preview:free"),
     ("kilo", "stepfun/step-5-preview-free"),
 ])
-def test_step_five_rank_is_shared_and_precedes_ultra(provider, model):
-    rank = model_rank(provider, model)
-    assert rank is not None
-    assert rank == model_rank("openrouter", "stepfun/step-5-preview")
-    assert rank < model_rank("nvidia", "nvidia/nemotron-3-ultra-550b-a55b")
+def test_step_five_score_is_shared_and_precedes_ultra(provider, model):
+    score = model_score(provider, model)
+    assert score is not None
+    assert score == model_score("openrouter", "stepfun/step-5-preview")
+    assert score > model_score("nvidia", "nvidia/nemotron-3-ultra-550b-a55b")
 
 
 @pytest.mark.parametrize("direct, hosted", [
@@ -32,28 +32,52 @@ def test_step_five_rank_is_shared_and_precedes_ultra(provider, model):
     ("nvidia/nemotron-3.5-lightning-30b-a3b", "nvidia/nemotron-3.5-lightning"),
     ("nvidia/nemotron-nano-3-30b-a3b", "nvidia/nemotron-3-nano-30b-a3b"),
 ])
-def test_provider_aliases_have_one_rank(direct, hosted):
-    rank = model_rank("nvidia", direct)
-    assert rank is not None
-    assert rank == model_rank("openrouter", hosted + ":free")
+def test_provider_aliases_have_one_score(direct, hosted):
+    score = model_score("nvidia", direct)
+    assert score is not None
+    assert score == model_score("openrouter", hosted + ":free")
 
 
-def test_rank_never_makes_a_paid_endpoint_free():
+def test_score_never_makes_a_paid_endpoint_free():
     model = ModelInfo("stepfun/step-5-preview", provider="kilo",
                       pricing={"prompt": "0.000001", "completion": "0.0000027"})
-    assert model.rank is not None
+    assert model.score is not None
     assert not eligible_free(model)
-    assert model_rank("kilo", "stepfun/step-5-preview-free-experimental") is None
+    assert model_score("kilo", "stepfun/step-5-preview-free-experimental") is None
 
 
 def test_reviewed_free_catalog_exposes_only_documented_benchmark_gaps():
     catalog = json.loads((Path(__file__).parent / "fixtures/free-model-catalog.json").read_text())
     missing = [model.selector for provider, ids in catalog.items()
                for model in coding_models([ModelInfo(mid, provider=provider) for mid in ids])
-               if model.rank is None and model.id not in MODEL_ROUTERS]
-    # The 2026-10-15 review found general benchmarks, but no verified coding
-    # results for these two. Preserve the ordinary unranked-model behavior.
-    assert missing == ["nvidia::aisingapore/sea-lion-7b-instruct", "nvidia::zyphra/zamba2-7b-instruct"]
+               if model.score is None and model.id not in MODEL_ROUTERS]
+    # Visual and general-knowledge results cannot supply text-coding scores.
+    assert missing == ["nvidia::aisingapore/sea-lion-7b-instruct",
+                       "nvidia::meta/llama-3.2-11b-vision-instruct",
+                       "nvidia::meta/llama-3.2-90b-vision-instruct",
+                       "nvidia::zyphra/zamba2-7b-instruct"]
+    assert all(reviewed_model(*selector.split("::", 1)) for selector in missing)
+
+
+def test_scores_are_bounded_estimates_and_have_stable_aliases():
+    assert all(score is None or 0 <= score <= 100 for score in SCORES.values())
+    assert model_score("kilo", "reflection/beam-free") == model_score("kilo", "reflection/beam")
+    assert model_score("openrouter", "xingchen-agi/xing4.0-29b-a4b:free") is not None
+    assert model_score("kilo", "reflection/beam-free-experimental") is None
+
+
+def test_model_display_uses_estimated_score_and_sorts_highest_first():
+    from slipagent.cli import _model_label
+    from slipagent.modelpricing import model_order
+    free = {"prompt": "0", "completion": "0"}
+    high = ModelInfo("high", score=90.5, pricing=free)
+    low = ModelInfo("low", score=0.0, pricing=free)
+    unknown = ModelInfo("unknown", pricing=free)
+    paid = ModelInfo("paid", score=100.0, pricing={"prompt": "1", "completion": "1"})
+    assert sorted([paid, low, unknown, high], key=model_order) == [high, low, unknown, paid]
+    assert "estimated coding score: 90.5/100" in _model_label(high)
+    assert "estimated coding score: 0.0/100" in _model_label(low)
+    assert "score:" not in _model_label(unknown)
 
 
 @pytest.mark.parametrize("model, native, limit, output", [
@@ -78,7 +102,7 @@ async def test_ranked_nvidia_models_can_be_selected_and_requested(model, native,
 
     async with NvidiaClient("dummy", transport=httpx.MockTransport(handle)) as client:
         entry, = await client.list_models()
-        assert eligible_free(entry) and entry.rank is not None
+        assert eligible_free(entry) and entry.score is not None
         profile = await client.model_capabilities(model)
         assert (profile.native_tools, profile.context_length, profile.max_completion_tokens) == (native, limit, output)
         response_format = model_response_format(model, profile, native_tools=native)

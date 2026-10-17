@@ -38,15 +38,15 @@ class MistralClient(APIClient):
                     self._model_properties[alias] = {**properties, "id": alias}
                     result.append(ModelInfo(id=alias, provider=self.provider,
                                             context_length=model.context_length, pricing=model.pricing,
-                                            rank=model.rank))
+                                            score=model.score))
         # Some catalogs list aliases as independent rows, in either order.
         by_id = {model.id: model for model in result}
         for model in result:
-            if model.rank is None:
+            if model.score is None:
                 continue
             for alias in self._model_properties[model.id].get("aliases") or []:
                 if isinstance(alias, str) and alias in by_id:
-                    by_id[alias].rank = model.rank
+                    by_id[alias].score = model.score
                     by_id[alias].pricing = model.pricing
         return result
 

@@ -95,8 +95,8 @@ async def test_mistral_activation_routes_its_ranked_free_model(tmp_path):
         session = import_module("test-providers").session_for(client, tmp_path)
         session.transport = transport
         session._catalog = await client.list_models()
-        assert session._catalog[0].rank is not None
-        assert session._catalog[1].rank == session._catalog[0].rank
+        assert session._catalog[0].score is not None
+        assert session._catalog[1].score == session._catalog[0].score
         session.configure_compaction()
         router = session.agent._compactor().routing
         try:
@@ -120,8 +120,8 @@ async def test_listed_alias_inherits_free_price_and_rank(reverse):
     async with MistralClient("dummy", transport=httpx.MockTransport(lambda r: httpx.Response(200, json=data))) as client:
         models = await client.list_models()
         assert len(models) == 2
-        assert all(eligible_free(model) and model.rank is not None for model in models)
-        assert models[0].rank == models[1].rank
+        assert all(eligible_free(model) and model.score is not None for model in models)
+        assert models[0].score == models[1].score
 
 
 @pytest.mark.parametrize("stream", [True, False])

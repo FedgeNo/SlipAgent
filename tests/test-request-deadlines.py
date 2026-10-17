@@ -84,7 +84,7 @@ async def test_silent_request_deadline_cancels_and_falls_back(tmp_path, monkeypa
         retry = AsyncMock(return_value=True)
         monkeypatch.setattr(client, 'wait_retry', retry)
         session = session_for(client, tmp_path)
-        session._catalog = [ModelInfo(name, provider='openrouter', rank=rank,
+        session._catalog = [ModelInfo(name, provider='openrouter', score=None if rank is None else 100.0 - rank,
                                      pricing={'prompt': '0', 'completion': '0'})
                             for rank, name in enumerate(('first', 'second'), 1)]
         diagnostics = RequestDiagnostics()

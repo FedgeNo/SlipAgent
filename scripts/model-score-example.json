@@ -1,0 +1,12 @@
+{
+  "model": "reflection/beam",
+  "benchmarks": {
+    "DeepSWE 1.1": 43.3,
+    "SWE Verified": 81.6,
+    "Terminal 2.1": 80.1,
+    "LiveCodeBench": 88.3
+  },
+  "aliases": ["reflection/beam-free"],
+  "sources": ["https://huggingface.co/reflection/Beam-1.0-501B-A23B"],
+  "notes": "BF16 results; confirm that the provider endpoint serves this model version."
+}

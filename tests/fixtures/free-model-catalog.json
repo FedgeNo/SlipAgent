@@ -17,7 +17,8 @@
         "poolside/laguna-s-2.1:free",
         "poolside/laguna-xs-2.1:free",
         "thinkingmachines/inkling-small:free",
-        "thinkingmachines/inkling:free"
+        "thinkingmachines/inkling:free",
+        "xingchen-agi/xing4.0-29b-a4b:free"
     ],
     "kilo": [
         "cohere/north-mini-code:free",
@@ -36,7 +37,9 @@
         "poolside/laguna-s-2.1:free",
         "poolside/laguna-xs-2.1:free",
         "stealth/glyph-cluster",
-        "thinkingmachines/inkling-small:free"
+        "thinkingmachines/inkling-small:free",
+        "reflection/beam-free",
+        "xingchen-agi/xing4.0-29b-a4b:free"
     ],
     "nvidia": [
         "01-ai/yi-large",

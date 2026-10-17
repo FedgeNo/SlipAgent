@@ -15,7 +15,7 @@ import subprocess
 import sys
 import threading
 from contextlib import ExitStack
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +35,8 @@ class StubOpenRouter:
         self.include_memory = include_memory
         self.requests: list[dict[str, Any]] = []
         self.summary_requests: list[dict[str, Any]] = []
-        self._server = HTTPServer(("127.0.0.1", 0), self._make_handler())
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._make_handler())
+        self._server.daemon_threads = False
         self.port = self._server.server_address[1]
         # Teardown should not spend the server's default half-second poll
         # interval waiting for a request that the test has finished sending.
@@ -47,6 +48,11 @@ class StubOpenRouter:
         stub = self
 
         class Handler(BaseHTTPRequestHandler):
+            # A cancelled client can connect without sending headers. Bound
+            # that idle read and join handlers during server_close(), while
+            # separate handlers keep other metadata/compression requests moving.
+            timeout = 5.0
+
             def log_message(self, *args: Any) -> None:  # silence stderr noise
                 pass
 
@@ -209,6 +215,44 @@ def metadata_server(monkeypatch):
         monkeypatch.setenv("OPENROUTER_BASE_URL", stub.base_url)
         monkeypatch.setenv("OPENROUTER_MODEL", "stub/one")
         yield stub
+
+
+def test_stub_shutdown_drains_a_connection_without_headers():
+    accepted = threading.Event()
+
+    class ObservedStub(StubOpenRouter):
+        def _make_handler(self):
+            base = super()._make_handler()
+
+            class Handler(base):
+                def setup(self):
+                    super().setup()
+                    accepted.set()
+
+            return Handler
+
+    stub = ObservedStub([]).__enter__()
+    connection = socket.create_connection(("127.0.0.1", stub.port))
+    stopped = threading.Event()
+
+    def close():
+        try:
+            stub.__exit__()
+        finally:
+            stopped.set()
+
+    closer = threading.Thread(target=close)
+    try:
+        assert accepted.wait(2)
+        closer.start()
+        assert stopped.wait(7), "Stub shutdown waited indefinitely for unused request headers"
+        assert not stub._thread.is_alive()
+    finally:
+        connection.close()
+        if closer.ident is None:
+            stub.__exit__()
+        else:
+            closer.join(timeout=5)
 
 
 # --------------------------------------------------------------------------- #
@@ -1473,7 +1517,9 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
                 def do_POST(self):
                     if not started.is_set():
                         started.set()
-                        release.wait(5)
+                        # The test releases this after /stop reaches the UI;
+                        # its finally block also releases on assertion failure.
+                        release.wait()
                     super().do_POST()
             return Handler
 
@@ -1546,16 +1592,18 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             os.write(master, b"go\r")
             wait_for(started.is_set)
             os.write(master, b"/rename Work in progress\r")
-            wait_for(lambda: screen.title.endswith("Work in progress | SlipAgent"))
-            os.write(master, b"/stop\r")
-            wait_for(lambda: "Stopping After This Step" in screen.display[17])
+            wait_for(lambda: "/rename Work in progress" in "\n".join(screen.display[:17]))
+            assert not screen.title.endswith("Work in progress | SlipAgent")
             os.write(master, b"queued followup\r")
             wait_for(lambda: "queued followup" in "\n".join(screen.display[:17]))
+            os.write(master, b"/stop\r")
+            wait_for(lambda: "Stopping After This Step" in screen.display[17])
             release.set()
             wait_for(lambda: "Stopped after the current step" in "\n".join(screen.display[:17]) and "Ready" in screen.display[17])
+            wait_for(lambda: screen.title.endswith("Work in progress | SlipAgent"))
             assert (project_dir / "finished.txt").read_text() == "completed"
             assert len(stub.requests) == 1
-            os.write(master, b"continue\r")
+            os.write(master, b"Inspect the next file\r")
             wait_for(lambda: "resumed successfully" in "\n".join(screen.display[:17]))
             assert len(stub.requests) == 2
             history = unpack_api_context(stub.requests[1]["messages"])

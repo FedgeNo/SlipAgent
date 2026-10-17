@@ -220,7 +220,7 @@ async def test_installed_key_reaches_catalog_model_selection_and_compression(key
     session, out, requests, clients = key_session
     monkeypatch.setenv("NVIDIA_BASE_URL", "https://nvidia.example.test/v1")
     await cli._key_command(session, "nvapi-new", cli.Style(False), out)
-    model = ModelInfo("test/new", provider="nvidia", rank=1, pricing={"prompt": "0", "completion": "0"})
+    model = ModelInfo("test/new", provider="nvidia", score=99.0, pricing={"prompt": "0", "completion": "0"})
     catalog = AsyncMock(return_value=[model])
     monkeypatch.setattr(sessionstate, "fetch_catalog", catalog)
     monkeypatch.setattr(session.client, "list_models", AsyncMock(return_value=[]))

@@ -1263,6 +1263,8 @@ async def _run_request(session: Session, prompt: str, style: Style) -> bool:
                         if renderer.terminal is not None:
                             renderer.terminal.consume_submission(line)
                         session.agent.enqueue(text)
+                        if session.agent.stop_requested:
+                            session.work.resume_after_commands = True
                     if reader is not None:
                         reader = asyncio.create_task(_read_line(session, style))
 
@@ -1424,8 +1426,8 @@ def _queue_command(session: Session, line: str, command: str) -> None:
     if commands is None:
         commands = []
         session.work.deferred_commands = commands
-    if not commands:
-        session.extensions["resume_after_commands"] = not session.agent.stop_requested
+    # Fresh input resumes after a stop; /stop clears this for older input.
+    session.work.resume_after_commands = True
     commands.append(line)
     pause = any(not _boundary_command(queued) for queued in commands)
     session.renderer._queued_settings_pause = pause and bool(session.extensions.get("resume_after_commands"))
@@ -1453,7 +1455,7 @@ async def _apply_deferred_commands(session: Session, *, exiting: bool = False) -
     """
     commands = session.work.deferred_commands or []
     if session.agent.has_queued_input and not exiting:
-        return bool(commands and session.work.resume_after_commands), False
+        return bool(session.work.resume_after_commands), False
     session.work.deferred_commands = None
     interrupt_sequence = session.extensions.get("interrupt_sequence", 0)
     resume = bool(session.work.resume_after_commands)
@@ -1483,7 +1485,9 @@ async def _apply_deferred_commands(session: Session, *, exiting: bool = False) -
             # A prompt is a barrier: later commands wait for its request.
             session.work.deferred_commands = commands[end:] or None
             session.work.resume_after_commands = resume
-            return True, False
+            # Keep an explicit /stop authoritative even when a preceding
+            # queued command has now finished applying.
+            return resume, False
         parts = line[1:].split(None, 1)
         command = parts[0].lower()
         argument = parts[1].strip() if len(parts) > 1 else ""
@@ -1587,14 +1591,14 @@ def _model_label(model: ModelInfo) -> str:
     if price.startswith("$"):
         price += "/Mtok"
     context = f"{model.context_length:,}" if model.context_length else "unknown"
-    rank = f"  rank: {model.rank}" if model.rank is not None else ""
-    return f"{model.selector}{name}  {price}  context: {context}{rank}"
+    score = f"  estimated coding score: {model.score:.1f}/100" if model.score is not None else ""
+    return f"{model.selector}{name}  {price}  context: {context}{score}"
 
 
 def _model_table(session: Session, models: list[ModelInfo]) -> str:
     terminal = session.renderer.terminal
     columns = terminal.output.get_size().columns if terminal is not None else shutil.get_terminal_size((80, 24)).columns
-    rows = [[f"{model.provider}::\n{model.id}" + (f"\nRank: {model.rank}" if model.rank is not None else ""),
+    rows = [[f"{model.provider}::\n{model.id}" + (f"\nEst. coding score: {model.score:.1f}/100" if model.score is not None else ""),
              f"{model.context_length:,}" if model.context_length else "-", _price_cell(model.pricing)] for model in models]
     headers = ["Model", "Context", "In/Out $/Mtok"]
     context_width = max(len(headers[1]), *(len(row[1]) for row in rows))

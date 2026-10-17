@@ -72,7 +72,7 @@ async def test_additional_free_models_are_visible_ranked_and_compatible(model, m
 
     async with GoogleClient("dummy", transport=httpx.MockTransport(handle)) as client:
         models = await client.list_models()
-        assert len(models) == 1 and models[0].rank is not None
+        assert len(models) == 1 and models[0].score is not None
         assert eligible_free(models[0])
         monkeypatch.setenv("GEMINI_BILLING_TIER", "paid")
         assert eligible_free(models[0]) == gemma

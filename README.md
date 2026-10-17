@@ -154,21 +154,24 @@ own harness.
 
 Ordinary startup selects the highest-ranked eligible free model. Explicit
 `--model` or `--provider` launch options start in manual mode. `/optimal on`
-enables automatic selection again. Rankings are
-manually reviewed from published coding benchmarks; only one overall rank is
-stored with model metadata. Smaller numbers are better. The same model/version
-shares its rank across providers, and model lists display the rank beside it.
-Different benchmark harnesses measure different tasks, so this order is a
-coding preference rather than a guarantee of results or availability.
-The complete table is in [`src/slipagent/modelranks.py`](src/slipagent/modelranks.py).
+enables automatic selection again. Model metadata stores one **estimated text-coding
+score from 0 to 100; higher is better**. Published benchmark results are calibrated
+onto a common scale using models tested on multiple benchmarks, including paid
+reference models. Visual results are excluded. These synthetic scores guide
+selection; they are not measured pass percentages or guarantees of results.
+The same model/version shares its score across providers, and model lists display
+it. The complete table is in [`src/slipagent/modelscores.py`](src/slipagent/modelscores.py).
+See [scoring and updates](docs/model-scores.md) for sources, validation limits, and
+the offline tool that scores a new model using saved calibration without
+recalculating existing entries.
 Provider-specific IDs, including Step 5's free promotional route and NVIDIA's
-longer Nemotron IDs, share the underlying model's rank. A rank does not make a
+longer Nemotron IDs, share the underlying model's score. A score does not make a
 paid endpoint free: automatic selection still checks that endpoint's pricing.
 
 Working requests keep their ordinary retries for transient failures. An
 unusable model, permanent request failure, or exhausted recovery moves coding
-to the next eligible rank. The conversation, original task, failed request
-records, and completed tool results stay intact. Tool/test failures remain
+to the next highest-scoring eligible model. The conversation, original task,
+failed request records, and completed tool results stay intact. Tool/test failures remain
 feedback for the current model. Each automatic selection is announced.
 Connection failures retain the current model after its ordinary retries are
 exhausted. A broken network connection does not exclude a model or provider;
@@ -184,7 +187,7 @@ its separate 20-minute timeout.
 
 The replacement remains selected until another failure, manual selection, or
 reset. Both `/optimal on` and `/optimal reset` clear failed coding/compression
-routes and retry from the highest rank. `/optimal off` keeps the current model
+routes and retry from the highest score. `/optimal off` keeps the current model
 under manual control; `/optimal` reports the state. Successful manual model or
 provider selection through `/model`, `/models`, or `/provider` also disables
 optimal mode. During active work, `/optimal` changes apply at the next safe step
@@ -200,13 +203,14 @@ a new conversation; a credential change clears that provider's exclusions.
 An authentication failure excludes that provider for both coding and compression;
 model-specific failures are tracked separately for those two uses.
 
-New free catalog models without a rank remain manually selectable. SlipAgent
-announces their release and asks you to update SlipAgent for updated rankings.
-Rankings are refreshed with software updates, without model calls or automatic
-benchmark collection at runtime. The October 15 catalog review covers 65 ranked
-models. SEA-LION 7B Instruct and Zamba2 7B Instruct remain unranked because that
-review found no verifiable coding results for them. With
-`GEMINI_BILLING_TIER=paid`, Google's billed Gemini IDs are excluded from automatic
+New free catalog models without a score remain manually selectable. SlipAgent
+announces their release and asks you to update SlipAgent for updated scores.
+Scores are refreshed with software updates, without model calls or automatic
+benchmark collection at runtime. The October 16 review scores 65 models, including
+Reflection Beam and Xing 4.0. SEA-LION 7B Instruct, Zamba2 7B Instruct, and the
+Llama 3.2 11B/90B Vision models remain unscored because the review found no verified
+text-coding results for them. Known evidence gaps do not trigger new-release notices.
+With `GEMINI_BILLING_TIER=paid`, Google's billed Gemini IDs are excluded from automatic
 free selection; the always-free Gemma 4 models remain eligible.
 
 Provider context limits and free availability can change. Check `/models` for
@@ -214,7 +218,7 @@ live catalog information; selection also fetches endpoint properties and uses
 their more conservative limits. A model's advertised maximum does not guarantee
 that every free endpoint offers the same window.
 Automatic routing refreshes provider catalogs after five minutes. Removed models
-keep their stored rankings but are excluded from coding and compression until
+keep their stored scores but are excluded from coding and compression until
 they return. A failed catalog connection retains that provider's last known
 inventory; a successful empty catalog removes its models from selection.
 
@@ -304,8 +308,9 @@ allowance. Responses continue streaming at the provider's speed. Upload
 pacing does not guarantee that Google will accept a single prompt larger than
 its TPM quota; that depends on Google's server-side quota accounting.
 
-Model lists put free models first, ordered by overall rank, with unranked entries
-after ranked ones. The interactive picker uses a green background
+Model lists put free models first, ordered by descending estimated coding score,
+with unscored entries afterward. Ties use provider and model ID for stable ordering.
+The interactive picker uses a green background
 and a matching `= free` legend on the right. `/models free` includes models with
 a free tier; these retain a `free tier` label because account billing and quotas
 still apply. Unknown prices are shown as `-`.
@@ -572,7 +577,7 @@ for the implementation workflow, state ownership, and failure behavior.
 
 ## Configure
 
-Successful `--model` and `/model` selections remember the provider and its model separately in `preferences.json` under `SLIPAGENT_STATE_DIR` (default platform data directory; Linux: `$XDG_DATA_HOME/slipagent` or `~/.local/share/slipagent`). Initial provider selection uses `--provider`, then `SLIPAGENT_PROVIDER`, the saved provider if its key is present, and finally the first provider with a key (OpenRouter takes precedence). Initial model selection uses CLI flags first, then the selected provider's exported model variable, its remembered model, `.env`, and its built-in default. Without explicit `--model` or `--provider` flags, optimal mode replaces this initial choice with the best eligible free rank during startup.
+Successful `--model` and `/model` selections remember the provider and its model separately in `preferences.json` under `SLIPAGENT_STATE_DIR` (default platform data directory; Linux: `$XDG_DATA_HOME/slipagent` or `~/.local/share/slipagent`). Initial provider selection uses `--provider`, then `SLIPAGENT_PROVIDER`, the saved provider if its key is present, and finally the first provider with a key (OpenRouter takes precedence). Initial model selection uses CLI flags first, then the selected provider's exported model variable, its remembered model, `.env`, and its built-in default. Without explicit `--model` or `--provider` flags, optimal mode replaces this initial choice with the highest-scoring eligible free model during startup.
 
 The selected provider requires its own API key. In addition to `.env`,
 you can supply it through the process environment:
@@ -843,7 +848,7 @@ In the REPL:
 | `/model <slug>` | Switch model and remember the choice for future launches |
 | `/models [filter]` | Select from the catalog with context and pricing; optionally filter by name |
 | `/models free` | Select from zero-cost models |
-| `/optimal [on\|off\|reset]` | Show automatic free-model routing; on/reset clears failures and selects the top rank; off keeps the current model under manual control |
+| `/optimal [on\|off\|reset]` | Show automatic free-model routing; on/reset clears failures and selects the highest score; off keeps the current model under manual control |
 | `/provider <provider>` | Select and remember a free default: OpenRouter/NVIDIA Nemotron 3 Ultra, or Kilo Auto Free; refuse missing models or nonzero/unknown pricing |
 | `/temperature` | Show the explicit temperature or provider default, and whether the selected model supports changing it |
 | `/temperature <value>` | Set the working-model temperature from 0 to 2; unsupported changes report an error |
@@ -1209,8 +1214,8 @@ Commands and prompts share submission order while the agent works. Commands appl
 after the current response and complete tool batch finish, and after earlier prompts
 reach a model request. Later prompts use the resulting settings. Settings changes then resume
 the task without resetting its request limit. `/stop` and exit controls remain
-immediate control actions. `/stop` prevents automatic
-continuation; reset, resume, and `/task new` replace the task instead of restarting
+immediate control actions. `/stop` holds previously queued input until fresh input
+arrives; reset, resume, and `/task new` replace the task instead of restarting
 the previous work. Slash commands are never sent to the model as user messages.
 
 The working indicator shows a moon-phase spinner beside `Working (esc to interrupt)`.
@@ -1521,8 +1526,10 @@ keeps their results in the conversation, and prevents another working model requ
 completed step still runs.
 Managed background commands also continue until completion, their execution
 timeout, or an explicit stop. Their completion cannot restart the agent.
-Queued input does not restart a stopped run automatically. Enter a follow-up
-or `continue` to resume. SlipAgent defines no Ctrl-C or SIGINT key binding.
+Input queued before `/stop` stays pending. A new prompt or queued command entered
+afterward resumes work, including while the current step is finishing. A new
+prompt also starts work from idle; no special resume phrase is required.
+SlipAgent defines no Ctrl-C or SIGINT key binding.
 Ctrl-D, `/exit`, or its alias `/quit` exits the session. Pipes and `TERM=dumb`
 use plain output.
 

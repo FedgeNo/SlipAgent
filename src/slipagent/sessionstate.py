@@ -103,7 +103,7 @@ class Session:
         keys[self.client.provider] = self.client.api_key
         names = active_providers(keys=keys)
         # Existing sessions acquire a cache timestamp on their first call after
-        # reload. Availability comes only from catalogs; the curated rank table
+        # reload. Availability comes only from catalogs; the curated score table
         # keeps historical models without manufacturing selectable endpoints.
         checked_at = self.extensions.setdefault("catalog_checked_at", time.monotonic())
         expired = time.monotonic() - checked_at >= CATALOG_REFRESH_SECONDS
@@ -136,6 +136,13 @@ class Session:
             self.extensions["catalog_providers"] = names
             self.extensions["catalog_checked_at"] = time.monotonic()
         models = coding_models(self._catalog)
+        # Refresh curated values after a score-table reload without fetching
+        # catalogs again. Preserve provider-supplied alias metadata for IDs that
+        # are absent from our exact identity table.
+        from .modelscores import model_score, reviewed_model
+        for model in models:
+            if reviewed_model(model.provider, model.id):
+                model.score = model_score(model.provider, model.id)
         routing = self.extensions.get("model_routing")
         if routing is not None:
             routing.catalog_notice(models)

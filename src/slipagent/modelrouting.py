@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING
 
 from .api import APIError, APIConfigError, APIConnectionError, APIResponseError, APITransportError, RETRYABLE_STATUS
 from .context import ContextError
-from .modelpricing import free_label
-from .modelranks import MODEL_ROUTERS
+from .modelpricing import free_label, model_order
+from .modelscores import MODEL_ROUTERS, reviewed_model
 from .providers import provider_class
 from .types import ModelInfo
 
@@ -60,12 +60,13 @@ class ModelRouting:
 
     def catalog_notice(self, models: list[ModelInfo]) -> None:
         unknown = {model.selector for model in models if free_label(model.pricing) is not None
-                   and model.rank is None and model.id not in MODEL_ROUTERS}
+                   and model.score is None and model.id not in MODEL_ROUTERS
+                   and not reviewed_model(model.provider, model.id)}
         new = unknown - self.notified
         if new:
             self.notified.update(new)
             self.notice("New free models have been released: " + ", ".join(sorted(new))
-                        + ". Update SlipAgent for updated model rankings.")
+                        + ". Update SlipAgent for updated coding scores.")
 
     async def candidates(self, purpose: str, *, include_failed: bool = False) -> list[ModelInfo]:
         options = self.session.compression_options()
@@ -82,9 +83,9 @@ class ModelRouting:
         async with self.catalog_lock:
             models = await self.session.catalog()
         self.catalog_notice(models)
-        ranked = sorted((model for model in models if model.rank is not None
+        ranked = sorted((model for model in models if model.score is not None
                          and model.provider in credentials and model.provider not in self.failed_providers
-                         and eligible_free(model)), key=lambda model: (model.rank or 0, model.provider, model.id))
+                         and eligible_free(model)), key=model_order)
         healthy = [model for model in ranked if model.selector not in self.failed[purpose]]
         return ranked if include_failed else healthy
 
@@ -122,7 +123,7 @@ class ModelRouting:
                 self.reject(model, "working", exc)
                 self.notice(f"Optimal skipped {model.selector}: {exc}")
                 continue
-            self.notice(f"Optimal selected {model.selector} (rank {model.rank}).")
+            self.notice(f"Optimal selected {model.selector} (estimated coding score {model.score:.1f}/100).")
             return
         raise APIConfigError("Optimal exhausted the eligible ranked free models. "
                              "Use /optimal reset to retry from the top, or /model to select a model.")

@@ -296,16 +296,20 @@ Native routes without schemas request plain reply text. JSON-only routes request
 `response` and `tool_calls` on every step, including final answers.
 Selection preflight publishes neither the model nor its profile on failure.
 
-`modelranks.py` stores manually reviewed overall coding ranks; `ModelInfo.rank`
-exposes the same model/version rank across providers. Unknown IDs have no rank.
-Catalog views sort free entries before paid entries and rank known entries
-within that ordering. Catalog discovery announces newly encountered unranked
-free models once, asking the user to update SlipAgent. Generic model routers
-are manual choices and do not trigger this notice.
+`modelscores.py` stores calibrated text-coding scores; `ModelInfo.score` exposes
+the same model/version estimate across providers. Higher scores sort first,
+after free/paid grouping, with provider/model IDs breaking ties. Zero is a valid
+score; `None` indicates missing evidence. Catalog discovery announces newly
+encountered unscored free models once, asking the user to update SlipAgent.
+Reviewed evidence gaps and generic routers remain manual choices without a
+new-release notice. Cached catalogs refresh known scores from the curated table
+on each access, so compatible table edits apply without a catalog request.
+The offline maintenance script uses saved benchmark calibration; runtime code
+loads only final scores and exact aliases. See [model scoring](model-scores.md).
 Catalog inventory expires after five minutes; working and compression selection
 share the routing lock and refreshed inventory. Successful catalogs replace each
 provider's available IDs, including empty catalogs. Connection failures preserve
-that provider's cached entries. The curated rank table retains removed IDs so a
+that provider's cached entries. The curated score table retains removed IDs so a
 returning model can be selected without another ranking update.
 
 `Session.model_routing` owns optimal mode, purpose-specific route failures,
@@ -315,21 +319,22 @@ selects manual mode. Fetch candidate catalogs alongside the other startup
 services, then preflight selection after MCP, environment, and history restore
 finish. Startup failure closes any provider client selected during this phase.
 Automatic eligibility requires a configured key, verified free pricing/tier,
-and a known rank. Billed Google accounts are excluded. `/optimal on` and
-`/optimal reset` clear all exclusions and preflight candidates in rank order;
+and a known score. Billed Google accounts are excluded. `/optimal on` and
+`/optimal reset` clear all exclusions and preflight candidates by descending score;
 manual selection or `/optimal off` disables working fallback. This mode and
 failure state are process-local; automatic selection does not save preferences.
 Credential/endpoint changes clear that provider's exclusions; conversation reset
-clears all exclusions. Rank metadata changes in `types.py` require a restart.
+clears all exclusions. The migration from rank to score in the stable `ModelInfo`
+dataclass requires a restart. Subsequent score-table edits are reloadable.
 
 `Agent._step` checks current eligibility before requesting a response. Normal
 request recovery happens first. When a working request exhausts recovery,
-optimal mode excludes its route and selects the next rank, rebuilding context
+optimal mode excludes its route and selects the next model by score, rebuilding context
 with retained task/history and durable failed attempts. A provider HTTP 401
 excludes all its models for both purposes. If no route remains, further prompts
 stay stopped until a reset, credential change, or manual selection. The fallback
 boundary encloses model requests only: accepted tool batches and test failures
-do not trigger it or replay tools. The replacement stays selected; rank alone
+do not trigger it or replay tools. The replacement stays selected; score alone
 does not move it back to a previously failed model. Stop and request limits still
 take precedence.
 
@@ -508,8 +513,9 @@ and subprocess operations retain their event-loop resources.
 State-changing slash commands queue in FIFO order while work is active. The
 agent finishes its response and whole tool batch, then applies commands while
 idle. Settings changes resume the same work with its original request budget
-and repetition guard. Explicit stop/exit prevents that automatic continuation;
-reset, resume, and starting a new task do not restart the replaced task. Command
+and repetition guard. Explicit stop holds earlier input until a new submission;
+exit prevents automatic continuation.
+Reset, resume, and starting a new task do not restart the replaced task. Command
 text remains outside model history and session journals.
 
 `/stop` finishes the active response and entire tool batch and prevents another

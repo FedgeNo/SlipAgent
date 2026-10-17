@@ -9,7 +9,7 @@ import pytest
 from slipagent import cli
 from slipagent.tools.base import Tool, ToolResult
 from slipagent.tools.discovery import tool_catalog
-from test_agent import StubClient, call, completion
+from test_agent import StubClient, call, completion, unpack_context
 from test_cli_e2e import metadata_server
 
 
@@ -121,4 +121,68 @@ async def test_deferred_settings_after_final_failure_or_exit(tmp_path, monkeypat
         release.set()
         step.cancel()
         await asyncio.gather(step, return_exceptions=True)
+        await cli._shutdown(session)
+
+
+@pytest.mark.parametrize("queued_setting", [False, True])
+@pytest.mark.parametrize("new_input", [None, "Inspect the next file", "/rename New title"])
+async def test_stop_holds_earlier_input_until_new_input(
+    tmp_path, monkeypatch, metadata_server, queued_setting, new_input,
+):
+    session = await cli.build_session(cli.build_parser().parse_args([
+        "--no-mcp", "--no-reload", "-w", str(tmp_path),
+    ]))
+    session.renderer.stream = io.StringIO()
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class GatedClient(StubClient):
+        async def chat(self, **kwargs):
+            if not self.calls:
+                entered.set()
+                await release.wait()
+            return await super().chat(**kwargs)
+
+    client = GatedClient([completion("First request finished."), completion("New request finished.")])
+    session.agent.client = client
+    lines = asyncio.Queue()
+
+    async def read(*args):
+        return await lines.get()
+
+    monkeypatch.setattr(cli, "_read_line", read)
+    task = asyncio.create_task(cli._run_request(session, "Start work", session.renderer.style))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        if queued_setting:
+            await cli._handle_command(session, "/rename Queued title")
+            cli._queue_command(session, "Earlier queued prompt", "input")
+        else:
+            session.agent.enqueue("Earlier queued prompt")
+        await cli._handle_command(session, "/stop")
+        if new_input is not None:
+            lines.put_nowait(new_input)
+            async with asyncio.timeout(2):
+                while new_input not in session.agent.pending and new_input not in (session.work.deferred_commands or []):
+                    await asyncio.sleep(0)
+        release.set()
+        assert not await asyncio.wait_for(task, 5)
+        if new_input is None:
+            assert len(client.calls) == 1
+            assert session.agent.stopped
+            assert session.agent.pending == ["Earlier queued prompt"]
+            assert not session.work.deferred_commands
+            assert not await cli._run_request(session, "Inspect the next file", session.renderer.style)
+        elif new_input.startswith("/"):
+            assert "title: New title" in session.renderer.stream.getvalue()
+        assert len(client.calls) == 2
+        messages = [m.content for m in unpack_context(client.calls[1]["messages"]) if m.role == "user"]
+        assert "Earlier queued prompt" in messages
+        if new_input is None or not new_input.startswith("/"):
+            assert messages.index("Earlier queued prompt") < messages.index("Inspect the next file")
+        assert not session.work.deferred_commands
+        assert not session.agent.pending
+    finally:
+        release.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
         await cli._shutdown(session)

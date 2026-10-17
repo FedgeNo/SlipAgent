@@ -169,7 +169,7 @@ async def test_paid_working_model_allows_its_provider_free_model(routing):
     router, _, _, _, _ = routing
     session = router.models.session
     session.agent.model = "paid"
-    session.extra.append(ModelInfo("paid", provider="openrouter", rank=1,
+    session.extra.append(ModelInfo("paid", provider="openrouter", score=99.0,
                                    pricing={"prompt": "1", "completion": "1"}))
     try:
         choices = [await router.select(set()) for _ in range(4)]
@@ -253,7 +253,7 @@ async def test_every_failure_moves_to_another_provider(routing, monkeypatch, gro
 async def test_permanent_failure_uses_next_rank_on_later_provider_rotation(routing, monkeypatch):
     from slipagent.api import APIClient, APIResponseError
     router, _, _, _, _ = routing
-    router.models.session.extra.append(ModelInfo("best:free", provider="kilo", rank=1,
+    router.models.session.extra.append(ModelInfo("best:free", provider="kilo", score=99.0,
                                                 pricing={"prompt": "0", "completion": "0"}))
     attempts = []
     original = APIClient.chat

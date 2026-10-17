@@ -18,3 +18,8 @@ def default_threads() -> int:
     except (AttributeError, NotImplementedError, psutil.Error):
         pass
     return max(1, int(threads))
+
+
+def background_threads() -> int:
+    """Leave half the cores to the user's own work during background indexing."""
+    return max(1, default_threads() // 2)

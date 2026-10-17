@@ -352,6 +352,8 @@ class MarkdownStream:
         self.pending = ""
         self.dirty = False
         self.literal_preview = False
+        # (fence character, fence length, language) while a code block is open.
+        self.fence: tuple[str, int, str] | None = None
 
     def append(self, text: str) -> None:
         self.source.seek(0, 2)
@@ -363,10 +365,56 @@ class MarkdownStream:
         self.source.seek(0)
         return self.source.read()
 
+    def _open_fence(self) -> bool:
+        """Enter streaming code mode when pending starts an unclosed fence."""
+        lines = self.pending.splitlines(keepends=True)
+        start = 0
+        while start < len(lines) and not lines[start].strip():
+            start += 1
+        opening = re.match(r"^ {0,3}(`{3,}|~{3,})([^\n]*)\n$", lines[start]) if start < len(lines) else None
+        if opening is None or opening[1][0] == "`" and "`" in opening[2]:
+            return False
+        marker = opening[1]
+        closing = re.compile(r"^ {0,3}" + re.escape(marker[0]) + "{" + str(len(marker)) + r",}[ \t]*\r?\n?$")
+        if any(closing.match(line) for line in lines[start + 1:]):
+            return False
+        self.fence = marker[0], len(marker), opening[2].split()[0] if opening[2].strip() else ""
+        self.pending = "".join(lines[start + 1:])
+        return True
+
+    def _fence_update(self, columns: int) -> tuple[list[DisplayRow], int]:
+        """Render only newly completed code lines; the final render rehighlights all."""
+        assert self.fence is not None
+        character, length, language = self.fence
+        closing = re.compile(r"^ {0,3}" + re.escape(character) + "{" + str(length) + r",}[ \t]*\r?\n$")
+        lines = self.pending.splitlines(keepends=True)
+        complete = 0
+        closed = False
+        while complete < len(lines) and lines[complete].endswith("\n"):
+            if closing.match(lines[complete]):
+                closed = True
+                break
+            complete += 1
+        body = "".join(lines[:complete])
+        stable = self.renderer.rows(self.renderer.code(body, language), columns, code=True) if body else []
+        if closed:
+            self.fence = None
+            self.pending = "".join(lines[complete + 1:])
+            rows, committed = self.update(columns)
+            return stable + rows, len(stable) + committed
+        self.pending = "".join(lines[complete:])
+        tail = self.renderer.rows(self.renderer.code(self.pending, language), columns, code=True) if self.pending else []
+        return stable + tail, len(stable)
+
     def update(self, columns: int, *, final: bool = False) -> tuple[list[DisplayRow], int]:
         self.dirty = False
         if final:
+            self.fence = None
             return self.renderer.render(self.original(), columns), 0
+        if self.fence is not None:
+            return self._fence_update(columns)
+        if not self.literal_preview and self._open_fence():
+            return self._fence_update(columns)
         if self.literal_preview or len(self.pending) > self.PREVIEW_LIMIT:
             self.literal_preview = True
             cut = self.pending.rfind("\n") + 1
@@ -386,6 +434,9 @@ class MarkdownStream:
         if prefix.endswith("\n\n") and stable:
             stable.append(DisplayRow([], "\n"))
         self.pending = tail
+        if self._open_fence():
+            rows, committed = self._fence_update(columns)
+            return stable + rows, len(stable) + committed
         return stable + self.renderer.render(tail, columns), len(stable)
 
     def close(self) -> None:

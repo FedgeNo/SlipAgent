@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-__version__ = "0.2.16"
+__version__ = "0.2.17"
+
+import logging
+
+# Background failures reach users through tool results; Python's last-resort
+# stderr handler would write over the full-screen terminal.
+logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 from .agent import Agent, AgentEvent, build_system_prompt
 from .api import APIClient, APIError

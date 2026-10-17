@@ -456,6 +456,7 @@ async def test_inspection_focus_reveals_selection_and_up_stays_at_first_item(dis
             ui.toggle_inspection()
             await wait_until(lambda: "Touched" in snapshot()[0])
             ui._files_window.scroll(20)
+            ui.app.invalidate()
             await wait_until(lambda: "file-29" not in snapshot()[1])
             pipe.send_text("\t\t")
             await wait_until(lambda: ui.app.layout.current_window is ui._files_window)

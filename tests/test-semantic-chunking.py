@@ -1,5 +1,6 @@
 """Keep every source character inside a chunk that fits the encoder budget."""
 
+import re
 import unittest
 import tempfile
 from io import StringIO
@@ -63,8 +64,9 @@ class TokenChunkingTests(unittest.TestCase):
 
     def test_streaming_preserves_every_character_and_line_number_across_read_boundaries(self):
         source = "λ🌓" * 25 + "\r\n" + "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029".join(["ab"] * 4) + "\rfinal\r"
-        coordinates = [number for number, line in enumerate(source.splitlines(keepends=True), 1)
-                       for _ in line]
+        # Only LF, CRLF and CR break lines, as in the file tools.
+        lines = re.findall(r"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+", source)
+        coordinates = [number for number, line in enumerate(lines, 1) for _ in line]
         for size in (1, 2, 7, 13, 64):
             with self.subTest(size=size), patch("slipagent.semantic.indexer.SOURCE_BLOCK_CHARS", size):
                 chunks = list(iter_chunks("source.py", StringIO(source), overlap=0,

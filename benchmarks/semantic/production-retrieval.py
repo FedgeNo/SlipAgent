@@ -12,11 +12,12 @@ import tempfile
 import time
 
 from slipagent.semantic import ONNXEmbedder, Searcher, Store
+from slipagent.semantic.embed import BUNDLED_MODEL
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model-dir", type=Path, required=True)
+    parser.add_argument("--model-dir", type=Path, default=BUNDLED_MODEL)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--batch-size", type=int)
     args = parser.parse_args()

@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-from slipagent.lsp import LanguageServers, NavigateCodeTool, validate_servers
+from slipagent.lsp import LanguageServers, NavigateCodeTool, language_servers_path, validate_servers
 
 
 SERVER = '''
@@ -52,11 +52,10 @@ while True:
 def setup(workspace, source=SERVER):
     script = workspace.root / "server.py"
     script.write_text(source)
-    directory = workspace.root / ".slipagent"
-    directory.mkdir()
     settings = {"language_servers": {"test": {"command": [sys.executable, str(script)],
                                             "extensions": [".py"], "language_id": "python"}}}
-    (directory / "project.json").write_text(json.dumps(settings))
+    language_servers_path().parent.mkdir(parents=True, exist_ok=True)
+    language_servers_path().write_text(json.dumps(settings))
     return settings
 
 
@@ -167,7 +166,7 @@ async def test_server_configuration_removal_closes_existing_process(workspace):
     try:
         await NavigateCodeTool(servers).run("hover", "source.py", 1, 1)
         process = servers.clients["test"].process
-        (workspace.root / ".slipagent" / "project.json").write_text("{}")
+        language_servers_path().write_text("{}")
         await servers.refresh()
         assert process.returncode is not None
         assert not servers.clients
@@ -201,3 +200,45 @@ async def test_navigation_tool_is_exposed_only_when_configured(workspace):
             await configured.aclose()
     finally:
         await registry.aclose()
+
+
+async def test_cr_line_positions_and_malformed_configuration_request(workspace):
+    source = SERVER.replace(
+        '    if method == "initialize":\n',
+        '    if message.get("id") == 99 and method is None:\n'
+        '        Path("configuration.json").write_text(json.dumps(message))\n'
+        '    if method == "initialize":\n'
+        '        send({"id":99,"method":"workspace/configuration","params":{"items":[5]}})\n', 1)
+    setup(workspace, source)
+    (workspace.root / "source.py").write_text("first = 1\rsecond = 2\r")
+    servers = LanguageServers(workspace)
+    try:
+        result = await NavigateCodeTool(servers).invoke({"operation": "definition", "path": "source.py", "line": 2, "column": 8})
+        assert not result.is_error, result.content
+        assert decode_json_content(result.content)["locations"] == [{"path": "source.py", "line": 2, "column_utf16": 8}]
+        assert servers.clients["test"].process.returncode is None
+    finally:
+        await servers.aclose()
+    answer = json.loads((workspace.root / "configuration.json").read_text())
+    assert answer["error"]["code"] == -32602
+
+
+async def test_project_settings_cannot_configure_server_commands(workspace):
+    from slipagent.environment import load_project_options
+    from slipagent.tools import build_default_registry
+
+    script = workspace.root / "server.py"
+    script.write_text(SERVER)
+    (workspace.root / ".slipagent").mkdir()
+    (workspace.root / ".slipagent" / "project.json").write_text(json.dumps({"python_syntax": False, "language_servers": {
+        "test": {"command": [sys.executable, str(script)], "extensions": [".py"], "language_id": "python"}}}))
+    (workspace.root / "source.py").write_text("x = 1")
+    assert load_project_options(workspace) == {"python_syntax": False}
+    assert "navigate_code" not in build_default_registry(workspace)
+    servers = LanguageServers(workspace)
+    try:
+        result = await NavigateCodeTool(servers).run("hover", "source.py", 1, 1)
+        assert result.is_error and str(language_servers_path()) in content_text(result.content)
+        assert not servers.clients
+    finally:
+        await servers.aclose()

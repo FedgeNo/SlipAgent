@@ -1759,7 +1759,8 @@ async def _model_command(
         await asyncio.to_thread(save_model_choice, entry.id, entry.provider)
     except (OSError, ConfigError) as exc:
         print(style.red(f"  could not remember model choice: {exc}"), file=out)
-    print(f"  switched to {style.cyan(entry.selector)}  {_price_cell(entry.pricing)}/Mtok",
+    price = _price_cell(entry.pricing)
+    print(f"  switched to {style.cyan(entry.selector)}  {price}{'/Mtok' if price.startswith('$') else ''}",
           file=out)
     if entry.provider == "openrouter" and _price_cell(entry.pricing) == "free":
         print(style.dim("  note: free models still work with a $0-limit key"), file=out)
@@ -1774,8 +1775,9 @@ async def _temperature_command(
             value = float(argument)
         except ValueError:
             value = float("nan")
-        if not math.isfinite(value) or not 0 <= value <= 2:
-            print(style.red("  temperature must be a number from 0 to 2."), file=out)
+        limit = session.client.max_temperature
+        if not math.isfinite(value) or not 0 <= value <= limit:
+            print(style.red(f"  temperature must be a number from 0 to {limit:g} for {session.client.provider}."), file=out)
             return
     try:
         capabilities = await session.client.model_capabilities(session.agent.model)
@@ -2082,11 +2084,13 @@ async def _mcp_command(
         session.mcp.servers.pop(removal, None)
         if not live and not saved:
             print(style.red(f"  no MCP server named {removal!r}"), file=out)
-        else:
+        elif saved:
             print(
                 style.dim(f"  removed {removal} from {config_path(session.workspace.root)}"),
                 file=out,
             )
+        else:
+            print(style.dim(f"  disconnected {removal} for this session"), file=out)
         return
 
     if action not in ("add", "save") or spec is None:
@@ -2375,6 +2379,21 @@ def _notice_ignored_project_settings(args: argparse.Namespace) -> None:
                       f"Put SlipAgent settings in {dotenv_path()} or export them."), file=sys.stderr)
 
 
+def _notice_project_language_servers(args: argparse.Namespace) -> None:
+    from .environment import PROJECT_SETTINGS_PATH
+    from .lsp import language_servers_path
+
+    start = Path(getattr(args, "workspace", None) or os.environ.get("SLIPAGENT_WORKSPACE") or ".").expanduser()
+    try:
+        data = json.loads((start / PROJECT_SETTINGS_PATH).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if isinstance(data, dict) and data.get("language_servers"):
+        print(literal(f"slipagent: ignoring language_servers in {start / PROJECT_SETTINGS_PATH}; "
+                      f"projects cannot name commands to start. Move them to {language_servers_path()}."),
+              file=sys.stderr)
+
+
 async def _dispatch(args: argparse.Namespace, prompt: str | None) -> int:
     """Run everything inside a single event loop.
 
@@ -2383,6 +2402,7 @@ async def _dispatch(args: argparse.Namespace, prompt: str | None) -> int:
     """
     asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=4, thread_name_prefix="slipagent"))
     _notice_ignored_project_settings(args)
+    _notice_project_language_servers(args)
     if args.list_models:
         try:
             return await _list_models(args)

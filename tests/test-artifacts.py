@@ -140,3 +140,28 @@ async def test_late_background_output_reference_is_attached_and_journalled(works
         assert step_record(saved["history"].steps[0].messages)["artifacts"] == record["artifacts"]
     finally:
         await registry.aclose()
+
+
+def test_version_two_pages_seek_and_detect_changed_payloads(tmp_path):
+    import os
+
+    output = tmp_path / "stdout"
+    text = "".join(f"{number} é😀 line\n" for number in range(20_000))
+    output.write_text(text, encoding="utf-8")
+    store = ArtifactStore(10_000_000)
+    store.use_directory(tmp_path / "records")
+    record = store.save_command("command", {"stdout": output, "stderr": None}, kind="command_output",
+                                step_id=1, call_id="call", error_suffix="[suffix]")
+    pages, offset = [], 0
+    while offset is not None:
+        page = store.read_page(record["record_id"], "output", offset, 7_001)
+        pages.append(page["output"])
+        offset = page["next_offset"]
+    assert "".join(pages) == text
+    error = store.read_page(record["record_id"], "error", 2, 100)
+    assert error["error"] == "uffix]" and error["eof"] and error["total_characters"] == 8
+    payload = store.directory / "payloads" / record["payloads"]["output"]["sha256"]
+    payload.write_bytes(payload.read_bytes().replace(b"19999", b"19998"))
+    os.utime(payload, ns=(1, 1))
+    with pytest.raises(ValueError, match="integrity"):
+        store.read_page(record["record_id"], "output", 0, 10)

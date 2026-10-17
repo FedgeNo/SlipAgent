@@ -11,10 +11,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
-from .config import command_environment
+from .config import ConfigError, command_environment, data_directory
 from .lifecycle import Lifetime, finish_cleanup
 from .fileio import open_regular
 from .tools.base import Tool, ToolResult
+from .tools.editing import split_lines
 from .tools.shell import kill_and_drain
 from .workspace import Workspace, WorkspaceError
 
@@ -42,6 +43,36 @@ def validate_servers(servers: Any) -> None:
             raise ValueError(f"language_servers.{name}.language_id is required")
         if not isinstance(value.get("settings", {}), dict):
             raise ValueError(f"language_servers.{name}.settings must be an object")
+
+
+LANGUAGE_SERVERS_FILE = "language-servers.json"
+
+
+def language_servers_path() -> Path:
+    return data_directory() / LANGUAGE_SERVERS_FILE
+
+
+def load_language_servers() -> dict[str, Any]:
+    """Read user-level server commands; projects cannot name executables to start."""
+    path = language_servers_path()
+    try:
+        with open_regular(path) as source:
+            raw = source.read(65537)
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
+        raise ConfigError(f"Cannot read {path}: {exc}") from exc
+    try:
+        if len(raw) > 65536:
+            raise ValueError("settings exceed 64 KiB")
+        data = json.loads(raw)
+        if not isinstance(data, dict) or data.keys() - {"language_servers"}:
+            raise ValueError('expected an object with only a "language_servers" map')
+        servers = data.get("language_servers", {})
+        validate_servers(servers)
+        return dict(servers)
+    except (ValueError, UnicodeError) as exc:
+        raise ConfigError(f"Invalid {path}: {exc}") from exc
 
 
 class LSPError(Exception):
@@ -174,9 +205,15 @@ class LanguageServer:
         result: Any = None
         if method == "workspace/configuration":
             result = []
-            for item in (message.get("params") or {}).get("items", []):
+            params = message.get("params")
+            items = params.get("items") if isinstance(params, dict) else None
+            if not isinstance(items, list) or not all(
+                    isinstance(item, dict) and isinstance(item.get("section", ""), (str, type(None))) for item in items):
+                await self._send({"id": message["id"], "error": {"code": -32602, "message": "Invalid configuration items"}})
+                return
+            for item in items:
                 value = self.config.get("settings", {})
-                for part in item.get("section", "").split(".") if item.get("section") else []:
+                for part in item["section"].split(".") if item.get("section") else []:
                     value = value.get(part) if isinstance(value, dict) else None
                 result.append(value)
         elif method == "workspace/workspaceFolders":
@@ -237,17 +274,17 @@ class LanguageServers:
                 del self.clients[name]
 
     async def refresh(self) -> None:
-        from .environment import load_project_options
         async with self.lock:
             if self.closing is not None:
                 raise LSPError("Language server service is closing or closed")
-            await self._reconcile(load_project_options(self.workspace).get("language_servers", {}))
+            await self._reconcile(load_language_servers())
 
     def _file_stamps(self) -> dict[str, tuple[int, int]]:
         files = {}
+        # iter_files already confines symlinks; only they need resolving for the URI.
         for path in self.workspace.iter_files():
             try:
-                target = self.workspace.resolve(path)
+                target = path.resolve() if path.is_symlink() else path
                 stat = target.stat()
                 files[target.as_uri()] = stat.st_mtime_ns, stat.st_size
             except FileNotFoundError:
@@ -272,23 +309,23 @@ class LanguageServers:
         self.files = current
 
     async def query(self, operation: str, path: str, line: int, column: int, server: str | None, offset: int) -> ToolResult:
-        from .environment import load_project_options
         async with self.lock:
             if self.closing is not None:
                 raise LSPError("Language server service is closing or closed")
-            settings = load_project_options(self.workspace).get("language_servers", {})
+            settings = load_language_servers()
             await self._reconcile(settings)
             target = self.workspace.resolve(path)
             matches = [name for name, config in settings.items() if target.suffix.casefold() in
                        [ext.casefold() for ext in config["extensions"]] and (server is None or server == name)]
             if len(matches) != 1:
                 return ToolResult.error("Select one configured language server for this file using server. "
-                                        f"Matches: {matches}. Configure language_servers in .slipagent/project.json; no servers are installed automatically.")
+                                        f"Matches: {matches}. Configure language_servers in {language_servers_path()}; no servers are installed automatically.")
             name = matches[0]
             config = settings[name]
             text = _document(target)
-            lines = text.split("\n")
-            if not 1 <= line <= len(lines) or not 1 <= column <= len(lines[line - 1].rstrip("\r")) + 1:
+            # LSP counts LF, CRLF and CR as line breaks, like the file tools.
+            lines = split_lines(text) or [""]
+            if not 1 <= line <= len(lines) or not 1 <= column <= len(lines[line - 1]) + 1:
                 return ToolResult.error("line and column must be 1-based positions within the file; columns count Unicode characters")
             await self._sync_files()
             client = self.clients.get(name)

@@ -7,13 +7,16 @@ be reused in any app that needs to enumerate and slice source files.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from io import StringIO
 from typing import Callable, Iterator, List, Optional, Set, TextIO
 
 
 SOURCE_BLOCK_CHARS = 64 * 1024
-LINE_ENDINGS = ("\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029")
+# Lines break only at LF, CRLF and CR, as in the file tools and Git.
+LINE_ENDINGS = ("\n", "\r")
+_LINE = re.compile(r"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+")
 
 
 @dataclass
@@ -180,11 +183,11 @@ def chunk_text(path: str, text: str, max_lines: int = 50, overlap: int = 5, *,
 
 
 def _source_pieces(source: TextIO) -> Iterator[tuple[str, int]]:
-    """Retain splitlines coordinates and line endings using bounded reads."""
+    """Retain line coordinates and line endings using bounded reads."""
     pending = ""
     number = 1
     while block := source.read(SOURCE_BLOCK_CHARS):
-        lines = (pending + block).splitlines(keepends=True)
+        lines = _LINE.findall(pending + block)
         pending = ""
         # A trailing CR may be the first half of CRLF in the next read.
         if lines and (not lines[-1].endswith(LINE_ENDINGS) or lines[-1].endswith("\r")):

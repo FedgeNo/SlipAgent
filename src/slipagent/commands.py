@@ -408,10 +408,11 @@ class ModelsCommand(ExclusiveCommand):
 
 class OptimalCommand(ExclusiveCommand):
     name = 'optimal'
-    banner = '/optimal [on|off|reset]'
+    banner = '/optimal [on|off|next|reset]'
     help = (
         CommandHelp('/optimal', 'show automatic free-model selection state', '/optimal'),
         CommandHelp('/optimal on', 'clear failed routes and select the best ranked free model', '/optimal on'),
+        CommandHelp('/optimal next', 'skip the current model and select the next ranked free model; starts optimal if off', '/optimal next'),
         CommandHelp('/optimal reset', 'retry from the top rank and clear coding/compression failures', '/optimal reset'),
         CommandHelp('/optimal off', 'keep the current model under manual control', '/optimal off'),
     )
@@ -425,6 +426,11 @@ class OptimalCommand(ExclusiveCommand):
                 await routing.enable()
             except APIError as exc:
                 print(context.style.red(f"  {exc}"), file=context.out)
+        elif action == 'next':
+            try:
+                await routing.skip()
+            except APIError as exc:
+                print(context.style.red(f"  {exc}"), file=context.out)
         elif action == 'off':
             routing.enabled = False
             print("  Optimal off; the current model remains selected.", file=context.out)
@@ -433,14 +439,14 @@ class OptimalCommand(ExclusiveCommand):
             print(f"  Optimal {'on' if routing.enabled else 'off'}: "
                   f"{session.client.provider}::{session.agent.model}", file=context.out)
         else:
-            print("  usage: /optimal [on|off|reset]", file=context.out)
+            print("  usage: /optimal [on|off|next|reset]", file=context.out)
         return None
 
 
 class ProviderCommand(ExclusiveCommand):
     name = 'provider'
     help = (
-        CommandHelp('/provider <provider> switch to a free default: openrouter/nvidia Ultra, kilo Auto Free', '', '/provider '),
+        CommandHelp('/provider <provider>', 'switch to a free default: openrouter/nvidia Ultra, kilo Auto Free', '/provider '),
     )
 
     async def run(self, context: CommandContext, argument: str) -> bool | None:
@@ -460,7 +466,7 @@ class TemperatureCommand(Command):
     banner = '/temperature [value]'
     help = (
         CommandHelp('/temperature', 'show the explicit temperature or provider default and model support', '/temperature'),
-        CommandHelp('/temperature <value> set working-model temperature from 0 to 2 when supported', '', '/temperature '),
+        CommandHelp('/temperature <value>', 'set working-model temperature from 0 to 2 when supported', '/temperature '),
     )
 
     def changes_session(self, argument: str) -> bool:
@@ -846,8 +852,8 @@ class McpCommand(Command):
     banner = '/mcp [add|save|remove]'
     help = (
         CommandHelp('/mcp', 'show MCP servers and their tools', '/mcp'),
-        CommandHelp('/mcp add <name> <command> [args...]', ' connect an MCP server over stdio for this session', '/mcp add '),
-        CommandHelp('/mcp save <name> <command> [args...]', ' same, but also save it globally for future runs in every project', '/mcp save '),
+        CommandHelp('/mcp add <name> <command> [args...]', 'connect an MCP server over stdio for this session', '/mcp add '),
+        CommandHelp('/mcp save <name> <command> [args...]', 'same, but also save it globally for future runs in every project', '/mcp save '),
         CommandHelp('/mcp remove <name>', 'disconnect a server and forget it', '/mcp remove '),
     )
 

@@ -179,7 +179,7 @@ retry when connectivity recovers. HTTP errors such as 429 and 503 still count
 as provider failures after retry exhaustion.
 A working request that produces no output within two minutes is cancelled and
 moves directly to the next eligible model. This deadline runs from request start,
-including connection and upload time; keepalives and empty stream markers do not
+including connection and upload time but not upload pacing waits; keepalives and empty stream markers do not
 extend it. Once reasoning, answer text, or tool-call content arrives, streaming
 continues under the ordinary transport timeout. In manual mode, the deadline
 reports an error and retains the selected model. Background compression retains
@@ -187,7 +187,9 @@ its separate 20-minute timeout.
 
 The replacement remains selected until another failure, manual selection, or
 reset. Both `/optimal on` and `/optimal reset` clear failed coding/compression
-routes and retry from the highest score. `/optimal off` keeps the current model
+routes and retry from the highest score. `/optimal next` excludes the current
+model until reset and selects the next ranked one; with optimal off, it starts
+optimal like `/optimal on`. `/optimal off` keeps the current model
 under manual control; `/optimal` reports the state. Successful manual model or
 provider selection through `/model`, `/models`, or `/provider` also disables
 optimal mode. During active work, `/optimal` changes apply at the next safe step
@@ -305,9 +307,9 @@ minute, including retried uploads. Paid-only models upload at full speed.
 Set `GEMINI_BILLING_TIER=paid` for a billed Google account to upload billed models
 at full speed; always-free Gemma requests retain pacing. The default is `free`, since the catalog does not report account
 billing status. Concurrent paced uploads through the same client share the
-allowance. Responses continue streaming at the provider's speed. Upload
-pacing does not guarantee that Google will accept a single prompt larger than
-its TPM quota; that depends on Google's server-side quota accounting.
+allowance. Responses continue streaming at the provider's speed. Paced models
+limit each prompt to the 200,000-token allowance, and pacing waits do not count
+toward the first-output deadline.
 
 Model lists put free models first, ordered by descending estimated coding score,
 with unscored entries afterward. Ties use provider and model ID for stable ordering.
@@ -811,8 +813,9 @@ session, not a global journal-retention limit. `--no-session` opts out of durabl
 storage. Existing processes acquire session persistence on their next launch.
 
 The project settings file accepts `python`, `log_quota_bytes`, `python_syntax`,
-`checks`, and the optional `language_servers` map described below. It is limited
-to 16 KiB. `.slipagent/` is ignored in this repository; add it to another project's
+and `checks`. It is limited to 16 KiB. Language servers are configured in your
+user settings instead (see below); a `language_servers` key in project settings
+is ignored with a startup notice. `.slipagent/` is ignored in this repository; add it to another project's
 ignore rules if its settings should remain local.
 
 ## Use
@@ -852,7 +855,7 @@ In the REPL:
 | `/model <slug>` | Switch model and remember the choice for future launches |
 | `/models [filter]` | Select from the catalog with context and pricing; optionally filter by name |
 | `/models free` | Select from zero-cost models |
-| `/optimal [on\|off\|reset]` | Show automatic free-model routing; on/reset clears failures and selects the highest score; off keeps the current model under manual control |
+| `/optimal [on\|off\|next\|reset]` | Show automatic free-model routing; on/reset clears failures and selects the highest score; next skips the current model; off keeps the current model under manual control |
 | `/provider <provider>` | Select and remember a free default: OpenRouter/NVIDIA Nemotron 3 Ultra, or Kilo Auto Free; refuse missing models or nonzero/unknown pricing |
 | `/temperature` | Show the explicit temperature or provider default, and whether the selected model supports changing it |
 | `/temperature <value>` | Set the working-model temperature from 0 to 2; unsupported changes report an error |
@@ -2112,7 +2115,10 @@ is unavailable under the current tool restrictions.
 ### Optional Language Servers
 
 Configure an already installed **stdio** language server in
-`.slipagent/project.json`, for example:
+`language-servers.json` in the SlipAgent data directory (for example
+`~/.local/share/slipagent/language-servers.json` on Linux). Repositories cannot
+name commands for SlipAgent to start, so server commands are only read from this
+user-level file:
 
 ```json
 {

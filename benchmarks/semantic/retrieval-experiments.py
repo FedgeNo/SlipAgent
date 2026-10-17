@@ -11,7 +11,6 @@ import importlib.util
 import importlib.metadata
 import json
 import math
-import os
 from pathlib import Path
 import re
 import sys
@@ -19,7 +18,7 @@ import time
 
 import numpy as np
 
-from slipagent.semantic.embed import DEFAULT_MODEL, ONNXEmbedder
+from slipagent.semantic.embed import BUNDLED_MODEL, ONNXEmbedder
 from slipagent.semantic.indexer import chunk_text
 
 
@@ -349,8 +348,7 @@ def choose(conditions: list[dict]) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", type=Path, default=Path(__file__).with_name("realistic-search.json"))
-    default = Path(os.environ.get("MEMORY_MODEL_CACHE_PATH", str(Path.home() / ".conventions-mcp/models"))) / DEFAULT_MODEL
-    parser.add_argument("--model-dir", type=Path, default=default)
+    parser.add_argument("--model-dir", type=Path, default=BUNDLED_MODEL)
     parser.add_argument("--fp32", type=Path, help="Optional local full-precision ONNX of the same BGE model")
     parser.add_argument("--cache", type=Path, default=Path.home() / ".cache/dots-retrieval-experiments")
     parser.add_argument("--budgets", type=int, nargs="+", default=[192, 320, 512])

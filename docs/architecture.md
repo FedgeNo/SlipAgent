@@ -278,7 +278,8 @@ automatically retried. Stream closure and usage accounting follow the ordinary
 request-error path. Background summaries do not use this working-response guard.
 
 Working requests also pass a 120-second first-output deadline to the streaming
-transport. It covers connection, upload, and waiting for output. Keepalives,
+transport. It covers connection, upload, and waiting for output; upload pacing
+waits suspend it. Keepalives,
 role-only deltas, and tool-call IDs without a name or arguments leave it armed.
 Content, reasoning, or tool-call content disarms it so active generation can
 continue. Expiry closes the stream, saves captured diagnostics, and records a

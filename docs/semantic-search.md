@@ -28,10 +28,13 @@ after installing this integration or changing its backend.
 Each workspace's canonical root hashes to its own folder under
 `data_directory()/semantic/`. The database stores original source chunks,
 file metadata and content digests, model identity, keyword postings, and the
-serialized graph. Vectors and source rows publish in one SQLite transaction;
-failed or interrupted updates retain the previous committed index. A model or
-index-configuration mismatch is reported rather than mixing incompatible vectors.
-Index state and model assets are generated data and are not shipped in the source.
+search graph. Each update appends its graph additions and removals to a journal;
+the full graph is saved as a checkpoint once the journal passes 256 changes, and
+loading replays the journal over the checkpoint. Vectors, source rows and journal
+entries publish in one SQLite transaction; failed or interrupted updates retain
+the previous committed index. A model or index-configuration mismatch is reported
+rather than mixing incompatible vectors. Index state is generated data and is not
+shipped in the source; the default model is bundled.
 
 The observer starts before the initial scan. Save bursts coalesce for 250 ms,
 with a one-second maximum delay. Queued edits are hashed even when timestamp
@@ -58,8 +61,9 @@ Traversal skips dependency/generated directories, hidden paths, symlinks,
 Git-ignored files, and harness data. Workspace confinement is applied before
 reading or returning paths; danger mode does not expand this index beyond the
 current workspace. File tools retain their normal visibility and access rules.
-Model assets reuse the existing Conventions cache or Hugging Face cache; only
-missing assets download. Embedding and query text are processed locally.
+The default model (quantized `bge-small-en-v1.5`, MIT) ships with SlipAgent in
+`src/slipagent/semantic/model/`, so it needs no download. Embedding and query
+text are processed locally.
 
 Unavailable models, watcher failures, or invalid indexes return a tool error with
 ordinary-search guidance. Cancellation stops indexing between chunk embeddings

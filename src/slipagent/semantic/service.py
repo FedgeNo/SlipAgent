@@ -12,7 +12,7 @@ import subprocess
 import threading
 from typing import Any, Callable
 
-from ..config import data_directory
+from ..config import command_environment, data_directory
 from ..lifecycle import Lifetime
 from ..tools.blocking import run_blocking
 from ..workspace import Workspace
@@ -26,7 +26,7 @@ class SemanticSearch:
         self.workspace = workspace
         identity = hashlib.sha256(os.fsencode(workspace.root)).hexdigest()
         self.state_directory = data_directory().resolve()
-        self.database = self.state_directory / "semantic" / identity / "index-v1.db"
+        self.database = self.state_directory / "semantic" / identity / "index-v2.db"
         self.encoder_factory = encoder_factory
         self._requests: Queue[tuple[str, int, Future[dict[str, Any]]]] = Queue()
         self._lock = threading.Lock()
@@ -77,7 +77,7 @@ class SemanticSearch:
                     ["git", "-c", "core.fsmonitor=false", "-c", f"core.hooksPath={os.devnull}",
                      "check-ignore", "-z", "--stdin"],
                     input=("\0".join(batch) + "\0").encode(), cwd=self.workspace.root,
-                    capture_output=True, timeout=2,
+                    capture_output=True, timeout=2, env=command_environment(),
                 )
             except FileNotFoundError:
                 break
@@ -98,11 +98,17 @@ class SemanticSearch:
             from .storage import Store
             from .watcher import IndexWatcher
 
-            encoder = self.encoder_factory() if self.encoder_factory is not None else ONNXEmbedder()
+            from .cpu import background_threads
+
+            encoder = (self.encoder_factory() if self.encoder_factory is not None
+                       else ONNXEmbedder(threads=background_threads()))
             dimensions = encoder.dim()
             if self._stop.is_set():
                 return
             self.database.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            # Version one numbered lines with str.splitlines; its chunks cannot be reused.
+            for suffix in ("", "-wal", "-shm", "-journal"):
+                (self.database.parent / f"index-v1.db{suffix}").unlink(missing_ok=True)
             with Store(str(self.database), dimensions, threads=getattr(encoder, "threads", None)) as store:
                 searcher = Searcher(store, encoder, cancelled=self._stop.is_set, path_filter=self._paths)
                 ready = False

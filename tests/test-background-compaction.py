@@ -499,3 +499,22 @@ async def test_bookkeeping_only_reply_retries_instead_of_silently_finishing():
     assert await agent.run("Work") == "Done"
     assert len(agent.history.steps) == 2 and len(client.main_requests) == 2
     assert any(event.kind == "retry" for event in events)
+
+
+async def test_cancelled_summaries_are_requested_again_with_the_next_step():
+    client = Client([reply("First."), reply("Second.")], pause_summary=True)
+    agent = Agent(client, ToolRegistry(), "test")
+    await agent.run("First request")
+    await client.started.wait()
+    # An interrupt, /key, or model change resets pending summaries.
+    agent._compactor().reset()
+    await agent._compactor().wait()
+    first = agent.history.steps[0]
+    assert first.summary is None and first.compaction_status == "cancelled"
+
+    client.release.set()
+    await agent.run("Second request")
+    await agent.wait_for_compaction()
+    assert [step.compaction_status for step in agent.history.steps] == ["complete", "complete"]
+    assert first.summary is not None
+    await agent.registry.aclose()

@@ -118,3 +118,13 @@ async def test_thought_summaries_requested_and_received(stream):
     assert result.message.reasoning == "Considering the problem."
     if stream:
         assert deltas == [("reasoning", "Considering the problem."), ("content", "Answer")]
+
+
+@pytest.mark.parametrize("tier, model, limit", [("free", "gemini-3.8-flash", 200000), ("paid", "gemini-3.8-flash", 1000000),
+                                                ("paid", "gemma-4-31b-it", 200000), ("free", "gemini-paid", 1000000)])
+async def test_free_tier_prompts_fit_the_per_minute_allowance(tier, model, limit, monkeypatch):
+    monkeypatch.setenv("GEMINI_BILLING_TIER", tier)
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"models": [entry(model)]}))
+    async with GoogleClient("dummy", transport=transport) as client:
+        profile = await client.model_capabilities(model)
+    assert profile.context_length == 1000000 and profile.max_prompt_tokens == limit

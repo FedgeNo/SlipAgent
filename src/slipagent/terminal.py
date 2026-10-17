@@ -46,7 +46,7 @@ from .inspection import IndexedText, field_snapshot, artifact_snapshot, build_sn
 from .transcriptlayouts import TranscriptLayouts
 from .types import ToolCall
 from .diffcomments import attach_reference, diff_reference
-from .statusline import PULSE_FRAMES, StatusLine
+from .statusline import NOTICE_SECONDS, PULSE_FRAMES, TIP_SECONDS, StatusLine
 from .mainarea import MainArea
 from .menulifecycle import MenuLifecycle
 from .terminalbindings import build_bindings
@@ -71,6 +71,8 @@ class QueuedSuggestion(Submission, SuggestedPrompt):
 
 
 MIN_REDRAW_INTERVAL = 1 / 30
+# Animation frames; idle screens redraw only on events and display deadlines.
+REFRESH_INTERVAL = .15
 FEED_LINK_PREFIXES = ("class:artifact-", "class:file-", "class:directory-", "class:suggestion-")
 
 
@@ -204,7 +206,7 @@ class TerminalUI:
             full_screen=True, input=input, output=self.output,
             mouse_support=True, before_render=lambda app: self._update_title(),
             after_render=lambda app: self._route_mouse_wheel(app),
-            refresh_interval=.15,
+            # Periodic redraws come from _refresh_loop only while something animates.
             min_redraw_interval=MIN_REDRAW_INTERVAL,
             color_depth=ColorDepth.DEPTH_24_BIT if color else ColorDepth.DEPTH_1_BIT,
             style=self._style(),
@@ -1860,12 +1862,40 @@ class TerminalUI:
             self._password = False
             self.app.invalidate()
 
+    def _refresh_needed(self, last: float, now: float) -> bool:
+        """Whether time alone changed what the screen shows since the last tick."""
+        status = self.status_line
+        pixel = self.__dict__.get("_pixel_mouse")
+        if (self.working or status.marquees or (pixel is not None and pixel.enabling)
+                or status.changed_at is not None and now - status.changed_at < 1):
+            return True
+        if (self._viewer_active or self.__dict__.get("_editor_active")) and now - last >= 1:
+            return True  # Open-file change checks run from each render.
+        deadlines = [status.navigation_until]
+        if status.notification and status.changed_at is not None:
+            deadlines.append(status.changed_at + NOTICE_SECONDS)
+        if status.tips_started is not None:
+            deadlines.append(status.tips_started + (now - status.tips_started) // TIP_SECONDS * TIP_SECONDS)
+        return any(last < deadline <= now for deadline in deadlines)
+
+    async def _refresh_loop(self) -> None:
+        last = time.monotonic()
+        while True:
+            await asyncio.sleep(REFRESH_INTERVAL)
+            now = time.monotonic()
+            if self._refresh_needed(last, now):
+                last = now
+                self.app.invalidate()
+
     async def run(self) -> None:
+        refresher = asyncio.create_task(self._refresh_loop())
         try:
             await self.app.run_async()
         except EOFError:
             pass
         finally:
+            refresher.cancel()
+            await asyncio.gather(refresher, return_exceptions=True)
             self._end_input()
             self._close_transcript()
 

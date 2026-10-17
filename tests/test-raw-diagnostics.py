@@ -39,7 +39,8 @@ class Stream(httpx.AsyncByteStream):
 
 
 @pytest.mark.parametrize('failure', [None, 'malformed', 'disconnect', 'cancel'])
-async def test_raw_stream_preserves_every_received_byte(tmp_path, failure):
+async def test_raw_stream_preserves_every_received_byte(tmp_path, failure, monkeypatch):
+    monkeypatch.setattr('slipagent.responsecapture.FLUSH_INTERVAL', 0.05)
     archive = RequestDiagnostics()
     archive.use_directory(tmp_path)
     attempt = archive.begin({}, step=1, step_id=1)
@@ -64,9 +65,15 @@ async def test_raw_stream_preserves_every_received_byte(tmp_path, failure):
             try:
                 await asyncio.wait_for(stream.started.wait(), 1)
                 record = json.loads((tmp_path / '00000001.json').read_text())
-                # A live stream is readable before its gzip footer is finalized.
-                compressed = (tmp_path / record['raw_response']).read_bytes()
-                assert zlib.decompressobj(31).decompress(compressed) == b''.join(chunks)
+                # A stalled stream becomes readable before its gzip footer is finalized.
+                deadline = asyncio.get_running_loop().time() + 2
+                while True:
+                    compressed = (tmp_path / record['raw_response']).read_bytes()
+                    received = zlib.decompressobj(31).decompress(compressed)
+                    if received == b''.join(chunks) or asyncio.get_running_loop().time() > deadline:
+                        break
+                    await asyncio.sleep(0.01)
+                assert received == b''.join(chunks)
             finally:
                 task.cancel()
             with pytest.raises(asyncio.CancelledError):

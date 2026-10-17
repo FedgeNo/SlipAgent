@@ -135,7 +135,8 @@ class HybridTests(unittest.TestCase):
         path.write_text("old_identifier\n")
         self.searcher.index_path(str(self.workspace))
         path.write_text("new_identifier\n")
-        with patch("usearch.index.Index.save", side_effect=OSError("save failed")):
+        with patch("usearch.index.Index.save", side_effect=OSError("save failed")), \
+                patch.object(Store, "CHECKPOINT_CHANGES", 0):
             with self.assertRaises(OSError):
                 self.searcher.index_path(str(self.workspace), changed_paths=[path])
         self.assertEqual(self.searcher.search("old_identifier")[0]["text"], "old_identifier\n")

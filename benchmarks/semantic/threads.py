@@ -34,9 +34,11 @@ def worker(payload: dict) -> dict:
 
 
 def main() -> int:
+    from slipagent.semantic.embed import BUNDLED_MODEL
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--worker", action="store_true")
-    parser.add_argument("--model-dir", type=Path)
+    parser.add_argument("--model-dir", type=Path, default=BUNDLED_MODEL)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--threads", type=int, nargs="+")
@@ -46,8 +48,8 @@ def main() -> int:
     if args.worker:
         print(json.dumps(worker(json.load(sys.stdin))))
         return 0
-    if args.model_dir is None or args.output is None or args.repeats < 1:
-        parser.error("--model-dir, --output, and positive --repeats are required")
+    if args.output is None or args.repeats < 1:
+        parser.error("--output and positive --repeats are required")
 
     import psutil
     from tokenizers import Tokenizer

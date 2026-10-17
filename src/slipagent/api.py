@@ -13,7 +13,7 @@ import json
 import random
 import copy
 import math
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -93,6 +93,7 @@ class APIClient:
 
     provider = ""
     default_base_url = ""
+    max_temperature = 2.0
     default_model = ""
     key_env = ""
     model_env = ""
@@ -261,8 +262,9 @@ class APIClient:
                 if on_response is not None and event != "[DONE]":
                     events.append(event)
             first_output = asyncio.timeout(first_output_timeout)
+            content = body if first_output_timeout is None else _PacingExcluded(body, first_output)
             try:
-                async with first_output, self._client.stream("POST", f"{self.base_url}/chat/completions", content=body, headers={"Content-Length": str(body.size)}, **transport_options) as response:
+                async with first_output, self._client.stream("POST", f"{self.base_url}/chat/completions", content=content, headers={"Content-Length": str(body.size)}, **transport_options) as response:
                     if on_raw_response is not None:
                         on_raw_response(response)
                     if response.status_code >= 400:
@@ -546,6 +548,32 @@ def _reasoning_text(delta: dict[str, Any]) -> list[str]:
             if isinstance(value, str) and value:
                 texts.append(value)
     return texts
+
+
+class _PacingExcluded(httpx.AsyncByteStream):
+    """Extend a deadline by time spent producing the body, such as upload pacing waits.
+
+    Network writes happen between chunks, so a stalled upload still counts.
+    """
+
+    def __init__(self, body: httpx.AsyncByteStream, deadline: asyncio.Timeout) -> None:
+        self.body, self.deadline = body, deadline
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        loop = asyncio.get_running_loop()
+        chunks = aiter(self.body)
+        while True:
+            when = self.deadline.when()
+            remaining = None if when is None else when - loop.time()
+            self.deadline.reschedule(None)
+            try:
+                chunk = await anext(chunks)
+            except StopAsyncIteration:
+                return
+            finally:
+                if remaining is not None:
+                    self.deadline.reschedule(loop.time() + remaining)
+            yield chunk
 
 
 class _StreamCompletion:

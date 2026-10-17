@@ -19,6 +19,8 @@ FREE_TIER_MODELS = {
     "gemini-3-flash-preview", "gemini-3.1-flash-lite", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
 }
 FREE_MODELS = {"gemma-4-31b-it", "gemma-4-26b-a4b-it"}
+# Leave headroom below the reported 250,000 input TPM free-tier limit.
+FREE_TIER_TOKENS_PER_MINUTE = 200000
 
 
 class GoogleClient(APIClient):
@@ -30,16 +32,20 @@ class GoogleClient(APIClient):
     base_url_env = "GEMINI_BASE_URL"
     catalog_requires_auth = True
 
-    def request_body(self, payload: dict[str, Any]) -> RequestBody:
+    @staticmethod
+    def free_tier_limited(model: str) -> bool:
+        """Whether requests for this model count against the free tier's input allowance."""
         tier = os.environ.get("GEMINI_BILLING_TIER", "free").strip().lower()
         if tier not in {"free", "paid"}:
             raise APIConfigError("GEMINI_BILLING_TIER must be free or paid.")
-        if payload["model"] not in FREE_MODELS and (tier == "paid" or payload["model"] not in FREE_TIER_MODELS):
+        return model in FREE_MODELS or (tier == "free" and model in FREE_TIER_MODELS)
+
+    def request_body(self, payload: dict[str, Any]) -> RequestBody:
+        if not self.free_tier_limited(payload["model"]):
             return super().request_body(payload)
         pacer = getattr(self, "_upload_pacer", None)
         if pacer is None:
-            # Leave headroom below the reported 250,000 input TPM free-tier limit.
-            pacer = self._upload_pacer = UploadPacer(200000)
+            pacer = self._upload_pacer = UploadPacer(FREE_TIER_TOKENS_PER_MINUTE)
         return PacedRequestBody(payload, pacer)
 
     def _catalog_auth(self, request: httpx.Request) -> httpx.Request:
@@ -103,9 +109,13 @@ class GoogleClient(APIClient):
         if not model.startswith("gemma-"):
             parameters.add("response_format")
             response_format = "json_object"
+        # One request cannot exceed the free tier's per-minute input allowance.
+        prompt_limit = entry["inputTokenLimit"]
+        if self.free_tier_limited(model):
+            prompt_limit = min(prompt_limit, FREE_TIER_TOKENS_PER_MINUTE)
         profile = RequestProfile(parameters=parameters,
                                  context_length=entry["inputTokenLimit"],
-                                 max_prompt_tokens=entry["inputTokenLimit"],
+                                 max_prompt_tokens=prompt_limit,
                                  max_completion_tokens=entry["outputTokenLimit"], format=response_format)
         if store:
             self.cache_capabilities(model, profile)

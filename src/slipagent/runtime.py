@@ -163,6 +163,7 @@ class RuntimeFrame:
         self.force = False
         self.generation = 0
         self.namespace: str | None = None
+        self._checked_stamps = self._stamps()
         self._applied = self._sources()
         self._attempted = self._signature(self._applied)
         self._observed = self._attempted
@@ -174,13 +175,28 @@ class RuntimeFrame:
         self._terminal_write: Callable[[Any, str], None] = cli_module.TerminalUI.write
         self._component_classes: dict[tuple[str, str], type[Any]] = {}
 
-    def _sources(self) -> dict[str, bytes]:
+    def _paths(self) -> list[Path]:
         from .prompts import prompt_directory
-        return {
-            os.path.relpath(path, self.root): path.read_bytes()
-            for path in sorted([*self.root.rglob("*.py"), *prompt_directory().rglob("*.md"), *prompt_directory().rglob("*.json")])
-            if "__pycache__" not in path.parts
-        }
+        return [path for path in sorted([*self.root.rglob("*.py"), *prompt_directory().rglob("*.md"),
+                                          *prompt_directory().rglob("*.json")])
+                if "__pycache__" not in path.parts]
+
+    def _sources(self) -> dict[str, bytes]:
+        return {os.path.relpath(path, self.root): path.read_bytes() for path in self._paths()}
+
+    def _stamps(self) -> dict[str, tuple[int, int, int]]:
+        """Cheap per-file identity for the _paths set; contents are read only after it changes."""
+        from .prompts import prompt_directory
+        stamps = {}
+        for base, suffixes in ((self.root, (".py",)), (prompt_directory(), (".md", ".json"))):
+            for directory, names, files in os.walk(base):
+                names[:] = [name for name in names if name != "__pycache__"]
+                for name in files:
+                    if name.endswith(suffixes):
+                        path = os.path.join(directory, name)
+                        metadata = os.stat(path)
+                        stamps[os.path.relpath(path, self.root)] = (metadata.st_ino, metadata.st_mtime_ns, metadata.st_size)
+        return stamps
 
     @staticmethod
     def _signature(sources: dict[str, bytes]) -> bytes:
@@ -219,14 +235,23 @@ class RuntimeFrame:
         self._notice(text, error=True)
 
     async def watch(self) -> None:
+        observed_stamps: dict[str, tuple[int, int, int]] | None = None
         while True:
             await asyncio.sleep(POLL_INTERVAL)
             try:
-                sources, signature = await asyncio.to_thread(self._snapshot)
+                stamps = await asyncio.to_thread(self._stamps)
                 self._read_error = None
-                # A second observation avoids most half-written editor saves.
+                # A second equal observation avoids most half-written editor
+                # saves; unchanged files need no reads or hashing at all.
+                stable, observed_stamps = stamps == observed_stamps, stamps
+                if not stable or (stamps == self.__dict__.get("_checked_stamps") and not self.force):
+                    continue
+                sources, signature = await asyncio.to_thread(self._snapshot)
                 if signature == self._observed:
                     await self.checkpoint(sources=sources)
+                    if self._attempted == signature:
+                        # Attempted or already applied; a deferral retries next poll.
+                        self._checked_stamps = stamps
                 self._observed = signature
             except OSError as exc:
                 if str(exc) != self._read_error:

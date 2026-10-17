@@ -1,4 +1,11 @@
-"""SQLite chunk storage and a transactionally persisted HNSW search graph."""
+"""SQLite chunk storage and a transactionally persisted HNSW search graph.
+
+The graph is derived from the stored embeddings. Each transaction appends its
+additions and removals to `graph_changes`; the full graph is saved only as an
+occasional checkpoint, after which the journal is truncated. Loading restores
+the checkpoint and replays the journal, so every update stays atomic with its
+rows without rewriting the whole graph.
+"""
 
 from __future__ import annotations
 
@@ -18,6 +25,11 @@ from .retrieval import hybrid_scores, words
 class Store:
     """Keep source snapshots, file fingerprints, and an ANN graph in one database."""
 
+    # Save a full checkpoint once the journal exceeds this many changes. Replaying
+    # an addition costs about 1.5 ms on a 20,000-chunk graph, so this bounds the
+    # extra load time while spreading each checkpoint over hundreds of changes.
+    CHECKPOINT_CHANGES = 256
+
     def __init__(self, db_path: str, dim: int, *, threads: int | None = None):
         if dim < 1:
             raise ValueError("dim must be positive")
@@ -29,7 +41,11 @@ class Store:
         self._conn: sqlite3.Connection | None = None
         self._index: Any = None
         self._revision: int | None = None
+        # Checkpoint generation and journal position reflected by `_index`.
+        self._checkpoint: int | None = None
+        self._applied = 0
         self._dirty = False
+        self._reset = False
         self._keyword_average: float | None = None
         self._calibration_ids: list[int] = []
 
@@ -72,8 +88,18 @@ class Store:
             );
             CREATE TABLE IF NOT EXISTS search_graph (
                 id INTEGER PRIMARY KEY CHECK(id = 1),
-                revision INTEGER NOT NULL,
                 data BLOB NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS graph_state (
+                id INTEGER PRIMARY KEY CHECK(id = 1),
+                revision INTEGER NOT NULL,
+                checkpoint INTEGER NOT NULL,
+                position INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS graph_changes (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                chunk_id INTEGER NOT NULL,
+                added INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS keyword_documents (
                 chunk_id INTEGER PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
@@ -95,22 +121,61 @@ class Store:
                      connectivity=16, expansion_add=128, expansion_search=64)
 
     def _graph(self) -> Any:
-        row = self.conn.execute("SELECT revision FROM search_graph WHERE id = 1").fetchone()
-        revision = row[0] if row else 0
+        row = self.conn.execute("SELECT revision, checkpoint, position FROM graph_state WHERE id = 1").fetchone()
+        revision, checkpoint, position = row if row else (0, 0, 0)
         if self._index is not None and self._revision == revision:
             return self._index
-        index = self._new_index()
-        if row:
-            data = self.conn.execute("SELECT data FROM search_graph WHERE id = 1").fetchone()[0]
-            index.load(data)
-            if index.ndim != self.dim:
-                raise ValueError("Embedding dimensions differ; rebuild the index with the selected model.")
-        elif self.conn.execute("SELECT 1 FROM chunks LIMIT 1").fetchone():
+        if row is None and self.conn.execute("SELECT 1 FROM chunks LIMIT 1").fetchone():
             raise ValueError("Legacy index has no search graph; rebuild the semantic index.")
+        try:
+            if self._index is not None and self._checkpoint == checkpoint:
+                # Same checkpoint: apply only the changes this copy has not seen.
+                index = self._index
+            else:
+                index = self._new_index()
+                blob = self.conn.execute("SELECT data FROM search_graph WHERE id = 1").fetchone()
+                if blob is not None:
+                    index.load(blob[0])
+                    if index.ndim != self.dim:
+                        raise ValueError("Embedding dimensions differ; rebuild the index with the selected model.")
+                self._applied = position
+            self._replay(index)
+        except BaseException:
+            self._index = None
+            self._revision = None
+            raise
         self._index = index
         self._revision = revision
+        self._checkpoint = checkpoint
         self._keyword_average = None
         return index
+
+    def _replay(self, index: Any) -> None:
+        """Apply the net journal changes after `_applied` to an in-memory graph."""
+        import numpy as np
+
+        final: dict[int, bool] = {}
+        for seq, chunk_id, added in self.conn.execute(
+                "SELECT seq, chunk_id, added FROM graph_changes WHERE seq > ? ORDER BY seq", (self._applied,)):
+            final[chunk_id] = bool(added)
+            self._applied = seq
+        if not final:
+            return
+        ids = np.asarray(list(final), dtype=np.uint64)
+        present = index.contains(ids) if len(index) else np.zeros(len(ids), dtype=bool)
+        removed = [int(key) for key, keep, there in zip(ids, final.values(), present) if not keep and there]
+        if removed:
+            index.remove(removed, threads=self.threads)
+        added = [int(key) for key, keep, there in zip(ids, final.values(), present) if keep and not there]
+        for start in range(0, len(added), 512):
+            batch = added[start:start + 512]
+            placeholders = ",".join("?" for _ in batch)
+            vectors = dict(self.conn.execute(
+                f"SELECT chunk_id, vector FROM embeddings WHERE chunk_id IN ({placeholders})", batch))
+            if len(vectors) != len(batch):
+                raise ValueError("Search graph journal references a missing vector; rebuild the semantic index.")
+            matrix = np.stack([np.frombuffer(vectors[key], dtype=np.float32) for key in batch])
+            index.add(np.asarray(batch, dtype=np.uint64), matrix, threads=self.threads)
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
@@ -119,20 +184,27 @@ class Store:
         if connection.in_transaction:
             raise RuntimeError("An index transaction is already active")
         connection.execute("BEGIN IMMEDIATE")
-        self._dirty = False
+        self._dirty = self._reset = False
         try:
             yield
-            revision = self._revision
+            revision, checkpoint, applied = self._revision, self._checkpoint, self._applied
             if self._dirty:
-                row = connection.execute("SELECT revision FROM search_graph WHERE id = 1").fetchone()
-                revision = (row[0] if row else 0) + 1
-                connection.execute(
-                    "INSERT INTO search_graph VALUES (1, ?, ?) "
-                    "ON CONFLICT(id) DO UPDATE SET revision=excluded.revision, data=excluded.data",
-                    (revision, self._index.save()),
-                )
+                row = connection.execute("SELECT revision, checkpoint, position FROM graph_state WHERE id = 1").fetchone()
+                revision, checkpoint, position = row if row else (0, 0, 0)
+                revision += 1
+                latest = connection.execute("SELECT MAX(seq) FROM graph_changes").fetchone()[0]
+                applied = position if latest is None else latest
+                pending = connection.execute("SELECT COUNT(*) FROM graph_changes").fetchone()[0]
+                if self._reset or pending > self.CHECKPOINT_CHANGES:
+                    connection.execute("INSERT INTO search_graph VALUES (1, ?) "
+                                       "ON CONFLICT(id) DO UPDATE SET data=excluded.data", (self._index.save(),))
+                    connection.execute("DELETE FROM graph_changes")
+                    checkpoint, position = checkpoint + 1, applied
+                connection.execute("INSERT INTO graph_state VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+                                   "revision=excluded.revision, checkpoint=excluded.checkpoint, "
+                                   "position=excluded.position", (revision, checkpoint, position))
             connection.commit()
-            self._revision = revision
+            self._revision, self._checkpoint, self._applied = revision, checkpoint, applied
         except BaseException:
             connection.rollback()
             self._index = None
@@ -140,7 +212,7 @@ class Store:
             self._keyword_average = None
             raise
         finally:
-            self._dirty = False
+            self._dirty = self._reset = False
 
     def configuration(self) -> dict[str, Any] | None:
         row = self.conn.execute("SELECT data FROM configuration WHERE id = 1").fetchone()
@@ -204,6 +276,7 @@ class Store:
             self.conn.executemany("INSERT INTO keyword_terms VALUES (?, ?, ?)",
                                   [(term, cursor.lastrowid, count) for term, count in counts.items()])
         index.add(np.asarray(ids, dtype=np.uint64), matrix, threads=self.threads)
+        self.conn.executemany("INSERT INTO graph_changes(chunk_id, added) VALUES (?, 1)", [(key,) for key in ids])
         self._dirty = True
         self._keyword_average = None
 
@@ -212,6 +285,7 @@ class Store:
         ids = [row[0] for row in self.conn.execute("SELECT id FROM chunks WHERE path = ?", (path,))]
         if ids:
             index.remove(ids, threads=self.threads)
+            self.conn.executemany("INSERT INTO graph_changes(chunk_id, added) VALUES (?, 0)", [(key,) for key in ids])
             self._dirty = True
             self._keyword_average = None
         self.conn.execute("DELETE FROM chunks WHERE path = ?", (path,))
@@ -349,10 +423,14 @@ class Store:
             with self.transaction():
                 self.clear()
             return
+        row = self.conn.execute("SELECT revision, checkpoint, position FROM graph_state WHERE id = 1").fetchone()
+        revision, checkpoint, position = row if row else (0, 0, 0)
+        latest = self.conn.execute("SELECT MAX(seq) FROM graph_changes").fetchone()[0]
+        # The empty graph is current; the commit saves it as a checkpoint and drops the journal.
         self._index = self._new_index()
-        row = self.conn.execute("SELECT revision FROM search_graph WHERE id = 1").fetchone()
-        self._revision = row[0] if row else 0
-        self._dirty = True
+        self._revision, self._checkpoint = revision, checkpoint
+        self._applied = position if latest is None else latest
+        self._dirty = self._reset = True
         self._keyword_average = None
         for table in ("embeddings", "chunks", "files", "configuration"):
             self.conn.execute(f"DELETE FROM {table}")
@@ -363,6 +441,7 @@ class Store:
             self._conn = None
         self._index = None
         self._revision = None
+        self._checkpoint = None
         self._keyword_average = None
 
     def __enter__(self) -> Store:

@@ -223,6 +223,11 @@ class Session:
             }
         self.client = replacement
         self.agent.client = replacement
+        limit = replacement.max_temperature
+        if self.agent.temperature is not None and self.agent.temperature > limit:
+            from .markdown import literal
+            self.agent.temperature = limit
+            self.renderer.emit(literal(f"Temperature lowered to {limit:g}, the {replacement.provider} maximum."))
         self.api_key = replacement.api_key
         self.base_url = replacement.base_url
         self.use_model(model.id)

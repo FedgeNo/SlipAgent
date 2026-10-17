@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from pathlib import Path
 from typing import Any, List, Protocol, runtime_checkable
 
@@ -19,6 +18,8 @@ from .cpu import default_threads
 
 DEFAULT_MODEL = "Xenova/bge-small-en-v1.5"
 MODEL_FILES = ("config.json", "tokenizer.json", "onnx/model_quantized.onnx")
+# The default model ships with SlipAgent; see its SOURCE.md and LICENSE.
+BUNDLED_MODEL = Path(__file__).parent / "model" / "bge-small-en-v1.5"
 
 
 @runtime_checkable
@@ -46,9 +47,9 @@ class Embedder(Protocol):
 class ONNXEmbedder:
     """Lazy CPU embeddings matching Conventions MCP's quantized BGE pipeline.
 
-    Reuses the Conventions model cache when available, otherwise uses the
-    Hugging Face cache and downloads missing files on first use. An explicit
-    model_dir always loads locally, without downloading anything.
+    The default model loads from the files bundled with SlipAgent. Other models
+    use the Hugging Face cache and download missing files on first use. An
+    explicit model_dir always loads locally, without downloading anything.
     """
 
     def __init__(self, model_name: str = DEFAULT_MODEL, *,
@@ -69,16 +70,14 @@ class ONNXEmbedder:
         self._max_tokens: int | None = None
 
     def _files(self) -> dict[str, Path]:
-        if self.model_dir is not None:
-            files = {name: self.model_dir / name for name in MODEL_FILES}
+        directory = self.model_dir
+        if directory is None and self.model_name == DEFAULT_MODEL:
+            directory = BUNDLED_MODEL
+        if directory is not None:
+            files = {name: directory / name for name in MODEL_FILES}
             for path in files.values():
                 if not path.is_file():
                     raise FileNotFoundError(f"Missing embedding model file: {path}")
-            return files
-
-        cache = Path(os.environ.get("MEMORY_MODEL_CACHE_PATH", str(Path.home() / ".conventions-mcp" / "models"))).expanduser()
-        files = {name: cache / self.model_name / name for name in MODEL_FILES}
-        if all(path.is_file() for path in files.values()):
             return files
 
         from huggingface_hub import hf_hub_download

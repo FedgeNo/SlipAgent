@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import gzip
 import os
+import time
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
 import httpx
+
+# Unfinished streams become inspectable within this many seconds.
+FLUSH_INTERVAL = 1.0
 
 
 class ResponseRecorder:
@@ -22,22 +27,49 @@ class ResponseRecorder:
         self.on_close = on_close
         self.failed = False
         self.closed = False
+        self.flushed_at = time.monotonic()
+        self.timer: asyncio.TimerHandle | None = None
 
     def write(self, chunk: bytes) -> None:
         if self.failed or self.closed:
             return
         try:
             self.compressed.write(chunk)
-            # Keep an unfinished stream inspectable while the provider stalls.
+        except OSError as exc:
+            self.failed = True
+            self.on_error(exc)
+            return
+        # Keep an unfinished stream inspectable while the provider stalls,
+        # without a compression sync flush per network chunk.
+        delay = self.flushed_at + FLUSH_INTERVAL - time.monotonic()
+        if delay <= 0:
+            self.flush()
+        elif self.timer is None:
+            try:
+                self.timer = asyncio.get_running_loop().call_later(delay, self.flush)
+            except RuntimeError:
+                self.flush()
+
+    def flush(self) -> None:
+        if self.timer is not None:
+            self.timer.cancel()
+            self.timer = None
+        if self.failed or self.closed:
+            return
+        try:
             self.compressed.flush()
             self.target.flush()
         except OSError as exc:
             self.failed = True
             self.on_error(exc)
+        self.flushed_at = time.monotonic()
 
     def close(self) -> None:
         if self.closed:
             return
+        if self.timer is not None:
+            self.timer.cancel()
+            self.timer = None
         self.closed = True
         try:
             self.compressed.close()

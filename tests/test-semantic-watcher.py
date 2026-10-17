@@ -202,6 +202,40 @@ class WatcherTests(unittest.TestCase):
         renamed.unlink()
         self.wait_for([])
 
+    def test_new_top_level_directories_are_watched_and_excluded_trees_are_not(self):
+        from watchdog.observers import Observer
+
+        (self.workspace / "node_modules" / "package").mkdir(parents=True)
+        (self.workspace / ".venv").mkdir()
+        scheduled = []
+        schedule = type(Observer()).schedule
+
+        def record(observer, handler, path, recursive=False, **options):
+            scheduled.append((os.path.basename(path), recursive))
+            return schedule(observer, handler, path, recursive=recursive, **options)
+
+        patcher = patch.object(type(Observer()), "schedule", record)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.launch()
+        self.assertEqual(scheduled, [("workspace", False)])
+        package = self.workspace / "package"
+        package.mkdir()
+        (package / "module.py").write_text("created early\n")
+        self.wait_for(["original\n", "created early\n"])
+        nested = package / "nested"
+        nested.mkdir()
+        (nested / "deep.py").write_text("nested edit\n")
+        self.wait_for(["original\n", "created early\n", "nested edit\n"])
+        (self.workspace / "node_modules" / "package" / "index.py").write_text("ignored\n")
+        shutil.rmtree(package)
+        self.wait_for(["original\n"])
+        package.mkdir()
+        (package / "again.py").write_text("recreated\n")
+        self.wait_for(["original\n", "recreated\n"])
+        self.assertNotIn(("node_modules", True), scheduled)
+        self.assertEqual(scheduled.count(("package", True)), 2)
+
     def test_edit_during_embedding_is_processed_in_a_later_batch(self):
         self.launch()
         self.encoder.during_embed = lambda: self.source.write_text("latest edit\n")

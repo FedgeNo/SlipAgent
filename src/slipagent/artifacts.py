@@ -74,6 +74,7 @@ class ArtifactStore:
                 raise ValueError("Invalid inspection-record index")
             restored[identifier] = record
         self._directory = directory
+        self.__dict__.pop("_encoded", None)
         self.records = restored
         self.used_bytes = sum(record["bytes"] for record in restored.values())
 
@@ -145,7 +146,7 @@ class ArtifactStore:
         published = False
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as index_target:
-                json.dump(list(proposed.values()), index_target, ensure_ascii=False)
+                index_target.write(self._encoded_index(proposed))
                 index_target.flush()
                 os.fsync(index_target.fileno())
             os.replace(name, self.directory / "index.json")
@@ -163,6 +164,17 @@ class ArtifactStore:
             if os.path.exists(name):
                 os.unlink(name)
         return dict(record)
+
+    def _encoded_index(self, records: dict[int, dict[str, Any]]) -> str:
+        """Encode the index, reusing each unchanged record's JSON text."""
+        encoded = self.__dict__.setdefault("_encoded", {})
+        parts = []
+        for identifier, record in records.items():
+            cached = encoded.get(identifier)
+            if cached is None or cached[0] is not record:
+                cached = encoded[identifier] = (record, json.dumps(record, ensure_ascii=False))
+            parts.append(cached[1])
+        return "[" + ", ".join(parts) + "]"
 
     def save_command(self, command: str, streams: dict[str, Path | None], *, kind: str,
                      step_id: int | None, call_id: str | None, error_suffix: str,
@@ -292,18 +304,30 @@ class ArtifactStore:
             if key in {"command", "call_id", "step_id", "kind"}:
                 expected = record[key] if isinstance(record[key], str) else json.dumps(record[key])
             fields[key] = ArtifactFieldPage(offset if key == field else 0, limit if key == field else 0, expected)
-        string_fields = record_fields(path, record, {key: cast(TextIO, target) for key, target in fields.items()})
+        version_two = record.get("format_version") == 2
+        string_fields = record_fields(path, record, {key: cast(TextIO, target) for key, target in fields.items()},
+                                      payloads=not version_two)
         for key in ("command", "call_id", "step_id", "kind"):
             expected = fields[key].expected
             if (string_fields[key] != isinstance(record[key], str)
                     or expected is None or fields[key].characters != len(expected)):
                 raise ValueError("Inspection-record metadata mismatch.")
-        selected = fields[field]
-        text = "".join(selected.pieces)
+        if version_two and field in ("output", "error"):
+            # Shared payloads are verified once, then paged by seeking.
+            from .payloads import payload_page
+            descriptor = record["payloads"][field]
+            suffix = record["error_suffix"] if field == "error" else ""
+            total = descriptor["characters"] + len(suffix)
+            text = payload_page(self.directory, descriptor, offset, limit)
+            start = max(offset - descriptor["characters"], 0)
+            text += suffix[start:start + limit - len(text)]
+        else:
+            selected = fields[field]
+            text, total = "".join(selected.pieces), selected.characters
         next_offset = offset + len(text)
         return {**self._page_metadata(record), field: text, "field": field, "offset": offset,
-                "next_offset": next_offset if next_offset < selected.characters else None,
-                "eof": next_offset >= selected.characters, "total_characters": selected.characters,
+                "next_offset": next_offset if next_offset < total else None,
+                "eof": next_offset >= total, "total_characters": total,
                 "offset_unit": "characters"}
 
     @staticmethod
@@ -326,6 +350,7 @@ class ArtifactStore:
 
     def clear(self) -> None:
         self.records.clear()
+        self.__dict__.pop("_encoded", None)
         self.used_bytes = 0
         self._directory = None
         if self._temporary is not None:

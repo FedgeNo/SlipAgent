@@ -76,7 +76,7 @@ class Searcher:
         configuration = {
             "workspace": str(root), "embedding_id": self._model_identity(),
             "dimensions": self.embedder.dim(), "max_lines": max_lines, "overlap": overlap,
-            "retrieval": RETRIEVAL,
+            "retrieval": RETRIEVAL, "line_breaks": "lf-crlf-cr",
         }
         document_batch_size = getattr(self.embedder, "batch_size", None)
         if document_batch_size is not None:

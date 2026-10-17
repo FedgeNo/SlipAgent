@@ -128,3 +128,18 @@ async def test_invalid_google_billing_tier_is_reported(monkeypatch):
     async with GoogleClient("dummy") as client:
         with pytest.raises(APIConfigError, match="GEMINI_BILLING_TIER"):
             client.request_body({"model": "gemini-3.6-flash", "messages": []})
+
+
+async def test_pacing_waits_do_not_count_toward_the_first_output_deadline():
+    def handle(request):
+        chunk = {"choices": [{"delta": {"content": "Done"}, "finish_reason": "stop"}]}
+        return httpx.Response(200, text="data: " + json.dumps(chunk) + "\n\ndata: [DONE]\n\n",
+                              headers={"content-type": "text/event-stream"})
+    async with GoogleClient("dummy", transport=httpx.MockTransport(handle)) as client:
+        client._upload_pacer = UploadPacer(60000)
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        result = await client.chat(model="gemini-3.6-flash", messages=[Message.user("x " * 2000)],
+                                   on_delta=lambda *args: None, single_attempt=True, first_output_timeout=0.3)
+        assert result.text == "Done"
+        assert loop.time() - start > 0.6

@@ -16,4 +16,4 @@ Locations follow the current Workspace Access mode. Returns all locations from `
 
 ## Prerequisites
 
-Requires `language_servers` in `.slipagent/project.json` and an already installed stdio server. Use `grep` and `read_file` for ordinary discovery; follow the explicit position units.
+Requires `language_servers` in the user's `language-servers.json` in the SlipAgent data directory and an already installed stdio server. Use `grep` and `read_file` for ordinary discovery; follow the explicit position units.

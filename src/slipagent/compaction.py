@@ -95,6 +95,17 @@ class StepCompactor:
         queue = self.__dict__.setdefault("_ready", deque())
         if conversation is not None:
             self.__dict__["_conversation"] = conversation
+            # Summaries cancelled by an interrupt, credential or model change,
+            # or interrupted by a restart, are requested again with this route.
+            for index, earlier in enumerate(conversation):
+                if (earlier is not step and isinstance(earlier, CompletedStep) and earlier.summary is None
+                        and getattr(earlier, "compaction_status", None) in {"cancelled", "interrupted"}
+                        and earlier.__dict__.get("_compaction_request") is None):
+                    earlier.__dict__["_compaction_request"] = (
+                        client, model, capabilities, max_tokens,
+                        tuple(_frozen_step(prior) for prior in conversation[max(0, index - 25):index]),
+                        conversation, _frozen_step(earlier))
+                    earlier.compaction_status = "deferred"
         else:
             self.__dict__.setdefault("_standalone_steps", []).append(step)
         if len(queue) < COMPACTION_QUEUE_SIZE:

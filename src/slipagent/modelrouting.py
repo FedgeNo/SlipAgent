@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from typing import TYPE_CHECKING
 
 from .api import APIError, APIConfigError, APIConnectionError, APIResponseError, APITransportError, RETRYABLE_STATUS
@@ -15,6 +16,10 @@ from .types import ModelInfo
 
 if TYPE_CHECKING:
     from .sessionstate import Session
+
+
+# Transient working-model failures skip the model for this long, not for the session.
+WORKING_COOLDOWN = 300.0
 
 
 def transient_error(error: Exception) -> bool:
@@ -51,8 +56,19 @@ class ModelRouting:
                 failures.difference_update(value for value in tuple(failures) if value.startswith(provider + "::"))
         if provider is None:
             self.failed_providers.clear()
+            self.cooling().clear()
         else:
             self.failed_providers.discard(provider)
+            for selector in [selector for selector in self.cooling() if selector.startswith(provider + "::")]:
+                del self.cooling()[selector]
+
+    def cooling(self) -> dict[str, float]:
+        """Working models skipped after a transient failure, with monotonic expiry times."""
+        cooling: dict[str, float] = self.__dict__.setdefault("_cooling", {})
+        now = time.monotonic()
+        for selector in [selector for selector, until in cooling.items() if until <= now]:
+            del cooling[selector]
+        return cooling
 
     def notice(self, message: str) -> None:
         from .markdown import literal
@@ -87,7 +103,16 @@ class ModelRouting:
                          and model.provider in credentials and model.provider not in self.failed_providers
                          and eligible_free(model)), key=model_order)
         healthy = [model for model in ranked if model.selector not in self.failed[purpose]]
+        if purpose == "working" and not include_failed:
+            # Cooling models return once every other route is unavailable.
+            cooling = self.cooling()
+            healthy = [model for model in healthy if model.selector not in cooling] or healthy
         return ranked if include_failed else healthy
+
+    def reject_working(self, model: ModelInfo, error: Exception) -> None:
+        if transient_error(error):
+            self.cooling()[model.selector] = time.monotonic() + WORKING_COOLDOWN
+        self.reject(model, "working", error)
 
     def reject(self, model: ModelInfo, purpose: str, error: Exception) -> None:
         if isinstance(error, APIResponseError) and error.status_code == 401:
@@ -98,6 +123,19 @@ class ModelRouting:
     async def enable(self) -> None:
         self.reset()
         self.enabled = True
+        await self.select_working()
+
+    async def skip(self) -> None:
+        """Select the next ranked model; the current one stays excluded until reset.
+
+        With optimal off, this starts it normally from the highest score.
+        """
+        if not self.enabled:
+            await self.enable()
+            return
+        model = ModelInfo(self.session.agent.model, provider=self.session.client.provider)
+        self.failed["working"].add(model.selector)
+        self.notice(f"Optimal skipped {model.selector}.")
         await self.select_working()
 
     async def prepare_working(self) -> None:
@@ -119,8 +157,7 @@ class ModelRouting:
                 # A failed metadata connection must not blacklist every model.
                 raise
             except (APIError, ContextError) as exc:
-                self.failed["working"].add(model.selector)
-                self.reject(model, "working", exc)
+                self.reject_working(model, exc)
                 self.notice(f"Optimal skipped {model.selector}: {exc}")
                 continue
             self.notice(f"Optimal selected {model.selector} (estimated coding score {model.score:.1f}/100).")
@@ -135,8 +172,7 @@ class ModelRouting:
             self.notice("Connection retries exhausted; keeping the current model. Retry when the connection recovers.")
             return False
         model = ModelInfo(self.session.agent.model, provider=self.session.client.provider)
-        self.failed["working"].add(model.selector)
-        self.reject(model, "working", error)
+        self.reject_working(model, error)
         self.notice(f"Optimal fallback from {model.selector}: {error}")
         await self.select_working()
         return True

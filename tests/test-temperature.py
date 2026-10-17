@@ -133,3 +133,14 @@ async def test_temperature_changes_wait_for_idle_but_readout_stays_available(tmp
         assert session.extensions["deferred_commands"] == ["/temperature 0.5"]
         await _handle_command(session, "/temperature")
         assert "temperature: provider default" in session.renderer.stream.getvalue()
+
+
+async def test_provider_maximum_is_validated(tmp_path):
+    from slipagent.nvidia import NvidiaClient
+
+    async with NvidiaClient("test", transport=transport([])) as client:
+        session = session_for(client, tmp_path)
+        session.agent.temperature = 0.5
+        await _handle_command(session, "/temperature 1.5")
+        assert session.agent.temperature == 0.5
+        assert "from 0 to 1 for nvidia" in session.renderer.stream.getvalue()

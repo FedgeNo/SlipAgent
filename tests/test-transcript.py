@@ -169,3 +169,31 @@ def test_file_records_support_random_access_and_release_storage():
         archive.close()
     with pytest.raises(ValueError, match="closed"):
         archive[1]
+
+
+@pytest.mark.parametrize("source", [False, True])
+def test_streamed_code_block_commits_completed_lines_once(source):
+    import os
+
+    def spooled(flow):
+        files = (flow.rows._file, flow._copy_rows._file)
+        for file in files:
+            file.flush()
+        return sum(os.fstat(file.fileno()).st_size for file in files)
+
+    body = "Module:\n\n```python\n" + "".join(f"def f{i}(x):\n    return x + {i}\n" for i in range(150))
+    body += "```\n\nDone with `inline` code.\n"
+    flow = WrappedTranscript(80, source=source)
+    reference = WrappedTranscript(80, source=source)
+    try:
+        for start in range(0, len(body), 37):
+            flow.append_markdown(body[start:start + 37], first=start == 0)
+            flow.content_rows()
+        flow.finish_markdown()
+        reference.append_markdown(body, first=True, final=True)
+        assert lines(flow) == lines(reference)
+        # Completed lines are stored once while streaming, not once per redraw.
+        assert spooled(flow) < 3 * spooled(reference)
+    finally:
+        flow.close()
+        reference.close()

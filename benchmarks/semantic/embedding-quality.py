@@ -7,7 +7,6 @@ import hashlib
 import importlib.metadata
 import json
 import math
-import os
 import platform
 import sys
 import time
@@ -15,7 +14,8 @@ from pathlib import Path
 
 import numpy as np
 
-from slipagent.semantic import DEFAULT_MODEL, ONNXEmbedder
+from slipagent.semantic import ONNXEmbedder
+from slipagent.semantic.embed import BUNDLED_MODEL
 from slipagent.semantic.indexer import chunk_text
 
 
@@ -241,9 +241,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", type=Path, default=Path(__file__).with_name("code-search.json"))
     parser.add_argument("--queries", type=Path, help="Five or six word query variants keyed by dataset query ID")
-    cache = Path(os.environ.get("MEMORY_MODEL_CACHE_PATH", str(Path.home() / ".conventions-mcp/models")))
-    parser.add_argument("--model-dir", type=Path, default=cache / DEFAULT_MODEL,
-                        help="Local model directory; missing assets fail without downloading")
+    parser.add_argument("--model-dir", type=Path, default=BUNDLED_MODEL,
+                        help="Local model directory (default: the bundled model); missing assets fail without downloading")
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--output", type=Path, required=True, help="JSON report path")
     args = parser.parse_args(argv)

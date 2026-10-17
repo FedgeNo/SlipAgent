@@ -190,8 +190,15 @@ class WrappedTranscript:
         if self._markdown_source:
             text = stream.original() if final else stream.pending
             style = stream.renderer.style("body") if isinstance(stream.renderer, ReasoningMarkdownRenderer) else ""
-            rendered = stream.renderer.rows([(style, text)], self.columns)
-            committed = 0
+            if final:
+                rendered, committed = stream.renderer.rows([(style, text)], self.columns), 0
+            else:
+                # Complete source lines are wrapped and stored once.
+                cut = text.rfind("\n") + 1
+                stable = stream.renderer.rows([(style, text[:cut])], self.columns) if cut else []
+                stream.pending = text[cut:]
+                tail = stream.renderer.rows([(style, stream.pending)], self.columns) if stream.pending else []
+                rendered, committed = stable + tail, len(stable)
         else:
             rendered, committed = stream.update(self.columns, final=final)
         for row in rendered:

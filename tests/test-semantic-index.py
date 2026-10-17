@@ -153,10 +153,41 @@ class IndexTests(unittest.TestCase):
     def test_failed_graph_save_rolls_back_sql_and_in_memory_graph(self):
         self.index()
         self.source.write_text("def auth(): return 'updated'\n")
-        with patch("usearch.index.Index.save", side_effect=OSError("graph save failed")):
+        with patch("usearch.index.Index.save", side_effect=OSError("graph save failed")), \
+                patch.object(Store, "CHECKPOINT_CHANGES", 0):
             with self.assertRaisesRegex(OSError, "graph save failed"):
                 self.index()
         self.assertEqual(self.searcher.search("auth")[0]["text"], self.original)
+
+    def test_updates_journal_graph_changes_and_reopen_replays_them(self):
+        self.index()
+        storage = self.workspace / "storage.py"
+        with patch("usearch.index.Index.save", side_effect=AssertionError("full graph save")):
+            storage.write_text("def storage(): pass\n")
+            self.assertEqual(self.index(), 1)
+            self.source.write_text("def auth(): return 'updated'\n")
+            self.assertEqual(self.index(), 1)
+            storage.unlink()
+            self.index()
+        journal = list(self.store.conn.execute("SELECT added FROM graph_changes ORDER BY seq"))
+        self.assertEqual([row[0] for row in journal], [1, 1, 0, 1, 0])
+        expected = self.searcher.search("auth")
+        with Store(self.database, dim=3) as reopened:
+            self.assertEqual(Searcher(reopened, FakeEmbedder()).search("auth"), expected)
+            self.assertEqual(len(reopened._graph()), 1)
+
+    def test_large_journal_is_checkpointed_and_truncated(self):
+        self.index()
+        with patch.object(Store, "CHECKPOINT_CHANGES", 2):
+            for number in range(3):
+                (self.workspace / f"storage{number}.py").write_text(f"def storage{number}(): pass\n")
+                self.index()
+        state = self.store.conn.execute("SELECT checkpoint FROM graph_state").fetchone()[0]
+        self.assertEqual(state, 1)
+        self.assertLessEqual(self.store.conn.execute("SELECT COUNT(*) FROM graph_changes").fetchone()[0], 2)
+        with Store(self.database, dim=3) as reopened:
+            self.assertEqual(len(reopened._graph()), 4)
+            self.assertEqual(Searcher(reopened, FakeEmbedder()).search("auth")[0]["text"], self.original)
 
     def test_failed_rebuild_keeps_previous_index(self):
         self.index()

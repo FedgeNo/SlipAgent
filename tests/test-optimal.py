@@ -143,7 +143,14 @@ async def test_unusable_working_models_fall_back_after_their_recovery(optimal_se
         await session.model_routing().enable()
         assert await session.agent.run("Work") == "Recovered."
         assert [request["model"] for request in requests] == ["first"] * (3 if malformed else 1) + ["second"]
-        assert session.model_routing().failed["working"] == {"openrouter::first"}
+        routing = session.model_routing()
+        if failure in (429, 503):
+            # Transient failures cool the model down instead of excluding it.
+            assert not routing.failed["working"] and set(routing.cooling()) == {"openrouter::first"}
+            routing.cooling()["openrouter::first"] = 0
+            assert [model.id for model in await routing.candidates("working")][0] == "first"
+        else:
+            assert routing.failed["working"] == {"openrouter::first"}
     finally:
         await session.agent._compactor().aclose()
         await session.client.aclose()
@@ -521,3 +528,22 @@ async def test_failed_startup_closes_automatically_selected_provider(tmp_path, m
         await cli.build_session(args)
     assert {client.provider for client in clients} == {"openrouter", "google"}
     assert all(client._client.is_closed for client in clients)
+
+
+async def test_next_skips_down_the_ranking_until_reset(optimal_session):
+    from slipagent.cli import _handle_command
+    session, _, _ = optimal_session
+    routing = session.model_routing()
+    try:
+        # With optimal off, next starts it normally at the highest score.
+        session.agent.model = "second"
+        await _handle_command(session, "/optimal next")
+        assert routing.enabled and session.agent.model == "first"
+        await _handle_command(session, "/optimal next")
+        assert session.agent.model == "second"
+        assert routing.failed["working"] == {"openrouter::first"}
+        assert "Optimal skipped openrouter::first" in session.renderer.stream.getvalue()
+        await _handle_command(session, "/optimal reset")
+        assert session.agent.model == "first" and not routing.failed["working"]
+    finally:
+        await session.client.aclose()

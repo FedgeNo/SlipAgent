@@ -72,11 +72,9 @@ no speed claim is derived from that incomplete run.
 
 ```bash
 .venv/bin/python -B benchmarks/semantic/production-retrieval.py \
-    --model-dir /path/to/local/bge-small-en-v1.5 \
     --output /tmp/production-results.json
 
 .venv/bin/python -B benchmarks/semantic/threads.py \
-    --model-dir /path/to/local/bge-small-en-v1.5 \
     --output /tmp/thread-results.json
 ```
 

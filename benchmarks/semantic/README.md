@@ -25,11 +25,11 @@ Run the actual integrated backend on all frozen queries from the repository root
 
 ```bash
 .venv/bin/python -B benchmarks/semantic/production-retrieval.py \
-    --model-dir /path/to/cached/bge-small-en-v1.5 \
     --output /tmp/semantic-production-results.json
 ```
 
-This explicit benchmark uses real local model files and temporary source/database
+This explicit benchmark uses the model bundled in `src/slipagent/semantic/model/`
+(or `--model-dir`) and temporary source/database
 files. It does not call a provider or download another model. Reports record
 source and model hashes, dependency versions, and every top-ten result. The
 historical batch-one/batch-eight reports retain their original fingerprints.

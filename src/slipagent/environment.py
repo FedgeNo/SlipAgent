@@ -64,9 +64,9 @@ def load_project_options(workspace: Workspace) -> dict[str, Any]:
         if type(quota) is not int or quota < 1:
             raise ValueError("log_quota_bytes must be a positive integer")
         from .checks import validate_checks
-        from .lsp import validate_servers
         validate_checks(data)
-        validate_servers(data.get("language_servers", {}))
+        # Accepted but ignored: server commands come only from user settings.
+        data.pop("language_servers", None)
         return data
     except (ValueError, UnicodeError) as exc:
         raise ConfigError(f"Invalid {PROJECT_SETTINGS_PATH}: {exc}") from exc

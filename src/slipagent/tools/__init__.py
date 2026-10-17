@@ -6,7 +6,7 @@ from typing import Any
 
 from ..workspace import Workspace
 from ..instructions import ProjectInstructions
-from ..environment import ProjectEnvironment, load_project_settings, load_project_options
+from ..environment import ProjectEnvironment, load_project_settings
 from .base import Tool, ToolRegistry, ToolResult, validate_arguments
 from .answer import AnswerTool
 from .files import EditFileTool, ReadFileTool, WriteFileTool, file_tools
@@ -71,7 +71,7 @@ def build_default_registry(
     from ..jobs import CommandJobs, CommandJobsTool
     from ..monitoring import MonitorCommandTool
     from ..diagnostics import RequestDiagnostics
-    from ..lsp import LanguageServers, NavigateCodeTool
+    from ..lsp import LanguageServers, NavigateCodeTool, load_language_servers
     from ..artifacts import ArtifactStore, ReadArtifactTool
     owns_services = services is None
     if services is None:
@@ -101,7 +101,7 @@ def build_default_registry(
             *([CommandJobsTool(services["command_jobs"])] if "command_jobs" in services else []),
             *([MonitorCommandTool(services["command_jobs"])] if "command_jobs" in services else []),
             *([NavigateCodeTool(services["language_servers"])]
-              if "language_servers" in services and load_project_options(workspace).get("language_servers") else []),
+              if "language_servers" in services and load_language_servers() else []),
             *git_tools(workspace, archive),
             ReadCommandOutputTool(archive),
             *([ReadArtifactTool(artifacts)] if artifacts is not None else []),

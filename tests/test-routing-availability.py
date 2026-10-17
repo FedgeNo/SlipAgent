@@ -50,7 +50,8 @@ async def test_provider_switch_does_not_restore_the_failed_model(tmp_path, monke
         assert session.client.provider == "google" and session.agent.model == "second"
         await routing.fallback(APIResponseError("Provider failed", status_code=status))
         assert session.client.provider == "openrouter" and session.agent.model == "third"
-        assert routing.failed["working"] == {"openrouter::first", "google::second"}
+        assert routing.failed["working"] == {"openrouter::first"}
+        assert set(routing.cooling()) == ({"google::second"} if status == 429 else set())
         assert routing.failed_providers == ({"google"} if status == 401 else set())
     finally:
         await session.agent._compactor().aclose()

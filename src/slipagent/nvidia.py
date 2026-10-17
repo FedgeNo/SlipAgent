@@ -19,6 +19,7 @@ class NvidiaClient(APIClient):
 
     provider = "nvidia"
     default_base_url = "https://integrate.api.nvidia.com/v1"
+    max_temperature = 1.0
     default_model = ULTRA_MODEL
     key_env = "NVIDIA_API_KEY"
     model_env = "NVIDIA_MODEL"
@@ -100,5 +101,5 @@ class NvidiaClient(APIClient):
             if self.reasoning_budget is not None:
                 payload.setdefault("reasoning_budget", self.reasoning_budget)
         temperature = payload.get("temperature")
-        if temperature is not None and temperature > 1:
-            raise APIConfigError("NVIDIA temperature must be at most 1.")
+        if temperature is not None and temperature > self.max_temperature:
+            raise APIConfigError(f"NVIDIA temperature must be at most {self.max_temperature:g}.")

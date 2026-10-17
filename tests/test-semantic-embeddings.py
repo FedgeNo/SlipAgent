@@ -1,7 +1,6 @@
 """Offline encoder checks with a tiny tokenizer and synthetic ONNX output."""
 
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -107,8 +106,8 @@ class EmbeddingTests(unittest.TestCase):
             self.assertTrue(all(embedder.token_count("File: source.py\n\n" + row["text"]) <= 20 for row in rows))
             self.assertTrue(all(feed["input_ids"].shape[1] <= 20 for feed in self.feeds))
 
-    def test_existing_conventions_cache_needs_no_hub_access(self):
-        with patch.dict(os.environ, {"MEMORY_MODEL_CACHE_PATH": str(self.root)}), \
+    def test_default_model_loads_bundled_files_without_hub_access(self):
+        with patch("slipagent.semantic.embed.BUNDLED_MODEL", self.model_dir), \
                 patch("huggingface_hub.hf_hub_download", side_effect=AssertionError("network access")):
             self.assertEqual(ONNXEmbedder().dim(), 3)
         self.assertEqual(Path(self.loader.call_args.args[0]), self.model_dir / "onnx/model_quantized.onnx")
@@ -129,12 +128,11 @@ class EmbeddingTests(unittest.TestCase):
                 raise LocalEntryNotFoundError("not cached")
             return str(self.model_dir / filename)
 
-        with patch.dict(os.environ, {"MEMORY_MODEL_CACHE_PATH": str(self.root / "missing")}), \
-                patch("huggingface_hub.hf_hub_download", side_effect=download):
-            self.assertEqual(ONNXEmbedder().dim(), 3)
+        with patch("huggingface_hub.hf_hub_download", side_effect=download):
+            self.assertEqual(ONNXEmbedder("example/other-model").dim(), 3)
         self.assertEqual([filename for _, filename, options in calls if not options.get("local_files_only")],
                          ["tokenizer.json"])
-        self.assertTrue(all(repository == DEFAULT_MODEL for repository, _, _ in calls))
+        self.assertTrue(all(repository == "example/other-model" for repository, _, _ in calls))
 
     def test_invalid_batch_size_is_rejected(self):
         with self.assertRaises(ValueError):
@@ -154,3 +152,15 @@ class EmbeddingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_bundled_model_matches_its_recorded_provenance():
+    import hashlib
+    import re
+    from slipagent.semantic.embed import BUNDLED_MODEL, MODEL_FILES
+
+    recorded = dict(re.findall(r"\| `([^`]+)` \| `([0-9a-f]{64})` \|", (BUNDLED_MODEL / "SOURCE.md").read_text()))
+    assert set(recorded) == set(MODEL_FILES)
+    for name, digest in recorded.items():
+        assert hashlib.sha256((BUNDLED_MODEL / name).read_bytes()).hexdigest() == digest
+    assert (BUNDLED_MODEL / "LICENSE").read_text().startswith("MIT License")

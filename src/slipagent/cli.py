@@ -980,13 +980,15 @@ async def run_repl(session: Session) -> int:
             quota_task.cancel()
             await _gather_quietly(quota_task)
         try:
-            await _shutdown(session)
-        finally:
+            # The final redraw still imports accepted component code. Retire
+            # that generation only after the terminal task has finished.
             if renderer.terminal is not None:
                 renderer.terminal.close()
             if terminal_task is not None:
                 await terminal_task
+        finally:
             renderer.terminal = None
+            await _shutdown(session)
     return 0
 
 

@@ -657,6 +657,39 @@ def test_terminal_rebuild_preserves_draft_history_scroll_and_input_queue(run_cop
     ''')
 
 
+def test_repl_shutdown_drains_final_redraw_before_retiring_generation(run_copy):
+    run_copy('''
+        import sys
+        from prompt_toolkit.input import create_pipe_input
+        from prompt_toolkit.output import DummyOutput
+        class Sink(io.StringIO):
+            def isatty(self):
+                return True
+        renderer.stream = Sink()
+        sys.stdin = Sink()
+        os.environ['TERM'] = 'xterm'
+        with create_pipe_input() as pipe:
+            terminal = cli.TerminalUI(lambda columns: 'status', sink, input=pipe, output=DummyOutput())
+            cli.TerminalUI = lambda *args, **kwargs: terminal
+            finished = []
+            terminal.app.after_render += lambda app: finished.append(app.is_done)
+            async def startup(session):
+                async with asyncio.timeout(3):
+                    while not terminal.app.is_running:
+                        await asyncio.sleep(.01)
+                for generation in (1, 2):
+                    frame.request()
+                    await frame.checkpoint()
+                    assert frame.generation == generation, sink.getvalue()
+                return False
+            cli._start_repl = startup
+            assert await cli.run_repl(session) == 0
+            assert True in finished
+            assert frame.namespace is None
+            assert renderer.terminal is None
+    ''')
+
+
 def test_failed_terminal_build_rolls_back_entire_candidate(run_copy):
     run_copy('''
         from prompt_toolkit.input import create_pipe_input

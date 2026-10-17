@@ -162,7 +162,8 @@ For Mistral, add `MISTRAL_API_KEY=your-key` to your local `.env`, then run
 `slipagent --provider mistral`. The default is `mistral-small-latest`;
 `/models mistral` lists available chat models and
 `/model mistral::<model-id>` selects one. Mistral's authenticated catalog supplies
-context limits, aliases, and native tool support. Leanstral 1.5.1 is labelled free;
+context limits, aliases, and native tool support. Leanstral 1.5 and 1.5.1 are labelled free
+and share the same estimated coding score, including when loaded from the startup cache;
 other prices remain unknown because the catalog does not identify your account's free allowance. Free-mode access
 and quotas are controlled by Mistral. Its ranked free models participate in
 background compression. `/provider` switches only to defaults advertised

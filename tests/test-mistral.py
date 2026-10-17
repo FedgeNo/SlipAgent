@@ -83,12 +83,13 @@ async def test_mistral_stream_omits_unsupported_options():
     assert result.message.content == "Hello" and deltas
 
 
-async def test_mistral_activation_routes_its_ranked_free_model(tmp_path):
+@pytest.mark.parametrize("model_id", ["labs-leanstral-1-5", "labs-leanstral-1-5-1"])
+async def test_mistral_activation_routes_its_ranked_free_model(tmp_path, model_id):
     env = {"MISTRAL_API_KEY": "dummy"}
     assert active_providers(env) == ["mistral"]
     config = Config.from_env(provider="mistral", environ=env)
     assert config.model == "mistral-small-latest" and config.api_key == "dummy"
-    data = {"data": [{"id": "labs-leanstral-1-5-1", "aliases": ["leanstral-alias"],
+    data = {"data": [{"id": model_id, "aliases": ["leanstral-alias"],
                       "max_context_length": 262144, "capabilities": {"completion_chat": True}}]}
     transport = httpx.MockTransport(lambda request: httpx.Response(200, json=data))
     async with MistralClient("dummy", transport=transport) as client:
@@ -100,14 +101,18 @@ async def test_mistral_activation_routes_its_ranked_free_model(tmp_path):
         session.configure_compaction()
         router = session.agent._compactor().routing
         try:
+            await session.model_routing().enable()
+            assert session.agent.model == model_id
             destination, model = await router.select(set())
-            assert destination.provider == "mistral" and model.id == "labs-leanstral-1-5-1"
+            assert destination.provider == "mistral" and model.id == model_id
         finally:
             await router.aclose()
 
 
 @pytest.mark.parametrize("reverse", [False, True])
-async def test_listed_alias_inherits_free_price_and_rank(reverse):
+@pytest.mark.parametrize("cached", [False, True])
+async def test_listed_alias_inherits_free_price_and_rank(reverse, cached, tmp_path):
+    from slipagent import startupcache
     from slipagent.modelrouting import eligible_free
     data = {"data": [
         {"id": "labs-leanstral-1-5-1", "aliases": ["labs-leanstral-1-5"],
@@ -119,9 +124,16 @@ async def test_listed_alias_inherits_free_price_and_rank(reverse):
         data["data"].reverse()
     async with MistralClient("dummy", transport=httpx.MockTransport(lambda r: httpx.Response(200, json=data))) as client:
         models = await client.list_models()
+        if cached:
+            startupcache.save_catalogs(models, {"mistral": "dummy-identity"})
+            models = startupcache.cached_catalog({"mistral": "dummy-identity"})
+            assert models is not None
         assert len(models) == 2
         assert all(eligible_free(model) and model.score is not None for model in models)
         assert models[0].score == models[1].score
+        session = import_module("test-providers").session_for(client, tmp_path)
+        session.model_routing().catalog_notice(models)
+        assert "New free models" not in session.renderer.stream.getvalue()
 
 
 @pytest.mark.parametrize("stream", [True, False])

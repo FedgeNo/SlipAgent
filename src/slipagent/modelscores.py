@@ -87,6 +87,7 @@ MODEL_ALIASES = {
     "meta-llama/llama-2-70b-chat": "meta/llama2-70b",
     "meta-llama/llama-3.2-11b-vision-instruct": "meta/llama-3.2-11b-vision-instruct",
     "meta-llama/llama-3.2-90b-vision-instruct": "meta/llama-3.2-90b-vision-instruct",
+    "mistral/labs-leanstral-1-5": "mistral/labs-leanstral-1-5-1",
     "nvidia/nemotron-3.5-lightning-30b-a3b": "nvidia/nemotron-3.5-lightning",
     "nvidia/nemotron-3.5-super-vl-120b-a12b": "nvidia/nemotron-3.5-super-vl",
     "nvidia/nemotron-nano-3-30b-a3b": "nvidia/nemotron-3-nano-30b-a3b",

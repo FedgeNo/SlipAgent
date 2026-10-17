@@ -42,7 +42,8 @@ def test_saved_offsets_reproduce_reviewed_examples(calibration):
     from slipagent.modelscores import model_score
     example = json.loads((ROOT / "scripts/model-score-example.json").read_text())
     assert updater.estimate(example["benchmarks"], calibration) == model_score("kilo", "reflection/beam-free")
-    assert updater.estimate({"FLTEval pass1": 28.9}, calibration) == model_score("mistral", "labs-leanstral-1-5-1")
+    for model in ("labs-leanstral-1-5", "labs-leanstral-1-5-1"):
+        assert updater.estimate({"FLTEval pass1": 28.9}, calibration) == model_score("mistral", model)
 
 
 def test_coding_judge_rating_uses_its_native_scale(calibration):

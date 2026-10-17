@@ -30,7 +30,7 @@ class MistralClient(APIClient):
             model.context_length = properties["context_length"]
             # The catalog describes models, not the account's free-plan allowance.
             model.pricing = {"prompt": "unknown", "completion": "unknown"}
-            if model.id == "labs-leanstral-1-5-1":
+            if model.id in {"labs-leanstral-1-5", "labs-leanstral-1-5-1"}:
                 model.pricing = {"prompt": "0", "completion": "0"}
             result.append(model)
             for alias in properties.get("aliases") or []:

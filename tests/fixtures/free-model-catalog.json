@@ -137,6 +137,7 @@
         "gemma-4-31b-it"
     ],
     "mistral": [
+        "labs-leanstral-1-5",
         "labs-leanstral-1-5-1"
     ]
 }

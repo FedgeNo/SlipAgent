@@ -43,6 +43,8 @@ connect older code generation tests to SWE Verified. [Claude Sonnet 4.6's system
 and [Haiku 4.5 results](https://www.anthropic.com/news/claude-haiku-4-5)
 connect the SWE scale to the [FLTEval comparison](https://mistral.ai/news/leanstral/).
 [Leanstral 1.5](https://mistral.ai/news/leanstral-1-5/) supplies its own pass@1 result.
+Mistral's live catalog lists `labs-leanstral-1-5` and `labs-leanstral-1-5-1` as
+aliases; both use the resulting 79.7 estimate through the exact identity table.
 The [description-only coding comparison](https://arxiv.org/html/2410.12381v1)
 uses text descriptions; its image-input scores are excluded.
 New catalog entries include [Reflection Beam](https://huggingface.co/reflection/Beam-1.0-501B-A23B)

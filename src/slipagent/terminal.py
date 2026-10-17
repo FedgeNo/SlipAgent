@@ -1136,6 +1136,11 @@ class TerminalUI:
     def _bindings(self) -> KeyBindings:
         return build_bindings(self)
 
+    def set_skip_handler(self, callback: Callable[[], None] | None) -> None:
+        """Offer Ctrl+N while the current request may be skipped."""
+        self.__dict__["_skip_callback"] = callback
+        self.app.invalidate()
+
     def set_interrupt_handler(self, callback: Callable[[], None]) -> None:
         """Interrupt work directly, without submitting or changing the draft."""
         self._interrupt_callback = callback

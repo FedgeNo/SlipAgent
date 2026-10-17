@@ -208,6 +208,12 @@ def build_bindings(ui: TerminalUI) -> KeyBindings:
         if callback is not None:
             callback()
 
+    @bindings.add("c-n", filter=Condition(lambda: ui.__dict__.get("_skip_callback") is not None) & ~in_menu & ~in_editor & ~in_setting)
+    def skip_model(event: KeyPressEvent) -> None:
+        callback = ui.__dict__.pop("_skip_callback", None)
+        if callback is not None:
+            callback()
+
     @bindings.add(Keys.Any, filter=in_menu)
     def ignore_menu_text(event: KeyPressEvent) -> None:
         pass

@@ -81,6 +81,8 @@ Use /help for command details. Ctrl+\\ toggles the context view.
 """.replace("{commands}", banner_commands())
 
 QUOTA_REFRESH_INTERVAL = 15 * 60
+# Seconds without model output before the status line shows the deadline.
+FIRST_OUTPUT_NOTICE_SECONDS = 10
 
 HELP = all_help()
 
@@ -417,6 +419,32 @@ class Renderer:
         screen, meaning output must be written around it rather than over it."""
         return self._prompt is not None
 
+    def first_output_wait(self, deadline: Any, *, skippable: bool) -> None:
+        """Count down a silent request's deadline; Ctrl+N skips to the next model."""
+        ticker = self.__dict__.pop("_first_output_ticker", None)
+        if ticker is not None:
+            ticker.cancel()
+        terminal = self.terminal
+        if terminal is None:
+            return
+        terminal.set_skip_handler(deadline.skip if deadline is not None and skippable else None)
+        if deadline is None:
+            if ticker is not None:
+                terminal.set_retry_status("")
+            return
+
+        async def tick() -> None:
+            started = time.monotonic()
+            while True:
+                await asyncio.sleep(1)
+                remaining = deadline.remaining()
+                # Ordinary responses start within seconds; only a long silence is shown.
+                if remaining is not None and time.monotonic() - started >= FIRST_OUTPUT_NOTICE_SECONDS:
+                    action = "next model" if skippable else "timeout"
+                    hint = " (Ctrl+N: next model)" if skippable else ""
+                    terminal.set_retry_status(f"No model output yet; {math.ceil(remaining)}s until {action}{hint}")
+        self.__dict__["_first_output_ticker"] = asyncio.ensure_future(tick())
+
     def retry_countdown(self, error: str, seconds: int) -> None:
         """Keep countdown ticks out of scrollback while retaining the error."""
         previous = self.__dict__.get("_retry_error", "")
@@ -619,7 +647,6 @@ async def build_session(args: argparse.Namespace, *, defer_startup: bool = False
         max_steps=args.max_steps,
         temperature=args.temperature,
         max_tokens=args.max_tokens,
-        context_steps=args.context_steps,
     )
     try:
         workspace = Workspace(config.workspace, danger=getattr(args, "danger", False))
@@ -692,6 +719,8 @@ async def build_session(args: argparse.Namespace, *, defer_startup: bool = False
                 await session.client.aclose()
 
         resources.push_async_callback(close_selected_client)
+        registry.services["first_output_wait"] = lambda deadline: renderer.first_output_wait(
+            deadline, skippable=session.model_routing().enabled)
         session.configure_compaction()
         if defer_startup:
             session.extensions["startup"] = lambda: _initialize_session(session, args, config, announce=True)
@@ -708,6 +737,8 @@ async def _initialize_session(session: Session, args: argparse.Namespace, config
     model_error: APIError | None = None
     routing = session.model_routing()
     routing.enabled = not (args.model or getattr(args, "provider", None))
+    # Interactive startup selects from saved metadata and refreshes it afterwards.
+    cached_start = False
 
     def notice(text: str) -> None:
         if announce:
@@ -724,12 +755,24 @@ async def _initialize_session(session: Session, args: argparse.Namespace, config
         notice(outcome if isinstance(outcome, str) else f"Finished {action}.")
 
     async def metadata() -> str | None:
-        nonlocal model_error
+        nonlocal model_error, cached_start
         try:
             if routing.enabled:
+                if announce and await session.use_cached_catalog():
+                    cached_start = True
+                    return "Model catalog: using the saved catalog; refreshing it in the background."
                 await routing.candidates("working")
-            elif await session.client.model_capabilities(config.model, refresh=True) is None:
-                raise APIConfigError("The API did not supply capabilities to verify the configured model's compatibility.")
+            else:
+                if announce:
+                    from . import startupcache
+                    profile = await run_blocking(startupcache.cached_profile, ModelInfo(config.model, provider=config.provider),
+                                                 session.provider_identity(config.provider))
+                    if profile is not None:
+                        session.client.cache_capabilities(config.model, profile)
+                        cached_start = True
+                        return "Model capabilities: using the saved profile; refreshing it in the background."
+                if await session.client.model_capabilities(config.model, refresh=True) is None:
+                    raise APIConfigError("The API did not supply capabilities to verify the configured model's compatibility.")
         except APIError as exc:
             model_error = exc
             renderer.emit(literal(f"  model check failed: {exc} Select another model with /models or /model <slug>."))
@@ -792,9 +835,13 @@ async def _initialize_session(session: Session, args: argparse.Namespace, config
         ("Connecting to MCP servers and loading their tools", mcp),
         ("Scanning repository files and building the repository map", repository),
         ("Finding and validating the project Python environment", environment),
-        ("Retrieving the remaining API quota", quota),
         ("Preparing session storage and restoring any requested session", resume),
     ]
+    if announce:
+        # The quota is informational; the prompt need not wait for it.
+        _start_background_task(session, _refresh_quota(session))
+    else:
+        operations.insert(4, ("Retrieving the remaining API quota", quota))
     tasks = [asyncio.create_task(phase(label, operation)) for label, operation in operations]
     try:
         await asyncio.gather(*tasks)
@@ -807,7 +854,7 @@ async def _initialize_session(session: Session, args: argparse.Namespace, config
         notice("Preparing model context…")
         try:
             # Selection preflights context after MCP, environment, and restored history settle.
-            preview = asyncio.ensure_future(routing.enable() if routing.enabled else
+            preview = asyncio.ensure_future(routing.enable(cached=cached_start) if routing.enabled else
                                             agent._context_view(registry.specs(), 0, preview=True))
             try:
                 await asyncio.shield(preview)
@@ -817,6 +864,8 @@ async def _initialize_session(session: Session, args: argparse.Namespace, config
         except APIError as exc:
             model_error = exc
             renderer.emit(literal(f"  model check failed: {exc} Select another model with /models or /model <slug>."))
+    if cached_start:
+        _start_background_task(session, _refresh_model_metadata(session))
     if not getattr(args, "no_reload", False):
         frame = await run_blocking(RuntimeFrame, session, sys.modules[__name__])
         session.reloader = frame
@@ -1542,6 +1591,32 @@ def _start_background_command(session: Session, text: str) -> None:
     task.add_done_callback(tasks.discard)
 
 
+def _start_background_task(session: Session, work: Awaitable[Any]) -> None:
+    """Own startup work that must not delay the prompt; shutdown cancels it."""
+    tasks: set[asyncio.Task[Any]] = session.extensions.setdefault("background_tasks", set())
+    task = asyncio.ensure_future(work)
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
+
+
+async def _refresh_model_metadata(session: Session) -> None:
+    """Replace saved catalogs and profiles used at startup with current ones."""
+    try:
+        await session.catalog(refresh=True)
+        current = ModelInfo(session.agent.model, provider=session.client.provider)
+        targets = [current]
+        routing = session.model_routing()
+        if routing.enabled:
+            # Save the best candidate's profile so the next launch can select it from the cache.
+            best = next(iter(await routing.candidates("working")), None)
+            if best is not None and best.selector != current.selector:
+                targets.append(best)
+        for model in targets:
+            await session.refresh_profile(model)
+    except (APIError, ConfigError, ValueError):
+        pass
+
+
 async def _gather_quietly(*tasks: asyncio.Task[object]) -> None:
     for task in tasks:
         try:
@@ -1557,7 +1632,7 @@ async def _shutdown(session: Session) -> None:
     are stopped before the registry and HTTP client are closed.
     """
     await _wait_for_interrupt(session)
-    tasks = list(session.extensions.get("command_tasks", ()))
+    tasks = list(session.extensions.get("command_tasks", ())) + list(session.extensions.get("background_tasks", ()))
     for task in tasks:
         task.cancel()
     await _gather_quietly(*tasks)
@@ -1710,30 +1785,119 @@ async def _execute_command(session: Session, line: str, *, at_boundary: bool = F
     return False
 
 
+# `/model` subcommands, shown as `[name] description` in its menu.
+MODEL_MENU = (
+    ("model", "Enter a model name or filter words; blank lists every model"),
+    ("provider", "Choose a provider and list its models, free ones first"),
+    ("free", "Choose from free models"),
+    ("optimal", "Select the best ranked free model automatically"),
+    ("next", "Skip the current model for the next ranked free model"),
+    ("reset", "Retry from the best ranked free model, clearing failures"),
+)
+
+
 async def _model_command(
     session: Session, argument: str, style: Style, out: io.TextIOBase, *, require_free: bool = False,
 ) -> None:
-    if not argument:
-        if session.renderer.terminal is not None:
-            await _models_command(session, "", style, out)
-            return
-        print(f"  current model: {style.cyan(session.agent.model)}", file=out)
-        print(style.dim("  switch with: /model <slug>   browse with: /models"), file=out)
-        return
+    """Dispatch `/model`: a menu, a subcommand, a provider, an exact model, or filter words.
 
+    Subcommands and provider names apply only as a single word; several words search.
+    """
+    words = argument.strip()
+    action = words.lower() if len(words.split()) == 1 else ""
+    terminal = session.renderer.terminal
+    if not argument.strip():
+        routing = session.model_routing()
+        current = f"{session.client.provider}::{session.agent.model}"
+        state = f"Optimal {'on' if routing.enabled else 'off'}"
+        if terminal is None:
+            print(f"  current model: {style.cyan(current)} ({state})", file=out)
+            for name, description in MODEL_MENU:
+                print(f"  /model {name:<9} {description}", file=out)
+            print(style.dim("  /model <provider>, <model> or <words> also select directly."), file=out)
+            return
+        action = await terminal.choose(f"Model: {current} ({state})",
+                                       [(name, f"[{name}] {description}") for name, description in MODEL_MENU]) or ""
+        if not action:
+            return
+        if action == "model":
+            try:
+                words = (await _ask_input(session, "  model or filter words (blank lists every model): ")).strip()
+            except (EOFError, KeyboardInterrupt):
+                return
+            await _model_lookup(session, words, style, out, require_free=require_free)
+            return
+    if action == "provider":
+        await _provider_models(session, "", style, out)
+    elif action in PROVIDERS:
+        await _provider_models(session, action, style, out)
+    elif action in {"optimal", "next", "reset"}:
+        await _routing_action(session, action, style, out)
+    elif action == "free":
+        await _models_command(session, "free", style, out)
+    else:
+        await _model_lookup(session, words, style, out, require_free=require_free)
+
+
+async def _routing_action(session: Session, action: str, style: Style, out: io.TextIOBase) -> None:
+    """Enable optimal selection, skip to the next ranked model, or retry from the top."""
+    routing = session.model_routing()
+    try:
+        await (routing.skip() if action == "next" else routing.enable())
+    except APIError as exc:
+        print(style.red(f"  {exc}"), file=out)
+
+
+async def _provider_models(session: Session, provider: str, style: Style, out: io.TextIOBase) -> None:
+    """List a provider's models, free ones first, choosing the provider when none is named."""
+    if not provider:
+        terminal = session.renderer.terminal
+        if terminal is None:
+            print("  providers: " + ", ".join(PROVIDERS) + "  (/model <provider> lists its models)", file=out)
+            return
+        provider = await terminal.choose("Select Provider", [(name, name) for name in PROVIDERS]) or ""
+        if not provider:
+            return
+    await _models_command(session, "", style, out, provider=provider)
+
+
+async def _provider_default(session: Session, provider: str, style: Style, out: io.TextIOBase) -> None:
+    """Switch to a provider's free default model."""
+    if provider not in PROVIDERS:
+        print(style.red("  usage: /provider " + "|".join(PROVIDERS)), file=out)
+        return
+    await _select_model(session, f"{provider}::{provider_class(provider).default_model}", style, out, require_free=True)
+
+
+async def _model_lookup(session: Session, words: str, style: Style, out: io.TextIOBase, *,
+                        require_free: bool = False) -> None:
+    """Select an exact model, or list the models matching every word."""
     try:
         catalog = await session.catalog(refresh=True)
     except (APIError, ConfigError) as exc:
         print(style.red(f"  could not verify against the catalog: {exc}"), file=out)
         return
+    if words and any(words in (model.id, model.selector) for model in catalog):
+        await _select_model(session, words, style, out, require_free=require_free, catalog=catalog)
+    else:
+        await _models_command(session, words, style, out)
+
+
+async def _select_model(
+    session: Session, argument: str, style: Style, out: io.TextIOBase, *, require_free: bool = False,
+    catalog: list[ModelInfo] | None = None,
+) -> None:
+    """Switch to an exact model, verified against a freshly fetched catalog."""
+    if catalog is None:
+        try:
+            catalog = await session.catalog(refresh=True)
+        except (APIError, ConfigError) as exc:
+            print(style.red(f"  could not verify against the catalog: {exc}"), file=out)
+            return
 
     matches = [model for model in catalog if argument in (model.id, model.selector)]
     if not matches:
-        suggestions = [m for m in catalog if argument.lower() in m.id.lower()][:5]
         print(style.red(f"  unknown model: {argument}"), file=out)
-        if suggestions:
-            print(style.dim("  did you mean:"), file=out)
-            print(_model_table(session, suggestions), file=out)
         return
     if len(matches) > 1:
         print(style.dim("  Select a provider explicitly with /model <provider>::<model>:"), file=out)
@@ -1799,7 +1963,7 @@ async def _temperature_command(
 
 
 async def _models_command(
-    session: Session, argument: str, style: Style, out: io.TextIOBase
+    session: Session, argument: str, style: Style, out: io.TextIOBase, *, provider: str | None = None,
 ) -> None:
     try:
         catalog = await session.catalog()
@@ -1821,9 +1985,12 @@ async def _models_command(
                    if all(word in labels[m.selector].lower() for word in words)]
     else:
         matches = list(catalog)
+    if provider is not None:
+        matches = [model for model in matches if model.provider == provider]
 
     if not matches:
-        print(f"  no models matching {argument!r}", file=out)
+        print(f"  no {provider + ' ' if provider else ''}models matching {argument!r}" if argument
+              else f"  no {provider} models are available; check its API key", file=out)
         return
 
     terminal = session.renderer.terminal
@@ -1837,7 +2004,7 @@ async def _models_command(
                                                 if free_label(m.pricing) is not None},
                                         legend=[("class:menu-free", "   "), ("", " = free")])
         if selected is not None:
-            await _model_command(session, selected, style, out)
+            await _select_model(session, selected, style, out)
         return
 
     free_count = sum(1 for m in catalog if free_label(m.pricing) is not None)
@@ -2231,6 +2398,7 @@ def _describe_mcp(session: Session, style: Style, out: io.TextIOBase) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="slipagent",
+        usage="slipagent [options] [prompt ...]",
         description="An agentic coding harness with selectable API providers.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
@@ -2241,54 +2409,59 @@ def build_parser() -> argparse.ArgumentParser:
             "  slipagent --list-models         browse configured providers' catalogs\n"
         ),
     )
-    parser.add_argument("--planning", action=argparse.BooleanOptionalAction, default=True,
-                        help="Expose a persistent working-plan tool for multi-step tasks (default: enabled).")
-    parser.add_argument("--hashline", action=argparse.BooleanOptionalAction, default=True,
-                        help="Offer optional hash-anchored read/edit tools (default: enabled; --no-hashline removes their guidance).")
-    parser.add_argument("--raw-reasoning-history", action="store_true", help="Compare original thoughts instead of filtered thoughts in Overthinking history.")
-    parser.add_argument("--context-tokens", type=int, help="Working context cap including output reserve (at least 4096; never expands the endpoint limit).")
-    parser.add_argument("--reasoning-history-steps", type=int, choices=range(26), default=25,
-                        metavar="0..25", help="Recent steps whose archived thoughts may be supplied; 0 keeps outcomes only (default 25).")
-    parser.add_argument("--tools", help="Comma-separated tool allowlist; recall_history and enabled planning remain available.")
     parser.add_argument("prompt", nargs="*", help="Task to run, then exit.")
     parser.add_argument("-p", "--prompt", dest="prompt_flag",
                         help="Task to run, then exit.")
-    parser.add_argument("--prompt-file", metavar="PATH", help="Read a UTF-8 one-shot prompt verbatim; use - for stdin.")
-    parser.add_argument("--json-events", action="store_true",
-                        help="One-shot automation: stream JSON Lines events and final status on stdout.")
-    parser.add_argument("-m", "--model", help="Select and remember a model in manual mode (default: optimal free-model selection).")
     parser.add_argument("-w", "--workspace", default=None,
                         help="Project root and default path boundary (lifted by --danger). Default: cwd.")
-    parser.add_argument("--max-steps", type=int, default=None,
-                        help="Cap on model requests per run, including response retries. "
-                             "Default: 200.")
-    parser.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE,
-                        help="Working-model temperature override when supported; omitted by default. Compression always omits it.")
-    parser.add_argument("--max-tokens", type=int, default=None,
-                        help="Cap on completion tokens per response.")
-    parser.add_argument("--context-steps", type=int, default=None,
-                        help="Deprecated compatibility option; history now targets the newest third of retained posts in full.")
-    parser.add_argument("--python", default=None,
-                        help="Project Python interpreter path, overriding .slipagent/project.json and venv discovery.")
+    parser.add_argument("-m", "--model", help="Select and remember a model in manual mode (default: optimal free-model selection).")
     parser.add_argument("--provider", choices=list(PROVIDERS), help="Select an API provider in manual mode (or set SLIPAGENT_PROVIDER for the initial provider).")
-    parser.add_argument("--api-key", help="Selected provider API key (or set its API_KEY environment variable).")
-    parser.add_argument("--base-url", help="Override the API base URL.")
-    parser.add_argument("--list-models", action="store_true",
-                        help="List catalogs from providers with configured API keys and exit.")
-    parser.add_argument("-v", "--verbose", action="store_true",
-                        help="Show full tool output and per-step token usage.")
-    parser.add_argument("--no-color", action="store_true", help="Disable ANSI colour.")
-    parser.add_argument("--theme", choices=list(THEMES), default="dark", help="Markdown theme (default: dark).")
-    parser.add_argument("--markdown", action="store_true", help="Preserve Markdown source instead of readable plain output.")
-    parser.add_argument("--no-reload", action="store_true", help="Disable automatic component reloads.")
     parser.add_argument("--resume", nargs="?", const="latest", help="Restore a project session by full ID, or the latest saved session.")
-    parser.add_argument("--no-session", action="store_true", help="Keep conversation and command logs only until reset or exit.")
     parser.add_argument("--danger", action="store_true",
                         help="Disable built-in workspace path confinement without a confirmation prompt.")
-    parser.add_argument("--no-mcp", action="store_true",
-                        help="Do not connect to globally configured MCP servers.")
-    parser.add_argument("--mcp", action="store_true",
-                        help="Force connecting to MCP servers even in one-shot mode.")
+    parser.add_argument("--update", action="store_true",
+                        help="Download the latest SlipAgent from GitHub and run its installer, which checks for local edits first.")
+    parser.add_argument("--list-models", action="store_true",
+                        help="List catalogs from providers with configured API keys and exit.")
+
+    display = parser.add_argument_group("display and sessions")
+    display.add_argument("--theme", choices=list(THEMES), default="dark", help="Markdown theme (default: dark).")
+    display.add_argument("--no-color", action="store_true", help="Disable ANSI colour.")
+    display.add_argument("--markdown", action="store_true", help="Preserve Markdown source instead of readable plain output.")
+    display.add_argument("-v", "--verbose", action="store_true",
+                         help="Show full tool output and per-step token usage.")
+    display.add_argument("--no-session", action="store_true", help="Keep conversation and command logs only until reset or exit.")
+
+    automation = parser.add_argument_group("automation")
+    automation.add_argument("--prompt-file", metavar="PATH", help="Read a UTF-8 one-shot prompt verbatim; use - for stdin.")
+    automation.add_argument("--json-events", action="store_true",
+                            help="One-shot automation: stream JSON Lines events and final status on stdout.")
+    automation.add_argument("--max-steps", type=int, default=None,
+                            help="Cap on model requests per run, including response retries. Default: 200.")
+    automation.add_argument("--tools", help="Comma-separated tool allowlist; recall_history and enabled planning remain available.")
+    automation.add_argument("--mcp", action="store_true",
+                            help="Force connecting to MCP servers even in one-shot mode.")
+    automation.add_argument("--no-mcp", action="store_true",
+                            help="Do not connect to globally configured MCP servers.")
+
+    advanced = parser.add_argument_group("advanced", "Model tuning and connection overrides; the defaults suit most use.")
+    advanced.add_argument("--api-key", help="Selected provider API key (or set its API_KEY environment variable).")
+    advanced.add_argument("--base-url", help="Override the API base URL.")
+    advanced.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE,
+                          help="Working-model temperature override when supported; omitted by default. Compression always omits it.")
+    advanced.add_argument("--max-tokens", type=int, default=None,
+                          help="Cap on completion tokens per response.")
+    advanced.add_argument("--context-tokens", type=int, help="Working context cap including output reserve (at least 4096; never expands the endpoint limit).")
+    advanced.add_argument("--reasoning-history-steps", type=int, choices=range(26), default=25,
+                          metavar="0..25", help="Recent steps whose archived thoughts may be supplied; 0 keeps outcomes only (default 25).")
+    advanced.add_argument("--raw-reasoning-history", action="store_true", help="Compare original thoughts instead of filtered thoughts in Overthinking history.")
+    advanced.add_argument("--planning", action=argparse.BooleanOptionalAction, default=True,
+                          help="Expose a persistent working-plan tool for multi-step tasks (default: enabled).")
+    advanced.add_argument("--hashline", action=argparse.BooleanOptionalAction, default=True,
+                          help="Offer optional hash-anchored read/edit tools (default: enabled; --no-hashline removes their guidance).")
+    advanced.add_argument("--python", default=None,
+                          help="Project Python interpreter path, overriding .slipagent/project.json and venv discovery.")
+    advanced.add_argument("--no-reload", action="store_true", help="Disable automatic component reloads.")
     return parser
 
 
@@ -2329,6 +2502,9 @@ async def _list_models(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.update:
+        from .updater import update
+        return update()
     try:
         Path.cwd()
     except OSError as exc:
@@ -2394,6 +2570,46 @@ def _notice_project_language_servers(args: argparse.Namespace) -> None:
               file=sys.stderr)
 
 
+FIRST_RUN_PROVIDERS = (
+    ("openrouter", "OpenRouter", "https://openrouter.ai/keys"),
+    ("nvidia", "NVIDIA", "https://build.nvidia.com"),
+    ("google", "Google Gemini", "https://aistudio.google.com/apikey"),
+    ("mistral", "Mistral", "https://console.mistral.ai/api-keys"),
+    ("kilo", "Kilo", "https://kilo.ai"),
+)
+
+
+def _first_run_key() -> bool:
+    """Ask for a first API key before an interactive launch that has none."""
+    print("SlipAgent needs an API key from one of these providers; each offers free models:", file=sys.stderr)
+    for _, name, url in FIRST_RUN_PROVIDERS:
+        print(f"  {name:<14} {url}", file=sys.stderr)
+    try:
+        key = getpass.getpass("Paste an API key (hidden; Enter exits): ").strip()
+        if not key:
+            return False
+        provider = key_provider(key)
+        while provider is None:
+            answer = input("Which provider is this key for? (" + ", ".join(PROVIDERS) + "; Enter exits) ").strip().lower()
+            if not answer:
+                return False
+            provider = answer if answer in PROVIDERS else None
+        implementation = provider_class(provider)
+        print(f"Using it as the {provider} key for this session.", file=sys.stderr)
+        save = input(f"Save it to {dotenv_path()} for future launches? [Y/n] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print(file=sys.stderr)
+        return False
+    os.environ[implementation.key_env] = key
+    if save in {"", "y", "yes"}:
+        try:
+            save_dotenv_value(dotenv_path(), implementation.key_env, key)
+            print(f"Saved to {dotenv_path()}.", file=sys.stderr)
+        except (OSError, ConfigError) as exc:
+            print(f"Could not save the key: {exc}", file=sys.stderr)
+    return True
+
+
 async def _dispatch(args: argparse.Namespace, prompt: str | None) -> int:
     """Run everything inside a single event loop.
 
@@ -2411,8 +2627,11 @@ async def _dispatch(args: argparse.Namespace, prompt: str | None) -> int:
             return 2
 
     events = JsonEventStream(sys.stdout) if getattr(args, "json_events", False) else None
+    interactive = not prompt and sys.stdin.isatty() and sys.stderr.isatty() and os.environ.get("TERM") != "dumb"
+    if interactive and not args.api_key and not active_providers():
+        if not await asyncio.to_thread(_first_run_key):
+            return 2
     try:
-        interactive = not prompt and sys.stdin.isatty() and sys.stderr.isatty() and os.environ.get("TERM") != "dumb"
         session = await build_session(args, defer_startup=interactive)
     except (ConfigError, APIError) as exc:
         print(literal(f"slipagent: {exc}"), file=sys.stderr)

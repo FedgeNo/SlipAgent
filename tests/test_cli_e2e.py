@@ -1237,7 +1237,7 @@ async def test_command_help_accepts_optional_slash_without_executing_command(tmp
                 assert 'connect an MCP server over stdio' in replies[0]
                 assert '/mcp remove' in replies[0]
             if topic == 'model':
-                assert '/model <selector>' in replies[0]
+                assert '/model <model>' in replies[0] and '[subcommand]' in replies[0]
                 assert '/models' not in replies[0]
         assert not (tmp_path / 'AGENTS.md').exists()
         assert cli._command_help('') == cli.HELP
@@ -1591,7 +1591,7 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             assert screen.title.endswith(f"{project_dir} | SlipAgent")
             wait_for(lambda: "/quit" in "\n".join(screen.display[:17]))
             startup = "\n".join(screen.display[:17])
-            for command in ["/help", "/menu", "/danger", "/tools", "/model", "/models", "/key", "/cost", "/mcp", "/rename", "/reset", "/reload", "/generations", "/init", "/stop", "/exit", "/quit"]:
+            for command in ["/help", "/menu", "/danger", "/tools", "/model", "/models", "/key", "/cost", "/mcp", "/rename", "/new", "/reload", "/generations", "/init", "/stop", "/exit", "/quit"]:
                 assert command in startup
             wait_for(lambda: "Ctrl-D quits" in "\n".join(screen.display[:17]))
             assert "Follow-ups queue" in "\n".join(screen.display[:17])

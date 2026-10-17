@@ -64,7 +64,7 @@ async def test_optimal_reset_retries_best_and_manual_selection_disables(tmp_path
     router = ModelRouting(session)
     selected = []
 
-    async def select(model, *, automatic=False):
+    async def select(model, *, automatic=False, cached=False):
         selected.append(model.id)
         session.agent.model = model.id
 
@@ -547,3 +547,58 @@ async def test_next_skips_down_the_ranking_until_reset(optimal_session):
         assert session.agent.model == "first" and not routing.failed["working"]
     finally:
         await session.client.aclose()
+
+
+async def test_interactive_startup_uses_saved_metadata_and_403_moves_to_the_next_model(tmp_path, monkeypatch):
+    import asyncio
+    from slipagent import cli
+    from slipagent.config import DEFAULT_MODEL
+    best = "dots-studio/dots-3-note-preview:free"
+    properties = {"context_length": 1_000_000, "supported_parameters": ["tools", "max_tokens"],
+                  "pricing": {"prompt": "0", "completion": "0"}}
+    network = asyncio.Event()
+    network.set()
+    chats = []
+
+    async def handle(request):
+        await network.wait()
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{**properties, "id": model} for model in (DEFAULT_MODEL, best)]})
+        if request.url.path.endswith("/endpoints"):
+            return httpx.Response(200, json={"data": {"endpoints": [{**properties, "tag": "stub"}]}})
+        if request.url.path.endswith("/chat/completions"):
+            model = json.loads(request.content)["model"]
+            chats.append(model)
+            if model == best:
+                return httpx.Response(403, json={"error": {"message": "model unavailable for this key"}})
+            return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "Done."},
+                                                          "finish_reason": "stop"}]})
+        return httpx.Response(200, json={"data": {"is_free_tier": True}})
+
+    monkeypatch.setattr(cli, "create_client", lambda provider, **options:
+                        create_client(provider, **options, transport=httpx.MockTransport(handle)))
+    monkeypatch.setattr("slipagent.environment.ProjectEnvironment.snapshot", AsyncMock(return_value={}))
+    monkeypatch.setattr(cli.RepositoryMap, "snapshot", AsyncMock(return_value=""))
+    args = cli.build_parser().parse_args(["--api-key", "dummy", "--workspace", str(tmp_path),
+                                        "--no-mcp", "--no-reload", "--no-session"])
+
+    first = await cli.build_session(args, defer_startup=True)
+    try:
+        await first.extensions.pop("startup")()
+        assert first.agent.model == best
+    finally:
+        await cli._shutdown(first)
+
+    # With saved metadata, startup completes while every request stalls.
+    network.clear()
+    second = await cli.build_session(args, defer_startup=True)
+    try:
+        await asyncio.wait_for(second.extensions.pop("startup")(), 5)
+        assert second.agent.model == best and second.model_routing().enabled
+        network.set()
+        assert await second.agent.run("Work") == "Done."
+        assert chats == [best, DEFAULT_MODEL]
+        assert second.model_routing().failed["working"] == {f"openrouter::{best}"}
+    finally:
+        network.set()
+        await cli._shutdown(second)

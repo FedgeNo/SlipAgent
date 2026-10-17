@@ -120,10 +120,10 @@ class ModelRouting:
         elif not transient_error(error):
             self.failed[purpose].add(model.selector)
 
-    async def enable(self) -> None:
+    async def enable(self, *, cached: bool = False) -> None:
         self.reset()
         self.enabled = True
-        await self.select_working()
+        await self.select_working(cached=cached)
 
     async def skip(self) -> None:
         """Select the next ranked model; the current one stays excluded until reset.
@@ -146,13 +146,14 @@ class ModelRouting:
                        for model in candidates):
                 await self.select_working()
 
-    async def select_working(self) -> None:
+    async def select_working(self, *, cached: bool = False) -> None:
+        """Select the best healthy candidate; `cached` uses saved profiles when present."""
         candidates = await self.candidates("working")
         for model in candidates:
             if model.provider in self.failed_providers:
                 continue
             try:
-                await self.session.select_model(model, automatic=True)
+                await self.session.select_model(model, automatic=True, cached=cached)
             except APIConnectionError:
                 # A failed metadata connection must not blacklist every model.
                 raise

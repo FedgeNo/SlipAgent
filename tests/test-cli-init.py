@@ -79,9 +79,15 @@ async def test_config_show_uses_active_model_without_disclosing_dotenv(workspace
     (workspace.root / ".env").write_text("OPENROUTER_API_KEY=private-test-key\nOPENROUTER_MODEL=old/model\n")
     session = session_for(workspace)
     session.agent.model = "selected/model"
-    assert await _execute_command(session, "/config-show") is False
-    output = session.renderer.stream.getvalue()
-    assert "selected/model" in output
+    session.client = SimpleNamespace(provider="openrouter")
+    session.registry = session.agent.registry
+    session.model_routing = lambda: SimpleNamespace(enabled=True)
+    for command in ("/status", "/config-show"):
+        session.renderer.stream = io.StringIO()
+        assert await _execute_command(session, command) is False
+        output = session.renderer.stream.getvalue()
+        assert "openrouter::selected/model (Optimal on)" in output
+        assert "Planning: on" in output and "Temperature: provider default" in output
     assert "private-test-key" not in output
     assert "old/model" not in output
 
@@ -93,3 +99,32 @@ async def test_init_waits_for_active_turn_to_finish(workspace):
     assert not (workspace.root / "AGENTS.md").exists()
     assert "Queued /init" in session.renderer.stream.getvalue()
     assert session.extensions["deferred_commands"] == ["/init"]
+
+
+@pytest.mark.parametrize("running", [False, True])
+async def test_settings_menu_toggles_through_the_setting_command(workspace, running):
+    from unittest.mock import AsyncMock, MagicMock
+
+    session = session_for(workspace)
+    session.registry = session.agent.registry
+    choose = AsyncMock(return_value="planning")
+    session.renderer.terminal = MagicMock(choose=choose, _markdown_source=False)
+    session.renderer.markdown_theme = "dark"
+    session.agent.running = running
+    assert await _execute_command(session, "/settings") is False
+    title, options = choose.call_args.args
+    assert title == "Settings"
+    assert options[1] == ("planning", "[planning] on — offer the working-plan tool for multi-step tasks")
+    if running:
+        assert session.agent.planning and session.extensions["deferred_commands"] == ["/planning off"]
+    else:
+        assert not session.agent.planning
+
+
+async def test_settings_without_a_terminal_lists_values(workspace):
+    session = session_for(workspace)
+    session.registry = session.agent.registry
+    session.renderer.markdown_theme = "light"
+    assert await _execute_command(session, "/settings") is False
+    output = session.renderer.stream.getvalue()
+    assert "/theme" in output and "light" in output and "/temperature" in output

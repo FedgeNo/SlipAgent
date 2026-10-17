@@ -979,7 +979,7 @@ def test_real_cli_hides_memory_rolls_window_and_recalls_originals(tmp_path):
     intermediate = [tool_step("list_dir", {"path": f"directory-{index}"}) for index in range(4)]
     with StubOpenRouter([first, *intermediate, second, third, text_step(reply(8, "Inspection complete.", "User asked inspect and report; model reported completion.",
                                                                "User asked inspect and report; model recalled exact original input, response and file content."))]) as stub:
-        result = run_cli("-p", "inspect and report", "--context-steps", "5",
+        result = run_cli("-p", "inspect and report",
                          "--base-url", stub.base_url, "--model", "stub/one", cwd=tmp_path)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "Inspection complete."
@@ -1003,9 +1003,7 @@ def test_config_and_cli_expose_post_window_without_separate_token_cap():
     config = Config.from_env(environ={"OPENROUTER_API_KEY": "test"})
     assert config.context_steps == 50
     assert not hasattr(config, "context_tokens")
-    args = build_parser().parse_args(["--context-steps", "12"])
-    config = Config.from_env(environ={"OPENROUTER_API_KEY": "test"},
-                             context_steps=args.context_steps)
+    config = Config.from_env(environ={"OPENROUTER_API_KEY": "test"}, context_steps=12)
     assert config.context_steps == 12
     with pytest.raises(ConfigError):
         Config.from_env(environ={"OPENROUTER_API_KEY": "test"}, context_steps=0)

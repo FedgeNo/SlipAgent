@@ -89,6 +89,8 @@ def test_dotenv_falls_back_to_the_install_directory(tmp_path: Path, monkeypatch)
     install = tmp_path / "install" / "slipagent"
     install.mkdir(parents=True)
     monkeypatch.setattr(config_module, "__file__", str(install / "config.py"))
+    # The fallback is only consulted while dotenv files are enabled.
+    monkeypatch.delenv("SLIPAGENT_NO_DOTENV")
     env_file = install.parent / ".env"
     env_file.write_text("OPENROUTER_API_KEY=install-test-key\n")
     environ: dict[str, str] = {}

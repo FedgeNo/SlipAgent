@@ -2,7 +2,7 @@
 
 This document describes current behavior for contributors and agents editing
 SlipAgent. Read the [contributor workflow](../CONTRIBUTING.md) and applicable
-project instructions alongside it. The [README](../README.md) documents commands,
+project instructions alongside it. The [README](../README.md) and the user guides it links document commands,
 configuration, response examples, and the user-visible behavior.
 
 ## Instruction Ownership
@@ -1029,7 +1029,7 @@ Without journals, temporary storage lasts until reset or shutdown. Queued rewind
 never resumes the interrupted run automatically.
 
 The CLI exposes `/sessions`, `/resume [id|latest]`, `/fork`, `/delete`, `/rewind`, `--resume [id]`, and
-`--no-session`. `/reset` starts a new journal while retaining prior sessions.
+`--no-session`. `/new` starts a new journal while retaining prior sessions.
 On an interactive terminal, bare `/resume` passes saved titles and dates to
 `TerminalUI.choose`, using full session IDs as selection values. The list keeps
 the journal's newest-first order and marks the current session. The selected row
@@ -1436,7 +1436,7 @@ When adding a tool, define an accurate schema and recovery-oriented description,
 return `ToolResult`, register it once, and test errors as well as success. Choose
 whether its resources belong to a rebuilt tool or the session before constructing
 them. Keep remote names scoped so disconnecting one server cannot remove another's
-tools. Update the README tool table when the public tool set changes.
+tools. Update the tool table in `docs/tools.md` when the public tool set changes.
 
 The registry validates parameter-schema structure before registering tools or
 replacing its collection. Invalid schemas leave the existing collection intact;
@@ -1445,7 +1445,7 @@ remote servers remain responsible for full JSON Schema semantics.
 When changing the response schema, update validation, prompt explanations/example,
 step storage, task/context budgets, stub responses, streaming/reload fixtures, and
 offline demos together. When adding a command, update busy-state restrictions,
-help, startup listing, README, and control-flow tests. Read-only network commands
+help, startup listing, the command table in `docs/terminal.md`, and control-flow tests. Read-only network commands
 must not block input processing while `/stop` is waiting.
 
 For every stateful change, test the relevant combination of success, rejection,

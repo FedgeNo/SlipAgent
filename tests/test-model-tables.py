@@ -70,7 +70,7 @@ async def test_free_model_selector_filters_and_switches_only_on_selection(monkey
     renderer.terminal = SimpleNamespace(choose=choose)
     session = SimpleNamespace(renderer=renderer, catalog=catalog, agent=SimpleNamespace(model="test/free"))
     switch = AsyncMock()
-    monkeypatch.setattr(cli, "_model_command", switch)
+    monkeypatch.setattr(cli, "_select_model", switch)
     await _models_command(session, "free", Style(False), io.StringIO())
     title, options = choose.call_args.args
     assert title == "Select Model"
@@ -82,14 +82,61 @@ async def test_free_model_selector_filters_and_switches_only_on_selection(monkey
         assert switch.call_args.args[1] == selection
 
 
-async def test_model_without_slug_opens_selector(monkeypatch):
+def model_session(choose, routing=None):
+    return SimpleNamespace(renderer=SimpleNamespace(terminal=SimpleNamespace(choose=choose)),
+                           client=SimpleNamespace(provider="openrouter"), agent=SimpleNamespace(model="test/current"),
+                           model_routing=lambda: routing or SimpleNamespace(enabled=True))
+
+
+async def test_model_without_arguments_lists_every_subcommand(monkeypatch):
     from slipagent import cli
     browse = AsyncMock()
     monkeypatch.setattr(cli, "_models_command", browse)
-    session = SimpleNamespace(renderer=SimpleNamespace(terminal=object()))
-    out = io.StringIO()
-    await _model_command(session, "", Style(False), out)
-    assert browse.call_args.args[1] == ""
+    choose = AsyncMock(return_value="free")
+    await _model_command(model_session(choose), "", Style(False), io.StringIO())
+    title, options = choose.call_args.args
+    assert title == "Model: openrouter::test/current (Optimal on)"
+    assert [label.split("]")[0] + "]" for _, label in options] == [
+        "[model]", "[provider]", "[free]", "[optimal]", "[next]", "[reset]"]
+    assert browse.call_args.args[1] == "free"
+
+
+@pytest.mark.parametrize("argument, provider", [("nvidia", "nvidia"), ("provider", "kilo")])
+async def test_model_provider_lists_that_providers_models(monkeypatch, argument, provider):
+    from slipagent import cli
+    browse = AsyncMock()
+    monkeypatch.setattr(cli, "_models_command", browse)
+    choose = AsyncMock(return_value="kilo")
+    await _model_command(model_session(choose), argument, Style(False), io.StringIO())
+    assert browse.call_args.args[1] == "" and browse.call_args.kwargs["provider"] == provider
+
+
+@pytest.mark.parametrize("argument", ["next", "free nemotron", "next ultra"])
+async def test_single_words_are_subcommands_and_several_words_search(monkeypatch, argument):
+    from slipagent import cli
+    routing = AsyncMock()
+    lookup = AsyncMock()
+    monkeypatch.setattr(cli, "_routing_action", routing)
+    monkeypatch.setattr(cli, "_model_lookup", lookup)
+    await _model_command(model_session(AsyncMock()), argument, Style(False), io.StringIO())
+    if argument == "next":
+        assert routing.call_args.args[1] == "next" and not lookup.await_count
+    else:
+        assert lookup.call_args.args[1] == argument and not routing.await_count
+
+
+async def test_provider_listing_shows_free_models_first_in_the_free_style():
+    models = [ModelInfo("paid/model", provider="nvidia", pricing={"prompt": "1", "completion": "1"}),
+              ModelInfo("free/model", provider="nvidia", pricing={"prompt": "0", "completion": "0"}),
+              ModelInfo("other/model", provider="kilo", pricing={"prompt": "0", "completion": "0"})]
+    choose = AsyncMock(return_value=None)
+    renderer = Renderer(Style(False), io.StringIO(), False)
+    renderer.terminal = SimpleNamespace(choose=choose)
+    session = SimpleNamespace(renderer=renderer, catalog=AsyncMock(return_value=models), agent=SimpleNamespace(model="x"))
+    await _models_command(session, "", Style(False), io.StringIO(), provider="nvidia")
+    _, options = choose.call_args.args
+    assert [value for value, _ in options] == ["nvidia::free/model", "nvidia::paid/model"]
+    assert choose.call_args.kwargs["styles"] == {"nvidia::free/model": "class:menu-free"}
 
 
 @pytest.mark.parametrize("interactive", [False, True])

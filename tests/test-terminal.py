@@ -3560,7 +3560,7 @@ def test_startup_and_help_list_all_commands_with_requested_spacing():
     banner = BANNER.format(model="test/model", workspace="project", mcp="")
     for command in [
         "/help", "/menu", "/danger", "/tools", "/model", "/models", "/key", "/cost", "/mcp",
-        "/rename", "/reset", "/reload", "/generations", "/init", "/stop", "/exit", "/quit",
+        "/rename", "/new", "/reload", "/generations", "/init", "/stop", "/exit", "/quit",
     ]:
         assert command in banner
         assert command in HELP
@@ -4056,6 +4056,33 @@ async def test_output_unit_gaps_render_without_separating_model_text_and_tools(d
                 "  ⚙ list_dir({})", "    result", "", "Finished.", "", "next command response",
             ]
             assert ">" in snapshot()[18]
+        finally:
+            ui.close()
+            await task
+
+
+async def test_silent_request_shows_deadline_and_ctrl_n_skips(display, monkeypatch):
+    import slipagent.cli as cli
+
+    sink, _, output, _, snapshot = display
+    monkeypatch.setattr(cli, "FIRST_OUTPUT_NOTICE_SECONDS", 0)
+    skipped = []
+    deadline = SimpleNamespace(remaining=lambda: 87.2, skip=lambda: skipped.append(True))
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        renderer = Renderer(Style(True), sink, False)
+        renderer.terminal = ui
+        task = asyncio.create_task(ui.run())
+        try:
+            ui.set_working(True)
+            renderer.first_output_wait(deadline, skippable=True)
+            await wait_until(lambda: any("88s until next model (Ctrl+N: next model)" in line for line in snapshot()))
+            await send_keys(ui, pipe, "\x0e")
+            assert skipped == [True]
+            await send_keys(ui, pipe, "\x0e")
+            assert skipped == [True]
+            renderer.first_output_wait(None, skippable=True)
+            await wait_until(lambda: not any("until next model" in line for line in snapshot()))
         finally:
             ui.close()
             await task

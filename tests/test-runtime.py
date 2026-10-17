@@ -320,7 +320,7 @@ def test_reload_updates_behavior_preserving_live_session_and_class_identities(ru
         assert old_web_client.is_closed
         assert registry.get('recall_history').history is history
         await cli._handle_command(session, '/model')
-        assert 'chosen model: test/model' in sink.getvalue()
+        assert 'chosen model: openrouter::test/model' in sink.getvalue()
         responses.append({'role': 'assistant', 'content': 'second answer'})
         assert await agent.run('second question') == 'new behavior: second answer'
         # Patched zero-argument super() and imported exception aliases still work.
@@ -351,7 +351,7 @@ def test_invalid_edit_keeps_previous_version_and_recovers_on_next_edit(run_copy,
         assert 'Reload rejected' in content_text(context[0].content)
         assert 'previous code remains active' in content_text(context[0].content)
         await cli._handle_command(session, '/model')
-        assert 'current model: test/model' in sink.getvalue()
+        assert 'current model: openrouter::test/model' in sink.getvalue()
         messages = sink.getvalue().count('Reload rejected')
         await frame.checkpoint()
         assert sink.getvalue().count('Reload rejected') == messages
@@ -359,7 +359,7 @@ def test_invalid_edit_keeps_previous_version_and_recovers_on_next_edit(run_copy,
         await frame.checkpoint()
         assert frame.generation == 1, sink.getvalue()
         await cli._handle_command(session, '/model')
-        assert 'changed model: test/model' in sink.getvalue()
+        assert 'changed model: openrouter::test/model' in sink.getvalue()
     ''')
 
 
@@ -391,7 +391,7 @@ def test_hashes_detect_same_size_same_timestamp_edits_and_manual_reload(run_copy
         await cli._handle_command(session, '/reload')
         assert frame.generation == 2, sink.getvalue()  # pre-command edit + forced reload
         await cli._handle_command(session, '/model')
-        assert 'updated model: test/model' in sink.getvalue()
+        assert 'updated model: openrouter::test/model' in sink.getvalue()
         await cli._handle_command(session, '/reload')
         assert frame.generation == 3
     ''')
@@ -567,7 +567,7 @@ def test_idle_watcher_applies_edits_without_user_input(run_copy):
                 while frame.generation == 0:
                     await asyncio.sleep(.05)
             await cli._handle_command(session, '/model')
-            assert 'updated model: test/model' in sink.getvalue()
+            assert 'updated model: openrouter::test/model' in sink.getvalue()
         finally:
             watcher.cancel()
             try:
@@ -591,7 +591,7 @@ def test_frame_and_state_layout_edits_require_restart(run_copy):
         assert frame.generation == 0
         assert 'Restart required for frame/contract edits: runtime.py' in sink.getvalue()
         await cli._handle_command(session, '/model')
-        assert 'current model: test/model' in sink.getvalue()
+        assert 'current model: openrouter::test/model' in sink.getvalue()
     ''')
 
 
@@ -714,7 +714,7 @@ def test_failed_terminal_build_rolls_back_entire_candidate(run_copy):
             assert terminal.input.window.height is original_height
             renderer.terminal = None
             await cli._handle_command(session, '/model')
-            assert 'current model: test/model' in sink.getvalue()
+            assert 'current model: openrouter::test/model' in sink.getvalue()
             assert terminal._activity()[0][1] == 'Ready'
             renderer.terminal = None
     ''')
@@ -961,7 +961,7 @@ def test_renderer_failure_does_not_stop_frame_reporting_or_watching(run_copy):
                 while frame.generation < 2:
                     await asyncio.sleep(.05)
             await cli._handle_command(session, '/model')
-            assert 'current model: test/model' in sink.getvalue()
+            assert 'current model: openrouter::test/model' in sink.getvalue()
         finally:
             watcher.cancel()
             try:

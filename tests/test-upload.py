@@ -143,3 +143,31 @@ async def test_pacing_waits_do_not_count_toward_the_first_output_deadline():
                                    on_delta=lambda *args: None, single_attempt=True, first_output_timeout=0.3)
         assert result.text == "Done"
         assert loop.time() - start > 0.6
+
+
+@pytest.mark.parametrize("paced", [False, True])
+async def test_skipping_the_first_output_wait_ends_the_request(paced):
+    from slipagent.api import APIResponseError
+
+    async def handle(request):
+        await request.aread()
+        await asyncio.Event().wait()
+
+    deadlines = []
+    client_type = GoogleClient if paced else OpenRouterClient
+    async with client_type("dummy", transport=httpx.MockTransport(handle)) as client:
+        if paced:
+            client._upload_pacer = UploadPacer(30000)
+
+        def waiting(deadline):
+            deadlines.append(deadline)
+            if deadline is not None and len(deadlines) == 1:
+                # Paced bodies suspend the deadline; the skip applies when pacing yields.
+                asyncio.get_running_loop().call_later(0.05, deadline.skip)
+
+        with pytest.raises(APIResponseError, match="Skipped by the user"):
+            await asyncio.wait_for(client.chat(
+                model="gemini-3.6-flash" if paced else "test", messages=[Message.user("x " * 2000)],
+                on_delta=lambda *args: None, single_attempt=True, first_output_timeout=60,
+                on_first_output=waiting), 10)
+    assert deadlines[0] is not None and deadlines[0].skipped and deadlines[-1] is None

@@ -178,10 +178,12 @@ def find_dotenv() -> Path | None:
     """Locate the `.env` that would be loaded, without applying it.
 
     Searches private user data, then package ancestors for compatibility with
-    existing installation settings.
+    existing installation settings. With `SLIPAGENT_NO_DOTENV`, only the data
+    directory is considered, so saving a value never reaches an installation file.
     """
     here = Path(__file__).resolve().parent
-    for directory in (data_directory(), here, *here.parents):
+    legacy = () if _dotenv_disabled(os.environ) else (here, *here.parents)
+    for directory in (data_directory(), *legacy):
         candidate = directory / ".env"
         if candidate.is_file():
             return candidate
@@ -302,7 +304,7 @@ class Config:
         if not resolved_key.strip():
             raise ConfigError(
                 f"No {selected} API key found. Set {implementation.key_env} "
-                "(see README.md) or pass --api-key."
+                "(see docs/configuration.md) or pass --api-key."
             )
 
         root = Path(workspace or env.get("SLIPAGENT_WORKSPACE", ".")).expanduser()

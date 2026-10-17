@@ -12,8 +12,8 @@ A managed development install uses `python3 install.py --dev`, or
 `py -3 install.py --dev` on Windows. The installer records the checkout and Python
 interpreter in `installation.json`; Linux/macOS also provide a `current` shortcut.
 Use the permanent checkout and its existing virtual environment, rather than
-editing an unrelated download or installing into system Python. The README's
-[installation guide](../README.md#installation-and-data-locations) lists locations.
+editing an unrelated download or installing into system Python. The
+[installation guide](installation.md#installation-and-data-locations) lists locations.
 
 To ask SlipAgent to edit itself, make that checkout its workspace. Danger Mode
 also permits explicitly requested access from another workspace; it lifts file
@@ -47,7 +47,7 @@ general model instructions must work in unrelated workspaces without this file.
 Every built-in tool supplies a description and a JSON argument schema. Dedicated
 Markdown files document behavior, side effects, returned data, limits, and
 recovery. JSON description mappings explain individual schema fields. See the
-[editable prompt guide](../prompts/README.md) and [tool reference](../README.md#tools).
+[editable prompt guide](../prompts/README.md) and [tool reference](tools.md#tools).
 The Python schema remains authoritative for argument names, types, and validation;
 editing a description alone does not change executable behavior.
 
@@ -169,4 +169,4 @@ replacement. An unchanged install updates without edit-loss confirmation. Change
 added, or deleted application files must be listed and replacement requires
 confirmation. Missing or unreadable baselines are not evidence of an unmodified
 installation. Updates preserve configuration, Git metadata, and the environment;
-see the [installer documentation](../README.md#installation-and-data-locations).
+see the [installer documentation](installation.md#installation-and-data-locations).

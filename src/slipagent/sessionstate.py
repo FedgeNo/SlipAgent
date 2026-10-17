@@ -21,6 +21,8 @@ from .tools.base import ToolRegistry
 from .types import KeyInfo, ModelInfo
 from .workspace import Workspace
 from .work import SessionWork
+from . import startupcache
+from .tools.blocking import run_blocking
 
 if TYPE_CHECKING:
     from .cli import Renderer
@@ -97,10 +99,39 @@ class Session:
     def resources(self) -> SessionResources:
         return self.registry.resources
 
+    def _provider_keys(self) -> dict[str, str]:
+        keys = {name: options["api_key"] for name, options in self.extensions.get("provider_options", {}).items()}
+        if hasattr(self.client, "provider"):
+            keys[self.client.provider] = self.client.api_key
+        return keys
+
+    def provider_identity(self, provider: str) -> str:
+        """Fingerprint the key and endpoint a provider's cached metadata belongs to."""
+        implementation = provider_class(provider)
+        if provider == getattr(self.client, "provider", None):
+            key, base_url = self.client.api_key, self.client.base_url
+        else:
+            options = self.extensions.get("provider_options", {}).get(provider, {})
+            key = self._provider_keys().get(provider) or os.environ.get(implementation.key_env, "")
+            base_url = options.get("base_url") or os.environ.get(implementation.base_url_env) or implementation.default_base_url
+        return startupcache.fingerprint(key, (base_url or implementation.default_base_url).rstrip("/"))
+
+    async def use_cached_catalog(self) -> bool:
+        """Adopt every active provider's saved catalog without a network request."""
+        names = active_providers(keys=self._provider_keys())
+        identities = {name: self.provider_identity(name) for name in names}
+        cached = await run_blocking(startupcache.cached_catalog, identities) if names else None
+        if not cached:
+            return False
+        self._catalog = cached
+        self.extensions["catalog_providers"] = names
+        self.extensions["catalog_checked_at"] = time.monotonic()
+        self.extensions["catalog_errors"] = []
+        return True
+
     async def catalog(self, refresh: bool = False) -> list[ModelInfo]:
         """Current provider inventory, cached for at most five minutes."""
-        keys = {name: options["api_key"] for name, options in self.extensions.get("provider_options", {}).items()}
-        keys[self.client.provider] = self.client.api_key
+        keys = self._provider_keys()
         names = active_providers(keys=keys)
         # Existing sessions acquire a cache timestamp on their first call after
         # reload. Availability comes only from catalogs; the curated score table
@@ -132,6 +163,9 @@ class Session:
             self.extensions["catalog_errors"] = errors
             if not catalog and errors:
                 raise APIError("; ".join(errors))
+            fetched = [name for name, result in zip(names, results) if not isinstance(result, BaseException)]
+            await run_blocking(startupcache.save_catalogs, catalog,
+                               {name: self.provider_identity(name) for name in fetched})
             self._catalog = catalog
             self.extensions["catalog_providers"] = names
             self.extensions["catalog_checked_at"] = time.monotonic()
@@ -188,19 +222,47 @@ class Session:
         await finish_cleanup(asyncio.create_task(retired.aclose()))
         return info
 
-    async def select_model(self, model: ModelInfo, *, automatic: bool = False) -> None:
-        """Preflight the candidate before replacing any active provider state."""
-        replacement = self.client
-        if model.provider != self.client.provider:
-            options = self.extensions.get("provider_options", {}).get(model.provider)
-            if options is None:
-                config = Config.from_env(provider=model.provider, model=model.id)
-                options = {"api_key": config.api_key, "base_url": config.base_url,
-                           "http_referer": config.http_referer, "app_title": config.app_title,
-                           "on_retry": self.renderer.retry_countdown}
-            replacement = create_client(model.provider, **options)
+    def _provider_client(self, model: ModelInfo) -> APIClient:
+        """A new client for another provider, using its session or environment settings."""
+        options = self.extensions.get("provider_options", {}).get(model.provider)
+        if options is None:
+            config = Config.from_env(provider=model.provider, model=model.id)
+            options = {"api_key": config.api_key, "base_url": config.base_url,
+                       "http_referer": config.http_referer, "app_title": config.app_title,
+                       "on_retry": self.renderer.retry_countdown}
+        return create_client(model.provider, **options)
+
+    async def refresh_profile(self, model: ModelInfo) -> None:
+        """Fetch and save a model's current profile without changing the selection."""
+        client = self.client if model.provider == self.client.provider else self._provider_client(model)
         try:
-            capabilities = await replacement.model_capabilities(model.id, refresh=True, store=False)
+            capabilities = await client.model_capabilities(model.id, refresh=True, store=False)
+            if capabilities is None:
+                return
+            await run_blocking(startupcache.save_profile, model,
+                               startupcache.fingerprint(client.api_key, client.base_url), capabilities)
+            if client is self.client and model.id == self.agent.model:
+                client.cache_capabilities(model.id, capabilities)
+        finally:
+            if client is not self.client:
+                await finish_cleanup(asyncio.create_task(client.aclose()))
+
+    async def select_model(self, model: ModelInfo, *, automatic: bool = False, cached: bool = False) -> None:
+        """Preflight the candidate before replacing any active provider state.
+
+        With `cached`, a saved profile for this key and endpoint replaces the
+        network capability check; requests still verify the model.
+        """
+        replacement = self.client if model.provider == self.client.provider else self._provider_client(model)
+        try:
+            capabilities = None
+            fetched = False
+            if cached:
+                identity = startupcache.fingerprint(replacement.api_key, replacement.base_url)
+                capabilities = await run_blocking(startupcache.cached_profile, model, identity)
+            if capabilities is None:
+                capabilities = await replacement.model_capabilities(model.id, refresh=True, store=False)
+                fetched = True
             if capabilities is None:
                 raise APIConfigError("The API did not supply capabilities to verify this model's compatibility.")
             await self.agent._context_view(self.registry.specs(), 0, capabilities=capabilities, preview=True,
@@ -214,6 +276,9 @@ class Session:
                 await finish_cleanup(asyncio.create_task(replacement.aclose()))
             raise
         replacement.cache_capabilities(model.id, capabilities)
+        if fetched:
+            await run_blocking(startupcache.save_profile, model,
+                               startupcache.fingerprint(replacement.api_key, replacement.base_url), capabilities)
         previous = self.client
         if previous is not replacement:
             self.extensions.setdefault("provider_options", {})[previous.provider] = {

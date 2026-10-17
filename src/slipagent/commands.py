@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .markdown import THEMES
-from .providers import PROVIDERS, provider_class
 from .sessions import SessionError, session_title
 from .checkpoints import CheckpointError
 from .task import TaskMemory
@@ -138,19 +137,83 @@ class HelpCommand(Command):
         return None
 
 
-class ConfigShowCommand(Command):
-    name = 'config-show'
+def current_settings(session: Session) -> list[tuple[str, str, str]]:
+    """Each `/settings` entry as (command, current value, description)."""
+    terminal = session.renderer.terminal
+    temperature = session.agent.temperature
+
+    def state(enabled: bool) -> str:
+        return "on" if enabled else "off"
+
+    return [
+        ("overthinking", state(session.agent.overthinking), "supply archived thoughts from recent steps"),
+        ("planning", state(session.agent.planning), "offer the working-plan tool for multi-step tasks"),
+        ("hashline", state(session.registry.services.get("hashline_enabled", True)), "offer hash-anchored read/edit tools"),
+        ("danger", state(session.workspace.access.danger), "lift workspace path confinement"),
+        ("theme", session.renderer.markdown_theme, "Markdown colors"),
+        ("markdown", "source" if terminal is not None and terminal._markdown_source else "rendered", "how replies display"),
+        ("temperature", "provider default" if temperature is None else f"{temperature:g}", "working-model temperature"),
+    ]
+
+
+class StatusCommand(Command):
+    name = 'status'
+    aliases = ('config-show',)
     help = (
-        CommandHelp('/config-show', 'show active interpreter, model, and workspace settings', '/config-show'),
+        CommandHelp('/status', 'show the model, workspace, interpreter, and current settings', '/status'),
     )
 
     async def run(self, context: CommandContext, argument: str) -> bool | None:
         session, style, out = context.session, context.style, context.out
-        print(f"Active interpreter: {sys.executable}", file=out)
-        print(f"Model choice: {session.agent.model}", file=out)
+        routing = session.model_routing()
+        print(f"Model: {session.client.provider}::{session.agent.model} (Optimal {'on' if routing.enabled else 'off'})", file=out)
         print(f"Workspace: {session.workspace.root}", file=out)
-        print(f"Danger mode: {'on' if session.workspace.access.danger else 'off'}", file=out)
-        print(f"Overthinking mode: {'on' if session.agent.overthinking else 'off'}", file=out)
+        print(f"Active interpreter: {sys.executable}", file=out)
+        for name, value, _ in current_settings(session):
+            print(f"{name.capitalize()}: {value}", file=out)
+        return None
+
+
+class SettingsCommand(Command):
+    name = 'settings'
+    help = (
+        CommandHelp('/settings', 'choose a setting to change; each line shows its command and current value', '/settings'),
+    )
+
+    def background(self, argument: str) -> bool:
+        return True
+
+    async def run(self, context: CommandContext, argument: str) -> bool | None:
+        from . import cli
+        session, style, out = context.session, context.style, context.out
+        settings = current_settings(session)
+        terminal = session.renderer.terminal
+        if terminal is None:
+            for name, value, description in settings:
+                print(f"  /{name:<13} {value:<17} {description}", file=out)
+            return None
+        choice = await terminal.choose("Settings", [(name, f"[{name}] {value} — {description}")
+                                                    for name, value, description in settings])
+        if choice is None:
+            return None
+        value = dict((name, current) for name, current, _ in settings)[choice]
+        line = None
+        if choice in {"overthinking", "planning", "hashline", "danger"}:
+            line = f"/{choice} {'off' if value == 'on' else 'on'}"
+        elif choice == "markdown":
+            line = "/markdown " + ("rendered" if value == "source" else "source")
+        elif choice == "theme":
+            theme = await terminal.choose("Theme", [(name, name) for name in THEMES])
+            line = f"/theme {theme}" if theme else None
+        else:
+            try:
+                text = (await cli._ask_input(session, "  temperature (blank keeps it): ")).strip()
+            except (EOFError, KeyboardInterrupt):
+                text = ""
+            line = f"/temperature {text}" if text else None
+        if line is not None:
+            # Typed commands and menu choices share queueing while work is active.
+            await cli._execute_command(session, line)
         return None
 
 
@@ -379,10 +442,17 @@ class ToolsCommand(Command):
 
 class ModelCommand(ExclusiveCommand):
     name = 'model'
-    banner = '/model [slug]'
+    banner = '/model [model|provider|free|optimal|next|reset|words]'
     help = (
-        CommandHelp('/model', 'choose a model with Up/Down and Enter; Escape cancels', '/model'),
-        CommandHelp('/model <selector>', 'switch model/provider; use provider::model when ambiguous', '/model '),
+        CommandHelp('/model', 'choose from every /model option, each shown as [subcommand]', '/model'),
+        CommandHelp('/model <model>', 'switch to an exact model; use provider::model when ambiguous', '/model '),
+        CommandHelp('/model <words>', 'choose from models matching every word; several words always search', '/model '),
+        CommandHelp('/model provider', "choose a provider, then one of its models", '/model provider'),
+        CommandHelp('/model <provider>', "choose from that provider's models, free ones first", '/model '),
+        CommandHelp('/model free', 'choose from free models', '/model free'),
+        CommandHelp('/model optimal', 'select the best ranked free model automatically', '/model optimal'),
+        CommandHelp('/model next', 'skip the current model for the next ranked free model', '/model next'),
+        CommandHelp('/model reset', 'retry from the best ranked free model, clearing failures', '/model reset'),
     )
 
     async def run(self, context: CommandContext, argument: str) -> bool | None:
@@ -421,16 +491,9 @@ class OptimalCommand(ExclusiveCommand):
         from .api import APIError
         routing = context.session.model_routing()
         action = argument.strip().lower()
-        if action in {'on', 'reset'}:
-            try:
-                await routing.enable()
-            except APIError as exc:
-                print(context.style.red(f"  {exc}"), file=context.out)
-        elif action == 'next':
-            try:
-                await routing.skip()
-            except APIError as exc:
-                print(context.style.red(f"  {exc}"), file=context.out)
+        if action in {'on', 'reset', 'next'}:
+            from . import cli
+            await cli._routing_action(context.session, action, context.style, context.out)
         elif action == 'off':
             routing.enabled = False
             print("  Optimal off; the current model remains selected.", file=context.out)
@@ -452,12 +515,7 @@ class ProviderCommand(ExclusiveCommand):
     async def run(self, context: CommandContext, argument: str) -> bool | None:
         from . import cli
         session, style, out = context.session, context.style, context.out
-        provider = argument.lower()
-        if provider not in PROVIDERS:
-            print(style.red("  usage: /provider " + "|".join(PROVIDERS)), file=out)
-        else:
-            await cli._model_command(session, f"{provider}::{provider_class(provider).default_model}",
-                                 style, out, require_free=True)
+        await cli._provider_default(session, argument.strip().lower(), style, out)
         return None
 
 
@@ -596,7 +654,7 @@ class TaskCommand(Command):
     banner = '/task [new]'
     help = (
         CommandHelp('/task', 'show retained user input and its source step IDs', '/task'),
-        CommandHelp('/task new', 'start a new task with your next prompt; retain history and logs', '/task new'),
+        CommandHelp('/task new', 'treat your next prompt as a new task in this conversation; /new starts a fresh conversation', '/task new'),
     )
 
     def changes_session(self, argument: str) -> bool:
@@ -867,15 +925,17 @@ class McpCommand(Command):
         return None
 
 
-class ResetCommand(ExclusiveCommand):
-    name = 'reset'
-    banner = '/reset'
+class NewCommand(ExclusiveCommand):
+    name = 'new'
+    aliases = ('reset',)
+    banner = '/new'
 
     def replaces_task(self, argument: str) -> bool:
         return True
 
     help = (
-        CommandHelp('/reset', 'start a fresh conversation; saved sessions remain on disk', '/reset'),
+        CommandHelp('/new', 'start a fresh conversation; saved sessions remain on disk', '/new'),
+        CommandHelp('/reset', 'same as /new', '/reset'),
     )
 
     async def run(self, context: CommandContext, argument: str) -> bool | None:
@@ -976,7 +1036,8 @@ class ExitCommand(Command):
 
 COMMANDS: tuple[Command, ...] = (
     HelpCommand(),
-    ConfigShowCommand(),
+    StatusCommand(),
+    SettingsCommand(),
     MenuCommand(),
     ViewCommand(),
     ThemeCommand(),
@@ -1004,7 +1065,7 @@ COMMANDS: tuple[Command, ...] = (
     ResumeCommand(),
     RequestsCommand(),
     McpCommand(),
-    ResetCommand(),
+    NewCommand(),
     ReloadCommand(),
     GenerationsCommand(),
     InitCommand(),
@@ -1012,7 +1073,7 @@ COMMANDS: tuple[Command, ...] = (
     ExitCommand(),
 )
 BY_NAME = {name: command for command in COMMANDS for name in (command.name, *command.aliases)}
-HELP_FOOTER = '\nCtrl+\\ toggles the context view. Scroll it with the mouse wheel, arrows,\nPage Up/Down, or Home/End. System prompts appear in yellow.\n\nOrdinary text continues the active task. Use /task new before a separate task.\nProject Python selection is shown in context; --python PATH overrides discovery.\nSessions, command logs, and request diagnostics are saved unless --no-session is used.\nCommand logs default to a shared 1 GiB quota; request diagnostics roll forward at 32 MiB,\nkeeping the newest attempt complete even when it exceeds that target.\nBackground commands use command_jobs and read_command_output for control/output.\n/stop leaves those jobs running; /reset and exit stop them.\nEsc immediately interrupts agent work, active tools, and background jobs.\nInside a chooser, Esc only closes the chooser. Completed results are preserved.'
+HELP_FOOTER = '\nCtrl+\\ toggles the context view. Scroll it with the mouse wheel, arrows,\nPage Up/Down, or Home/End. System prompts appear in yellow.\n\nOrdinary text continues the active task. Use /task new before a separate task.\nProject Python selection is shown in context; --python PATH overrides discovery.\nSessions, command logs, and request diagnostics are saved unless --no-session is used.\nCommand logs default to a shared 1 GiB quota; request diagnostics roll forward at 32 MiB,\nkeeping the newest attempt complete even when it exceeds that target.\nBackground commands use command_jobs and read_command_output for control/output.\n/stop leaves those jobs running; /new and exit stop them.\nEsc immediately interrupts agent work, active tools, and background jobs.\nInside a chooser, Esc only closes the chooser. Completed results are preserved.'
 
 
 def all_help() -> str:

@@ -53,8 +53,8 @@ For automated harness trials, use the normal one-shot CLI with `--json-events`
 and `--prompt-file PATH` (or `-` for stdin). This preserves the production request,
 tool, and compaction path while emitting structured events and final status.
 Use fresh workspaces and `SLIPAGENT_STATE_DIR` directories for repeated trials;
-grade resulting behavior separately from harness completion. See the README's
-[automation guide](README.md#headless-automation-and-evaluations). Offline tests
+grade resulting behavior separately from harness completion. See the
+[automation guide](docs/automation.md#headless-automation-and-evaluations). Offline tests
 must still use stub providers and the existing child-process environment guard.
 
 ## Find the Owner of the Change
@@ -234,9 +234,10 @@ failure cases close to the code that enforces them. Docstrings should make publi
 entry points usable without reverse-engineering their callers. Avoid line-by-line
 narration, unexplained compatibility branches, or claims stronger than the code.
 
-Keep the README oriented toward users: setup, choices, commands, model behavior,
-storage lifetime, and recovery. Put deeper lifecycle and extension contracts in
-the architecture document, and link them from the README. Update examples when
+Keep the README a short user guide: setup, model choice, everyday commands, and
+links. Full user documentation lives in `docs/` (for example `docs/terminal.md`
+for commands and `docs/tools.md` for tools). Put deeper lifecycle and extension
+contracts in the architecture document, and link them from the user guides. Update examples when
 schemas change and verify them against the parser. Numeric limits need units,
 defaults, scope, and what happens on exhaustion. Treat project instruction files
 as user-controlled guidance; do not replace custom content to synchronize a guide.

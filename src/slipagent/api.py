@@ -168,6 +168,7 @@ class APIClient:
         single_attempt: bool = False,
         disable_timeout: bool = False,
         first_output_timeout: float | None = None,
+        on_first_output: Callable[[FirstOutputDeadline | None], None] | None = None,
     ) -> Completion:
         """Request a completion; an isolated job may supply its frozen profile.
 
@@ -175,6 +176,8 @@ class APIClient:
         compaction passes request_profile so later reselection cannot change
         routing, temperature support, or reasoning for an already archived step.
         first_output_timeout bounds streaming startup; background calls omit it.
+        on_first_output receives each attempt's deadline while it waits for
+        output, then None.
         """
         if not messages:
             raise APIError("chat() requires at least one message")
@@ -237,7 +240,8 @@ class APIClient:
                 await observed
         if on_delta is not None:
             return await self._stream_request(payload, on_delta, single_attempt=single_attempt, disable_timeout=disable_timeout, on_response=on_response, request_body=body,
-                                              first_output_timeout=first_output_timeout, on_raw_response=on_raw_response)
+                                              first_output_timeout=first_output_timeout, on_raw_response=on_raw_response,
+                                              on_first_output=on_first_output)
         transport_options: dict[str, Any] = {"timeout": None} if disable_timeout else {}
         raw = await self._request("POST", "/chat/completions", single_attempt=single_attempt, content=body, headers={"Content-Length": str(body.size)}, on_response=on_response, on_raw_response=on_raw_response, **transport_options)
         return _parse_completion(raw)
@@ -245,7 +249,8 @@ class APIClient:
     async def _stream_request(self, payload: dict[str, Any], on_delta: Callable[[str, str], None], *, single_attempt: bool = False, disable_timeout: bool = False,
                               on_response: Callable[[dict[str, Any]], None] | None = None, request_body: Any = None,
                               first_output_timeout: float | None = None,
-                              on_raw_response: Callable[[httpx.Response], None] | None = None) -> Completion:
+                              on_raw_response: Callable[[httpx.Response], None] | None = None,
+                              on_first_output: Callable[[FirstOutputDeadline | None], None] | None = None) -> Completion:
         body = request_body if request_body is not None else self.request_body(payload)
         transport_options: dict[str, Any] = {"timeout": None} if disable_timeout else {}
         observed = False
@@ -262,7 +267,10 @@ class APIClient:
                 if on_response is not None and event != "[DONE]":
                     events.append(event)
             first_output = asyncio.timeout(first_output_timeout)
-            content = body if first_output_timeout is None else _PacingExcluded(body, first_output)
+            deadline = None if first_output_timeout is None else FirstOutputDeadline(first_output)
+            content = body if deadline is None else _PacingExcluded(body, deadline)
+            if deadline is not None and on_first_output is not None:
+                on_first_output(deadline)
             try:
                 async with first_output, self._client.stream("POST", f"{self.base_url}/chat/completions", content=content, headers={"Content-Length": str(body.size)}, **transport_options) as response:
                     if on_raw_response is not None:
@@ -321,6 +329,8 @@ class APIClient:
                                            for index, call in state.calls.items())
                                     or state.function_call or state.tool_blocks):
                                 first_output.reschedule(None)
+                                if on_first_output is not None:
+                                    on_first_output(None)
                     if data:
                         event = "\n".join(data)
                         data.clear()
@@ -330,9 +340,10 @@ class APIClient:
                             state.add(event)
                     return state.completion()
             except TimeoutError as exc:
-                if first_output_timeout is None or not first_output.expired():
+                if deadline is None or not first_output.expired():
                     raise
-                error = APIResponseError(f"No model output within {first_output_timeout:g} seconds from request start.")
+                error = APIResponseError("Skipped by the user before any model output." if deadline.skipped else
+                                         f"No model output within {first_output_timeout:g} seconds from request start.")
                 if state is not None:
                     state.attach_diagnostics(error)
                 raise error from exc
@@ -362,6 +373,8 @@ class APIClient:
                     continue
                 raise
             finally:
+                if deadline is not None and on_first_output is not None:
+                    on_first_output(None)
                 if on_response is not None:
                     if data:
                         capture_event("\n".join(data))
@@ -550,29 +563,52 @@ def _reasoning_text(delta: dict[str, Any]) -> list[str]:
     return texts
 
 
+class FirstOutputDeadline:
+    """A working request's wait for output, which the user can end early."""
+
+    def __init__(self, timeout: asyncio.Timeout) -> None:
+        self.timeout = timeout
+        self.skipped = False
+
+    def remaining(self) -> float | None:
+        """Seconds left, or None while the deadline is suspended or disarmed."""
+        when = self.timeout.when()
+        return None if when is None else max(0.0, when - asyncio.get_running_loop().time())
+
+    def skip(self) -> None:
+        """Expire now; a suspended deadline expires when it resumes."""
+        self.skipped = True
+        if self.timeout.when() is not None:
+            try:
+                self.timeout.reschedule(asyncio.get_running_loop().time())
+            except RuntimeError:
+                pass
+
+
 class _PacingExcluded(httpx.AsyncByteStream):
     """Extend a deadline by time spent producing the body, such as upload pacing waits.
 
     Network writes happen between chunks, so a stalled upload still counts.
     """
 
-    def __init__(self, body: httpx.AsyncByteStream, deadline: asyncio.Timeout) -> None:
+    def __init__(self, body: httpx.AsyncByteStream, deadline: FirstOutputDeadline) -> None:
         self.body, self.deadline = body, deadline
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         loop = asyncio.get_running_loop()
         chunks = aiter(self.body)
+        timeout = self.deadline.timeout
         while True:
-            when = self.deadline.when()
+            when = timeout.when()
             remaining = None if when is None else when - loop.time()
-            self.deadline.reschedule(None)
+            timeout.reschedule(None)
             try:
                 chunk = await anext(chunks)
             except StopAsyncIteration:
                 return
             finally:
                 if remaining is not None:
-                    self.deadline.reschedule(loop.time() + remaining)
+                    timeout.reschedule(loop.time() + (0 if self.deadline.skipped else remaining))
             yield chunk
 
 

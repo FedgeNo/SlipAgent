@@ -421,7 +421,7 @@ class Agent:
 
     def _uses_native_tools(self, capabilities: RequestProfile | None, *, model: str | None = None) -> bool:
         channel = model_prompt_profile(self.model if model is None else model).get("tool_channel")
-        if channel == "embedded":
+        if channel in ("embedded", "glm_xml"):
             return False
         return capabilities is None or capabilities.native_tools
 

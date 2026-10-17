@@ -198,6 +198,9 @@ class _JSONResponseStream:
         return "".join(output)
 
 
+INLINE_TAGS = ("<tool_call>", "<tool_call ", "<function_call>", "<function_call ")
+
+
 class _VisibleTextStream:
     """Hold ambiguous line prefixes, bookkeeping, and trailing whitespace."""
 
@@ -210,6 +213,9 @@ class _VisibleTextStream:
         self._stopped = False
         self._space = ""
         self._started = False
+        # A call tag can also start mid-line after prose, outside inline code.
+        self._inline = ""
+        self._ticks = 0
 
     def _classify(self, *, final: bool) -> str:
         stripped = self._line.strip()
@@ -259,7 +265,15 @@ class _VisibleTextStream:
                 break
             visible = ""
             if self._passing:
-                visible = char
+                if self._tagged and (self._inline or char == "<" and self._ticks % 2 == 0):
+                    self._inline += char
+                    if any(self._inline.startswith(tag) for tag in INLINE_TAGS):
+                        self._stopped = True
+                        break
+                    if not any(tag.startswith(self._inline) for tag in INLINE_TAGS):
+                        visible, self._inline = self._inline, ""
+                else:
+                    visible = char
             elif char == "\n":
                 if self._classify(final=True) == "pass":
                     visible = self._line + char
@@ -269,9 +283,12 @@ class _VisibleTextStream:
                     visible = self._line
                     self._line = ""
                     self._passing = True
+            if char == "`":
+                self._ticks += 1
             if char == "\n":
                 self._line = ""
                 self._passing = False
+                self._ticks = 0
             for value in visible:
                 if value.isspace():
                     if self._started:

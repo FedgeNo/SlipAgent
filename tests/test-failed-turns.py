@@ -210,3 +210,34 @@ async def test_resume_after_failure_keeps_unacknowledged_tool_results_and_failur
         assert tool.seen == [{"value": "A"}]
         await restored.registry.aclose()
         await agent.registry.aclose()
+
+
+async def test_user_skipped_attempt_never_reaches_model_history():
+    from slipagent.api import APIOutputSkipped
+
+    requests = []
+
+    def handle(request):
+        body = json.loads(request.content)
+        summary = summary_response(body)
+        if summary is not None:
+            return httpx.Response(200, json=summary)
+        requests.append(body)
+        return response(packet({"content": "Done."}), packet(finish="stop"))
+
+    async with client_for(handle) as client:
+        agent = Agent(client, ToolRegistry([RecordingTool()]), "test")
+        chat = client.chat
+        skipped = []
+
+        async def skip_once(*args, **kwargs):
+            if not skipped:
+                skipped.append(True)
+                raise APIOutputSkipped("Skipped by the user before any model output.")
+            return await chat(*args, **kwargs)
+        client.chat = skip_once
+        with pytest.raises(APIOutputSkipped):
+            await agent.run("hello")
+        assert not any("Skipped by the user" in content_text(m.content) for m in agent.messages)
+        assert await agent.run("again") == "Done."
+        assert "Skipped by the user" not in json.dumps(requests[-1])

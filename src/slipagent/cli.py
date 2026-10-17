@@ -512,6 +512,12 @@ class Renderer:
 
         elif event.kind == "assistant_text":
             preview = "".join(self.__dict__.pop("_reply_preview", []))
+            if self.show_assistant_text and preview and preview != event.text and self.terminal is not None:
+                # The preview streamed text the validated reply omits, such as a call tag.
+                self._finish_stream()
+                if self.terminal.replace_markdown(event.text):
+                    self._last_output_blank = False
+                    return
             if self.show_assistant_text and preview != event.text:
                 self._finish_stream()
                 self._model_block = object()

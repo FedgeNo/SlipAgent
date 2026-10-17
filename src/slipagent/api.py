@@ -66,6 +66,10 @@ class APIConnectionError(APITransportError):
     """A broken connection does not establish that the selected model failed."""
 
 
+class APIOutputSkipped(APIResponseError):
+    """The user moved on to another model before this one produced output."""
+
+
 class APIAuthError(APIResponseError):
     """The API key was missing, malformed, or rejected."""
 
@@ -342,8 +346,8 @@ class APIClient:
             except TimeoutError as exc:
                 if deadline is None or not first_output.expired():
                     raise
-                error = APIResponseError("Skipped by the user before any model output." if deadline.skipped else
-                                         f"No model output within {first_output_timeout:g} seconds from request start.")
+                error = (APIOutputSkipped("Skipped by the user before any model output.") if deadline.skipped else
+                         APIResponseError(f"No model output within {first_output_timeout:g} seconds from request start."))
                 if state is not None:
                     state.attach_diagnostics(error)
                 raise error from exc

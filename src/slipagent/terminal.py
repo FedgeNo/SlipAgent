@@ -1424,6 +1424,21 @@ class TerminalUI:
                 self.write_markdown("", first=False, final=True,
                                     reasoning=len(self._raw_output) - 1 in self._reasoning_chunks)
 
+    def replace_markdown(self, text: str) -> bool:
+        """Replace the latest Markdown reply block, when it ends the transcript."""
+        self._ensure_transcript()
+        end = len(self._raw_output) - 1
+        if end < 0 or end not in self._markdown_chunks or end in self._reasoning_chunks:
+            return False
+        start = end
+        while start not in self._block_starts and start > 0 and start - 1 in self._markdown_chunks:
+            start -= 1
+        for index in range(start, end + 1):
+            self._raw_output.clear_record(index)
+        self.write_markdown(text, first=True, final=True)
+        self._wrapped_columns = 0
+        return True
+
     def last_markdown(self) -> str:
         self._ensure_transcript()
         if not self._markdown_chunks:

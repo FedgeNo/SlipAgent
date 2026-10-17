@@ -92,7 +92,9 @@ class ContextBuilder:
             sections.add("environment", "Project Python Environment", load_prompt('environment-snapshot.md', environment=render_data(await environment.snapshot())), 30, owner="environment")
         response_format = model_response_format(self.settings.model, capabilities, native_tools=native_tools)
         schema = response_format if response_format is not None and response_format["type"] == "json_schema" else None
-        if not native_tools or schema is not None:
+        glm_xml = model_profile.get("tool_channel") == "glm_xml"
+        # GLM's reply and call format heads the context instead; see ConversationHistory.view.
+        if (not native_tools or schema is not None) and not glm_xml:
             sections.add("schema", "Response Schema",
                 load_prompt('response-json.md') + '\n\n'
                 + (load_prompt('response-native-json.md')
@@ -106,14 +108,21 @@ class ContextBuilder:
         for index, filename in enumerate(model_profile.get("sections", [])):
             sections.add(f"model_{index}", filename, load_prompt(filename),
                          5, owner="model", dynamic=False)
-        sections.add("suggestions", "Optional Suggested Next Steps", load_prompt('response-suggestions.md'),
-                     1, owner="protocol", dynamic=False)
-        sections.add("tools", "Available Tool Definitions", load_prompt('tool-definitions.md',
-                     core_definitions=json.dumps({spec.name: {"description": spec.description, "parameters": spec.parameters}
-                                                  for spec in specs if spec.name in CORE_TOOLS}, ensure_ascii=False, indent=2),
-                     loaded_definitions=json.dumps({spec.name: {"description": spec.description, "parameters": spec.parameters}
-                                                    for spec in specs if spec.name not in CORE_TOOLS}, ensure_ascii=False, indent=2)),
-                     10, owner="tools", dynamic=False)
+        if not glm_xml:  # Suggestions need a JSON reply object, which GLM's text replies avoid.
+            sections.add("suggestions", "Optional Suggested Next Steps", load_prompt('response-suggestions.md'),
+                         1, owner="protocol", dynamic=False)
+        if glm_xml:
+            # GLM's own template lists one JSON signature per line inside <tools>.
+            sections.add("tools", "Tools", load_prompt('tool-definitions-glm-xml.md', definitions="\n".join(
+                json.dumps({"name": spec.name, "description": spec.description, "parameters": spec.parameters},
+                           ensure_ascii=False) for spec in specs)), 10, owner="tools", dynamic=False)
+        else:
+            sections.add("tools", "Available Tool Definitions", load_prompt('tool-definitions.md',
+                         core_definitions=json.dumps({spec.name: {"description": spec.description, "parameters": spec.parameters}
+                                                      for spec in specs if spec.name in CORE_TOOLS}, ensure_ascii=False, indent=2),
+                         loaded_definitions=json.dumps({spec.name: {"description": spec.description, "parameters": spec.parameters}
+                                                        for spec in specs if spec.name not in CORE_TOOLS}, ensure_ascii=False, indent=2)),
+                         10, owner="tools", dynamic=False)
         catalog = self.registry.services.get("tool_catalog")
         if catalog is not None and catalog.deferred():
             sections.add("tool_catalog", "Additional Tool Catalog",
@@ -180,6 +189,7 @@ class ContextBuilder:
             max_output=self.settings.max_tokens or min(8192, max(256, length // 8)),
             native_tools=native_tools,
             text_tool_history=not native_tools,
+            glm_xml=glm_xml,
             schema=schema,
             token_scale=token_scale,
         )
@@ -192,5 +202,5 @@ class ContextBuilder:
             # Orientation is optional; it must never displace the current task.
             context = await history.view(self.messages, specs, extra_instructions=extra_instructions, **view_options)
         if not native_tools:
-            context = tool_history_as_text(context)
+            context = tool_history_as_text(context, glm_xml=glm_xml)
         return context

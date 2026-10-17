@@ -13,6 +13,7 @@ formats execute once; intentional repetitions within a batch remain separate.
 | Bare JSON | `{"name":"read_file","arguments":{"path":"app.py"}}` or an array of calls | All models |
 | Tagged JSON | `<tool_call>{"name":"read_file","arguments":{"path":"app.py"}}</tool_call>` | All models |
 | Qwen tags | `<tool_call><function=read_file><parameter=path>app.py</parameter></function></tool_call>` | All models |
+| GLM tags | `<tool_call>read_file<arg_key>path</arg_key><arg_value>app.py</arg_value></tool_call>` | All models |
 | Invoke XML | `<function_calls><invoke name="read_file"><parameter name="path">app.py</parameter></invoke></function_calls>` | XML profile |
 | Wrapped XML | `<tool_calls><call><invoke name="read_file"><parameter name="path">app.py</parameter></invoke></call></tool_calls>` | XML profile |
 | Singular invoke XML | `<tool_call><invoke name="read_file"><parameter name="path">app.py</parameter></invoke></tool_call>` | Tagged calls; XML profile also accepts whole XML fences |
@@ -148,7 +149,11 @@ their existing handling.
 
 Quoted, indented, and prose-surrounded fenced examples remain literal.
 A response consisting entirely of a JSON fence is a call carrier when its body
-is a call. Whole XML fences require the model's `xml_tool_calls` profile setting.
+is a call. So is a JSON fence that ends the reply after prose, when its calls
+name at least one registered tool. A `<tool_call>` that starts mid-line after
+prose is executed when it parses completely. Other call fragments in prose,
+such as a broken `<tool_call>` or `"tool_calls": [{`, reject the response so
+the model resends its calls. Whole XML fences require the model's `xml_tool_calls` profile setting.
 Tool markers at the start of a JSON reply string are also recognized; XML
 profiles additionally inspect their reply strings for supported carriers.
 

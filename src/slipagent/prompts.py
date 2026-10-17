@@ -76,7 +76,7 @@ def model_prompt_profile(model: str) -> dict[str, Any]:
     if not isinstance(profiles, dict):
         raise PromptError("model-profiles.json must map model IDs to profiles")
     profile = profiles.get(model, {})
-    if not isinstance(profile, dict) or profile.get("tool_channel") not in (None, "native", "embedded"):
+    if not isinstance(profile, dict) or profile.get("tool_channel") not in (None, "native", "embedded", "glm_xml"):
         raise PromptError(f"Invalid prompt profile for {model}")
     sections = profile.get("sections", [])
     if not isinstance(sections, list) or any(not isinstance(path, str) for path in sections):

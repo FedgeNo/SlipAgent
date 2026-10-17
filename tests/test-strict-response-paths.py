@@ -138,7 +138,7 @@ def test_json_final_and_batch_structure_is_strict(text):
 
 
 def test_plain_reply_examples_do_not_execute_calls():
-    text = 'Example:\n```json\n' + json.dumps({"tool_calls": [CALL]}) + '\n```'
+    text = 'Example:\n```json\n' + json.dumps({"tool_calls": [CALL]}) + '\n```\nAdjust the arguments as needed.'
     result = parse_agent_response(text, [])
     assert result.text == text and result.calls == []
 

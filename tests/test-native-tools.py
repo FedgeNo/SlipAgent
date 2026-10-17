@@ -109,17 +109,13 @@ async def test_native_calls_execute_once_and_results_round_trip_with_ids():
     assert [event.text for event in events if event.kind == "assistant_text"] == ["Reading.", "Done."]
 
 
+@pytest.mark.parametrize("model", ["z-ai/glm-5.3", "z-ai/glm-5.3-flash"])
 @pytest.mark.parametrize("parameters", [["tools", "structured_outputs"], ["tools"]])
-@pytest.mark.parametrize("format", ["json", "xml"])
-async def test_glm_53_requests_embedded_calls_and_executes_them(parameters, format):
-    model = "z-ai/glm-5.3"
-    content = json.dumps({"response": "Recording.", "tool_calls": [
-        {"name": "record", "arguments": {"value": "A"}},
-    ]}) if format == "json" else '<function_calls><invoke name="record"><parameter name="value">A</parameter></invoke></function_calls>'
-    router = Router({model: parameters}, [
-        {"role": "assistant", "content": content},
-        {"role": "assistant", "content": json.dumps({"response": "Done.", "tool_calls": []})},
-    ])
+@pytest.mark.parametrize("returned", ["glm", "native"])
+async def test_glm_53_gets_xml_tool_definitions_and_executes_either_call_form(model, parameters, returned):
+    first = ({"role": "assistant", "content": "Recording.\n<tool_call>record<arg_key>value</arg_key><arg_value>A</arg_value></tool_call>"}
+             if returned == "glm" else wire("Recording.", [native_call()]))
+    router = Router({model: parameters}, [first, {"role": "assistant", "content": "Done."}])
     tool = RecordingTool()
     registry = ToolRegistry([tool])
     async with OpenRouterClient("dummy", transport=httpx.MockTransport(router.handle)) as client:
@@ -128,14 +124,14 @@ async def test_glm_53_requests_embedded_calls_and_executes_them(parameters, form
         await agent.wait_for_compaction()
     assert tool.seen == [{"value": "A"}]
     for request in router.requests:
-        assert "tools" not in request
-        assert "`tool_calls` (an ordered call array)" in request["messages"][0]["content"]
-        assert "# Tool Calls in This Response" in request["messages"][0]["content"]
-        assert "Send tools through the API tool channel" not in request["messages"][0]["content"]
-        if "structured_outputs" in parameters:
-            assert "tool_calls" in request["response_format"]["json_schema"]["schema"]["required"]
-        else:
-            assert "response_format" not in request
+        system = request["messages"][0]["content"]
+        assert "tools" not in request and "response_format" not in request
+        assert "You are provided with function signatures within <tools></tools> XML tags:" in system
+        assert '{"name": "record", "description":' in system
+        assert "<tool_call>{function-name}<arg_key>" in system
+        assert "Return one JSON object" not in system
+        assert "`tool_calls` (an ordered call array)" not in system
+        assert "JSON object" not in system
     await registry.aclose()
 
 
@@ -161,7 +157,7 @@ async def test_dots_3_keeps_native_calls_without_structured_reply_constraints(mo
     await registry.aclose()
 
 
-@pytest.mark.parametrize("model", ["z-ai/glm-5.3-prime", "z-ai/glm-5.3-flash", "z-ai/glm-5.2", "other/model"])
+@pytest.mark.parametrize("model", ["z-ai/glm-5.3-prime", "z-ai/glm-5.2", "other/model"])
 async def test_other_models_keep_native_tool_channel(model):
     router = Router({model: ["tools", "structured_outputs"]}, [wire()])
     registry = ToolRegistry([RecordingTool()])

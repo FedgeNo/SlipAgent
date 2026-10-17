@@ -29,7 +29,7 @@ System instructions and tool definitions remain separate from user-input metadat
 
 `model-profiles.json` maps exact model IDs to optional settings. `sections` lists Markdown prompt files relative to this directory, inserted in list order after reply-format instructions. Edit the mapping or files to update newly built requests. Switching models selects the new model's sections; unlisted models use the normal prompts.
 
-`tool_channel: "embedded"` requests calls inside response JSON and includes them in the response schema. Omit this setting, or use `"native"`, to follow the endpoint's normal tool capabilities. `xml_tool_calls: true` additionally accepts explicit invoke/parameter XML and whole XML fences in assistant output. Supported wrappers are `<function_calls><invoke name="tool">…</invoke></function_calls>` and `<tool_calls><call><invoke name="tool">…</invoke></call></tool_calls>`, with named `<parameter name="argument">value</parameter>` children. Each `<call>` contains exactly one `<invoke>`. Broken XML, missing tool names, and duplicate parameters reject the whole batch and request a correction before any calls execute. JSON and native API calls remain accepted. Thoughts and quoted examples are not executable calls.
+`tool_channel: "embedded"` requests calls inside response JSON and includes them in the response schema. `tool_channel: "glm_xml"` presents tools the way GLM's own chat template does: one JSON signature per line inside `<tools></tools>` (`tool-definitions-glm-xml.md`), with calls written as `<tool_call>name<arg_key>key</arg_key><arg_value>value</arg_value></tool_call>` after Markdown reply text (`response-glm-xml.md`). String values are literal and other values JSON. Earlier calls appear in the same form, and the JSON-only suggestions section is omitted. No API tool definitions or response format are sent; native API calls are still accepted if the provider converts them. Omit this setting, or use `"native"`, to follow the endpoint's normal tool capabilities. `xml_tool_calls: true` additionally accepts explicit invoke/parameter XML and whole XML fences in assistant output. Supported wrappers are `<function_calls><invoke name="tool">…</invoke></function_calls>` and `<tool_calls><call><invoke name="tool">…</invoke></call></tool_calls>`, with named `<parameter name="argument">value</parameter>` children. Each `<call>` contains exactly one `<invoke>`. Broken XML, missing tool names, and duplicate parameters reject the whole batch and request a correction before any calls execute. JSON and native API calls remain accepted. Thoughts and quoted examples are not executable calls.
 
 `structured_output: false` omits the API `response_format` parameter for that model. Native-tool models receive plain Markdown reply instructions and keep their API tools. Embedded-tool models still receive JSON call instructions, with local validation before execution. Set `structured_output` to `true`, or omit it, to use the endpoint's normal formatting capabilities; this does not enable unsupported formats. The setting must be a JSON boolean and is reread when building requests, including after model switches.
 
@@ -45,7 +45,7 @@ For example, to disable structured reply formatting for one exact model:
 }
 ```
 
-The `z-ai/glm-5.3` profile uses `models/glm-5.3.md`, embedded calls, and XML compatibility. The `dots-studio/dots-3-note-preview` and `dots-studio/dots-3-note-preview:free` profiles disable structured reply formatting to avoid interference with native tool calling and enable XML compatibility for calls returned in reply text. Other models have no overrides.
+The `z-ai/glm-5.3` and `z-ai/glm-5.3-flash` profiles use the GLM XML channel and XML compatibility. The `dots-studio/dots-3-note-preview` and `dots-studio/dots-3-note-preview:free` profiles disable structured reply formatting to avoid interference with native tool calling and enable XML compatibility for calls returned in reply text. Other models have no overrides.
 
 ## Resource Files
 
@@ -67,7 +67,7 @@ The `z-ai/glm-5.3` profile uses `models/glm-5.3.md`, embedded calls, and XML com
 | `overthinking-*.md` | Archived reasoning guidance |
 | `workspace-*.md`, `environment-*.md` | Access policy and Python environment guidance |
 | `harness-installation.md` | Running harness code location, supplied only in Danger Mode |
-| `tool-definitions.md`, `harness-state.md` | Headed runtime data blocks |
+| `tool-definitions.md`, `tool-definitions-glm-xml.md`, `harness-state.md` | Headed runtime data blocks |
 | `project-instructions-*.md` | Project instruction scope and delivery |
 | `instruction-scope.md`, `instruction-file.md` | Dynamic scope and source labels |
 | `mcp-guidance.md` | Guidance for connected MCP tools |

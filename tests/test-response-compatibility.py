@@ -70,12 +70,48 @@ def test_explicit_markers_inside_json_reply_are_recognized(text):
 @pytest.mark.parametrize('style', ['fence', 'quote', 'indent'])
 def test_examples_do_not_become_actions(carrier, style):
     if style == 'fence':
-        text = 'Example:\n```\n' + carrier + '\n```'
+        text = 'Example:\n```\n' + carrier + '\n```\nThat is the format.'
     elif style == 'quote':
         text = '> ' + carrier.replace('\n', '\n> ')
     else:
         text = '    ' + carrier.replace('\n', '\n    ')
     result = parse_agent_response(text, [], tools=[SPEC], xml_tool_calls=True)
+    assert result.text == text and result.calls == []
+
+
+@pytest.mark.parametrize('carrier', [json.dumps(CALL), json.dumps([CALL]), ENVELOPE])
+@pytest.mark.parametrize('language', ['', 'json'])
+def test_call_block_ending_the_reply_executes(carrier, language):
+    text = 'Reading the file.\n\n```' + language + '\n' + carrier + '\n```\n'
+    result = parse_agent_response(text, [], tools=[SPEC])
+    assert [(c.name, c.arguments) for c in result.calls] == [('record', {'value': 'A'})]
+    assert result.text.startswith('Reading the file.')
+
+
+def test_call_block_naming_no_registered_tool_stays_text():
+    text = 'Example:\n```json\n' + json.dumps({'name': 'other', 'arguments': {}}) + '\n```'
+    result = parse_agent_response(text, [], tools=[SPEC])
+    assert result.text == text and result.calls == []
+
+
+@pytest.mark.parametrize('text', [
+    'Reading now.<tool_call>response_text>:"x","tool_calls":[{"id":"a","name":"record"}]',
+    'Calling it: "tool_calls": [{"name": "record"',
+    'Done.\n```json\n{"tool_calls":[{"name":"record","arguments":\n```',
+])
+def test_broken_calls_in_prose_are_rejected(text):
+    with pytest.raises(ResponseFormatError):
+        parse_agent_response(text, [], tools=[SPEC])
+
+
+@pytest.mark.parametrize('text', [
+    'Use `<tool_call>` tags or `"tool_calls": [{` fields.',
+    '> <tool_call>' + json.dumps(CALL),
+    '    "tool_calls": [{"name": "record"',
+    '```\n"tool_calls": [{"name": "record"\n```\nThat is broken.',
+])
+def test_quoted_call_fragments_stay_text(text):
+    result = parse_agent_response(text, [], tools=[SPEC])
     assert result.text == text and result.calls == []
 
 
@@ -198,3 +234,54 @@ async def test_final_reply_without_calls_ends_even_with_inconsistent_finish_meta
         assert len(router.requests) == 1
     finally:
         await registry.aclose()
+
+
+GLM_SPEC = ToolSpec('read', '', {'properties': {'path': {'type': 'string'}, 'limit': {'type': 'integer'},
+                                                'flags': {'type': 'array'}}})
+
+
+@pytest.mark.parametrize('text', [
+    'Reading.\n<tool_call>read<arg_key>path</arg_key><arg_value>a b.md</arg_value>'
+    '<arg_key>limit</arg_key><arg_value>5</arg_value><arg_key>flags</arg_key><arg_value>["x"]</arg_value></tool_call>',
+    'Reading.<tool_call>read<arg_key>path</arg_key><arg_value>a b.md</arg_value>\n'
+    '<arg_key>limit</arg_key><arg_value>5</arg_value><arg_key>flags</arg_key><arg_value>["x"]</arg_value>\n</tool_call>',
+])
+def test_glm_calls_decode_strings_literally_and_other_values_as_json(text):
+    result = parse_agent_response(text, [], tools=[GLM_SPEC])
+    assert result.text == 'Reading.'
+    assert [(c.name, c.arguments) for c in result.calls] == [('read', {'path': 'a b.md', 'limit': 5, 'flags': ['x']})]
+
+
+def test_glm_call_after_prose_with_inline_code_executes():
+    # GLM's own reply: inline code earlier in the sentence must not hide the call.
+    text = ('I am loading the conventions `list_rules` tool first, along with `git_status`.'
+            '<tool_call>load_tools<arg_key>names</arg_key><arg_value>["a", "b"]</arg_value></tool_call>')
+    spec = ToolSpec('load_tools', '', {'properties': {'names': {'type': 'array'}}})
+    result = parse_agent_response(text, [], tools=[spec])
+    assert [(c.name, c.arguments) for c in result.calls] == [('load_tools', {'names': ['a', 'b']})]
+    assert result.text.endswith('`git_status`.')
+
+
+def test_glm_calls_batch_and_allow_no_arguments():
+    text = '<tool_call>read<arg_key>path</arg_key><arg_value>a</arg_value></tool_call>\n<tool_call>record</tool_call>'
+    result = parse_agent_response(text, [], tools=[GLM_SPEC, SPEC])
+    assert [(c.name, c.arguments) for c in result.calls] == [('read', {'path': 'a'}), ('record', {})]
+
+
+@pytest.mark.parametrize('text', [
+    '<tool_call>read<arg_key>path</arg_key><arg_value>a</arg_value>',
+    '<tool_call>read<arg_key>path</arg_key><arg_value>a</arg_value><arg_key>path</arg_key><arg_value>b</arg_value></tool_call>',
+])
+def test_incomplete_or_duplicated_glm_calls_are_rejected(text):
+    with pytest.raises(ResponseFormatError):
+        parse_agent_response(text, [], tools=[GLM_SPEC])
+
+
+def test_glm_history_shows_earlier_calls_in_its_own_format():
+    from slipagent.context import tool_history_as_text
+    from slipagent.types import Message, content_text
+    message = Message(role='assistant', content='Reading.',
+                      tool_calls=[ToolCall('one', 'read', {'path': 'a.md', 'limit': 5})])
+    text = content_text(tool_history_as_text([message], glm_xml=True)[0].content)
+    assert text == ('Reading.\n<tool_call>read<arg_key>path</arg_key><arg_value>a.md</arg_value>'
+                    '<arg_key>limit</arg_key><arg_value>5</arg_value></tool_call>')

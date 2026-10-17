@@ -28,6 +28,9 @@ XML_CALL_TAGS = ("<function_calls>", "<tool_calls>")
 TOOL_MARKERS = ("[TOOL_CALLS]", "<｜tool▁calls▁begin｜>", "<|tool_calls_section_begin|>")
 CALL_OPENING = re.compile(r"<(tool_call|function_call|function_calls|tool_calls)(?=[\s>])")
 FUNCTION_OPENING = "<function="
+GLM_CALL_NAME = re.compile(r"([A-Za-z_][\w.\-]*)\s*(?=<arg_key>|</(?:tool_call|function_call)\s*>)")
+# Call fragments inside prose: a reply carrying one was meant to act.
+BROKEN_CALL = re.compile(r'<(?:tool_call|function_call)(?=[\s>])|"tool_calls"\s*:\s*\[\s*\{')
 
 
 class ResponseFormatError(ValueError):
@@ -77,7 +80,8 @@ def agent_response_format(*, native_tools: bool) -> dict[str, Any]:
 def model_response_format(model: str, capabilities: RequestProfile | None, *,
                           native_tools: bool) -> dict[str, Any] | None:
     """Select the working reply constraint for both prompt and API construction."""
-    if not model_prompt_profile(model).get("structured_output", True):
+    profile = model_prompt_profile(model)
+    if not profile.get("structured_output", True) or profile.get("tool_channel") == "glm_xml":
         return None
     if capabilities is not None and capabilities.format == "json_schema":
         return agent_response_format(native_tools=native_tools)
@@ -224,10 +228,27 @@ def _detect_response(text: str, tools: list[ToolSpec], *, xml_tool_calls: bool =
             marker = re.match(r"(`{3,}|~{3,})", stripped)
             if marker:
                 if not in_fence:
+                    trailing = _trailing_fence_calls(text[offset:], tools, xml_tool_calls=xml_tool_calls)
+                    if trailing is not None:
+                        reply = "\n".join(part for part in (text[:offset].rstrip(), trailing.text) if part)
+                        return AgentResponse(reply, trailing.calls, trailing.suggestions)
                     in_fence = marker[1]
                 elif marker[1][0] == in_fence[0] and len(marker[1]) >= len(in_fence):
                     in_fence = ""
             elif not in_fence and len(line) - len(stripped) < 4 and "\t" not in line[:len(line) - len(stripped)]:
+                if not stripped.startswith(">") and BROKEN_CALL.search(re.sub(r"`[^`\n]*`", "", stripped)) and not (
+                        CALL_OPENING.match(stripped) or stripped.startswith(("{", "[", FUNCTION_OPENING, *TOOL_MARKERS))):
+                    inline = re.search(r"<tool_call(?=[\s>])", line)
+                    # An odd count of backticks before the tag places it inside inline code.
+                    if inline is not None and line[:inline.start()].count("`") % 2 == 0:
+                        start = offset + inline.start()
+                        try:
+                            return AgentResponse(text[:start].rstrip(), _tagged_calls(text[start:], tools))
+                        except ResponseFormatError:
+                            pass
+                    raise ResponseFormatError(
+                        "The reply contains a tool call that could not be parsed. Resend the complete "
+                        "tool calls in the required response format; no tools from this reply ran.")
                 opening = CALL_OPENING.match(stripped)
                 if stripped.startswith(FUNCTION_OPENING):
                     functions = []
@@ -258,6 +279,26 @@ def _detect_response(text: str, tools: list[ToolSpec], *, xml_tool_calls: bool =
                         literal_until = len(text) - len(tail) + end
             offset += len(line)
     return AgentResponse(text, [])
+
+
+def _trailing_fence_calls(text: str, tools: list[ToolSpec], *, xml_tool_calls: bool) -> AgentResponse | None:
+    """Calls in a JSON code block that ends the reply, naming at least one registered tool.
+
+    Models without a native tool channel often explain an action, then write
+    its call in a closing code block. Blocks followed by more prose stay examples.
+    """
+    block = re.fullmatch(r"(`{3,}|~{3,})[ \t]*(?:json)?[ \t]*\r?\n(.*?)\r?\n[ \t]*\1[ \t]*",
+                         text.strip(), re.DOTALL | re.IGNORECASE)
+    if block is None:
+        return None
+    body = block[2].strip()
+    if not body.startswith(("{", "[")) or not _json_call_start(body):
+        return None
+    found = _detect_response(body, tools, xml_tool_calls=xml_tool_calls)
+    names = [tool.name for tool in tools]
+    if not found.calls or names and not any(tool_name(call.name, names) in names for call in found.calls):
+        return None
+    return found
 
 
 def _call_value(value: Any) -> bool:
@@ -427,6 +468,9 @@ def _tagged_calls(text: str, tools: list[ToolSpec]) -> list[ToolCall]:
         elif remaining.startswith("<function="):
             call, remaining = _qwen_call(remaining, tools)
             raw.append(call)
+        elif glm := GLM_CALL_NAME.match(remaining):
+            call, remaining = _glm_call(glm, remaining, tools)
+            raw.append(call)
         else:
             try:
                 _, end = _json_prefix(remaining)
@@ -492,6 +536,35 @@ def _xml_calls(text: str, tools: list[ToolSpec]) -> list[dict[str, Any]]:
                     arguments[key] = value
         calls.append({"id": invoke.get("id"), "name": name, "arguments": arguments})
     return calls
+
+
+def _glm_call(name: re.Match[str], text: str, tools: list[ToolSpec]) -> tuple[dict[str, Any], str]:
+    """Decode GLM's `name<arg_key>k</arg_key><arg_value>v</arg_value>` call body.
+
+    Its template writes string values as text and other values as JSON, so
+    schema string parameters stay literal and the rest decode when valid.
+    """
+    resolved = tool_name(name[1], [tool.name for tool in tools])
+    properties: dict[str, Any] = next((tool.parameters.get("properties", {}) for tool in tools if tool.name == resolved), {})
+    remaining = text[name.end():]
+    arguments: dict[str, Any] = {}
+    while (pair := re.match(r"\s*<arg_key>(.*?)</arg_key>\s*<arg_value>(.*?)</arg_value>", remaining, re.DOTALL)):
+        key, value = pair[1].strip(), pair[2]
+        if not key or key in arguments:
+            raise ResponseFormatError("Expected named, nonduplicated GLM call arguments.")
+        kind = properties.get(key, {}).get("type")
+        if kind == "string" or isinstance(kind, list) and "string" in kind:
+            arguments[key] = value
+        else:
+            try:
+                arguments[key] = _decode(value)
+            except ResponseFormatError:
+                arguments[key] = value
+        remaining = remaining[pair.end():]
+    remaining = remaining.lstrip()
+    if not re.match(r"</(?:tool_call|function_call)\s*>", remaining):
+        raise ResponseFormatError("Expected </tool_call> after GLM call arguments.")
+    return {"name": resolved, "arguments": arguments}, remaining
 
 
 def _qwen_call(text: str, tools: list[ToolSpec]) -> tuple[dict[str, Any], str]:

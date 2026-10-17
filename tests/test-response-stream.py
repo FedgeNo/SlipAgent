@@ -71,3 +71,20 @@ def test_xml_call_fences_do_not_expose_arguments_in_preview(envelope):
         wire = json.dumps({"response": wire})
     stream = ResponseStream(xml_tool_calls=True)
     assert "".join(stream.push(char) for char in wire) == ""
+
+
+@pytest.mark.parametrize("size", [1, 7, 1000])
+def test_mid_line_call_tags_are_never_previewed(size):
+    # GLM writes its call right after a sentence; only the prose may stream.
+    prose = "I'll load `list_rules` first, then run a demo."
+    text = prose + '<tool_call>load_tools<arg_key>names</arg_key><arg_value>["a"]</arg_value></tool_call>'
+    stream = ResponseStream()
+    shown = "".join(stream.push(text[i:i + size]) for i in range(0, len(text), size))
+    assert shown == prose
+    assert stream.finish(prose) == ""
+
+
+@pytest.mark.parametrize("text", ["Use `<tool_call>` tags.", "Keep a < b and <b>bold</b>.", "A <tool_callx> stays."])
+def test_inline_code_and_other_tags_still_preview(text):
+    stream = ResponseStream()
+    assert "".join(stream.push(char) for char in text) == text

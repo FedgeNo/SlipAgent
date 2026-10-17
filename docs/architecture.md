@@ -353,11 +353,11 @@ Setting the switch to `false` omits `response_format`; native-tool models receiv
 plain reply instructions and retain native tools. Embedded-tool models retain
 their JSON call instructions and local validation. Omission or `true` follows
 endpoint capabilities. Both Dots3 Note Preview IDs disable the constraint.
-GLM-5.3 uses embedded calls:
-its schema includes `tool_calls`, its system prompt explains that channel, and
-native tool definitions are omitted from the API body but remain in the system
-prompt. Its profile also enables invoke/parameter XML parsing in assistant
-output. Native API calls are still accepted if returned. Other models retain
+GLM-5.3 and GLM-5.3 Flash use the `glm_xml` channel: their system prompt lists
+tools and the `<tool_call>name<arg_key>…</arg_key><arg_value>…</arg_value></tool_call>`
+call format exactly as GLM's chat template does, earlier calls are shown in that
+form, and no API tool definitions or response format are sent. Native API calls
+are still accepted if returned. Other models retain
 their capability-selected channel. Profile edits and model switches apply when
 the next request is built; no model-specific instructions are hard-coded in Python.
 

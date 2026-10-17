@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from .api import APIClient, APIContextError, APIResponseError, APITransportError, RETRYABLE_STATUS
+from .api import APIClient, APIContextError, APIOutputSkipped, APIResponseError, APITransportError, RETRYABLE_STATUS
 from .budget import ContextBudget
 from .capabilities import RequestProfile
 from .context import ContextError
@@ -234,7 +234,9 @@ class RequestDriver:
                 self.hooks.account(exc.usage)
                 finish_attempt("request_error", detail=str(exc), response=exc.partial_response or exc.body or "", usage=exc.usage)
                 end_preview(failed=True)
-                record_failure("request_error", str(exc), exc.partial_response or exc.body or "", exc.usage)
+                # A skip is the user's routing choice, not model behavior to learn from.
+                if not isinstance(exc, APIOutputSkipped):
+                    record_failure("request_error", str(exc), exc.partial_response or exc.body or "", exc.usage)
                 if self.hooks.stop_requested():
                     return RequestStopped(self.hooks.stop_notice(step))
                 transient = isinstance(exc, APITransportError) or exc.status_code in RETRYABLE_STATUS
@@ -295,10 +297,7 @@ class RequestDriver:
                 self.registry.services["accepted_user_edits"] = notifications(context)
                 accepted_text = record.text.strip()
                 if preview.text and not accepted_text.startswith(preview.text):
-                    end_preview()
-                    self.hooks.emit(AgentEvent(kind="warning", step=step, text=(
-                        "Response preview differs from the accepted reply; showing the validated reply below."
-                    )))
+                    end_preview()  # The renderer replaces the preview with the validated reply.
                 else:
                     remaining = preview.finish(accepted_text)
                     if remaining:
@@ -319,8 +318,10 @@ class RequestDriver:
                 f"Retrying from the start (retry {attempts}/{MAX_MEMORY_ATTEMPTS - 1})."
             )))
             # Retry the complete round without adding unexecuted tool calls to history.
-            repair = load_prompt("response-repair.md", rejection=rejection,
-                                 tool_channel=load_prompt("repair-native-tools.md" if native_tools else "repair-json-tools.md"))
+            channel = ("repair-native-tools.md" if native_tools else
+                       "repair-glm-xml-tools.md" if model_prompt_profile(self.settings.model).get("tool_channel") == "glm_xml"
+                       else "repair-json-tools.md")
+            repair = load_prompt("response-repair.md", rejection=rejection, tool_channel=load_prompt(channel))
             if rejected_excerpt:
                 repair += (
                     load_prompt('rejected-output.md') + '\n\n'

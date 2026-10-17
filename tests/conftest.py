@@ -47,8 +47,11 @@ def reload_source(tmp_path_factory):
     """Compile one immutable template per worker; each test edits its own copy."""
     package_root = tmp_path_factory.mktemp("reload-source")
     repository = Path(__file__).resolve().parents[1]
+    # Each reload test copies this template into system temp storage, which may be
+    # RAM-backed; the bundled embedding model is not needed for reloads.
     shutil.copytree(repository / "src" / "slipagent", package_root / "slipagent",
-                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+                    ignore=lambda directory, names: {"__pycache__", *(name for name in names if name.endswith(".pyc"))}
+                    | ({"model"} if Path(directory).name == "semantic" else set()))
     shutil.copytree(repository / "prompts", package_root / "slipagent" / "prompts")
     shutil.copyfile(Path(__file__).with_name("data_text_reader.py"), package_root / "data_text_reader.py")
     assert compileall.compile_dir(package_root, quiet=2)

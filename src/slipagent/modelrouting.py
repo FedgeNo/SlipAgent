@@ -10,6 +10,7 @@ from .api import APIError, APIConfigError, APIResponseError, APITransportError, 
 from .context import ContextError
 from .modelpricing import free_label
 from .modelranks import MODEL_ROUTERS
+from .providers import provider_class
 from .types import ModelInfo
 
 if TYPE_CHECKING:
@@ -68,7 +69,11 @@ class ModelRouting:
 
     async def candidates(self, purpose: str, *, include_failed: bool = False) -> list[ModelInfo]:
         options = self.session.compression_options()
-        credentials = {name: (value["api_key"], value.get("base_url") or "")
+        # Match APIClient's effective endpoint. Selecting a provider fills in
+        # its default URL and strips trailing slashes; that is not a key change
+        # and must not resurrect a route that has just failed.
+        credentials = {name: (value["api_key"],
+                              (value.get("base_url") or provider_class(name).default_base_url).rstrip("/"))
                        for name, value in options.items() if value.get("api_key", "").strip()}
         for name in self.credentials.keys() | credentials.keys():
             if self.credentials.get(name) != credentials.get(name):

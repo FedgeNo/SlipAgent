@@ -376,8 +376,19 @@ async def test_startup_defaults_to_best_rank_unless_explicitly_selected(tmp_path
         assert session.agent.model == (DEFAULT_MODEL if explicit else best)
         assert all(request.method == "GET" for request in requests)
         assert sum(request.url.path.endswith("/models") for request in requests) == 1
+        if not explicit:
+            await session.model_routing().fallback(APIResponseError("unusable", status_code=400))
+            assert session.agent.model == DEFAULT_MODEL
+            assert session.model_routing().failed["working"]
     finally:
         await cli._shutdown(session)
+    if not explicit:
+        fresh = await cli.build_session(args)
+        try:
+            assert fresh.agent.model == best
+            assert not fresh.model_routing().failed["working"]
+        finally:
+            await cli._shutdown(fresh)
 
 
 async def test_failed_startup_closes_automatically_selected_provider(tmp_path, monkeypatch):

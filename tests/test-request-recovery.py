@@ -65,6 +65,7 @@ async def test_recovered_logging_saves_response_and_clears_stale_warning(tmp_pat
             await agent.wait_for_compaction()
             assert "request_diagnostics" not in registry.context_notes
             assert diagnostics.listing()[0]["outcome"] == "accepted"
+            assert (diagnostics.directory / diagnostics.listing()[0]["raw_response"]).is_file()
             assert '"content": "done"' in diagnostics.read(1)
         finally:
             await registry.aclose()

@@ -1028,12 +1028,20 @@ Each working attempt records its run-step and history-step IDs, UTC time, reques
 outcome, reported usage, and complete response/error details. A separate compressed
 response captures all provider fields before parsing. Streaming choices, calls,
 and reasoning blocks are assembled by index; text fragments join into continuous
-fields. Interrupted and rejected responses are retained too. Exact final request
-JSON is gzip-compressed and deduplicated by SHA-256; no authentication headers are
-captured. Pending records survive a crash and remain visibly unsettled. Atomic
+fields. Interrupted and rejected responses are retained too. `responsecapture.py`
+wraps the HTTPX response byte stream before content decoding, recording each chunk
+in an owner-only `NNNNNNNN-stream.bin.gz` file. Each chunk flushes for inspection
+while a request is pending; closing finalizes and fsyncs the gzip stream even on
+parser failure or cancellation. The attempt records HTTP status, response headers,
+and whether an injected/prefetched response was already decoded. Real transport
+captures retain provider content encoding, comments, empty events, malformed bytes,
+and line endings; TLS and HTTP transfer framing are outside this capture. A logging
+write failure reports an error while allowing delivery and transport cleanup.
+Exact final request JSON is gzip-compressed and deduplicated by SHA-256; request
+authentication headers are excluded. Pending records survive a crash and remain visibly unsettled. Atomic
 owner-only writes and fsync preserve earlier records when storage fails. The
 archive targets 32 MiB by default, evicting oldest attempts after each durable
-write. Eviction removes attempt metadata, its response, and request snapshots
+write. Eviction removes attempt metadata, assembled and raw responses, and request snapshots
 whose last reference was removed. Shared request snapshots remain readable.
 The newest attempt stays complete even when it alone exceeds the target;
 later attempts can evict it. Unknown files are preserved. Storage errors warn

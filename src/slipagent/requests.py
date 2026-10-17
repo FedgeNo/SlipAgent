@@ -151,11 +151,15 @@ class RequestDriver:
             def response_received(body: dict[str, Any]) -> None:
                 if diagnostics is not None:
                     diagnostics.response(diagnostic_id, body)
+            def raw_response_received(response: Any) -> None:
+                if diagnostics is not None:
+                    diagnostics.capture_response(diagnostic_id, response)
             stream_guard = StreamLoopGuard()
             options: dict[str, Any] = {
                 "on_delta": delta,
                 "on_request_body": request_sent,
                 "on_response": response_received,
+                "on_raw_response": raw_response_received,
                 "single_attempt": True,
                 "first_output_timeout": FIRST_OUTPUT_TIMEOUT,
             } if isinstance(self.client, APIClient) else {}

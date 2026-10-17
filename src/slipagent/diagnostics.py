@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 DEFAULT_REQUEST_LOG_QUOTA = 32 * 1024 * 1024
 
 
@@ -110,6 +112,7 @@ class RequestDiagnostics:
                 continue
             self._discard(path)
             self._discard(self.directory / f"{path.stem}-response.json.gz")
+            self._discard(self.directory / f"{path.stem}-stream.bin.gz")
             if snapshot is not None:
                 references[snapshot] -= 1
                 if not references[snapshot]:
@@ -183,6 +186,47 @@ class RequestDiagnostics:
             self._trim()
         except (OSError, ValueError) as exc:
             self.error = str(exc)
+
+    def capture_response(self, attempt: int | None, response: httpx.Response) -> None:
+        """Tee transport bytes to disk before HTTP content or SSE decoding."""
+        self._migrate_quota()
+        if attempt is None or self.error:
+            return
+        from .responsecapture import CapturedResponseStream, ResponseRecorder
+
+        def failed(error: OSError) -> None:
+            self.error = str(error)
+
+        def closed() -> None:
+            try:
+                self.used += raw.stat().st_size
+                if not self.error:
+                    self._trim()
+            except OSError as exc:
+                failed(exc)
+
+        recorder = None
+        try:
+            path = self.directory / f"{attempt:08d}.json"
+            record = json.loads(path.read_text())
+            raw = self.directory / f"{attempt:08d}-stream.bin.gz"
+            recorder = ResponseRecorder(raw, failed, closed)
+            record.update(raw_response=raw.name, response_status=response.status_code,
+                          response_headers=[[key.decode("latin-1"), value.decode("latin-1")]
+                                            for key, value in response.headers.raw],
+                          raw_response_decoded=response.is_stream_consumed)
+            self._write(path, json.dumps(record, ensure_ascii=False).encode("utf-8"))
+            if response.is_stream_consumed:
+                # Prefetched responses (including mock transports) are decoded already.
+                recorder.write(response.content)
+                recorder.close()
+            else:
+                assert isinstance(response.stream, httpx.AsyncByteStream)
+                response.stream = CapturedResponseStream(response.stream, recorder)
+        except (OSError, ValueError) as exc:
+            self.error = str(exc)
+            if recorder is not None:
+                recorder.close()
 
     def response(self, attempt: int | None, body: dict[str, Any]) -> None:
         """Save the complete provider response before normalization."""

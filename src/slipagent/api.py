@@ -158,6 +158,7 @@ class APIClient:
         on_request: Callable[[dict[str, Any]], None] | None = None,
         on_request_body: Callable[[Any], None] | None = None,
         on_response: Callable[[dict[str, Any]], None] | None = None,
+        on_raw_response: Callable[[httpx.Response], None] | None = None,
         request_profile: RequestProfile | None = None,
         single_attempt: bool = False,
         disable_timeout: bool = False,
@@ -228,14 +229,15 @@ class APIClient:
             on_request_body(body)
         if on_delta is not None:
             return await self._stream_request(payload, on_delta, single_attempt=single_attempt, disable_timeout=disable_timeout, on_response=on_response, request_body=body,
-                                              first_output_timeout=first_output_timeout)
+                                              first_output_timeout=first_output_timeout, on_raw_response=on_raw_response)
         transport_options: dict[str, Any] = {"timeout": None} if disable_timeout else {}
-        raw = await self._request("POST", "/chat/completions", single_attempt=single_attempt, content=body, headers={"Content-Length": str(body.size)}, on_response=on_response, **transport_options)
+        raw = await self._request("POST", "/chat/completions", single_attempt=single_attempt, content=body, headers={"Content-Length": str(body.size)}, on_response=on_response, on_raw_response=on_raw_response, **transport_options)
         return _parse_completion(raw)
 
     async def _stream_request(self, payload: dict[str, Any], on_delta: Callable[[str, str], None], *, single_attempt: bool = False, disable_timeout: bool = False,
                               on_response: Callable[[dict[str, Any]], None] | None = None, request_body: Any = None,
-                              first_output_timeout: float | None = None) -> Completion:
+                              first_output_timeout: float | None = None,
+                              on_raw_response: Callable[[httpx.Response], None] | None = None) -> Completion:
         body = request_body if request_body is not None else self.request_body(payload)
         transport_options: dict[str, Any] = {"timeout": None} if disable_timeout else {}
         observed = False
@@ -259,6 +261,8 @@ class APIClient:
             first_output = asyncio.timeout(first_output_timeout)
             try:
                 async with first_output, self._client.stream("POST", f"{self.base_url}/chat/completions", content=body, headers={"Content-Length": str(body.size)}, **transport_options) as response:
+                    if on_raw_response is not None:
+                        on_raw_response(response)
                     if response.status_code >= 400:
                         await response.aread()
                         captured = _response_body(response)
@@ -410,13 +414,17 @@ class APIClient:
 
     async def _request(
         self, method: str, path: str, *, single_attempt: bool = False,
-        on_response: Callable[[dict[str, Any]], None] | None = None, **kwargs: Any
+        on_response: Callable[[dict[str, Any]], None] | None = None,
+        on_raw_response: Callable[[httpx.Response], None] | None = None, **kwargs: Any
     ) -> dict[str, Any]:
         url = f"{self.base_url}{path}"
         attempt = 0
         while True:
             try:
-                response = await self._client.request(method, url, **kwargs)
+                async with self._client.stream(method, url, **kwargs) as response:
+                    if on_raw_response is not None:
+                        on_raw_response(response)
+                    await response.aread()
             except (httpx.TimeoutException, httpx.TransportError, httpx.DecodingError) as exc:
                 error: APIResponseError = APITransportError(f"Network error talking to API provider after {attempt + 1} attempt(s): {exc}")
                 if single_attempt or not await self.wait_retry(attempt, error):

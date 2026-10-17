@@ -1483,10 +1483,16 @@ responses are captured before parsing, with streaming text and reasoning joined
 into continuous fields rather than individual fragments. Provider metadata and
 tool-call fields are retained, including partial responses on failure. Request JSON
 is deduplicated and gzip-compressed in private files beside the session journal,
-without authentication headers. These diagnostics are never supplied as history
+without request authentication headers. Each attempt also captures its raw HTTP
+response body in `NNNNNNNN-stream.bin.gz`, with status and response headers in
+the attempt metadata. This preserves keepalives, empty events, malformed bytes,
+and original line endings before HTTP content decoding or stream parsing. Capture
+writes incrementally; cancellation or disconnect retains the received prefix.
+The readable `/requests` view continues to show the assembled response and names
+its raw file. These diagnostics are never supplied as history
 or sent for compaction. Diagnostics use a **32 MiB rolling target**: oldest attempts
 are removed as new ones are saved. The newest attempt keeps its complete request
-and response even if it alone exceeds the target. Shared request snapshots remain
+and responses, including raw bytes, even if it alone exceeds the target. Shared request snapshots remain
 until their last retained attempt is removed. Conversation history is unaffected.
 Storage failures display a warning and preserve existing records. Reset starts a
 new directory. Resuming continues the saved attempt numbering and rolling retention.

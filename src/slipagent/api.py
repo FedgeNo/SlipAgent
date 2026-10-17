@@ -161,12 +161,14 @@ class APIClient:
         request_profile: RequestProfile | None = None,
         single_attempt: bool = False,
         disable_timeout: bool = False,
+        first_output_timeout: float | None = None,
     ) -> Completion:
         """Request a completion; an isolated job may supply its frozen profile.
 
         Ordinary calls use the selected model's cached capabilities. Background
         compaction passes request_profile so later reselection cannot change
         routing, temperature support, or reasoning for an already archived step.
+        first_output_timeout bounds streaming startup; background calls omit it.
         """
         if not messages:
             raise APIError("chat() requires at least one message")
@@ -225,13 +227,15 @@ class APIClient:
         if on_request_body is not None:
             on_request_body(body)
         if on_delta is not None:
-            return await self._stream_request(payload, on_delta, single_attempt=single_attempt, disable_timeout=disable_timeout, on_response=on_response, request_body=body)
+            return await self._stream_request(payload, on_delta, single_attempt=single_attempt, disable_timeout=disable_timeout, on_response=on_response, request_body=body,
+                                              first_output_timeout=first_output_timeout)
         transport_options: dict[str, Any] = {"timeout": None} if disable_timeout else {}
         raw = await self._request("POST", "/chat/completions", single_attempt=single_attempt, content=body, headers={"Content-Length": str(body.size)}, on_response=on_response, **transport_options)
         return _parse_completion(raw)
 
     async def _stream_request(self, payload: dict[str, Any], on_delta: Callable[[str, str], None], *, single_attempt: bool = False, disable_timeout: bool = False,
-                              on_response: Callable[[dict[str, Any]], None] | None = None, request_body: Any = None) -> Completion:
+                              on_response: Callable[[dict[str, Any]], None] | None = None, request_body: Any = None,
+                              first_output_timeout: float | None = None) -> Completion:
         body = request_body if request_body is not None else self.request_body(payload)
         transport_options: dict[str, Any] = {"timeout": None} if disable_timeout else {}
         observed = False
@@ -252,8 +256,9 @@ class APIClient:
                     _merge_response(captured, value)
                 else:
                     captured.setdefault("unparsed_events", []).append(value)
+            first_output = asyncio.timeout(first_output_timeout)
             try:
-                async with self._client.stream("POST", f"{self.base_url}/chat/completions", content=body, headers={"Content-Length": str(body.size)}, **transport_options) as response:
+                async with first_output, self._client.stream("POST", f"{self.base_url}/chat/completions", content=body, headers={"Content-Length": str(body.size)}, **transport_options) as response:
                     if response.status_code >= 400:
                         await response.aread()
                         captured = _response_body(response)
@@ -299,6 +304,14 @@ class APIClient:
                                 return state.completion()
                             observed = True
                             state.add(event)
+                            if first_output.when() is not None and (
+                                    state.content or state.reasoning
+                                    or any(detail.get("text") or detail.get("summary") or detail.get("data")
+                                           for detail in state.reasoning_details)
+                                    or any(call["function"]["name"] or call["function"]["arguments"]
+                                           for call in state.calls.values())
+                                    or state.function_call or state.tool_blocks):
+                                first_output.reschedule(None)
                     if data:
                         event = "\n".join(data)
                         data.clear()
@@ -307,6 +320,13 @@ class APIClient:
                             observed = True
                             state.add(event)
                     return state.completion()
+            except TimeoutError as exc:
+                if first_output_timeout is None or not first_output.expired():
+                    raise
+                error = APIResponseError(f"No model output within {first_output_timeout:g} seconds from request start.")
+                if state is not None:
+                    state.attach_diagnostics(error)
+                raise error from exc
             except (httpx.TimeoutException, httpx.TransportError, httpx.DecodingError) as exc:
                 # Visible partial output needs an agent-level retry notification.
                 error = APITransportError(f"API provider stream interrupted: {exc}")

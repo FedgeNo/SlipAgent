@@ -23,6 +23,7 @@ from .types import Completion, Message, ToolSpec, Usage
 from .events import AgentEvent
 
 MAX_MEMORY_ATTEMPTS = 3
+FIRST_OUTPUT_TIMEOUT = 120.0
 
 
 class ContextStepLimit(Exception):
@@ -156,6 +157,7 @@ class RequestDriver:
                 "on_request_body": request_sent,
                 "on_response": response_received,
                 "single_attempt": True,
+                "first_output_timeout": FIRST_OUTPUT_TIMEOUT,
             } if isinstance(self.client, APIClient) else {}
             try:
                 if not options:

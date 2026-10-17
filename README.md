@@ -170,6 +170,13 @@ unusable model, permanent request failure, or exhausted recovery moves coding
 to the next eligible rank. The conversation, original task, failed request
 records, and completed tool results stay intact. Tool/test failures remain
 feedback for the current model. Each automatic selection is announced.
+A working request that produces no output within two minutes is cancelled and
+moves directly to the next eligible model. This deadline runs from request start,
+including connection and upload time; keepalives and empty stream markers do not
+extend it. Once reasoning, answer text, or tool-call content arrives, streaming
+continues under the ordinary transport timeout. In manual mode, the deadline
+reports an error and retains the selected model. Background compression retains
+its separate 20-minute timeout.
 
 The replacement remains selected until another failure, manual selection, or
 reset. Both `/optimal on` and `/optimal reset` clear failed coding/compression

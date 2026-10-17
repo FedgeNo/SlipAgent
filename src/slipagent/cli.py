@@ -1206,6 +1206,15 @@ async def _run_request(session: Session, prompt: str, style: Style) -> bool:
     async def boundary() -> None:
         if previous_boundary is not None:
             await previous_boundary()
+        if not session.agent.has_queued_input and not session.agent.stop_requested:
+            # Optimal changes affect the next request and need no task stop.
+            commands = session.work.deferred_commands or []
+            while commands and _boundary_command(commands[0]):
+                await _execute_command(session, commands.pop(0), at_boundary=True)
+            if not commands:
+                session.work.deferred_commands = None
+                session.work.resume_after_commands = None
+                session.renderer._queued_settings_pause = False
         # Earlier prompts must reach a request before a later command applies.
         if session.work.deferred_commands and not session.agent.has_queued_input:
             session.agent.request_stop()
@@ -1418,15 +1427,22 @@ def _queue_command(session: Session, line: str, command: str) -> None:
     if not commands:
         session.extensions["resume_after_commands"] = not session.agent.stop_requested
     commands.append(line)
-    session.renderer._queued_settings_pause = bool(session.extensions.get("resume_after_commands"))
-    if not session.agent.has_queued_input:
+    pause = any(not _boundary_command(queued) for queued in commands)
+    session.renderer._queued_settings_pause = pause and bool(session.extensions.get("resume_after_commands"))
+    if pause and not session.agent.has_queued_input:
         session.agent.request_stop()
     if session.renderer.terminal is not None:
-        session.renderer.terminal.set_working(True, stopping=True)
+        session.renderer.terminal.set_working(True, stopping=session.agent.stop_requested)
     if session.renderer.terminal is None:
         session.renderer.emit(session.renderer.style.dim(
             f"  Queued /{command}; it will run after earlier input and the current tool batch."
         ))
+
+
+def _boundary_command(line: str) -> bool:
+    """Routing commands can apply between batches without ending the task."""
+    return (not isinstance(line, SuggestedPrompt) and not submitted_suggestion(line)
+            and line.split(None, 1)[0].lower() == "/optimal")
 
 
 async def _apply_deferred_commands(session: Session, *, exiting: bool = False) -> tuple[bool, bool]:
@@ -1658,7 +1674,7 @@ def _refresh_title(session: Session) -> None:
         terminal.set_title(title)
 
 
-async def _execute_command(session: Session, line: str) -> bool:
+async def _execute_command(session: Session, line: str, *, at_boundary: bool = False) -> bool:
     """Dispatch definitions while preserving batch boundaries and finalization."""
     parts = line[1:].split(None, 1)
     name = parts[0].lower() if parts else ""
@@ -1666,7 +1682,8 @@ async def _execute_command(session: Session, line: str) -> bool:
     command = BY_NAME.get(name)
     if cancelled(line):
         return False
-    if command is not None and command.changes_session(argument) and (session.agent.running or session.extensions.get("deferred_commands")):
+    if (not at_boundary and command is not None and command.changes_session(argument)
+            and (session.agent.running or session.extensions.get("deferred_commands"))):
         _queue_command(session, line, name)
         return False
     if isinstance(line, Submission) and session.renderer.terminal is not None:

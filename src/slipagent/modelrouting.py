@@ -6,7 +6,7 @@ import asyncio
 import os
 from typing import TYPE_CHECKING
 
-from .api import APIError, APIConfigError, APIResponseError, APITransportError, RETRYABLE_STATUS
+from .api import APIError, APIConfigError, APIConnectionError, APIResponseError, APITransportError, RETRYABLE_STATUS
 from .context import ContextError
 from .modelpricing import free_label
 from .modelranks import MODEL_ROUTERS
@@ -114,6 +114,9 @@ class ModelRouting:
                 continue
             try:
                 await self.session.select_model(model, automatic=True)
+            except APIConnectionError:
+                # A failed metadata connection must not blacklist every model.
+                raise
             except (APIError, ContextError) as exc:
                 self.failed["working"].add(model.selector)
                 self.reject(model, "working", exc)
@@ -126,6 +129,9 @@ class ModelRouting:
 
     async def fallback(self, error: Exception) -> bool:
         if not self.enabled:
+            return False
+        if isinstance(error, APIConnectionError):
+            self.notice("Connection retries exhausted; keeping the current model. Retry when the connection recovers.")
             return False
         model = ModelInfo(self.session.agent.model, provider=self.session.client.provider)
         self.failed["working"].add(model.selector)

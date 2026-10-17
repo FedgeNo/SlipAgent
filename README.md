@@ -170,6 +170,10 @@ unusable model, permanent request failure, or exhausted recovery moves coding
 to the next eligible rank. The conversation, original task, failed request
 records, and completed tool results stay intact. Tool/test failures remain
 feedback for the current model. Each automatic selection is announced.
+Connection failures retain the current model after its ordinary retries are
+exhausted. A broken network connection does not exclude a model or provider;
+retry when connectivity recovers. HTTP errors such as 429 and 503 still count
+as provider failures after retry exhaustion.
 A working request that produces no output within two minutes is cancelled and
 moves directly to the next eligible model. This deadline runs from request start,
 including connection and upload time; keepalives and empty stream markers do not
@@ -183,7 +187,9 @@ reset. Both `/optimal on` and `/optimal reset` clear failed coding/compression
 routes and retry from the highest rank. `/optimal off` keeps the current model
 under manual control; `/optimal` reports the state. Successful manual model or
 provider selection through `/model`, `/models`, or `/provider` also disables
-optimal mode. Opening or cancelling a picker leaves the mode unchanged. Optimal
+optimal mode. During active work, `/optimal` changes apply at the next safe step
+boundary in input order, without stopping the task. Opening or cancelling a
+picker leaves the mode unchanged. Optimal
 mode is session-only; ordinary saved model preferences remain unchanged by
 automatic selection and remain available when launching with `--provider`.
 

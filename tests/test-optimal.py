@@ -94,6 +94,8 @@ def optimal_session(tmp_path, monkeypatch):
                 "finish_reason": "stop"}]})
         requests.append(body)
         result = responses.pop(0)
+        if isinstance(result, Exception):
+            raise result
         if isinstance(result, int):
             return httpx.Response(result, json={"error": "model unavailable"})
         return httpx.Response(200, json={"choices": [{"message": result, "finish_reason": "stop"}]})
@@ -206,6 +208,94 @@ async def test_normal_mode_keeps_error_and_selected_model(optimal_session):
         assert [r["model"] for r in requests] == ["first"]
         assert session.agent.model == "first"
     finally:
+        await session.client.aclose()
+
+
+@pytest.mark.parametrize("failure", [httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadError,
+                                      httpx.ReadTimeout, httpx.WriteError, httpx.ProxyError])
+async def test_connection_failure_preserves_model_and_failure_state(optimal_session, failure):
+    session, responses, requests = optimal_session
+    responses.append(failure("Connection unavailable"))
+    routing = session.model_routing()
+    try:
+        await routing.enable()
+        with pytest.raises(APIResponseError, match="Connection unavailable"):
+            await session.agent.run("Work")
+        assert [request["model"] for request in requests] == ["first"]
+        assert session.agent.model == "first"
+        assert not any(routing.failed.values()) and not routing.failed_providers
+        assert "keeping" in session.renderer.stream.getvalue().lower()
+        responses.append({"content": "Connection restored."})
+        assert await session.agent.run("Continue") == "Connection restored."
+        assert [request["model"] for request in requests] == ["first", "first"]
+    finally:
+        await session.agent._compactor().aclose()
+        await session.client.aclose()
+
+
+async def test_preflight_connection_failure_keeps_candidates_eligible(optimal_session, monkeypatch):
+    from slipagent.api import APIConnectionError
+    session, _, _ = optimal_session
+    routing = session.model_routing()
+    monkeypatch.setattr(session.client, "model_capabilities", AsyncMock(
+        side_effect=APIConnectionError("Metadata connection failed")))
+    try:
+        with pytest.raises(APIConnectionError):
+            await routing.enable()
+        assert not any(routing.failed.values()) and not routing.failed_providers
+        assert session.client.model_capabilities.await_count == 1
+    finally:
+        await session.client.aclose()
+
+
+@pytest.mark.parametrize("command", ["/optimal on", "/optimal reset", "/optimal off"])
+async def test_optimal_command_at_tool_boundary_keeps_task_running(optimal_session, monkeypatch, command):
+    import asyncio
+    from slipagent import cli
+    from slipagent.tools.base import Tool, ToolResult
+    session, responses, requests = optimal_session
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class GatedTool(Tool):
+        name = "gated"
+        description = "Wait for the test."
+        parameters = {"type": "object", "properties": {}}
+
+        async def run(self):
+            entered.set()
+            await release.wait()
+            return ToolResult.ok("The tool ran once.")
+
+    session.registry.register(GatedTool())
+    responses.extend([
+        {"tool_calls": [{"id": "one", "type": "function", "function": {
+            "name": "gated", "arguments": "{}"}}]},
+        {"content": "Finished."},
+    ])
+    async def read(*args):
+        await asyncio.Event().wait()
+    monkeypatch.setattr(cli, "_read_line", read)
+    routing = session.model_routing()
+    await routing.enable()
+    await routing.fallback(APIResponseError("Unavailable", status_code=400))
+    task = asyncio.create_task(cli._run_request(session, "Complete this task", session.renderer.style))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        await cli._handle_command(session, command)
+        assert not session.agent.stop_requested
+        assert session.agent.model == "second"
+        release.set()
+        assert not await asyncio.wait_for(task, 5)
+        assert [request["model"] for request in requests] == ["second", "second" if command.endswith("off") else "first"]
+        assert not session.agent.stopped
+        assert not session.work.deferred_commands
+        assert "Complete this task" in json.dumps(requests[-1]["messages"])
+        assert "The tool ran once." in json.dumps(requests[-1]["messages"])
+    finally:
+        release.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await session.agent._compactor().aclose()
         await session.client.aclose()
 
 

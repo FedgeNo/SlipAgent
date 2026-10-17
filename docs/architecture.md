@@ -328,6 +328,12 @@ do not trigger it or replay tools. The replacement stays selected; rank alone
 does not move it back to a previously failed model. Stop and request limits still
 take precedence.
 
+Transport exceptions use `APIConnectionError` and retain the selected model
+after ordinary retry exhaustion. Metadata connection failures also leave routing
+exclusions unchanged. Explicit provider errors and the two-minute silent-output
+deadline remain eligible for fallback. Queued `/optimal` commands apply between
+batches in FIFO order without requesting a task stop.
+
 `prompts/model-profiles.json` applies exact-model prompt sections, optional
 tool-channel overrides, and a boolean `structured_output` switch at request
 construction. `protocol.model_response_format` supplies the same effective

@@ -62,6 +62,10 @@ class APITransportError(APIResponseError):
     """An interrupted request can be retried before accepting any actions."""
 
 
+class APIConnectionError(APITransportError):
+    """A broken connection does not establish that the selected model failed."""
+
+
 class APIAuthError(APIResponseError):
     """The API key was missing, malformed, or rejected."""
 
@@ -333,7 +337,8 @@ class APIClient:
                 raise error from exc
             except (httpx.TimeoutException, httpx.TransportError, httpx.DecodingError) as exc:
                 # Visible partial output needs an agent-level retry notification.
-                error = APITransportError(f"API provider stream interrupted: {exc}")
+                error_type = APIConnectionError if isinstance(exc, httpx.TransportError) else APITransportError
+                error = error_type(f"API provider stream interrupted: {exc}")
                 if state is not None:
                     state.attach_diagnostics(error)
                 if observed or single_attempt or not await self.wait_retry(attempt, error):
@@ -426,7 +431,8 @@ class APIClient:
                         on_raw_response(response)
                     await response.aread()
             except (httpx.TimeoutException, httpx.TransportError, httpx.DecodingError) as exc:
-                error: APIResponseError = APITransportError(f"Network error talking to API provider after {attempt + 1} attempt(s): {exc}")
+                error_type = APIConnectionError if isinstance(exc, httpx.TransportError) else APITransportError
+                error: APIResponseError = error_type(f"Network error talking to API provider after {attempt + 1} attempt(s): {exc}")
                 if single_attempt or not await self.wait_retry(attempt, error):
                     raise error from exc
                 attempt += 1

@@ -2628,6 +2628,9 @@ async def _dispatch(args: argparse.Namespace, prompt: str | None) -> int:
 
     events = JsonEventStream(sys.stdout) if getattr(args, "json_events", False) else None
     interactive = not prompt and sys.stdin.isatty() and sys.stderr.isatty() and os.environ.get("TERM") != "dumb"
+    if interactive and not args.api_key:
+        from .config import load_dotenv
+        load_dotenv()
     if interactive and not args.api_key and not active_providers():
         if not await asyncio.to_thread(_first_run_key):
             return 2

@@ -59,3 +59,28 @@ def test_tests_never_resolve_an_installation_dotenv():
 
     # Saving a key in a test must not reach a real checkout or installation file.
     assert dotenv_path().parent == data_directory()
+
+
+async def test_interactive_dispatch_reads_saved_keys_before_asking(no_keys, monkeypatch, tmp_path):
+    from slipagent.config import ConfigError, data_directory
+
+    dotenv = data_directory() / ".env"
+    dotenv.parent.mkdir(parents=True, exist_ok=True)
+    dotenv.write_text("KILO_API_KEY=saved-key\n")
+    monkeypatch.delenv("SLIPAGENT_NO_DOTENV")
+    # Registered with monkeypatch so the loaded value is removed afterwards.
+    monkeypatch.setenv("KILO_API_KEY", "")
+    monkeypatch.delenv("KILO_API_KEY")
+    calls = []
+    monkeypatch.setattr(cli, "_first_run_key", lambda: calls.append(True) or False)
+
+    async def stop(*args, **kwargs):
+        raise ConfigError("stop after the key check")
+    monkeypatch.setattr(cli, "build_session", stop)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr(cli.sys.stderr, "isatty", lambda: True, raising=False)
+    monkeypatch.setenv("TERM", "xterm")
+    args = cli.build_parser().parse_args(["--workspace", str(tmp_path), "--no-mcp", "--no-session"])
+    assert await cli._dispatch(args, None) == 2
+    assert calls == []
+    assert os.environ["KILO_API_KEY"] == "saved-key"

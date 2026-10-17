@@ -45,6 +45,25 @@ def test_saved_offsets_reproduce_reviewed_examples(calibration):
     assert updater.estimate({"FLTEval pass1": 28.9}, calibration) == model_score("mistral", "labs-leanstral-1-5-1")
 
 
+def test_coding_judge_rating_uses_its_native_scale(calibration):
+    from slipagent.modelscores import model_score
+    assert updater.estimate({"MT-Bench coding": 5.2}, calibration) == 16.2
+    assert model_score("nvidia", "zyphra/zamba2-7b-instruct") == 16.2
+    with pytest.raises(ValueError, match="between 1 and 10"):
+        updater.estimate({"MT-Bench coding": 52}, calibration)
+    with pytest.raises(ValueError, match="between 1 and 10"):
+        updater.estimate({"MT-Bench coding": 0.5}, calibration)
+
+
+@pytest.mark.parametrize("minimum, maximum", [(1, 1), (-1, 10), (0, 0), (0, float("inf")), (0, True)])
+def test_invalid_benchmark_scale_is_rejected(tmp_path, calibration, minimum, maximum):
+    calibration["benchmarks"]["MT-Bench coding"].update(min_score=minimum, max_score=maximum)
+    path = tmp_path / "calibration.json"
+    path.write_text(json.dumps(calibration))
+    with pytest.raises(ValueError):
+        updater.load_calibration(path)
+
+
 def test_new_models_use_fixed_calibration_and_preserve_existing_scores(tmp_path, table, capsys):
     before = runpy.run_path(str(table))
     data = write_input(tmp_path, [record(aliases=["host/new-model-free"]),

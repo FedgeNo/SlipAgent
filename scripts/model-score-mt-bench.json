@@ -1,0 +1,73 @@
+{
+  "reviewed": "2026-10-16",
+  "benchmark": "MT-Bench coding",
+  "metric": "Mean coding-category judge rating across both turns, 1-10",
+  "sources": {
+    "zyphra": "https://arxiv.org/html/2411.15242v1#S6.F9",
+    "lmsys": "https://huggingface.co/spaces/lmsys/mt-bench/blob/main/data/mt_bench/model_judgment/gpt-4_single.jsonl",
+    "questions": "https://huggingface.co/spaces/lmsys/mt-bench/blob/main/data/mt_bench/question.jsonl",
+    "humaneval": "https://evalplus.github.io/results.json",
+    "bigcodebench": "https://bigcode-bench.github.io/results.json",
+    "llama2_humaneval": "https://www.databricks.com/blog/introducing-dbrx-new-state-art-open-llm"
+  },
+  "samples": [
+    {
+      "model": "meta-llama/Llama-2-70b-chat-hf",
+      "rating": 3.15,
+      "rating_source": "lmsys",
+      "rating_observations": 20,
+      "benchmarks": {"HumanEval": 32.2},
+      "benchmark_source": "llama2_humaneval"
+    },
+    {
+      "model": "mistralai/Mistral-7B-Instruct-v0.3",
+      "rating": 5.4,
+      "rating_source": "zyphra",
+      "benchmarks": {"BigCodeBench complete": 27.3},
+      "benchmark_source": "bigcodebench"
+    },
+    {
+      "model": "meta-llama/Llama-3.1-8B-Instruct",
+      "rating": 6.3,
+      "rating_source": "zyphra",
+      "benchmarks": {"HumanEval": 69.5, "BigCodeBench complete": 40.5},
+      "benchmark_source": ["humaneval", "bigcodebench"]
+    },
+    {
+      "model": "google/gemma-7b-it",
+      "rating": 1.0,
+      "rating_source": "zyphra",
+      "benchmarks": {"HumanEval": 28.7},
+      "benchmark_source": "humaneval"
+    },
+    {
+      "model": "meta-llama/Llama-3.2-1B-Instruct",
+      "rating": 4.0,
+      "rating_source": "zyphra",
+      "benchmarks": {"BigCodeBench complete": 11.3},
+      "benchmark_source": "bigcodebench"
+    },
+    {
+      "model": "meta-llama/Llama-3.2-3B-Instruct",
+      "rating": 5.2,
+      "rating_source": "zyphra",
+      "benchmarks": {"BigCodeBench complete": 28.3},
+      "benchmark_source": "bigcodebench"
+    }
+  ],
+  "target": {
+    "model": "zyphra/zamba2-7b-instruct",
+    "benchmarks": {"MT-Bench coding": 5.2},
+    "sources": ["https://arxiv.org/html/2411.15242v1#S6.F9"],
+    "notes": "Figure 9 chart reading, approximately 5.2/10, not a published numeric table entry."
+  },
+  "method": "Convert existing benchmarks with saved offsets; fit the Huber location of logit(existing score / 100) minus logit(rating / 10), delta 0.75. Existing benchmark offsets and runtime model scores stay fixed.",
+  "limits": [
+    "Zyphra ratings are approximate chart readings to one decimal, with about 0.1 rating-point reading uncertainty.",
+    "Five references share a report; three are Llama models from related families. These are not six independent evaluation setups.",
+    "The ten coding questions are judged across two dependent turns. Ratings are not execution pass rates.",
+    "Validate on a held-out model, not on individual question ratings from a model included in the fit.",
+    "Calibration covers ratings 1.0-6.3; results above that range are extrapolations.",
+    "The Llama-3.2-1B plot label identifies the model; Table II's 1.2B label is inconsistent."
+  ]
+}

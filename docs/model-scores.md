@@ -73,10 +73,50 @@ For example, a high proof-engineering result may overestimate broad software
 engineering ability. Scores separated by a few points should be treated as
 close estimates. Broadly applicable shared measurements improve future reviews.
 
-Four reviewed models have no verified text-coding evidence: SEA-LION 7B
-Instruct, Zamba2 7B Instruct, and Llama 3.2 11B/90B Vision. Their identities remain
-in the table with `None` scores. They are manually selectable; visual results
-cannot justify automatic text-coding placement.
+The MT-Bench extension below adds Zamba2 at 16.2. Llama 3.2 11B/90B Vision use
+the shared text-model HumanEval results, 72.6/80.5, carried into
+[Amazon's comparison](https://arxiv.org/html/2506.12103v1#S2.T7), producing 28.9/38.8.
+[Meta's release](https://ai.meta.com/blog/llama-3-2-connect-2024-vision-edge-mobile-devices/)
+states that the language parameters and text capabilities are preserved. These
+are shared-backbone estimates, not independent coding measurements of the vision
+checkpoints. Visual benchmark scores remain excluded.
+
+SEA-LION v1 7B Instruct remains the one unscored model. Its published linguistic
+evaluations and code-security risk measurements do not establish a comparable
+code-correctness result. Its `None` score keeps manual selection available and
+prevents an unsupported automatic placement.
+
+## MT-Bench Coding Conversion
+
+Use the **coding category averaged across both turns**, on its native 1–10
+rating scale. Overall MT-Bench averages mix unrelated categories. This is a
+judge rating, not an execution pass percentage.
+
+The [saved paired evidence](../scripts/model-score-mt-bench.json) contains six
+models: Llama 2 70B Chat, Mistral 7B Instruct v0.3, Llama 3.1 8B Instruct,
+Gemma 7B IT, and Llama 3.2 1B/3B Instruct. Their existing HumanEval and/or
+BigCodeBench results determine their coding scores using the original saved
+calibration. Fit the Huber location of
+`logit(existing_score / 100) - logit(coding_rating / 10)`, holding the original
+benchmark offsets fixed. The new offset is **−1.7248025398743945**.
+
+Leaving each entire model out and fitting the other five produces mean absolute
+error **2.75 score points**, median **2.45**, and maximum **6.33**. This check
+predicts already estimated coding scores, not measured task success. Five
+ratings come from one report and three models are related Llamas, so the sample
+provides limited independent evidence.
+
+[Zyphra's Figure 9](https://arxiv.org/html/2411.15242v1#S6.F9) supplies approximate
+chart readings for Zamba2 and five references. Zamba2's roughly **5.2/10** gives
+**16.2/100**. Reading the chart as 5.1–5.3 changes that to 15.6–16.7; omitting
+one calibration model at a time changes it to 14.2–18.5. These are sensitivity
+checks, not confidence intervals. The sixth rating is calculated from LMSYS's
+20 published coding judgments for Llama 2 70B Chat. No new inference is run.
+Calibration covers ratings 1.0–6.3; higher ratings require extrapolation.
+
+Future inputs can use `"benchmarks": {"MT-Bench coding": 5.2}` directly. The
+updater validates the 1–10 range and uses the saved conversion. Existing model
+scores and benchmark offsets remain unchanged.
 
 ## Add a model without recalculating existing scores
 
@@ -91,7 +131,8 @@ and performs no network requests or inference.
    best-of-many results. Keep source links in the input for the next review.
 2. Copy [the example input](../scripts/model-score-example.json), replacing the
    model ID, results, source links, and optional exact provider aliases. A file
-   may contain one object or an array of objects. Percentages use the 0–100 scale.
+   may contain one object or an array of objects. Percentages use the 0–100 scale;
+   MT-Bench coding ratings use 1–10.
 3. Preview, then apply:
 
    ```bash

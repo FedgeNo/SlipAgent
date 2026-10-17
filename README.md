@@ -206,10 +206,11 @@ model-specific failures are tracked separately for those two uses.
 New free catalog models without a score remain manually selectable. SlipAgent
 announces their release and asks you to update SlipAgent for updated scores.
 Scores are refreshed with software updates, without model calls or automatic
-benchmark collection at runtime. The October 16 review scores 65 models, including
-Reflection Beam and Xing 4.0. SEA-LION 7B Instruct, Zamba2 7B Instruct, and the
-Llama 3.2 11B/90B Vision models remain unscored because the review found no verified
-text-coding results for them. Known evidence gaps do not trigger new-release notices.
+benchmark collection at runtime. The October 16 review scores 68 models, including
+Reflection Beam, Xing 4.0, Zamba2, and the Llama 3.2 11B/90B Vision models.
+Zamba2 uses a calibrated MT-Bench coding rating; the Llamas use their preserved
+text-model results. SEA-LION v1 7B Instruct remains unscored because no comparable
+code-correctness result was found. Known evidence gaps do not trigger new-release notices.
 With `GEMINI_BILLING_TIER=paid`, Google's billed Gemini IDs are excluded from automatic
 free selection; the always-free Gemma 4 models remain eligible.
 

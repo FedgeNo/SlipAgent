@@ -45,6 +45,7 @@ SCORES: dict[str, float | None] = {
     "nvidia/nemotron-3-nano-30b-a3b": 43.9,
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning": 43.5,
     "liquid/lfm-2.5-2.6b": 39.6,
+    "meta/llama-3.2-90b-vision-instruct": 38.8,
     "mistralai/codestral-22b-instruct-v0.1": 32.8,
     "nvidia/llama-3.1-nemotron-70b-instruct": 31.4,
     "deepseek-ai/deepseek-coder-6.7b-instruct": 30.8,
@@ -52,6 +53,7 @@ SCORES: dict[str, float | None] = {
     "meta/codellama-70b": 30.4,
     "nvidia/llama-3.1-nemotron-51b-instruct": 30.2,
     "nvidia/nemotron-4-340b-instruct": 29.5,
+    "meta/llama-3.2-11b-vision-instruct": 28.9,
     "ai21labs/jamba-1.5-large-instruct": 27.6,
     "google/gemma-3-4b-it": 27.6,
     "nvidia/mistral-nemo-minitron-8b-8k-instruct": 27.6,
@@ -66,6 +68,7 @@ SCORES: dict[str, float | None] = {
     "ibm/granite-8b-code-instruct": 17.4,
     "bigcode/starcoder2-15b": 16.8,
     "stealth/glyph-cluster": 16.3,
+    "zyphra/zamba2-7b-instruct": 16.2,
     "mistralai/mistral-7b-instruct-v0.3": 15.6,
     "mistralai/mixtral-8x22b-v0.1": 11.2,
     "google/codegemma-7b": 11.0,
@@ -75,9 +78,6 @@ SCORES: dict[str, float | None] = {
     "google/gemma-2b": 4.1,
     "google/recurrentgemma-2b": 4.0,
     "aisingapore/sea-lion-7b-instruct": None,
-    "meta/llama-3.2-11b-vision-instruct": None,
-    "meta/llama-3.2-90b-vision-instruct": None,
-    "zyphra/zamba2-7b-instruct": None,
 }
 
 # Exact aliases preserve identity without guessing about new variants or routers.

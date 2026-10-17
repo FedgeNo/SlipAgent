@@ -49,6 +49,10 @@ def load_calibration(path: Path) -> dict[str, Any]:
         if not isinstance(row, dict):
             raise ValueError(f"Invalid calibration for {name}")
         number(row.get("offset"), f"{name} offset")
+        minimum = number(row.get("min_score", 0), f"{name} min_score")
+        maximum = number(row.get("max_score", 100), f"{name} max_score")
+        if not 0 <= minimum < maximum:
+            raise ValueError(f"Invalid score range for {name}")
         if number(row.get("overlap_models"), f"{name} overlap_models") < 2:
             raise ValueError(f"{name} needs at least two models with shared benchmark results")
     if benchmarks[data["anchor"]]["offset"] != 0:
@@ -65,11 +69,13 @@ def estimate(results: object, calibration: dict[str, Any]) -> float:
     for name, raw in results.items():
         if name not in calibration["benchmarks"]:
             raise ValueError(f"Uncalibrated benchmark {name!r}; add shared-model evidence before using it")
+        benchmark = calibration["benchmarks"][name]
         score = number(raw, name)
-        if not 0 <= score <= 100:
-            raise ValueError(f"{name} must be a percentage between 0 and 100")
-        probability = min(1 - clip, max(clip, score / 100))
-        values.append(math.log(probability / (1 - probability)) + calibration["benchmarks"][name]["offset"])
+        minimum, maximum = benchmark.get("min_score", 0), benchmark.get("max_score", 100)
+        if not minimum <= score <= maximum:
+            raise ValueError(f"{name} must be between {minimum} and {maximum}")
+        probability = min(1 - clip, max(clip, score / maximum))
+        values.append(math.log(probability / (1 - probability)) + benchmark["offset"])
     ability = sum(values) / len(values)
     delta = calibration["huber_delta"]
     for _ in range(5000):

@@ -63,6 +63,22 @@
         91.5
       ]
     },
+    "MT-Bench coding": {
+      "offset": -1.7248025398743945,
+      "min_score": 1,
+      "max_score": 10,
+      "observations": 6,
+      "overlap_models": 6,
+      "observed_score_range": [1.0, 6.3],
+      "evidence": "model-score-mt-bench.json",
+      "method": "Huber offset against existing coding scores, holding the original calibration fixed.",
+      "validation": {
+        "count": 6,
+        "mean_absolute_error": 2.7479596531644503,
+        "median_absolute_error": 2.4510381364032616,
+        "maximum_absolute_error": 6.333700272053781
+      }
+    },
     "SWE Verified": {
       "offset": 0.0,
       "observations": 27,
@@ -101,6 +117,7 @@
     "Synthetic comparison score, not a measured pass rate or task success probability.",
     "LiveCodeBench releases and date windows are pooled; harness and reasoning budgets differ.",
     "Single-benchmark, specialist-proof, and old-model extrapolations are less reliable.",
+    "MT-Bench uses coding-category judge ratings on a 1-10 scale; chart readings and shared model families limit precision.",
     "Calibration includes paid reference models; runtime eligibility still requires a free endpoint."
   ]
 }

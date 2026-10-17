@@ -52,10 +52,7 @@ def test_reviewed_free_catalog_exposes_only_documented_benchmark_gaps():
                for model in coding_models([ModelInfo(mid, provider=provider) for mid in ids])
                if model.score is None and model.id not in MODEL_ROUTERS]
     # Visual and general-knowledge results cannot supply text-coding scores.
-    assert missing == ["nvidia::aisingapore/sea-lion-7b-instruct",
-                       "nvidia::meta/llama-3.2-11b-vision-instruct",
-                       "nvidia::meta/llama-3.2-90b-vision-instruct",
-                       "nvidia::zyphra/zamba2-7b-instruct"]
+    assert missing == ["nvidia::aisingapore/sea-lion-7b-instruct"]
     assert all(reviewed_model(*selector.split("::", 1)) for selector in missing)
 
 

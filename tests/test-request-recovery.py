@@ -41,6 +41,35 @@ def configured_client(handle, retry):
     return client
 
 
+async def test_recovered_logging_saves_response_and_clears_stale_warning(tmp_path):
+    from slipagent.diagnostics import RequestDiagnostics
+
+    diagnostics = RequestDiagnostics()
+    diagnostics.use_directory(tmp_path / "requests")
+    diagnostics.__dict__.pop("_rolling_quota", None)
+    diagnostics.quota = 32 * 1024 * 1024
+    diagnostics.error = f"Request diagnostic quota of {diagnostics.quota} bytes reached; existing records are preserved"
+    registry = ToolRegistry(services={"request_diagnostics": diagnostics})
+    registry.context_notes["request_diagnostics"] = diagnostics.error
+
+    def handle(request):
+        summary = summary_response(json.loads(request.content))
+        if summary is not None:
+            return httpx.Response(200, json=summary)
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Stream())
+
+    async with configured_client(handle, RetryPolicy(0, 0, 0)) as client:
+        agent = Agent(client, registry, "test")
+        try:
+            assert await agent.run("continue") == "done"
+            await agent.wait_for_compaction()
+            assert "request_diagnostics" not in registry.context_notes
+            assert diagnostics.listing()[0]["outcome"] == "accepted"
+            assert '"content": "done"' in diagnostics.read(1)
+        finally:
+            await registry.aclose()
+
+
 async def test_partial_tool_stream_retries_once_without_replaying_thoughts_or_tools():
     requests, events = [], []
     tool = RecordingTool()

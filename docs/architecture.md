@@ -1022,12 +1022,19 @@ and reasoning blocks are assembled by index; text fragments join into continuous
 fields. Interrupted and rejected responses are retained too. Exact final request
 JSON is gzip-compressed and deduplicated by SHA-256; no authentication headers are
 captured. Pending records survive a crash and remain visibly unsettled. Atomic
-owner-only writes and fsync preserve earlier records when storage fails. A
-32 MiB quota stops further diagnostic writes with a warning rather than blocking
-ordinary work. These files are not history steps. `/requests [attempt]` inspects
+owner-only writes and fsync preserve earlier records when storage fails. The
+archive targets 32 MiB by default, evicting oldest attempts after each durable
+write. Eviction removes attempt metadata, its response, and request snapshots
+whose last reference was removed. Shared request snapshots remain readable.
+The newest attempt stays complete even when it alone exceeds the target;
+later attempts can evict it. Unknown files are preserved. Storage errors warn
+without blocking ordinary work. Compatible reload clears the former hard-limit
+error and retains custom byte targets and unrelated I/O errors. A subsequent
+successful attempt clears the stale model-facing diagnostic warning. These files
+are not history steps. `/requests [attempt]` inspects
 saved attempts. Reset starts a new directory; resume reuses the saved session's
 directory, continues after its highest attempt number, and counts existing file
-sizes toward the quota. Even incomplete attempt files reserve their numbers.
+sizes toward the rolling target. Even incomplete attempt files reserve their numbers.
 `--no-session` uses temporary storage.
 
 ## Terminal Components and Invocation Identity

@@ -464,7 +464,7 @@ Enable `/danger on`, then explicitly ask for the harness change you want.
 Relative tool paths still refer to the project workspace; the agent must use
 the supplied installation location for harness files. `/danger off` removes
 this section from subsequent requests and restores built-in path confinement.
-Previously delivered information remains in saved request diagnostics.
+Previously delivered information can remain in retained request diagnostics.
 Making the harness itself the workspace also permits editing it without Danger
 Mode, but does not add the Danger Mode installation section.
 
@@ -1477,10 +1477,12 @@ into continuous fields rather than individual fragments. Provider metadata and
 tool-call fields are retained, including partial responses on failure. Request JSON
 is deduplicated and gzip-compressed in private files beside the session journal,
 without authentication headers. These diagnostics are never supplied as history
-or sent for compaction. Diagnostic writes have a separate **32 MiB quota**;
-reaching it stops logging and displays a warning. Reset starts a new directory.
-Resuming preserves existing attempts, continues their numbering, and counts
-saved files toward the same quota.
+or sent for compaction. Diagnostics use a **32 MiB rolling target**: oldest attempts
+are removed as new ones are saved. The newest attempt keeps its complete request
+and response even if it alone exceeds the target. Shared request snapshots remain
+until their last retained attempt is removed. Conversation history is unaffected.
+Storage failures display a warning and preserve existing records. Reset starts a
+new directory. Resuming continues the saved attempt numbering and rolling retention.
 `--no-session` uses temporary files removed on reset/exit. Treat request logs as
 private project data, since they contain the same text sent to the model.
 

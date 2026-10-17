@@ -115,6 +115,8 @@ class RequestDriver:
                     if diagnostics.error and self.registry.context_notes.get("request_diagnostics") != diagnostics.error:
                         self.registry.context_notes["request_diagnostics"] = diagnostics.error
                         self.hooks.emit(AgentEvent(kind="warning", text=f"Request diagnostics: {diagnostics.error}"))
+                    elif not diagnostics.error:
+                        self.registry.context_notes.pop("request_diagnostics", None)
             def record_failure(outcome: str, detail: str, response: str, usage: Usage) -> None:
                 nonlocal step, run_step, step_usage, start_next_step
                 recorder = self.registry.services["request_failure_recorder"]

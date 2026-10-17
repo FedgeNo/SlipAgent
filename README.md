@@ -1223,9 +1223,10 @@ The working indicator shows a moon-phase spinner beside `Working (esc to interru
 The spinner uses eight emoji frames of two terminal columns each and also appears
 in the terminal title. Press Escape outside a chooser to interrupt the active step immediately. It
 cancels model requests, active tools, background commands, and pending summaries;
-queued settings are discarded and no follow-up step starts automatically.
+queued settings are discarded. Once cancellation finishes, queued user messages
+start the next request; an empty queue leaves the agent idle.
 Completed tool results remain stored, while interrupted or unstarted calls are
-recorded explicitly. Queued user messages remain available for later continuation.
+recorded explicitly.
 An atomic file operation already running finishes safely before cleanup settles;
 the terminal stays responsive. Escape inside a chooser only closes that chooser
 and leaves agent work running. `/stop` retains its gentler step-boundary behavior.

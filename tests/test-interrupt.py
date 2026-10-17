@@ -1,4 +1,4 @@
-"""Escape ends the step without discarding results or launching another step."""
+"""Escape cancels active work and hands off to waiting user input after cleanup."""
 
 from slipagent.types import content_text
 
@@ -87,7 +87,8 @@ async def test_model_change_pause_resumes_and_preserves_submitted_input(tmp_path
 
 
 @pytest.mark.parametrize("phase", ["request", "tools"])
-async def test_interrupt_preserves_results_and_prevents_continuation(tmp_path, monkeypatch, metadata_server, phase):
+@pytest.mark.parametrize("queued", [False, True])
+async def test_interrupt_preserves_results_and_runs_only_queued_input(tmp_path, monkeypatch, metadata_server, phase, queued):
     session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
     session.renderer.stream = io.StringIO()
     entered = asyncio.Event()
@@ -96,6 +97,10 @@ async def test_interrupt_preserves_results_and_prevents_continuation(tmp_path, m
 
     class BlockingClient(StubClient):
         async def chat(self, **kwargs):
+            if entered.is_set():
+                assert cancelled.is_set()
+                assert "interrupt_requested" not in session.registry.services
+                return await super().chat(**kwargs)
             entered.set()
             try:
                 await asyncio.Event().wait()
@@ -122,7 +127,7 @@ async def test_interrupt_preserves_results_and_prevents_continuation(tmp_path, m
     calls = [call("probe_interrupt", value=value) for value in ["done", "blocked", "unstarted"]]
     for index, tool_call in enumerate(calls):
         tool_call.id = str(index)
-    client = BlockingClient([]) if phase == "request" else StubClient([completion(tool_calls=calls), completion("Continued.")])
+    client = BlockingClient([completion("Continued.")]) if phase == "request" else StubClient([completion(tool_calls=calls), completion("Continued.")])
     session.agent.client = client
 
     async def read(*arguments):
@@ -132,7 +137,8 @@ async def test_interrupt_preserves_results_and_prevents_continuation(tmp_path, m
     step = asyncio.create_task(cli._run_request(session, "Inspect", session.renderer.style))
     try:
         await asyncio.wait_for(entered.wait(), 2)
-        session.agent.enqueue("Queued follow-up")
+        if queued:
+            session.agent.enqueue("Queued follow-up")
         await cli._handle_command(session, "/danger")
         cli._request_interrupt(session)
         cleanup = session.extensions["interrupt_task"]
@@ -141,13 +147,16 @@ async def test_interrupt_preserves_results_and_prevents_continuation(tmp_path, m
         assert await asyncio.wait_for(step, 3) is False
         assert cancelled.is_set()
         assert not session.agent.running
-        assert session.agent.pending == ["Queued follow-up"]
+        assert not session.agent.has_queued_input
+        delivered = [message.content for message in session.agent.messages if message.role == "user"]
+        assert ("Queued follow-up" in delivered) is queued
         assert not session.workspace.access.danger
         assert not session.extensions.get("deferred_commands")
-        assert not session.registry.services["step_compactor"].jobs
-        assert not client.summary_calls
+        if not queued:
+            assert not session.registry.services["step_compactor"].jobs
+            assert not client.summary_calls
         if phase == "tools":
-            assert len(client.calls) == 1
+            assert len(client.calls) == 1 + int(queued)
             assert ran == ["done", "blocked"]
             results = [message for message in session.agent.messages if message.role == "tool"]
             assert len(results) == 3
@@ -245,16 +254,21 @@ async def test_interrupt_during_deferred_command_discards_remaining_commands(tmp
         await cli._shutdown(session)
 
 
-async def test_interrupt_as_turn_finishes_does_not_launch_pending_prompt(tmp_path, monkeypatch, metadata_server):
+async def test_interrupt_as_turn_finishes_launches_pending_prompt(tmp_path, monkeypatch, metadata_server):
     session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
     session.renderer.stream = io.StringIO()
     runs = []
 
     async def run(agent, prompt, **kwargs):
         runs.append(prompt)
-        agent.enqueue("Pending correction")
-        # Escape arrives after completion, before the controller handles it.
-        asyncio.get_running_loop().call_soon(cli._request_interrupt, session)
+        if len(runs) == 1:
+            agent.enqueue("Pending correction")
+            # Escape arrives after completion, before the controller handles it.
+            asyncio.get_running_loop().call_soon(cli._request_interrupt, session)
+        else:
+            assert "interrupt_requested" not in session.registry.services
+            agent._drain_pending()
+            agent._queued_messages_sent()
         return "Finished"
 
     async def read(*arguments):
@@ -264,7 +278,7 @@ async def test_interrupt_as_turn_finishes_does_not_launch_pending_prompt(tmp_pat
     monkeypatch.setattr(cli, "_read_line", read)
     try:
         assert await asyncio.wait_for(cli._run_request(session, "Inspect", session.renderer.style), 2) is False
-        assert runs == ["Inspect"]
-        assert session.agent.pending == ["Pending correction"]
+        assert runs == ["Inspect", ""]
+        assert not session.agent.has_queued_input
     finally:
         await cli._shutdown(session)

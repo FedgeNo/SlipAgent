@@ -532,8 +532,9 @@ read-only command tasks, background jobs, and compactor requests. Cleanup is
 retained in `Session.extensions`; repeated Escape does not cancel cleanup itself.
 The cancelled batch drains its tools and records completed, interrupted, and
 unstarted calls in model order. Interrupted archival persists originals without
-starting a summary request. Deferred commands are discarded; queued user prompts
-remain pending and no automatic continuation occurs. Worker-thread operations
+starting a summary request. Deferred commands are discarded. After an active
+agent run finishes cancellation, queued user prompts start a new run unless the
+session is exiting; an empty queue leaves it idle. Worker-thread operations
 retain their safe drain contract. Chooser bindings capture Escape before the
 interrupt binding, so closing a chooser never interrupts agent work.
 

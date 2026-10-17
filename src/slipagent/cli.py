@@ -1271,6 +1271,13 @@ async def _run_request(session: Session, prompt: str, style: Style) -> bool:
             if agent_task in done:
                 if session.extensions.get("interrupt_requested"):
                     await _wait_for_interrupt(session)
+                    if not exiting and session.agent.has_queued_input:
+                        renderer.emit(style.dim("  Starting queued input."))
+                        if renderer.terminal is not None:
+                            renderer.terminal.set_working(True)
+                        agent_task = asyncio.create_task(session.agent.run(""))
+                        session.work.agent_task = agent_task
+                        continue
                     break
                 answer = agent_task.result()
                 resume, commands_exit = await _apply_deferred_commands(session, exiting=exiting and not eof)

@@ -1165,23 +1165,22 @@ def _fit_readout(text: str, columns: int, *, keep_end: bool = False) -> str:
 
 
 def _status_bar(session: Session, style: Style, *, columns: int | None = None) -> str:
-    """Bottom readout: workspace CWD, active model, and free calls left."""
+    """Bottom readout: workspace CWD and active model."""
     cwd = _cwd_readout(session.workspace)
-    quota = session.free_calls
-    free = f"Free: {'—' if quota is None else quota}"
-    model = f"Model: {session.agent.model}"
+    model = session.agent.model
     if isinstance(getattr(session, "client", None), APIClient):
-        model += f" ({session.client.provider})"
+        model = f"{session.client.provider}::{model}"
+    model = f"Model: {model}"
     if columns is None:
         columns = shutil.get_terminal_size(fallback=(0, 0)).columns
     danger = _danger_suffix(session, Style(False))
     available = max(0, columns - wcswidth(danger)) if columns else 0
     if columns:
-        room = available - wcswidth(model + free + _READOUT_SEP * 2)
+        room = available - wcswidth(model + _READOUT_SEP)
         cwd = _fit_readout(cwd, room, keep_end=True) if room >= 4 else ""
         if not cwd:
-            model = _fit_readout(model, available - wcswidth(free + _READOUT_SEP))
-    parts = [part for part in (cwd, model, free) if part]
+            model = _fit_readout(model, available)
+    parts = [part for part in (cwd, model) if part]
     return (style.dim(_fit_readout(_READOUT_SEP.join(parts), available) if columns else _READOUT_SEP.join(parts))
             + style.red(_fit_readout(danger, columns, keep_end=True) if columns else danger))
 

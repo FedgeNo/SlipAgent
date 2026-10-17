@@ -132,7 +132,7 @@ when entering prompts, command arguments, configuration values, or file edits.
 
 On an interactive terminal, seven fixed rows sit at the bottom of the screen:
 a pulsing activity indicator, five rows for wrapping input,
-and the readout `<cwd>  │  Model: <slug>  │  Free: <n>`. Background colors distinguish this area from the scrolling transcript. Output and redraws preserve
+and the readout `<cwd>  │  Model: <provider>::<model>`. Background colors distinguish this area from the scrolling transcript. Output and redraws preserve
 partially typed input. The controls have a dark blue background, menus use
 dark purple, and the prompt retains its dark green background. Input and output wrap at word boundaries to the
 terminal width and reflow when you resize it. Wrapping preserves the submitted prompt's
@@ -383,9 +383,8 @@ batch therefore cannot bypass its rules. Unreadable guidance reports its path.
 Shell commands and external tools are not parsed for affected file paths, so the
 model must discover applicable instructions before using them to change files.
 
-The startup screen lists the available commands and basic usage. The free-call
-count is fetched from OpenRouter at startup and refreshed every 15 minutes,
-including while idle or working.
+The startup screen lists the available commands and basic usage. Startup reports
+OpenRouter's free-call count when it is available.
 
 ### Command Menu
 

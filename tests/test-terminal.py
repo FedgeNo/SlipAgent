@@ -2807,12 +2807,12 @@ async def test_danger_status_suffix_is_red_last_and_survives_resize(display, tmp
                         input=pipe, output=output, status_suffix=lambda: _danger_suffix(session, Style(True)))
         task = asyncio.create_task(ui.run())
         try:
-            await wait_until(lambda: "Free: 42" in snapshot()[23])
+            await wait_until(lambda: "Model: stub/model" in snapshot()[23])
             assert "Danger Mode" not in snapshot()[23]
             session.workspace.access.danger = True
             ui.app.invalidate()
             await wait_until(lambda: " | Danger Mode" in snapshot()[23])
-            assert snapshot()[23].index("Free: 42") < snapshot()[23].index("Danger Mode")
+            assert snapshot()[23].index("Model: stub/model") < snapshot()[23].index("Danger Mode")
             start = snapshot()[23].index("Danger Mode")
             assert all(screen.buffer[23][column].fg == "ff929b" for column in range(start, start + len("Danger Mode")))
             choice = asyncio.create_task(ui.choose("Commands", [("one", "One")]))
@@ -2825,7 +2825,7 @@ async def test_danger_status_suffix_is_red_last_and_survives_resize(display, tmp
             size[0] = Size(rows=24, columns=35)
             screen.resize(lines=24, columns=35)
             ui.app._on_resize()
-            await wait_until(lambda: " | Danger Mode" in snapshot()[23] and "Free: 42" in snapshot()[23])
+            await wait_until(lambda: " | Danger Mode" in snapshot()[23] and "Model: stub/model" in snapshot()[23])
             session.workspace.access.danger = False
             ui.app.invalidate()
             await wait_until(lambda: "Danger Mode" not in snapshot()[23])

@@ -127,8 +127,8 @@ The model can explain its work alongside those calls.
 Free inference still has availability and request limits; see
 [OpenRouter's current limits](https://openrouter.ai/docs/api_reference/limits).
 SlipAgent refreshes key information at startup and every 15 minutes, including
-while idle or working. The footer shows the free-call count when supplied by
-OpenRouter; `/key show` displays key information and `/cost` shows session token
+while idle or working. `/key show` displays key information, including the
+free-call count when OpenRouter supplies it, and `/cost` shows session token
 usage and reported spend.
 
 ## API Providers

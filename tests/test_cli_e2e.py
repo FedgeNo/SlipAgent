@@ -878,12 +878,13 @@ def test_model_reply_starts_with_a_gap_after_tool_output(project_dir: Path) -> N
     assert any("⚙ read_file" in line for line in lines[:answer])
 
 
-def test_status_bar_shows_cwd_and_free_calls(project_dir: Path) -> None:
+def test_status_bar_shows_cwd_and_provider_model(project_dir: Path) -> None:
     with StubOpenRouter([text_step("ok")]) as stub:
         proc = run_repl_commands(project_dir, ["go"], "--base-url", stub.base_url)
 
     assert proc.returncode == 0, proc.stderr
-    assert "Free: " in proc.stderr
+    assert "Model: openrouter::" in proc.stderr
+    assert "Free: " not in proc.stderr
     assert "│" in proc.stderr
 
 
@@ -895,7 +896,6 @@ def test_status_bar_is_separated_from_the_prompt(project_dir: Path) -> None:
     lines = proc.stderr.splitlines()
     prompt = next(i for i, line in enumerate(lines) if line.strip() == ">")
     assert lines[prompt + 1] == ""
-    assert "Free: " in lines[prompt + 2]
     assert "Model: " in lines[prompt + 2]
     assert ">" not in lines[prompt + 2]
     submitted = lines.index("> go")
@@ -913,7 +913,7 @@ def test_status_bar_names_the_working_directory(project_dir: Path) -> None:
         proc = run_repl_commands(project_dir, ["go"], "--base-url", stub.base_url)
 
     assert proc.returncode == 0, proc.stderr
-    line = next(line for line in proc.stderr.splitlines() if "Free: " in line)
+    line = next(line for line in proc.stderr.splitlines() if "│  Model: " in line)
     cwd, _, _ = line.partition("│")
     cwd = cwd.strip()
     assert cwd, proc.stderr
@@ -958,9 +958,7 @@ def test_status_bar_elides_the_cwd_when_the_terminal_is_tight(
         )
 
     assert proc.returncode == 0, proc.stderr
-    line = next(line for line in proc.stderr.splitlines() if "Free: " in line)
-    assert "Free: " in line
-    assert "Model: " in line
+    line = next(line for line in proc.stderr.splitlines() if "Model: openrouter::" in line)
     assert len(line) <= 30
     assert any(line.strip() == ">" for line in proc.stderr.splitlines())
 
@@ -979,7 +977,7 @@ def test_prompt_and_status_never_share_a_line_with_output(project_dir: Path) -> 
         if re.search(r"(?:^|\s)>(?:\s|$)", line) is None:
             continue
         # A prompt or queued-input echo starts at its own marker.
-        assert line.lstrip().startswith(">") or "Free: " in line, line
+        assert line.lstrip().startswith(">") or "Model: " in line, line
 
 
 def test_mid_turn_input_reaches_model_without_queue_label(project_dir: Path) -> None:
@@ -1587,7 +1585,7 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
                 assert proc.poll() is None, "CLI exited before the expected state"
             pytest.fail("terminal state timed out: " + repr(screen.display))
         try:
-            wait_for(lambda: "Model: stub/one" in screen.display[23] and "Working" in screen.display[17])
+            wait_for(lambda: "Model: openrouter::stub/one" in screen.display[23] and "Working" in screen.display[17])
             assert screen.title.endswith(f"{project_dir} | SlipAgent")
             wait_for(lambda: "/quit" in "\n".join(screen.display[:17]))
             startup = "\n".join(screen.display[:17])
@@ -1643,7 +1641,7 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             assert [m["tool_call_id"] for m in history if m["role"] == "tool"] == ["call_1", "call_2"]
             assert "queued followup" in [context_body(m["content"]) for m in history if m["role"] == "user"]
             os.write(master, b"/model stub/two\r")
-            wait_for(lambda: "Model: stub/two" in screen.display[23])
+            wait_for(lambda: "Model: openrouter::stub/two" in screen.display[23])
             assert screen.title.endswith("Work in progress | SlipAgent")
             os.write(master, b"/reset\r")
             wait_for(lambda: screen.title == f"{project_dir} | SlipAgent")

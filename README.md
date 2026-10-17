@@ -9,8 +9,8 @@ finished, you stop it, or the step limit is reached. By default it picks the
 best-scoring free model available to your API keys and moves to the next one
 when a model fails.
 
-- **Free-model workflow:** automatic selection of the best free model, quick
-  switching, and the remaining free-call quota when the provider reports it.
+- **Free-model workflow:** automatic selection of the best free model and quick
+  switching.
 - **Resumable work:** sessions are saved as you go; resume, fork, or rewind
   file edits later. Interrupted tools are never replayed automatically.
 - **Coding tools:** file editing, search, shell commands, Git, optional web

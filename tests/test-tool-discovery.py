@@ -274,3 +274,41 @@ def test_restoring_tool_use_scopes_rejected_call_ids_to_their_batch(rejected_fir
     messages = rejected + accepted if rejected_first else accepted + rejected
     selected = catalog.select([OptionalTool().spec, unloaded.spec], messages)
     assert selected == {"optional_record"}
+
+
+def test_archived_history_restores_loading_without_reading_result_text(monkeypatch):
+    from slipagent.context import ConversationHistory
+    from slipagent.sources import FileText
+    from slipagent.turnstore import TurnStore
+
+    unloaded = OptionalTool()
+    unloaded.name = "unloaded_record"
+    messages = [
+        Message.user("start"),
+        Message.assistant(None, [ToolCall("call_1", "unloaded_record", {})]),
+        # Long enough to be archived as a file reference rather than inline text.
+        Message.tool_result("call_1", {"tool": "unloaded_record", "call_id": "call_1", "status": "error",
+                                      "content": UNAVAILABLE_BATCH + "x" * 2000}),
+        Message.assistant(None, [ToolCall("call_2", "load_tools", {"names": ["optional_record"]})]),
+        Message.tool_result("call_2", {"tool": "load_tools", "call_id": "call_2", "status": "success",
+                                      "content": {"loaded": ["optional_record"], "definitions": [], "errors": {}}}),
+        Message.assistant(None, [ToolCall("call_3", "read_file", {"path": "a"})]),
+        Message.tool_result("call_3", {"tool": "read_file", "call_id": "call_3", "status": "success",
+                                      "content": "y" * 5000}),
+    ]
+    specs = [OptionalTool().spec, unloaded.spec]
+    expected = ToolCatalog().select(specs, messages)
+    history = ConversationHistory()
+    history.sync(messages)
+    history.store = TurnStore()
+    try:
+        for step in history.steps:
+            history.store.archive(step, messages)
+        reads = []
+        original = FileText.chunks
+        monkeypatch.setattr(FileText, "chunks", lambda self: (reads.append(self.characters), original(self))[1])
+        assert ToolCatalog().select(specs, messages) == expected == {"optional_record"}
+        # Only the rejected result's prefix is read; ordinary archived results stay on disk.
+        assert reads == [len(UNAVAILABLE_BATCH) + 2000]
+    finally:
+        history.clear()

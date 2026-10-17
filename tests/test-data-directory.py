@@ -55,15 +55,14 @@ def test_explicit_override_wins(tmp_path, monkeypatch):
     assert SessionJournal(str(tmp_path / "project")).directory.parent == root
 
 
-def test_user_data_dotenv_is_global_but_project_settings_win(tmp_path):
+def test_user_data_dotenv_is_used_and_project_dotenv_is_not(tmp_path, monkeypatch):
     root = data_directory()
     root.mkdir(parents=True, exist_ok=True)
     global_env = root / ".env"
     global_env.write_text("DUMMY_SETTING=global\n")
     project = tmp_path / "project"
     project.mkdir()
-    assert find_dotenv(project) == global_env
-    project_env = project / ".env"
-    project_env.write_text("DUMMY_SETTING=project\n")
-    assert find_dotenv(project) == project_env
-    assert dotenv_path(project) == project_env
+    (project / ".env").write_text("DUMMY_SETTING=project\n")
+    monkeypatch.chdir(project)
+    assert find_dotenv() == global_env
+    assert dotenv_path() == global_env

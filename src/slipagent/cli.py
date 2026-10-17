@@ -2359,6 +2359,22 @@ def main(argv: list[str] | None = None) -> int:
         return 130
 
 
+def _notice_ignored_project_settings(args: argparse.Namespace) -> None:
+    from .config import _dotenv_disabled, dotenv_path, ignored_project_settings
+
+    if _dotenv_disabled(os.environ):
+        return
+    start = Path(getattr(args, "workspace", None) or os.environ.get("SLIPAGENT_WORKSPACE") or ".").expanduser()
+    try:
+        ignored = ignored_project_settings(start)
+    except (OSError, ConfigError, APIConfigError):
+        return
+    if ignored is not None:
+        path, names = ignored
+        print(literal(f"slipagent: ignoring {', '.join(names)} in {path}; project .env files are not read. "
+                      f"Put SlipAgent settings in {dotenv_path()} or export them."), file=sys.stderr)
+
+
 async def _dispatch(args: argparse.Namespace, prompt: str | None) -> int:
     """Run everything inside a single event loop.
 
@@ -2366,6 +2382,7 @@ async def _dispatch(args: argparse.Namespace, prompt: str | None) -> int:
     execution cannot live in separate `asyncio.run` calls.
     """
     asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=4, thread_name_prefix="slipagent"))
+    _notice_ignored_project_settings(args)
     if args.list_models:
         try:
             return await _list_models(args)

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..sources import TextSource, materialize
+from ..turnstore import resident_content
 from ..types import Message, ToolSpec
 from .base import Tool, ToolRegistry, ToolResult
 
@@ -23,16 +25,19 @@ class ToolCatalog:
         # whose executed tools restore loading without a load_tools result.
         rejected: set[str | None] = set()
         for message in reversed(messages):
-            if (message.role == "tool" and isinstance(message.content, dict)
-                    and message.content.get("status") == "error"
-                    and str(message.content.get("content", "")).startswith(UNAVAILABLE_BATCH)):
-                rejected.add(message.tool_call_id)
             if message.role == "assistant":
                 self.loaded.update(call.name for call in message.tool_calls or [] if call.id not in rejected)
                 rejected.clear()
-            if (message.role == "tool" and isinstance(message.content, dict)
-                    and message.content.get("tool") == "load_tools"):
-                content = message.content.get("content")
+            if message.role != "tool":
+                continue
+            # Archived results stay on disk; only their small envelope is read here.
+            observation = resident_content(message)
+            if not isinstance(observation, dict):
+                continue
+            if observation.get("status") == "error" and _starts_with(observation.get("content", ""), UNAVAILABLE_BATCH):
+                rejected.add(message.tool_call_id)
+            if observation.get("tool") == "load_tools":
+                content = materialize(observation.get("content"))
                 if isinstance(content, dict) and isinstance(content.get("loaded"), list):
                     self.loaded.update(name for name in content["loaded"] if isinstance(name, str))
         return set((CORE_TOOLS | self.loaded) & self.available.keys())
@@ -46,6 +51,17 @@ class ToolCatalog:
                             if line.strip() and not line.lstrip().startswith("#")), "")
             result.append({"name": name, "purpose": purpose if len(purpose) <= 180 else purpose[:179] + "…"})
         return result
+
+
+def _starts_with(value: Any, prefix: str) -> bool:
+    if not isinstance(value, TextSource):
+        return str(value).startswith(prefix)
+    text = ""
+    for chunk in value.chunks():
+        text += chunk
+        if len(text) >= len(prefix):
+            break
+    return text.startswith(prefix)
 
 
 def tool_catalog(registry: ToolRegistry) -> ToolCatalog | None:

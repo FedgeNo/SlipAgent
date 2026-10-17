@@ -37,10 +37,10 @@ def test_additional_complete_carriers_preserve_native_mirrors(text, native):
 
 
 @pytest.mark.parametrize('carrier', CARRIERS)
-@pytest.mark.parametrize('style', ['quote', 'indent', 'fence', 'example', 'thought'])
+@pytest.mark.parametrize('style', ['quote', 'indent', 'fence', 'thought'])
 def test_new_carriers_remain_inert_in_examples_and_reasoning(carrier, style):
     text = {'quote': '> ' + carrier.replace('\n', '\n> '), 'indent': '    ' + carrier.replace('\n', '\n    '),
-            'fence': 'Example:\n```\n' + carrier + '\n```', 'example': 'Example:\n' + carrier,
+            'fence': 'Example:\n```\n' + carrier + '\n```',
             'thought': '<think>' + carrier.removeprefix('</think>\n') + '</think>'}[style]
     result = parse_agent_response(text, [], tools=[SPEC])
     assert result.calls == []

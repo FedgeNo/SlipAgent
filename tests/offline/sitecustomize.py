@@ -50,3 +50,26 @@ def _audit(event, args):
 
 
 sys.addaudithook(_audit)
+
+
+class _PreserveGuardForMCP:
+    """Let test MCP servers keep this guard despite their minimal environment."""
+
+    def find_spec(self, name, path, target=None):
+        if name != "slipagent.mcp":
+            return None
+        from importlib.machinery import PathFinder
+        spec = PathFinder.find_spec(name, path)
+        if spec is None or spec.loader is None:
+            return spec
+        execute = spec.loader.exec_module
+
+        def exec_module(module):
+            execute(module)
+            module.INHERITED_ENV = (*module.INHERITED_ENV, "PYTHONPATH")
+
+        spec.loader.exec_module = exec_module
+        return spec
+
+
+sys.meta_path.insert(0, _PreserveGuardForMCP())

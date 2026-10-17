@@ -2,7 +2,8 @@
 
 Model precedence: explicit CLI flag > real environment variable > saved choice
 > `.env` file > built-in default. `.env` never shadows a variable the shell
-already exports, so `OPENROUTER_MODEL=... slipagent` still wins.
+already exports, so `OPENROUTER_MODEL=... slipagent` still wins. Only
+SlipAgent's own `.env` is read; project `.env` files belong to the project.
 """
 
 from __future__ import annotations
@@ -59,9 +60,9 @@ def save_dotenv_value(path: Path, name: str, value: str) -> None:
     save_private_text(path, "\n".join(updated) + "\n")
 
 
-def dotenv_path(start: Path | None = None) -> Path:
+def dotenv_path() -> Path:
     """The `.env` SlipAgent would load for this run, found without reading it."""
-    found = find_dotenv(start)
+    found = find_dotenv()
     if found is not None:
         return found
     return data_directory() / ".env"
@@ -132,10 +133,11 @@ def configured_provider(provider: str | None = None, *, environ: Mapping[str, st
     return provider or env.get("SLIPAGENT_PROVIDER") or default
 
 
-def load_dotenv(start: Path | None = None, environ: dict[str, str] | None = None) -> Path | None:
-    """Load KEY=VALUE pairs from the nearest `.env` into `environ`.
+def load_dotenv(environ: dict[str, str] | None = None) -> Path | None:
+    """Load KEY=VALUE pairs from SlipAgent's own `.env` into `environ`.
 
-    Searches project ancestors, private user data, then package ancestors.
+    Reads private user data, then an older installation's `.env`. Project
+    `.env` files belong to the project and are never read for configuration.
     Existing environment variables always win.
 
     Returns the file that was loaded, or None if there was nothing to load.
@@ -146,42 +148,77 @@ def load_dotenv(start: Path | None = None, environ: dict[str, str] | None = None
     if _dotenv_disabled(env):
         return None
 
-    candidate = find_dotenv(start)
+    candidate = find_dotenv()
     if candidate is None:
         return None
     try:
-        _apply_dotenv(candidate, env)
+        added = _apply_dotenv(candidate, env)
     except (OSError, ValueError) as exc:
         raise ConfigError(f"could not read {candidate}: {exc}") from exc
+    if env is os.environ:
+        _DOTENV_NAMES.update(added)
     return candidate
+
+
+# Variables this process added to its environment from SlipAgent's `.env`.
+# They were never in the user's shell, so child processes do not receive them.
+_DOTENV_NAMES: set[str] = set()
+
+
+def command_environment() -> dict[str, str]:
+    """The process environment as the user's shell had it, without `.env` values."""
+    return {key: value for key, value in os.environ.items() if key not in _DOTENV_NAMES}
 
 
 def _dotenv_disabled(env: Mapping[str, str]) -> bool:
     return env.get("SLIPAGENT_NO_DOTENV", "").strip().lower() in {"1", "true", "yes"}
 
 
-def find_dotenv(start: Path | None = None) -> Path | None:
+def find_dotenv() -> Path | None:
     """Locate the `.env` that would be loaded, without applying it.
 
-    Searches project ancestors, then private user data, then package ancestors
-    for compatibility with existing installation settings.
+    Searches private user data, then package ancestors for compatibility with
+    existing installation settings.
     """
     here = Path(__file__).resolve().parent
-    start_dir = (start or Path.cwd()).resolve()
-
-    seen: set[Path] = set()
-    for directory in (start_dir, *start_dir.parents, data_directory(), here, *here.parents):
-        if directory in seen:
-            continue
-        seen.add(directory)
+    for directory in (data_directory(), here, *here.parents):
         candidate = directory / ".env"
         if candidate.is_file():
             return candidate
     return None
 
 
-def _apply_dotenv(path: Path, env: MutableMapping[str, str]) -> None:
+def ignored_project_settings(start: Path) -> tuple[Path, list[str]] | None:
+    """Report SlipAgent settings in the nearest project `.env`; values are not read."""
+    from .providers import PROVIDERS, provider_class
+
+    names = {"EXA_API_KEY", "OPENROUTER_REFERER", "OPENROUTER_TITLE"}
+    for provider in PROVIDERS:
+        implementation = provider_class(provider)
+        names.update((implementation.key_env, implementation.model_env, implementation.base_url_env))
+    loaded = find_dotenv()
+    for directory in (start.resolve(), *start.resolve().parents):
+        candidate = directory / ".env"
+        if not candidate.is_file():
+            continue
+        if candidate == loaded:
+            return None
+        try:
+            lines = candidate.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeError):
+            return None
+        found = []
+        for line in lines:
+            key = line.strip().removeprefix("export ").partition("=")[0].strip()
+            if "=" in line and (key in names or key.startswith("SLIPAGENT_")) and key not in found:
+                found.append(key)
+        return (candidate, found) if found else None
+    return None
+
+
+def _apply_dotenv(path: Path, env: MutableMapping[str, str]) -> list[str]:
     """Merge `path` into `env` without overwriting what is already set."""
+    added = []
     for line in path.read_text(encoding="utf-8").splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
@@ -199,6 +236,8 @@ def _apply_dotenv(path: Path, env: MutableMapping[str, str]) -> None:
 
         if key and key not in env:
             env[key] = value
+            added.append(key)
+    return added
 
 
 @dataclass(slots=True)

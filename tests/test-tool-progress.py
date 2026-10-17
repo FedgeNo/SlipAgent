@@ -210,5 +210,37 @@ def test_stream_guard_bounds_buffers_and_excludes_long_code_fences():
         guard.feed("content", str(index) + PROSE + "\n")
     guard.feed("content", "```\nDone.")
     guard.finish()
-    assert all(len(value) <= 32768 for value in guard.buffers.values())
-    assert len(guard.pending) <= 32768
+    assert all(len(window.value()) <= 32768 for window in guard.buffers.values())
+    assert len(guard.line.value()) <= 32768 and len(guard.line_head) <= 256
+
+
+def test_stream_guard_bounds_one_long_unfinished_line():
+    guard = StreamLoopGuard()
+    for index in range(50_000):
+        guard.feed("content", f"w{index} ")
+        # Unjoined fragments stay bounded between checks.
+        assert guard.line.size <= 4 * guard.line.KEEP + 16
+    assert len(guard.line.value()) <= 32768 and len(guard.line_head) <= 256
+
+
+def test_stream_guard_cost_grows_linearly_with_stream_size():
+    import random
+    import time
+
+    random.seed(1)
+    words = ["".join(random.choice("abcdefghij") for _ in range(random.randint(2, 9))) for _ in range(5000)]
+    text = " ".join(random.choice(words) for _ in range(40_000))
+
+    def elapsed(size):
+        best = float("inf")
+        for _ in range(3):
+            guard = StreamLoopGuard()
+            start = time.perf_counter()
+            for index in range(0, size, 8):
+                guard.feed("reasoning", text[index:index + 8])
+            guard.finish()
+            best = min(best, time.perf_counter() - start)
+        return best
+
+    # Linear work grows about 8x; re-normalizing the whole window grew much faster.
+    assert elapsed(240_000) < elapsed(30_000) * 24

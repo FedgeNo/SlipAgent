@@ -22,7 +22,7 @@ from ..workspace import Workspace, WorkspaceError
 from ..fileio import read_regular
 from .base import Tool, ToolResult
 from .blocking import run_blocking
-from .editing import MAX_DIFF_CHARS, apply_edits, edit_diff
+from .editing import MAX_DIFF_CHARS, apply_edits, edit_diff, split_lines
 
 # Bound local read memory; request assembly enforces the model's context budget.
 MAX_READ_BYTES = 32_000_000
@@ -192,7 +192,7 @@ class ReadFileTool(Tool):
         except OSError as exc:
             return ToolResult.error(f"Could not read file: {exc}")
 
-        lines = text.splitlines()
+        lines = split_lines(text)
         total = len(lines)
         start = max(1, offset)
         end = None if limit is None else start - 1 + limit
@@ -275,7 +275,7 @@ class WriteFileTool(Tool):
                                          edit_diff(self.workspace.relative(target), before, content, limit=None))
         elif self.__dict__.get("artifacts") is not None and before is None:
             artifact_notice = "\nPrevious contents were not readable as UTF-8 text within the read limit; no diff record was created."
-        line_count = len(content.splitlines())
+        line_count = len(split_lines(content))
         return ToolResult.ok(
             f"{verb} {self.workspace.relative(target)} "
             f"({len(content.encode('utf-8'))} bytes, {line_count} line(s))." + artifact_notice

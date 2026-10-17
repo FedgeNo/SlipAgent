@@ -8,7 +8,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from ..config import ConfigError
+from ..config import ConfigError, command_environment
 from ..environment import ProjectEnvironment
 from ..workspace import WorkspaceError
 from .base import Tool, ToolResult
@@ -32,7 +32,7 @@ class CreatePythonEnvironmentTool(Tool):
     async def _create(self, target: Path, interpreter: str) -> ToolResult | None:
         process = await asyncio.create_subprocess_exec(
             interpreter, "-I", "-m", "venv", str(target),
-            cwd=self.environment.workspace.root,
+            cwd=self.environment.workspace.root, env=command_environment(),
             stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE, start_new_session=os.name == "posix",
         )

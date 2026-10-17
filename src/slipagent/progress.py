@@ -19,11 +19,10 @@ from .data_text import render_data
 
 class LoopGuard:
     def __init__(self) -> None:
-        self.signature: str | None = None
-        self.count = 0
+        self.reset()
 
     def reset(self) -> None:
-        self.signature = None
+        self.signature: str | None = None
         self.count = 0
         self.recent: list[tuple[str, int, tuple[str, ...]]] = []
         self.recent_calls: dict[int, list[dict[str, Any]]] = {}
@@ -92,48 +91,88 @@ class StreamLoopError(APIResponseError):
     """A response repeats itself; its partial calls must never execute."""
 
 
+class _Squashed:
+    """Whitespace-collapsed text built once per fragment, keeping a bounded tail."""
+
+    KEEP = 16386
+
+    def __init__(self) -> None:
+        self.text = ""
+        self.parts: list[str] = []
+        self.size = 0
+        self.space = False
+
+    def add(self, raw: str) -> None:
+        piece = re.sub(r"\s+", " ", raw)
+        if self.space and piece.startswith(" "):
+            piece = piece[1:]
+        if piece:
+            self.parts.append(piece)
+            self.space = piece.endswith(" ")
+            self.size += len(piece)
+            if self.size > 4 * self.KEEP:
+                self.value()
+
+    def value(self) -> str:
+        if self.parts:
+            self.text = (self.text + "".join(self.parts))[-self.KEEP:]
+            self.parts.clear()
+            self.size = len(self.text)
+        return self.text
+
+
 class StreamLoopGuard:
     """Detect sustained exact prose repetition independently of SSE chunk sizes."""
 
     def __init__(self) -> None:
-        self.buffers: dict[str, str] = {}
+        self.buffers: dict[str, _Squashed] = {}
         self.checked: dict[str, int] = {}
-        self.pending = ""
+        # The unfinished content line: its raw start classifies it, and its
+        # collapsed text joins the prose window once the line is complete.
+        self.line = _Squashed()
+        self.line_head = ""
         self.fence = ""
 
     @staticmethod
     def _prose(line: str) -> bool:
         return not re.match(r"^(?: {4}|\t|\s*(?:[|#]|[-*+]\s|\d+[.)]\s|[={}\[\]]|`{3,}|~{3,}))", line)
 
+    def _complete_line(self) -> None:
+        marker = re.match(r"^\s*(`{3,}|~{3,})", self.line_head)
+        if marker:
+            if not self.fence:
+                self.fence = marker[1]
+            elif marker[1][0] == self.fence[0] and len(marker[1]) >= len(self.fence):
+                self.fence = ""
+        elif not self.fence and self._prose(self.line_head):
+            self.buffers.setdefault("content", _Squashed()).add(self.line.value() + "\n")
+        self.line = _Squashed()
+        self.line_head = ""
+
     def feed(self, kind: str, text: str) -> None:
         if kind not in {"content", "reasoning"} or not text:
             return
         if kind == "content":
-            lines = (self.pending + text).split("\n")
-            self.pending = lines.pop()
-            if len(self.pending) > 32768:
-                self.pending = self.pending[:256] + self.pending[-32512:]
-            for line in lines:
-                marker = re.match(r"^\s*(`{3,}|~{3,})", line)
-                if marker:
-                    if not self.fence:
-                        self.fence = marker[1]
-                    elif marker[1][0] == self.fence[0] and len(marker[1]) >= len(self.fence):
-                        self.fence = ""
-                elif not self.fence and self._prose(line):
-                    self.buffers[kind] = (self.buffers.get(kind, "") + line + "\n")[-32768:]
+            for index, segment in enumerate(text.split("\n")):
+                if index:
+                    self._complete_line()
+                if len(self.line_head) < 256:
+                    self.line_head += segment[:256 - len(self.line_head)]
+                self.line.add(segment)
         else:
-            self.buffers[kind] = (self.buffers.get(kind, "") + text)[-32768:]
+            self.buffers.setdefault(kind, _Squashed()).add(text)
         self.checked[kind] = self.checked.get(kind, 0) + len(text)
         if self.checked[kind] >= 256:
             self.check(kind)
             self.checked[kind] = 0
 
     def check(self, kind: str) -> None:
-        text = self.buffers.get(kind, "")
-        if kind == "content" and not self.fence and self._prose(self.pending):
-            text += self.pending
-        text = re.sub(r"\s+", " ", text).strip()[-16384:]
+        window = self.buffers.get(kind)
+        text = window.value() if window is not None else ""
+        if kind == "content" and not self.fence and self._prose(self.line_head):
+            line = self.line.value()
+            text += line[1:] if text.endswith(" ") and line.startswith(" ") else line
+        text = text.strip()[-16384:]
         if len(text) < 480:
             return
         anchor = text[-64:]

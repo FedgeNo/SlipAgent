@@ -15,6 +15,19 @@ from itertools import zip_longest
 MAX_DIFF_CHARS = 32_000_000
 
 
+def source_lines(text: str) -> list[str]:
+    """Split at LF, CRLF, or CR only, keeping each line's ending."""
+    return [line for line in re.split(r"(?<=\n)|(?<=\r)(?!\n)", text) if line]
+
+
+def split_lines(text: str) -> list[str]:
+    """Lines numbered as editors and Git do; other Unicode separators stay in the line."""
+    lines = re.split(r"\r\n|\r|\n", text)
+    if lines[-1] == "":
+        lines.pop()
+    return lines
+
+
 def edit_pattern(old: str) -> re.Pattern[str]:
     pattern = re.escape(old)
     if "\r" not in old:
@@ -29,8 +42,8 @@ def missing_match_details(text: str, old: str, replacement: str) -> str:
     if existing is not None:
         line_number = text.count("\n", 0, existing.start()) + 1
         notes.append(f"Replacement text already exists at line {line_number}; inspect before retrying.")
-    lines = text.splitlines()
-    anchor = max(old.splitlines(), key=len, default="")[:300].strip()
+    lines = split_lines(text)
+    anchor = max(split_lines(old), key=len, default="")[:300].strip()
     words = set(re.findall(r"\w+|[^\w\s]", anchor))
     candidates = []
     # Cheap token overlap bounds the expensive character comparisons, even for
@@ -119,9 +132,10 @@ def edit_result_line(result: str) -> int | None:
 
 def edit_diff(path: str, before: str, after: str, *, limit: int | None = MAX_DIFF_CHARS) -> str:
     """Bound model/UI feedback; full file contents stay available to read_file."""
-    diff = difflib.unified_diff(before.splitlines(keepends=True), after.splitlines(keepends=True),
+    diff = difflib.unified_diff(source_lines(before), source_lines(after),
                                 fromfile=path, tofile=path)
-    lines = (line.removesuffix("\n") if line.endswith("\n")
+    # A CR-only line is complete; like CRLF lines, it keeps its CR in the display.
+    lines = (line.removesuffix("\n") if line.endswith(("\n", "\r"))
              else line + "\n\\ No newline at end of file" for line in diff)
     if limit is None:
         return "\n".join(lines)

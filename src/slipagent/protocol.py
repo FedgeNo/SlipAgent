@@ -103,7 +103,9 @@ def parse_agent_response(text: str, native_calls: list[ToolCall], *, native_tool
             arguments = schema_arguments(call.arguments, available[name].parameters) if name in available else call.arguments
             converted.append(ToolCall(call.id, name, arguments))
         return converted
-    result.calls = combine_calls(compatible(normalize_calls([call.to_record() for call in native_calls])), compatible(result.calls))
+    combined = combine_calls(compatible(normalize_calls([call.to_record() for call in native_calls])), compatible(result.calls))
+    # Name and schema conversion can change values; validate the final batch once.
+    result.calls = normalize_calls([call.to_record() for call in combined])
     if not isinstance(result.text, str):
         raise ResponseFormatError("response must be a string.")
     if not result.text.strip() and not result.calls:
@@ -116,6 +118,7 @@ def combine_calls(*sources: list[ToolCall]) -> list[ToolCall]:
 
     Mirrored calls match by ID or by name and exact JSON arguments. Multiplicity
     is preserved, so two intentional equal calls in a batch still execute twice.
+    Sources are already normalized; only IDs need to stay unique across them.
     """
     result: list[ToolCall] = []
     def signature(call: ToolCall) -> tuple[str, str]:
@@ -135,7 +138,14 @@ def combine_calls(*sources: list[ToolCall]) -> list[ToolCall]:
             else:
                 additions.append(call)
         result.extend(additions)
-    return normalize_calls([call.to_record() for call in result])
+    unique: list[ToolCall] = []
+    ids: set[str] = set()
+    for call in result:
+        if call.id in ids:
+            call = ToolCall("call_" + uuid.uuid4().hex, call.name, call.arguments)
+        ids.add(call.id)
+        unique.append(call)
+    return unique
 
 
 def _detect_response(text: str, tools: list[ToolSpec], *, xml_tool_calls: bool = False) -> AgentResponse:
@@ -218,10 +228,6 @@ def _detect_response(text: str, tools: list[ToolSpec], *, xml_tool_calls: bool =
                 elif marker[1][0] == in_fence[0] and len(marker[1]) >= len(in_fence):
                     in_fence = ""
             elif not in_fence and len(line) - len(stripped) < 4 and "\t" not in line[:len(line) - len(stripped)]:
-                prefix = text[:offset].rstrip()
-                # Explicit example labels protect unfenced examples as well.
-                if re.search(r"(?im)^.*\b(?:example|sample|illustration)s?[^\n]*:\s*$", prefix):
-                    return AgentResponse(text, [])
                 opening = CALL_OPENING.match(stripped)
                 if stripped.startswith(FUNCTION_OPENING):
                     functions = []
@@ -231,14 +237,14 @@ def _detect_response(text: str, tools: list[ToolSpec], *, xml_tool_calls: bool =
                         functions.append(call)
                     if remaining:
                         raise ResponseFormatError("Unexpected text after function calls.")
-                    return AgentResponse(prefix, normalize_calls(functions))
+                    return AgentResponse(text[:offset].rstrip(), normalize_calls(functions))
                 if opening and (xml_tool_calls or opening[1] in {"tool_call", "function_call"}):
-                    return AgentResponse(prefix, _tagged_calls(text[offset:], tools))
+                    return AgentResponse(text[:offset].rstrip(), _tagged_calls(text[offset:], tools))
                 if stripped.startswith(TOOL_MARKERS):
-                    return AgentResponse(prefix, _marker_calls(text[offset:].strip()))
+                    return AgentResponse(text[:offset].rstrip(), _marker_calls(text[offset:].strip()))
                 if offset and stripped.startswith(("{", "[")) and _json_call_start(text[offset:].strip()):
                     embedded = _detect_response(text[offset:], tools, xml_tool_calls=xml_tool_calls)
-                    reply = "\n".join(part for part in (prefix, embedded.text) if part)
+                    reply = "\n".join(part for part in (text[:offset].rstrip(), embedded.text) if part)
                     return AgentResponse(reply, embedded.calls, embedded.suggestions)
                 if stripped.startswith(("{", "[")):
                     # A literal JSON value is one block. Never inspect its
@@ -459,7 +465,7 @@ def _xml_calls(text: str, tools: list[ToolSpec]) -> list[dict[str, Any]]:
     for element in root:
         invoke = element
         if root.tag == "tool_calls" and element.tag == "call":
-            if element.tag != "call" or len(element) != 1 or (element.text or "").strip():
+            if len(element) != 1 or (element.text or "").strip():
                 raise ResponseFormatError("Expected each call in tool_calls to contain exactly one invoke element.")
             invoke = element[0]
             if (invoke.tail or "").strip():

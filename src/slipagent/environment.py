@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import ConfigError
+from .config import ConfigError, command_environment
 from .fileio import open_regular
 from .workspace import Workspace
 
@@ -147,7 +147,7 @@ class ProjectEnvironment:
                    stat.st_size, config_stamp, self._module_stamp())
             if key != self._cached_key:
                 process = await asyncio.create_subprocess_exec(
-                    str(path), "-I", "-c", PROBE, cwd=self.workspace.root,
+                    str(path), "-I", "-c", PROBE, cwd=self.workspace.root, env=command_environment(),
                     stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE, start_new_session=os.name == "posix",
                 )

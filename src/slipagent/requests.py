@@ -127,12 +127,21 @@ class RequestDriver:
                 run_step += 1
                 step_usage = Usage()
                 start_next_step = True
-            def request_sent(request: Any) -> None:
+            async def request_sent(request: Any) -> None:
                 nonlocal request_estimate, diagnostic_id
                 request_estimate = request.estimate
                 self.hooks.delivered()
                 if diagnostics is not None:
-                    diagnostic_id = diagnostics.begin(request, step=run_step, step_id=step)
+                    # Hashing and compressing a large body must not stall the terminal.
+                    # A cancelled request still keeps its attempt so the outcome is recorded.
+                    from .lifecycle import finish_cleanup
+                    worker = asyncio.create_task(asyncio.to_thread(
+                        diagnostics.begin, request, step=run_step, step_id=step))
+                    try:
+                        diagnostic_id = await asyncio.shield(worker)
+                    except asyncio.CancelledError:
+                        diagnostic_id = await finish_cleanup(worker)
+                        raise
                 instructions = self.registry.resources.instructions
                 if instructions is not None:
                     instructions.presented(self.registry.services.get("instruction_snapshot", {}))
@@ -212,7 +221,9 @@ class RequestDriver:
                     smaller = await self.hooks.context(repair, budget_fraction)
                 finally:
                     record_failure("context_overflow", str(exc), exc.partial_response or exc.body or "", exc.usage)
-                if [m.to_api() for m in smaller] == [m.to_api() for m in context]:
+                # Messages and their structured contents compare by value, so
+                # an unchanged request is detected without rendering its text.
+                if smaller == context:
                     raise ContextError("The provider rejected the current input even without removable history. Originals are preserved; shorten the input or select a larger-context model.")
                 context = await self.hooks.context(repair, budget_fraction)
                 self.budget.fraction = budget_fraction
@@ -220,7 +231,6 @@ class RequestDriver:
                 continue
             except APIResponseError as exc:
                 self.hooks.account(exc.usage)
-                step_usage = step_usage + exc.usage
                 finish_attempt("request_error", detail=str(exc), response=exc.partial_response or exc.body or "", usage=exc.usage)
                 end_preview(failed=True)
                 record_failure("request_error", str(exc), exc.partial_response or exc.body or "", exc.usage)

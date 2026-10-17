@@ -9,18 +9,24 @@ from __future__ import annotations
 
 from ..prompts import load_prompt
 
+import codecs
+import contextlib
 import os
 import re
 import asyncio
 import ipaddress
 import socket
+from collections.abc import AsyncIterator
 from html.parser import HTMLParser
 from itertools import groupby
 from urllib.parse import urljoin, urlsplit
 
 import httpx
 
+from typing import Any
+
 from .base import Tool, ToolResult
+from .blocking import run_blocking
 
 EXA_SEARCH_URL = "https://api.exa.ai/search"
 DEFAULT_TIMEOUT = 30.0
@@ -212,7 +218,7 @@ class WebSearchTool(Tool):
         return ToolResult.ok("\n".join(blocks))
 
 
-async def _public_address(url: httpx.URL) -> str:
+async def _public_addresses(url: httpx.URL) -> list[str]:
     if url.scheme not in {"http", "https"} or not url.host or url.username or url.password:
         raise ValueError("url must be an absolute HTTP(S) URL without credentials")
     try:
@@ -227,7 +233,11 @@ async def _public_address(url: httpx.URL) -> str:
         addresses = [literal]
     if not addresses or any(not address.is_global for address in addresses):
         raise ValueError("url resolves to a non-public address")
-    return str(addresses[0])
+    return list(dict.fromkeys(str(address) for address in addresses))
+
+
+async def _public_address(url: httpx.URL) -> str:
+    return (await _public_addresses(url))[0]
 
 
 class _PublicTransport(httpx.AsyncHTTPTransport):
@@ -255,6 +265,42 @@ class PublicHttpTool(Tool):
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+    @contextlib.asynccontextmanager
+    async def _stream(self, method: str, url: httpx.URL, **options: Any) -> AsyncIterator[httpx.Response]:
+        """Connect to each validated address in order until one accepts.
+
+        Only connection failures move on; once a response starts, its errors
+        belong to the caller. Every candidate passed the public-address check.
+        """
+        addresses = await _public_addresses(url)
+        for index, address in enumerate(addresses):
+            stream = self._client.stream(method, url, extensions={"validated_address": address}, **options)
+            try:
+                response = await stream.__aenter__()
+            except (httpx.ConnectError, httpx.ConnectTimeout):
+                if index == len(addresses) - 1:
+                    raise
+                continue
+            try:
+                yield response
+            except BaseException as exc:
+                await stream.__aexit__(type(exc), exc, exc.__traceback__)
+                raise
+            await stream.__aexit__(None, None, None)
+            return
+
+
+def _charset(response: httpx.Response, raw: bytes, html: bool) -> str:
+    """The declared text encoding, from the header or an HTML meta tag."""
+    declared = response.charset_encoding
+    if declared is None and html:
+        meta = re.search(rb'<meta[^>]+charset\s*=\s*["\']?([A-Za-z0-9_.:-]+)', raw[:4096], re.IGNORECASE)
+        declared = meta[1].decode("ascii") if meta else None
+    try:
+        return codecs.lookup(declared).name if declared else "utf-8"
+    except LookupError:
+        return "utf-8"
 
 
 class FetchPageTool(PublicHttpTool):
@@ -287,11 +333,9 @@ class FetchPageTool(PublicHttpTool):
         try:
             current = httpx.URL(candidate)
             for hop in range(11):
-                address = await _public_address(current)
-                async with self._client.stream(
+                async with self._stream(
                     "GET", current, follow_redirects=False,
                     headers={"User-Agent": "SlipAgent/0.1", "Accept-Encoding": "identity"},
-                    extensions={"validated_address": address},
                 ) as response:
                     if response.has_redirect_location:
                         if hop == 10:
@@ -301,6 +345,7 @@ class FetchPageTool(PublicHttpTool):
                     if response.status_code >= 400:
                         return ToolResult.error(f"Fetch failed ({response.status_code}) for {candidate}")
                     content_type = response.headers.get("Content-Type", "").lower()
+                    final = response
                     async for chunk in response.aiter_bytes():
                         remaining = MAX_FETCH_BYTES - len(raw_body)
                         raw_body.extend(chunk[:remaining])
@@ -312,12 +357,14 @@ class FetchPageTool(PublicHttpTool):
             return ToolResult.error(f"Could not fetch {candidate}: {exc}")
         raw = bytes(raw_body)
 
+        html = "html" in content_type or raw[:200].lstrip()[:1] == b"<"
+        encoding = _charset(final, raw, html and "json" not in content_type)
         if "json" in content_type:
             body = raw.decode("utf-8", errors="replace")
             heading = f"{candidate} (application/json)"
-        elif "html" in content_type or raw[:200].lstrip()[:1] == b"<":
-            markup = raw.decode("utf-8", errors="replace")
-            body, title = html_to_text(markup, base_url=str(current))
+        elif html:
+            markup = raw.decode(encoding, errors="replace")
+            body, title = await run_blocking(html_to_text, markup, base_url=str(current))
             heading = f"{candidate}"
             if title:
                 heading = f"{title} — {candidate}"
@@ -327,7 +374,7 @@ class FetchPageTool(PublicHttpTool):
                     f"JavaScript-rendered)."
                 )
         else:
-            body = raw.decode("utf-8", errors="replace")
+            body = raw.decode(encoding, errors="replace")
             heading = candidate
 
         limit = max(500, min(int(max_chars), MAX_PAGE_CHARS))

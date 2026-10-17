@@ -69,7 +69,7 @@ Linux and macOS use a symlink. Windows also uses a symlink when permitted, with 
 
 The installer replaces recognized SlipAgent launchers and saves a backup; it refuses unrelated commands or nonempty unmanaged installation directories. The permanent working checkout lives at `source` inside the installation directory, with its own `.venv`. Initial copies include application files, uncommitted edits, and Git metadata, but exclude existing virtual environments, caches, and secrets. Updates from another checkout replace the application directories and supplied root files while preserving installed Git metadata, the virtual environment, and configuration. Removed application directory contents are removed during updates too. Existing Git history is retained, so new downloaded files appear as working-tree changes. Failed updates restore the previous application and dependencies as described below. Older release directories are retained during migration. On Linux/macOS, `current` points to `source`; `installation.json` records the source, interpreter, and launcher on all platforms. Edit the permanent checkout for live changes and normal Git development.
 
-An existing checkout `.env` is copied to the private user data directory on the first install, with owner-only file permissions on Linux/macOS. Subsequent installs preserve that configuration. Project `.env` files take precedence over the global user-data `.env`; old installation `.env` files remain a compatibility fallback. The installer does not move or delete the original checkout or project sessions.
+An existing checkout `.env` is copied to the private user data directory on the first install, with owner-only file permissions on Linux/macOS. Subsequent installs preserve that configuration. SlipAgent reads only its own user-data `.env`; old installation `.env` files remain a compatibility fallback. Project `.env` files belong to their projects and are never read. The installer does not move or delete the original checkout or project sessions.
 
 ### Installation and Data Locations
 
@@ -616,10 +616,13 @@ export OPENROUTER_API_KEY="sk-or-..."
 
 OpenRouter requests identify SlipAgent using its repository URL, app title, `X-OpenRouter-Categories: cli-agent`, and a versioned `User-Agent: SlipAgent/<version>`. Other providers receive the versioned user agent. The referer and title overrides above customize OpenRouter attribution.
 
-`.env` is loaded automatically, searched upward from the current directory and
-then from the platform data directory and installation ancestors. Real environment
+`.env` is loaded automatically from the platform data directory, or from an
+older installation's ancestors when the data directory has none. Project `.env`
+files are never read. If one contains SlipAgent settings (provider keys, model or
+base-URL variables, `EXA_API_KEY`, or `SLIPAGENT_*`), startup prints a notice
+naming the file and variables, without their values. Real environment
 variables win over `.env`;
-explicit CLI overrides win over both. Harness-saved credentials use `0600`
+explicit CLI overrides win over both. Values loaded from SlipAgent's `.env` are not passed to commands, checks, Git, search, language servers, or project Python probes, which see the environment your shell provided. Harness-saved credentials use `0600`
 permissions. Set `SLIPAGENT_NO_DOTENV=1` in CI to use only the process
 environment and CLI configuration. Keep `.env` and credential-bearing MCP
 configuration private; `.env` is ignored by Git and global MCP settings live outside the checkout.
@@ -683,7 +686,7 @@ is cached until the executable, venv configuration, selection, or import-locatio
 metadata changes. Installing or removing packages therefore refreshes the
 reported module availability on the next request.
 `--python` continues to override project-file edits for that process. The API-key
-`.env` search starts from the current working directory and package directory;
+`.env` comes from the data directory or an older installation, never the project;
 it is separate from workspace-specific `.slipagent/project.json` resolution.
 
 `log_quota_bytes` sets a **session-wide disk quota**, default **1 GiB**, read at
@@ -896,7 +899,7 @@ provider's key rebuilds its connection. OpenRouter verifies through `GET /key`;
 Google and Mistral use their authenticated model catalogs. NVIDIA and Kilo report
 that authentication will be checked on inference. Failed verification preserves
 existing credentials. Saving for future runs still requires `y` at the prompt
-and updates only the detected provider's entry in `.env`.
+and updates only the detected provider's entry in the data-directory `.env`.
 
 Both forms supplying a key are omitted from input history, queued display text,
 model input, and session journals.
@@ -1933,7 +1936,10 @@ session, or save it globally to `mcp.json` so later runs in every project pick i
 ```
 
 Remote tools are namespaced `server__tool` so two servers can both expose
-`search` without colliding, and the model's argument validation is applied to the
+`search` without colliding. Names that providers would reject (characters other
+than letters, digits, `_` and `-`, or more than 64 characters) are sanitized and
+given a stable short hash suffix; calls still reach the server under its original
+tool name. The model's argument validation is applied to the
 JSON Schema the server advertises. The REPL connects every globally configured server
 on startup; a server that fails to start is reported and skipped rather than
 blocking the session.
@@ -1943,7 +1949,9 @@ are not surfaced. Existing MCP connections survive component reloads.
 Connected server instructions enter model context with their server scope from the first request, even while their tool definitions are deferred. Servers excluded by an explicit tool allowlist do not contribute guidance.
 Structured results and error flags are retained. A server starts in the selected
 workspace unless `cwd` is configured; relative values resolve against that workspace.
-MCP processes inherit the harness environment plus configured `env` overrides.
+Tool calls wait up to 300 seconds by default; set a server's `timeout` (seconds) in
+`mcp.json` to change it. Startup and tool listing keep a 30-second limit.
+MCP processes receive a minimal environment, as in the reference MCP SDKs: `HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER` and `TMPDIR` (or the Windows equivalents), plus locale (`LANG`, `LANGUAGE`, `LC_*`) and proxy variables. Add anything else a server needs, including API keys, under its `env` in `mcp.json`.
 Project Python selection does not rewrite their command or PATH; use an explicit
 interpreter in the server's `command` when required.
 

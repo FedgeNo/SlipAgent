@@ -18,7 +18,9 @@ from .prompts import PromptSections, load_prompt, model_prompt_profile
 from .protocol import model_response_format
 from .repomap import RepositoryMap
 from .tools.base import ToolRegistry
+from .sources import materialize
 from .tools.discovery import CORE_TOOLS
+from .turnstore import resident_content
 from .types import Message, ToolSpec
 
 
@@ -50,12 +52,14 @@ class ContextBuilder:
         length = model_context_limit(self.settings.model, capabilities, length)
         sections = PromptSections()
         if self.settings.planning:
-            saved_plan = next(((prior.id, message.content['content'])
+            # Read archived envelopes only; the matching plan alone is loaded.
+            saved_plan = next(((prior.id, materialize(observation['content']))
                          for prior in reversed(self.history.steps)
                          for message in reversed(prior.messages)
-                         if message.role == 'tool' and isinstance(message.content, dict)
-                         and message.content.get('tool') == 'update_plan'
-                         and message.content.get('status') == 'success'), None)
+                         if message.role == 'tool'
+                         and isinstance(observation := resident_content(message), dict)
+                         and observation.get('tool') == 'update_plan'
+                         and observation.get('status') == 'success'), None)
             if saved_plan is not None:
                 plan_record = load_prompt('working-plan-record.md', step_id=saved_plan[0],
                                           plan=render_data(saved_plan[1]))

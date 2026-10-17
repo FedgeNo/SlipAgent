@@ -16,6 +16,7 @@ from pathlib import Path
 
 from ..workspace import Workspace, WorkspaceError
 from .base import Tool, ToolResult
+from .blocking import run_blocking
 from .output import CommandArchive, CommandLog
 from .shell import DEFAULT_TIMEOUT, MAX_OUTPUT_CHARS, MAX_TIMEOUT, capture_process, _truncate
 
@@ -147,7 +148,8 @@ class GitTool(Tool):
     async def _execute(
         self, repository: GitRepository, args: list[str], timeout: float,
     ) -> GitOutput:
-        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        from ..config import command_environment
+        env = {key: value for key, value in command_environment().items() if not key.startswith("GIT_")}
         # Author/committer identity overrides do not redirect repository operations.
         for role in ("AUTHOR", "COMMITTER"):
             for field in ("NAME", "EMAIL", "DATE"):
@@ -216,7 +218,7 @@ class GitStatusTool(GitTool):
     }
 
     async def run(self, repo: str = ".", timeout: float = DEFAULT_TIMEOUT) -> ToolResult:
-        repository = self._repository(repo)
+        repository = await run_blocking(self._repository, repo)
         output = await self._execute(
             repository, ["status", "--short", "--branch", "--ignore-submodules=all"], timeout,
         )
@@ -241,7 +243,7 @@ class GitDiffTool(GitTool):
         self, repo: str = ".", staged: bool = False, paths: list[str] | None = None,
         timeout: float = DEFAULT_TIMEOUT,
     ) -> ToolResult:
-        repository = self._repository(repo)
+        repository = await run_blocking(self._repository, repo)
         args = ["diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all"]
         if staged:
             args.append("--cached")
@@ -265,7 +267,7 @@ class GitLogTool(GitTool):
     }
 
     async def run(self, repo: str = ".", limit: int = 10, timeout: float = DEFAULT_TIMEOUT) -> ToolResult:
-        repository = self._repository(repo)
+        repository = await run_blocking(self._repository, repo)
         output = await self._execute(
             repository,
             ["log", f"-n{limit}", "--format=%h %s", "--no-ext-diff", "--no-textconv", "--no-show-signature"],
@@ -288,7 +290,7 @@ class GitAddTool(GitTool):
     }
 
     async def run(self, paths: list[str], repo: str = ".", timeout: float = DEFAULT_TIMEOUT) -> ToolResult:
-        repository = self._repository(repo)
+        repository = await run_blocking(self._repository, repo)
         relative = self._paths(repository, paths)
         listing = await self._execute(
             repository,
@@ -300,7 +302,7 @@ class GitAddTool(GitTool):
         for path in files:
             candidate = self.workspace.resolve(repository.root / path)
             if candidate.is_dir() and (candidate / ".git").exists():
-                self._repository(str(candidate))
+                await run_blocking(self._repository, str(candidate))
         if files:
             attributes = await self._execute(
                 repository, ["check-attr", "-z", "filter", "--", *files], timeout,
@@ -338,7 +340,7 @@ class GitCommitTool(GitTool):
     async def run(self, message: str, repo: str = ".", timeout: float = DEFAULT_TIMEOUT) -> ToolResult:
         if not message.strip():
             return ToolResult.error("Commit message must not be blank.")
-        repository = self._repository(repo)
+        repository = await run_blocking(self._repository, repo)
         return (await self._execute(repository, ["commit", "-m", message], timeout)).result()
 
 

@@ -432,3 +432,28 @@ def test_real_cli_readonly_call_without_memory_needs_no_regeneration(tmp_path):
     assert len(stub.requests) == 2
     assert TOOL_SUMMARY_KEY not in result.stdout + result.stderr
     assert "Retrying" not in result.stderr
+
+
+def test_streamed_text_arguments_and_diagnostics_assemble_exactly():
+    from slipagent.api import _StreamCompletion, _merge_events
+
+    arguments = json.dumps({"path": "a.py", "content": "line\n" * 20_000 + "é\"\\"})
+    reply = "Writing the file.\n" * 2000
+    shown = []
+    state = _StreamCompletion(lambda kind, text: shown.append(text))
+    events = [json.dumps({"choices": [{"index": 0, "delta": {"tool_calls": [
+        {"index": 0, "id": "call_1", "type": "function", "function": {"name": "write_file", "arguments": ""}}]}}]})]
+    events += [json.dumps({"choices": [{"index": 0, "delta": {"content": reply[i:i + 7]}}]})
+               for i in range(0, len(reply), 7)]
+    events += [json.dumps({"choices": [{"index": 0, "delta": {"tool_calls": [
+        {"index": 0, "function": {"arguments": arguments[i:i + 9]}}]}}]}) for i in range(0, len(arguments), 9)]
+    events.append(json.dumps({"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}))
+    for event in events:
+        state.add(event)
+    result = state.completion()
+    # Reply text still reaches the display fragment by fragment.
+    assert "".join(shown) == reply and len(shown) > 1
+    assert result.text == reply and result.tool_calls[0].arguments == json.loads(arguments)
+    captured = _merge_events(events)
+    delta = captured["choices"][0]["delta"]
+    assert delta["content"] == reply and delta["tool_calls"][0]["function"]["arguments"] == arguments

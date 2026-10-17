@@ -20,8 +20,10 @@ The client implements two negotiation paths:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
+import re
 import signal
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
@@ -52,6 +54,8 @@ CLIENT_INFO = {"name": "slipagent", "version": __version__}
 
 DEFAULT_CONFIG_NAME = "mcp.json"
 DEFAULT_TIMEOUT = 30.0
+# Tool calls can legitimately run long; servers may set their own `timeout`.
+DEFAULT_TOOL_TIMEOUT = 300.0
 PROBE_TIMEOUT = 10.0
 # The spec forbids newlines inside a message, but a large tool result can still
 # be big, so the line reader gets a generous ceiling rather than the 64 KiB
@@ -62,6 +66,38 @@ STDERR_TAIL_LINES = 20
 # JSON-RPC error codes we care about.
 ERR_METHOD_NOT_FOUND = -32601
 ERR_UNSUPPORTED_VERSION = -32022
+
+# Stdio servers inherit only these variables, as in the reference MCP SDKs,
+# plus locale, temporary-directory, and proxy settings. Servers that need more
+# declare them under `env` in mcp.json.
+INHERITED_ENV = (
+    ("APPDATA", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "PATH", "PATHEXT", "PROCESSOR_ARCHITECTURE",
+     "PROGRAMFILES", "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TMP", "USERNAME", "USERPROFILE")
+    if os.name == "nt" else ("HOME", "LOGNAME", "PATH", "SHELL", "TERM", "USER", "TMPDIR")
+) + ("LANG", "LANGUAGE", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
+     "http_proxy", "https_proxy", "no_proxy", "all_proxy")
+
+
+def tool_alias(server: str, tool: str) -> str:
+    """A provider-valid function name for one server tool.
+
+    Chat Completions providers accept letters, digits, `_` and `-`, up to 64
+    characters. Other names are sanitized and given a stable hash suffix, so
+    distinct originals cannot collide; calls still use the server's own name.
+    """
+    qualified = f"{server}{TOOL_SEPARATOR}{tool}"
+    if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", qualified):
+        return qualified
+    digest = hashlib.sha256(qualified.encode("utf-8")).hexdigest()[:8]
+    return re.sub(r"[^A-Za-z0-9_-]", "_", qualified)[:55] + "_" + digest
+
+
+def server_environment(spec_env: dict[str, str] | None) -> dict[str, str]:
+    """A minimal inherited environment plus the server's configured variables."""
+    inherited = {key: value for key, value in os.environ.items()
+                 if (key in INHERITED_ENV or key.startswith("LC_")) and not value.startswith("()")}
+    return {**inherited, **(spec_env or {})}
+
 
 # Disambiguates tools from different servers that share a name, per the spec's
 # guidance for clients that aggregate multiple servers.
@@ -87,6 +123,7 @@ class ServerSpec:
     env: dict[str, str] | None = None
     cwd: str | None = None
     description: str = ""
+    timeout: float | None = None
 
     @classmethod
     def from_json(cls, name: str, raw: Any) -> ServerSpec:
@@ -106,6 +143,9 @@ class ServerSpec:
         cwd = raw.get("cwd")
         if cwd is not None and not isinstance(cwd, str):
             raise MCPError(f"server '{name}' has a non-string 'cwd'")
+        timeout = raw.get("timeout")
+        if timeout is not None and (type(timeout) not in (int, float) or not 0 < timeout <= 86400):
+            raise MCPError(f"server '{name}' has an invalid 'timeout'; use seconds between 0 and 86400")
         return cls(
             name=name,
             command=command.strip(),
@@ -113,6 +153,7 @@ class ServerSpec:
             env=env,
             cwd=cwd,
             description=str(raw.get("description") or ""),
+            timeout=float(timeout) if timeout is not None else None,
         )
 
     def to_json(self) -> dict[str, Any]:
@@ -123,6 +164,8 @@ class ServerSpec:
             payload["cwd"] = self.cwd
         if self.description:
             payload["description"] = self.description
+        if self.timeout is not None:
+            payload["timeout"] = self.timeout
         return payload
 
     def command_line(self) -> str:
@@ -274,7 +317,7 @@ class MCPClient:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self.spec.cwd,
-                env={**os.environ, **(self.spec.env or {})},
+                env=server_environment(self.spec.env),
                 limit=MAX_LINE_BYTES,
                 start_new_session=os.name == "posix",
             )
@@ -591,7 +634,8 @@ class MCPClient:
             if "__slipagent_eof__" in message:
                 raise MCPError(
                     f"'{self.spec.name}' exited before answering {method}"
-                    f"{self._stderr_hint()}"
+                    f"{self._stderr_hint()}. MCP servers receive a minimal environment; "
+                    "add variables they need under env in mcp.json"
                 )
 
             if "id" not in message:
@@ -695,7 +739,8 @@ class MCPClient:
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         response = await self._request(
-            "tools/call", {"name": name, "arguments": arguments}, self._request_meta()
+            "tools/call", {"name": name, "arguments": arguments}, self._request_meta(),
+            timeout=self.spec.timeout if self.spec.timeout is not None else DEFAULT_TOOL_TIMEOUT,
         )
         if "error" in response:
             return ToolResult.error(
@@ -872,10 +917,10 @@ class MCPManager:
         state: ServerState,
     ) -> list[str]:
         if self.registry is None:
-            return [f"{name}{TOOL_SEPARATOR}{info.name}" for info in tools]
+            return [tool_alias(name, info.name) for info in tools]
         registered = state.qualified
         for info in tools:
-            qualified = f"{name}{TOOL_SEPARATOR}{info.name}"
+            qualified = tool_alias(name, info.name)
             if qualified in self.registry:
                 state.detail = f"skipped '{qualified}': name collides with another tool"
                 continue

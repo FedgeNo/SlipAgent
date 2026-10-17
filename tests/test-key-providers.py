@@ -13,7 +13,7 @@ from slipagent import cli, compressionproviders, sessionstate
 from slipagent.agent import Agent
 from slipagent.api import RetryPolicy
 from slipagent.capabilities import RequestProfile
-from slipagent.config import Config, load_dotenv
+from slipagent.config import Config, data_directory, load_dotenv
 from slipagent.providers import create_client, provider_class
 from slipagent.tools import ToolRegistry
 from slipagent.types import ModelInfo
@@ -79,7 +79,8 @@ async def test_detected_key_is_saved_to_its_provider(key_session, tmp_path, monk
     routing.enabled = True
     routing.failed_providers.update({provider, "untouched"})
     session._catalog = []
-    path = tmp_path / ".env"
+    path = data_directory() / ".env"
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("# Keep this\nOPENROUTER_API_KEY=old\nUNRELATED=value\n")
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     ask = AsyncMock(return_value="yes")
@@ -104,7 +105,7 @@ async def test_detected_key_is_saved_to_its_provider(key_session, tmp_path, monk
     else:
         assert session.client is not original and original._client.is_closed
     loaded = {}
-    load_dotenv(tmp_path, environ=loaded)
+    load_dotenv(environ=loaded)
     restored = Config.from_env(provider=provider, environ=loaded)
     assert restored.api_key == key and restored.provider == provider
 
@@ -117,7 +118,7 @@ async def test_unrecognized_key_needs_provider_without_sending_it(key_session, t
     assert "opaque-secret" not in out.getvalue()
     assert not requests and len(clients) == 1
     assert session.client is original
-    assert not (tmp_path / ".env").exists()
+    assert not (data_directory() / ".env").exists()
 
 
 @pytest.mark.parametrize("candidate", [
@@ -177,7 +178,8 @@ async def test_rejected_key_keeps_live_state_and_saved_key(key_session, tmp_path
     original_catalog = session._catalog = []
     session.free_calls = 37
     session.extensions["provider_options"] = {"mistral": {"api_key": "mstrl_old"}}
-    path = tmp_path / ".env"
+    path = data_directory() / ".env"
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("OPENROUTER_API_KEY=old\nMISTRAL_API_KEY=mstrl_old\n")
     original_text = path.read_text()
     factory = sessionstate.create_client

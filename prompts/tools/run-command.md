@@ -6,7 +6,7 @@ Use this for tests, linters, type checks, builds, and operations outside dedicat
 
 ## Environment and Access
 
-Commands use a non-login shell with inherited `PATH` and the harness process's permissions, including access outside the workspace. Use explicit project interpreter paths. Commands are killed at their timeout.
+Commands use a non-login shell with the user's inherited environment, including `PATH`, and the harness process's permissions, including access outside the workspace. Settings loaded from SlipAgent's own `.env`, such as its API keys, are not passed to commands. Use explicit project interpreter paths. Commands are killed at their timeout.
 
 ## Output
 

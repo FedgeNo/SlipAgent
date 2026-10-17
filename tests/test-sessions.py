@@ -510,3 +510,18 @@ def test_startup_resume_displays_saved_conversation_without_inference(tmp_path):
         assert "> Original saved question" in resumed.stderr
         assert "Original saved answer" in resumed.stderr
         assert len(stub.requests) == 1
+
+
+async def test_corrupt_inspection_index_is_reported_as_a_session_error(workspace, tmp_path):
+    from slipagent.artifacts import ArtifactStore
+
+    original = Agent(StubClient([completion("First answer")]), ToolRegistry(), "test")
+    journal = attach(original, workspace, tmp_path)
+    await original.run("Original user request")
+    await original.wait_for_compaction()
+    data = journal.load(journal.session_id)
+    (journal.directory / (journal.session_id + "-artifacts")).mkdir(exist_ok=True)
+    (journal.directory / (journal.session_id + "-artifacts") / "index.json").write_text("{not json")
+    restored = Agent(StubClient([]), ToolRegistry(services={"artifact_store": ArtifactStore(1_000_000)}), "test")
+    with pytest.raises(SessionError, match="Cannot restore inspection records"):
+        journal.restore(restored, data)

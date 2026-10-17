@@ -17,7 +17,7 @@ import pytest
 
 from slipagent.agent import Agent
 from slipagent.cli import Session, Style, _key_command, _mask_key, _replace_key
-from slipagent.config import dotenv_path
+from slipagent.config import data_directory, dotenv_path
 from slipagent.openrouter import OpenRouterAuthError, OpenRouterClient
 from slipagent.tools import ToolRegistry
 from slipagent.types import KeyInfo
@@ -193,7 +193,8 @@ async def test_bad_key_never_reaches_disk(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """A rejected key must leave the stored credential untouched."""
-    env_file = tmp_path / ".env"
+    env_file = data_directory() / ".env"
+    env_file.parent.mkdir(parents=True, exist_ok=True)
     env_file.write_text(f"OPENROUTER_API_KEY={GOOD_KEY}\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
 
@@ -249,7 +250,8 @@ async def test_key_command_refuses_to_prompt_without_a_tty(
 async def test_stored_key_survives_a_failed_swap(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    env_file = tmp_path / ".env"
+    env_file = data_directory() / ".env"
+    env_file.parent.mkdir(parents=True, exist_ok=True)
     env_file.write_text(f"OPENROUTER_API_KEY={GOOD_KEY}\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("sys.stdin", io.StringIO(""))
@@ -263,4 +265,4 @@ async def test_stored_key_survives_a_failed_swap(
 
     assert session.api_key == GOOD_KEY
     assert GOOD_KEY in env_file.read_text()
-    assert dotenv_path(tmp_path) == env_file
+    assert dotenv_path() == env_file

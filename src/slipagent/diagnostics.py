@@ -151,7 +151,7 @@ class RequestDiagnostics:
                 fd, temporary = tempfile.mkstemp(prefix=".request-", dir=self.directory)
                 try:
                     with os.fdopen(fd, "wb") as target:
-                        with gzip.GzipFile(fileobj=target, mode="wb", mtime=0, filename="") as compressed:
+                        with gzip.GzipFile(fileobj=target, mode="wb", mtime=0, filename="", compresslevel=1) as compressed:
                             for chunk in chunks():
                                 compressed.write(chunk)
                         target.flush()

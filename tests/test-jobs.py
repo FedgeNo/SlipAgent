@@ -73,3 +73,30 @@ async def test_completion_is_announced_once_without_starting_a_model_turn(worksp
     finally:
         await agent.registry.aclose()
         await archive.aclose()
+
+
+async def test_cleanup_keeps_unreported_completions(workspace):
+    from slipagent.jobs import CommandJob
+    from slipagent.tools.base import ToolResult
+    from slipagent.tools.output import CommandLog
+
+    jobs = CommandJobs()
+    archive = CommandArchive(1_000_000)
+    for index in range(128):
+        job = CommandJob(CommandLog(archive, f"echo {index}", None, None))
+        job.state, job.notified = "completed", index != 0
+        jobs.jobs[job.log.id] = job
+    unreported, oldest_reported = list(jobs.jobs)[:2]
+
+    async def finished():
+        return ToolResult.ok("done")
+
+    jobs.start(CommandLog(archive, "true", None, None), finished)
+    assert unreported in jobs.jobs and oldest_reported not in jobs.jobs and len(jobs.jobs) == 128
+    for job in jobs.jobs.values():
+        if job.task is not None:
+            await job.task
+        job.notified = False
+    with pytest.raises(ValueError, match="not been reported yet"):
+        jobs.check_capacity()
+    await jobs.aclose()

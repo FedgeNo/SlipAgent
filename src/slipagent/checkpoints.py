@@ -169,6 +169,8 @@ class FileCheckpoints:
         raise CheckpointError("Unknown or already restored file checkpoint.")
 
     def preview(self, checkpoint_id: str) -> str:
+        from .tools.editing import split_lines
+
         selected, originals, planned = self._plan(checkpoint_id)
         names = [self.workspace.relative(path) for path in planned]
         diffs: list[str] = []
@@ -182,8 +184,8 @@ class FileCheckpoints:
                 diff = f"{name}: diff omitted for large contents; original bytes are retained\n"
             else:
                 diff = "".join(difflib.unified_diff(
-                    [line + "\n" for line in (after or b"").decode("utf-8", errors="replace").splitlines()],
-                    [line + "\n" for line in (before or b"").decode("utf-8", errors="replace").splitlines()],
+                    [line + "\n" for line in split_lines((after or b"").decode("utf-8", errors="replace"))],
+                    [line + "\n" for line in split_lines((before or b"").decode("utf-8", errors="replace"))],
                     fromfile=name + " (current)", tofile=name + " (restored)",
                 ))
                 if not diff and before != after:

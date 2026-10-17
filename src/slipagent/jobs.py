@@ -50,11 +50,19 @@ class CommandJobs:
             raise ValueError("Background commands are shutting down")
         if sum(job.state == "running" for job in self.jobs.values()) >= 4:
             raise ValueError("Four background commands are already running; wait for or stop one before starting another")
+        if len(self.jobs) >= 128 and self._removable() is None and any(
+                job.state != "running" for job in self.jobs.values()):
+            raise ValueError("Earlier background command results have not been reported yet; "
+                             "start another after the next step")
+
+    def _removable(self) -> str | None:
+        # Only reported completions may leave the retained list.
+        return next((key for key, job in self.jobs.items() if job.state != "running" and job.notified), None)
 
     def start(self, log: CommandLog, run: Callable[[], Awaitable[ToolResult]]) -> CommandJob:
         self.check_capacity()
         while len(self.jobs) >= 128:
-            oldest = next((key for key, job in self.jobs.items() if job.state != "running"), None)
+            oldest = self._removable()
             if oldest is None:
                 break
             del self.jobs[oldest]

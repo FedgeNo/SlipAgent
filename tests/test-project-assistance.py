@@ -202,3 +202,21 @@ async def test_configured_checks_expand_paths_as_arguments_without_shell(workspa
         assert "Arguments: PASSED" in result and str(workspace.root / name) in result
     finally:
         await registry.aclose()
+
+
+def test_repository_map_reuses_ranking_only_while_files_are_unchanged(tmp_path):
+    import os
+    from slipagent.repomap import RepositoryMap
+    from slipagent.workspace import Workspace
+
+    source = tmp_path / "parser.py"
+    source.write_text("def parse_value(text):\n    return text\n")
+    repository = RepositoryMap(Workspace(tmp_path))
+    first = repository._snapshot("parse", 128_000)
+    assert "def parse_value(text)" in first
+    assert repository._snapshot("parse", 128_000) is first
+    source.write_text("def parse_value(text):\n    return text\n\ndef parse_list(items):\n    return items\n")
+    stat = source.stat()
+    os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+    changed = repository._snapshot("parse", 128_000)
+    assert "def parse_list(items)" in changed

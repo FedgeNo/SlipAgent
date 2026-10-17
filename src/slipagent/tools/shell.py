@@ -220,7 +220,8 @@ async def kill_and_drain(process: asyncio.subprocess.Process, *, log: CommandLog
 
 
 def _subprocess_env() -> dict[str, str]:
-    env = dict(os.environ)
+    from ..config import command_environment
+    env = command_environment()
     # Flush Python child output promptly for capture and progress updates.
     env["PYTHONUNBUFFERED"] = "1"
     env.setdefault("PYTHONIOENCODING", "utf-8")

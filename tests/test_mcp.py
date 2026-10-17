@@ -478,3 +478,62 @@ for line in sys.stdin:
 @pytest.fixture(autouse=True)
 def global_mcp_directory():
     config_path().parent.mkdir(parents=True, exist_ok=True)
+
+
+def test_tool_aliases_are_provider_valid_stable_and_distinct():
+    import re
+    from slipagent.mcp import tool_alias
+
+    assert tool_alias("github", "search_repos") == "github__search_repos"
+    names = [tool_alias("github", "search.repos"), tool_alias("github", "search_repos"),
+             tool_alias("my tools", "echo"), tool_alias("server" * 10, "tool" * 20)]
+    assert all(re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name) for name in names)
+    assert len(set(names)) == len(names)
+    assert names[0] == tool_alias("github", "search.repos")
+    assert names[0].startswith("github__search_repos_")
+
+
+async def test_aliased_tool_calls_the_server_by_its_original_name():
+    from types import SimpleNamespace
+    from slipagent.mcp import MCPManager, MCPToolInfo, ServerState
+
+    calls = []
+
+    async def call_tool(name, arguments):
+        calls.append((name, arguments))
+        from slipagent.tools.base import ToolResult
+        return ToolResult.ok("done")
+
+    client = SimpleNamespace(spec=stub_spec("my tools"), connected=True, call_tool=call_tool)
+    registry = ToolRegistry()
+    manager = MCPManager(registry=registry)
+    state = ServerState(spec=client.spec, client=client)
+    info = MCPToolInfo("files.read", "Read a file", {"type": "object", "properties": {"path": {"type": "string"}}})
+    [alias] = manager._register("my tools", client, [info], state)
+    assert alias in registry and " " not in alias and "." not in alias
+    result = await registry.invoke(alias, {"path": "a.txt"})
+    assert result.content == "done" and calls == [("files.read", {"path": "a.txt"})]
+
+
+def test_server_timeout_is_validated_and_round_trips():
+    spec = ServerSpec.from_json("slow", {"command": "server", "timeout": 900})
+    assert spec.timeout == 900.0 and ServerSpec.from_json("slow", spec.to_json()).timeout == 900.0
+    assert ServerSpec.from_json("fast", {"command": "server"}).timeout is None
+    for value in (0, -1, "60", True, 10**9):
+        with pytest.raises(MCPError, match="timeout"):
+            ServerSpec.from_json("bad", {"command": "server", "timeout": value})
+
+
+async def test_tool_calls_use_the_server_timeout(monkeypatch):
+    from slipagent import mcp
+
+    seen = []
+
+    async def request(self, method, params, meta, *, timeout=None):
+        seen.append((method, timeout))
+        return {"result": {"content": [{"type": "text", "text": "ok"}]}}
+
+    monkeypatch.setattr(mcp.MCPClient, "_request", request)
+    await mcp.MCPClient(ServerSpec("a", "cmd")).call_tool("t", {})
+    await mcp.MCPClient(ServerSpec("b", "cmd", timeout=900.0)).call_tool("t", {})
+    assert seen == [("tools/call", mcp.DEFAULT_TOOL_TIMEOUT), ("tools/call", 900.0)]

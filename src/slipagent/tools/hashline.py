@@ -13,13 +13,9 @@ from ..artifacts import ArtifactStore
 from .base import Tool, ToolRegistry, ToolResult
 from .blocking import run_blocking
 from .files import ReadFileTool, MAX_READ_BYTES, _atomic_write, _save_diff
-from .editing import MAX_DIFF_CHARS, edit_diff
+from .editing import MAX_DIFF_CHARS, edit_diff, source_lines
 
 HASHLINE_NAMES = frozenset({"read_hashlines", "edit_hashlines"})
-
-
-def source_lines(text: str) -> list[str]:
-    return [line for line in re.split(r"(?<=\n)|(?<=\r)(?!\n)", text) if line]
 
 
 def revision(data: bytes) -> str:

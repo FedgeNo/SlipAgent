@@ -187,8 +187,11 @@ class SessionJournal:
     def _artifact_directory(self, agent: Agent, *, parent: str | None = None) -> None:
         store = agent.registry.services.get("artifact_store")
         if store is not None:
-            store.use_directory(self.directory / (self.session_id + "-artifacts"),
-                                source=self.directory / (parent + "-artifacts") if parent else None)
+            try:
+                store.use_directory(self.directory / (self.session_id + "-artifacts"),
+                                    source=self.directory / (parent + "-artifacts") if parent else None)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                raise SessionError(f"Cannot restore inspection records: {exc}") from exc
 
     def _checkpoint_directory(self, agent: Agent, *, parent: str | None = None) -> None:
         checkpoints = agent._checkpoints()

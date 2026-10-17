@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 from collections import defaultdict
 
+from .config import command_environment
 from .workspace import IGNORED_DIRS, Workspace, WorkspaceError
 from .symbols import outline
 from .fileio import open_regular
@@ -103,24 +104,28 @@ class RepositoryMap:
             self.cache.clear()
             self.symbol_version = 2
         paths, incomplete = self._candidates()
-        names = [self.workspace.relative(path) for path in paths]
+        # Candidates come from scanning beneath the root, so their relative
+        # names are a fixed-length prefix away.
+        prefix = len(str(self.workspace.root).rstrip(os.sep)) + 1
+        relative = {path: str(path)[prefix:].replace(os.sep, "/") for path in paths}
+        names = list(relative.values())
         # Delegate ignore semantics to Git, including nested rules and negations.
         # Outside Git the explicit source/dependency filters still apply.
         try:
             ignored = subprocess.run(
                 ["git", "-c", "core.fsmonitor=false", "-c", f"core.hooksPath={os.devnull}", "check-ignore", "-z", "--stdin"], input="\0".join(names).encode() + b"\0",
-                cwd=self.workspace.root, capture_output=True, timeout=2,
+                cwd=self.workspace.root, capture_output=True, timeout=2, env=command_environment(),
             )
             if ignored.returncode in {0, 1}:
                 excluded = set(ignored.stdout.decode(errors="replace").split("\0"))
-                paths = [path for path in paths if self.workspace.relative(path) not in excluded]
+                paths = [path for path in paths if relative[path] not in excluded]
         except (OSError, subprocess.TimeoutExpired):
             pass
         retained: dict[str, tuple[tuple[int, int, int], str, set[str]]] = {}
         deadline = time.monotonic() + 2
         parsed_bytes = 0
         for path in sorted(paths):
-            name = self.workspace.relative(path)
+            name = relative[path]
             try:
                 stat = self.workspace.resolve(path).stat()
                 stamp = (stat.st_ino, stat.st_mtime_ns, stat.st_size)
@@ -138,6 +143,13 @@ class RepositoryMap:
                 continue
         self.cache = {name: entry for name, entry in retained.items() if entry[1] != "[outline deferred]"}
         words = set(re.findall(r"[a-z_][a-z_0-9]{2,}", query.casefold()))
+        # Identical files, query terms, and size produce an identical ranking.
+        key = (frozenset(words), limit, incomplete, tuple((name, entry[0], entry[1] == "[outline deferred]")
+                                                          for name, entry in retained.items()))
+        previous = self.__dict__.get("_last_snapshot")
+        if previous is not None and previous[0] == key:
+            result: str = previous[1]
+            return result
         definitions: dict[str, set[str]] = defaultdict(set)
         modules: dict[str, set[str]] = defaultdict(set)
         for name, (_, _, refs) in retained.items():
@@ -188,4 +200,5 @@ class RepositoryMap:
             result += entry
         if incomplete:
             result += partial
+        self.__dict__["_last_snapshot"] = (key, result)
         return result

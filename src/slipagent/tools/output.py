@@ -64,7 +64,7 @@ class CommandLog:
         remaining = max(0, self.archive.quota_bytes - self.archive.used_bytes)
         # Never leave half a character at the retention boundary. Once bytes are
         # lost this stream stays stopped, so a file always represents one prefix.
-        kept = raw[:remaining].decode("utf-8", errors="ignore").encode("utf-8")
+        kept = raw if len(raw) <= remaining else raw[:remaining].decode("utf-8", errors="ignore").encode("utf-8")
         written = 0
         try:
             if kept:
@@ -81,7 +81,8 @@ class CommandLog:
                 stream.error = f"Session log quota of {self.archive.quota_bytes} bytes reached; later bytes from this stream are not archived."
         except OSError as exc:
             stream.error = f"Log storage failed: {exc}; later bytes from this stream are not archived."
-        valid_written = len(kept[:written].decode("utf-8", errors="ignore").encode("utf-8"))
+        valid_written = written if written == len(raw) else len(
+            kept[:written].decode("utf-8", errors="ignore").encode("utf-8"))
         stream.retained_bytes += valid_written
         self.archive.used_bytes += written
         stream.lost_bytes += len(raw) - valid_written

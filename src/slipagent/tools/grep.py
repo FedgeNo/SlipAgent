@@ -2,7 +2,9 @@
 
 The parent launches a snapshot of this source, so rejected on-disk edits cannot
 change an already active tool. Keep this worker independent of package imports.
-Each input line is a JSON object; each output line is its JSON result.
+Each batch is a JSON header line with file byte sizes, followed by the files'
+raw bytes; each output line is its JSON result. Files decode as UTF-8 with
+replacement, and lines break at LF, CRLF, or CR, as in editors.
 """
 
 from __future__ import annotations
@@ -18,21 +20,40 @@ def worker_source() -> bytes:
 
 
 def main() -> None:
-    config = json.loads(sys.stdin.readline())
+    source = sys.stdin.buffer
+    config = json.loads(source.readline())
     try:
         pattern = re.compile(config["pattern"], re.IGNORECASE if config["ignore_case"] else 0)
     except re.error as exc:
         print(json.dumps({"error": f"Invalid regular expression: {exc}"}), flush=True)
         return
     print(json.dumps({"ready": True}), flush=True)
-    for line in sys.stdin:
-        request = json.loads(line)
-        matches = []
-        for number, text in enumerate(request["text"].splitlines(), 1):
-            if pattern.search(text):
-                matches.append([number, text])
-                if len(matches) >= request["budget"]:
-                    break
+    breaks = re.compile(r"\r\n|\r|\n")
+    # Without anchors, boundaries, or lookarounds, any match inside a line is
+    # also a match in the whole text, so a file without one can be skipped.
+    context = ("^", "$", "\\A", "\\Z", "\\z", "\\b", "\\B", "(?=", "(?!", "(?<=", "(?<!")
+    whole = None if any(token in config["pattern"] for token in context) else pattern
+    while header := source.readline():
+        request = json.loads(header)
+        budget = request["budget"]
+        data = source.read(sum(request["sizes"]))
+        offset = 0
+        matches: list[list[object]] = []
+        for index, size in enumerate(request["sizes"]):
+            text = data[offset:offset + size].decode("utf-8", errors="replace")
+            offset += size
+            if whole is not None and whole.search(text) is None:
+                continue
+            lines = breaks.split(text)
+            if lines[-1] == "":
+                lines.pop()
+            for number, content in enumerate(lines, 1):
+                if pattern.search(content):
+                    matches.append([index, number, content])
+                    if len(matches) >= budget:
+                        break
+            if len(matches) >= budget:
+                break
         print(json.dumps({"matches": matches}), flush=True)
 
 

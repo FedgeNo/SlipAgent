@@ -407,8 +407,9 @@ def test_search_worker_uses_active_snapshot_after_rejected_source_edit(run_copy)
         assert frame.generation == 0
         result = await registry.invoke('grep', {'pattern': 'needle'})
         assert not result.is_error and 'sample.txt:1:' in result.content, result.content
-        assert 'matches.append([number, text])' in original
-        path.write_text(original.replace('matches.append([number, text])', 'matches.append([number, "UPDATED " + text])'))
+        assert 'matches.append([index, number, content])' in original
+        path.write_text(original.replace('matches.append([index, number, content])',
+                                         'matches.append([index, number, "UPDATED " + content])'))
         await frame.checkpoint()
         assert frame.generation == 1, sink.getvalue()
         result = await registry.invoke('grep', {'pattern': 'needle'})

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
+from .config import command_environment
 from .lifecycle import Lifetime, finish_cleanup
 from .fileio import open_regular
 from .tools.base import Tool, ToolResult
@@ -68,7 +69,7 @@ class LanguageServer:
         spawn = asyncio.create_task(asyncio.create_subprocess_exec(
             *command, cwd=self.workspace.root, stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            start_new_session=os.name == "posix", limit=16384,
+            start_new_session=os.name == "posix", limit=16384, env=command_environment(),
         ))
         try:
             self.process = await asyncio.shield(spawn)

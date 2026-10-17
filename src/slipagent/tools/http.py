@@ -10,7 +10,7 @@ import httpx
 
 from ..prompts import load_prompt
 from .base import ToolResult
-from .web import PublicHttpTool, MAX_FETCH_BYTES, _public_address
+from .web import PublicHttpTool, MAX_FETCH_BYTES
 
 
 class HttpFetchTool(PublicHttpTool):
@@ -43,13 +43,11 @@ class HttpFetchTool(PublicHttpTool):
             return ToolResult.error("Provide body or json_body, not both.")
         try:
             target = httpx.URL(url)
-            address = await _public_address(target)
             async with asyncio.timeout(timeout):
-                async with self._client.stream(
+                async with self._stream(
                     method, target, headers=headers, params=params,
                     content=body.encode("utf-8") if body is not None else None,
                     json=json_body, timeout=timeout, follow_redirects=False,
-                    extensions={"validated_address": address},
                 ) as response:
                     raw = bytearray()
                     truncated = False

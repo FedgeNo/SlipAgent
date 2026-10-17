@@ -15,6 +15,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+from ..config import command_environment
 from ..workspace import Workspace, WorkspaceError
 from ..fileio import read_regular
 from .base import Tool, ToolResult
@@ -26,6 +27,9 @@ MAX_GREP_RESULTS = 100_000
 MAX_GREP_FILE_BYTES = 32_000_000
 MAX_GLOB_RESULTS = 100_000
 GREP_TIMEOUT = 120.0
+# One worker request carries up to this many files or bytes.
+GREP_BATCH_FILES = 256
+GREP_BATCH_BYTES = 4_000_000
 
 
 def _looks_binary(chunk: bytes) -> bool:
@@ -80,7 +84,7 @@ class GrepTool(Tool):
             sys.executable, "-I", "-c", self._worker_source.decode("utf-8"),
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL, cwd=self.workspace.root, limit=256_000_000,
-            start_new_session=os.name == "posix",
+            start_new_session=os.name == "posix", env=command_environment(),
         )
         try:
             async with asyncio.timeout(GREP_TIMEOUT):
@@ -94,9 +98,11 @@ class GrepTool(Tool):
             await _kill(process)
 
     @staticmethod
-    async def _worker_request(process: asyncio.subprocess.Process, request: dict[str, Any]) -> dict[str, Any]:
+    async def _worker_request(process: asyncio.subprocess.Process, request: dict[str, Any],
+                              payload: bytes = b"") -> dict[str, Any]:
         assert process.stdin is not None and process.stdout is not None
-        process.stdin.write((json.dumps(request) + "\n").encode("utf-8"))
+        # File bytes follow their JSON header unencoded; the worker decodes them.
+        process.stdin.write((json.dumps(request) + "\n").encode("utf-8") + payload)
         await process.stdin.drain()
         line = await process.stdout.readline()
         if not line:
@@ -126,21 +132,22 @@ class GrepTool(Tool):
         # Direct run() calls use the same result ceiling as validated calls.
         max_results = min(max_results, MAX_GREP_RESULTS)
         candidates = self.workspace.iter_files(base)
-        while (candidate := await asyncio.to_thread(next, candidates, None)) is not None:
-            if include and not _matches_include(candidate, base, include):
+        done = False
+        while not done and not truncated:
+            # Traversal and reads share one thread hop per bounded batch.
+            scanned, batch, done = await asyncio.to_thread(self._read_batch, candidates, base, include)
+            files_scanned += scanned
+            if not batch:
                 continue
-            files_scanned += 1
-            text = await asyncio.to_thread(self._read_file, candidate)
-            if text is None:
-                continue
-            result = await self._worker_request(process, {"text": text, "budget": max_results - len(matches)})
-            line_hits = [f"{self.workspace.relative(candidate)}:{number}: {line}" for number, line in result["matches"]]
-            if line_hits:
-                files_with_matches += 1
-                matches.extend(line_hits)
-                if len(matches) >= max_results:
-                    truncated = True
-                    break
+            result = await self._worker_request(
+                process, {"sizes": [len(data) for _, data in batch], "budget": max_results - len(matches)},
+                b"".join(data for _, data in batch))
+            matched_files: set[int] = set()
+            for index, number, line in result["matches"]:
+                matched_files.add(index)
+                matches.append(f"{self.workspace.relative(batch[index][0])}:{number}: {line}")
+            files_with_matches += len(matched_files)
+            truncated = len(matches) >= max_results
 
         if not matches:
             scope = self.workspace.relative(base)
@@ -151,7 +158,7 @@ class GrepTool(Tool):
             )
 
         header = (
-            f"{len(matches)}+ match(es) for {pattern!r} in "
+            f"{len(matches)}{'+' if truncated else ''} match(es) for {pattern!r} in "
             f"{files_with_matches} of {files_scanned} file(s) scanned"
             f"{' under ' + self.workspace.relative(base)}"
         )
@@ -160,7 +167,24 @@ class GrepTool(Tool):
 
         return ToolResult.ok(header + "\n" + "\n".join(matches))
 
-    def _read_file(self, candidate: Path) -> str | None:
+    def _read_batch(self, candidates: Iterator[Path], base: Path,
+                    include: str | None) -> tuple[int, list[tuple[Path, bytes]], bool]:
+        scanned, size = 0, 0
+        batch: list[tuple[Path, bytes]] = []
+        while len(batch) < GREP_BATCH_FILES and size < GREP_BATCH_BYTES:
+            candidate = next(candidates, None)
+            if candidate is None:
+                return scanned, batch, True
+            if include and not _matches_include(candidate, base, include):
+                continue
+            scanned += 1
+            data = self._read_file(candidate)
+            if data is not None:
+                batch.append((candidate, data))
+                size += len(data)
+        return scanned, batch, False
+
+    def _read_file(self, candidate: Path) -> bytes | None:
         try:
             candidate = self.workspace.resolve(candidate)
             raw = read_regular(candidate, MAX_GREP_FILE_BYTES)
@@ -169,7 +193,7 @@ class GrepTool(Tool):
         if _looks_binary(raw[:4096]):
             return None
 
-        return raw.decode("utf-8", errors="replace")
+        return raw
 
 
 class GlobTool(Tool):

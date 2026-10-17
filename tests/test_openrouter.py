@@ -424,3 +424,22 @@ async def test_requests_use_local_user_agent_override(monkeypatch):
 
     async with OpenRouterClient("test", transport=httpx.MockTransport(handler)) as client:
         assert await client.list_models() == []
+
+
+async def test_declined_stream_retry_is_decided_once(monkeypatch):
+    from slipagent.api import APIClient, APIResponseError, RetryPolicy
+    from slipagent.types import Message
+
+    decisions = []
+
+    async def wait_retry(self, attempt, error, **options):
+        decisions.append(attempt)
+        return False
+
+    monkeypatch.setattr(APIClient, "wait_retry", wait_retry)
+    transport = httpx.MockTransport(lambda request: httpx.Response(503, json={"error": {"message": "busy"}}))
+    async with APIClient("key", base_url="https://stub.invalid", transport=transport,
+                         retry=RetryPolicy(max_retries=0)) as client:
+        with pytest.raises(APIResponseError):
+            await client.chat(model="m", messages=[Message.user("hi")], on_delta=lambda kind, text: None)
+    assert decisions == [0]

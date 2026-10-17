@@ -13,7 +13,7 @@ import json
 import random
 import copy
 import math
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -160,7 +160,7 @@ class APIClient:
         extra_body: dict[str, Any] | None = None,
         on_delta: Callable[[str, str], None] | None = None,
         on_request: Callable[[dict[str, Any]], None] | None = None,
-        on_request_body: Callable[[Any], None] | None = None,
+        on_request_body: Callable[[Any], Awaitable[None] | None] | None = None,
         on_response: Callable[[dict[str, Any]], None] | None = None,
         on_raw_response: Callable[[httpx.Response], None] | None = None,
         request_profile: RequestProfile | None = None,
@@ -230,7 +230,10 @@ class APIClient:
             # Capture the final request body before transport, without headers.
             on_request(body.read())
         if on_request_body is not None:
-            on_request_body(body)
+            # An async observer may persist the body; transport waits for it.
+            observed = on_request_body(body)
+            if observed is not None:
+                await observed
         if on_delta is not None:
             return await self._stream_request(payload, on_delta, single_attempt=single_attempt, disable_timeout=disable_timeout, on_response=on_response, request_body=body,
                                               first_output_timeout=first_output_timeout, on_raw_response=on_raw_response)
@@ -248,20 +251,15 @@ class APIClient:
         attempt = 0
         while True:
             state: _StreamCompletion | None = None
-            captured: dict[str, Any] = {}
+            # An HTTP error whose retry was already declined is not reconsidered.
+            declined: APIResponseError | None = None
+            captured: dict[str, Any] | None = None
+            # Raw events are merged once when the attempt ends.
+            events: list[str] = []
             data: list[str] = []
             def capture_event(event: str) -> None:
-                if on_response is None or event == "[DONE]":
-                    return
-                try:
-                    value = json.loads(event)
-                except ValueError:
-                    captured.setdefault("unparsed_events", []).append(event)
-                    return
-                if isinstance(value, dict):
-                    _merge_response(captured, value)
-                else:
-                    captured.setdefault("unparsed_events", []).append(value)
+                if on_response is not None and event != "[DONE]":
+                    events.append(event)
             first_output = asyncio.timeout(first_output_timeout)
             try:
                 async with first_output, self._client.stream("POST", f"{self.base_url}/chat/completions", content=body, headers={"Content-Length": str(body.size)}, **transport_options) as response:
@@ -275,6 +273,7 @@ class APIClient:
                         if not single_attempt and response.status_code in RETRYABLE_STATUS and await self.wait_retry(attempt, error):
                             attempt += 1
                             continue
+                        declined = error
                         raise error
                     # Gateways and test servers may return a regular completion.
                     if "application/json" in response.headers.get("content-type", ""):
@@ -313,11 +312,11 @@ class APIClient:
                             observed = True
                             state.add(event)
                             if first_output.when() is not None and (
-                                    state.content or state.reasoning
+                                    any(state.content_parts) or state.reasoning
                                     or any(detail.get("text") or detail.get("summary") or detail.get("data")
                                            for detail in state.reasoning_details)
-                                    or any(call["function"]["name"] or call["function"]["arguments"]
-                                           for call in state.calls.values())
+                                    or any(call["function"]["name"] or state.has_arguments(index)
+                                           for index, call in state.calls.items())
                                     or state.function_call or state.tool_blocks):
                                 first_output.reschedule(None)
                     if data:
@@ -345,13 +344,15 @@ class APIClient:
                     raise error from exc
                 attempt += 1
             except APIResponseError as exc:
+                if exc is declined:
+                    raise
                 if state is not None:
                     state.attach_diagnostics(exc)
                 exc.retry_after = exc.retry_after or response.headers.get("retry-after")
                 # HTTP 200 can contain an overload instead of a completion.
                 # Partial output returns to the agent for visible recovery.
                 no_partial = not observed if state is None else not (
-                    state.content or state.reasoning or state.reasoning_details or state.calls or state.function_call or state.tool_blocks or state.usage)
+                    any(state.content_parts) or state.reasoning or state.reasoning_details or state.calls or state.function_call or state.tool_blocks or state.usage)
                 if (not single_attempt and exc.status_code in RETRYABLE_STATUS and no_partial
                         and await self.wait_retry(attempt, exc)):
                     attempt += 1
@@ -362,7 +363,7 @@ class APIClient:
                 if on_response is not None:
                     if data:
                         capture_event("\n".join(data))
-                    on_response(captured)
+                    on_response(captured if captured is not None else _merge_events(events))
 
     async def list_models(self) -> list[ModelInfo]:
         """Return the model catalog.
@@ -555,9 +556,12 @@ class _StreamCompletion:
         self.identity_mode = identity_mode
         self.index_mode = index_mode
         self.active_slots: dict[int, int] = {}
-        self.content = ""
+        # Streamed text is forwarded as it arrives and joined once at the end.
+        self.content_parts: list[str] = []
         self.thoughts = ThoughtStream(self._text_delta)
         self.calls: dict[int, dict[str, Any]] = {}
+        # String argument fragments per call; None while a non-string value is held.
+        self.argument_parts: dict[int, list[str] | None] = {}
         self.model = ""
         self.finish_reason: str | None = None
         self.usage: dict[str, Any] | None = None
@@ -566,8 +570,24 @@ class _StreamCompletion:
         self.function_call: dict[str, Any] = {}
         self.tool_blocks: list[dict[str, Any]] = []
 
+    @property
+    def content(self) -> str:
+        return "".join(self.content_parts)
+
+    def has_arguments(self, index: int) -> bool:
+        parts = self.argument_parts.get(index, [])
+        return any(parts) if parts is not None else bool(self.calls[index]["function"]["arguments"])
+
+    def joined_calls(self) -> dict[int, dict[str, Any]]:
+        for index, parts in self.argument_parts.items():
+            if parts is not None:
+                joined = "".join(parts)
+                self.argument_parts[index] = [joined]
+                self.calls[index]["function"]["arguments"] = joined
+        return self.calls
+
     def attach_diagnostics(self, error: APIResponseError) -> None:
-        error.partial_response = json.dumps({"content": self.content, "tool_calls": self.calls,
+        error.partial_response = json.dumps({"content": self.content, "tool_calls": self.joined_calls(),
                                              "reasoning": "".join(self.reasoning)}, ensure_ascii=False)[:16000]
         try:
             error.usage = Usage.from_api(self.usage)
@@ -679,11 +699,14 @@ class _StreamCompletion:
                                       for field in ("arguments", "input", "parameters")
                                       if source.get(field) is not None), None)
                     if arguments is not None:
-                        previous = call["function"]["arguments"]
-                        if isinstance(arguments, str) and isinstance(previous, str):
-                            call["function"]["arguments"] += arguments
+                        parts = self.argument_parts.setdefault(index, [])
+                        if isinstance(arguments, str) and parts is not None:
+                            parts.append(arguments)
+                        elif isinstance(arguments, str):
+                            self.argument_parts[index] = [arguments]
                         else:
                             call["function"]["arguments"] = arguments
+                            self.argument_parts[index] = None
                 legacy = delta.get("function_call")
                 if legacy is not None:
                     if not isinstance(legacy, dict):
@@ -702,7 +725,7 @@ class _StreamCompletion:
         if kind == "reasoning":
             self.reasoning.append(text)
         else:
-            self.content += text
+            self.content_parts.append(text)
         self.on_delta(kind, text)
 
     def completion(self) -> Completion:
@@ -712,12 +735,14 @@ class _StreamCompletion:
             self.thoughts.finish()
         except ValueError as exc:
             raise APIResponseError(str(exc)) from exc
+        calls = self.joined_calls()
+        content = self.content
         return _parse_completion({
             "model": self.model, "usage": self.usage,
             "choices": [{"finish_reason": self.finish_reason, "message": {
-                "role": "assistant", "content": ([{"type": "text", "text": self.content}, *self.tool_blocks]
-                                                  if self.tool_blocks else self.content or None),
-                "tool_calls": [self.calls[index] for index in sorted(self.calls)],
+                "role": "assistant", "content": ([{"type": "text", "text": content}, *self.tool_blocks]
+                                                  if self.tool_blocks else content or None),
+                "tool_calls": [calls[index] for index in sorted(calls)],
                 "function_call": self.function_call or None,
                 "reasoning_details": self.reasoning_details or None,
                 "reasoning": "".join(self.reasoning),
@@ -817,6 +842,43 @@ def _response_body(response: httpx.Response) -> dict[str, Any]:
     return value if isinstance(value, dict) else {"body": value}
 
 
+class _TextParts:
+    """Text fragments joined once after all diagnostic events are merged."""
+
+    def __init__(self, parts: list[str]) -> None:
+        self.parts = parts
+
+    def text(self) -> str:
+        return "".join(self.parts)
+
+
+def _joined(value: Any) -> Any:
+    if isinstance(value, _TextParts):
+        return value.text()
+    if isinstance(value, dict):
+        return {key: _joined(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_joined(item) for item in value]
+    return value
+
+
+def _merge_events(events: list[str]) -> dict[str, Any]:
+    """Assemble captured stream events for diagnostics in one linear pass."""
+    captured: dict[str, Any] = {}
+    for event in events:
+        try:
+            value = json.loads(event)
+        except ValueError:
+            captured.setdefault("unparsed_events", []).append(event)
+            continue
+        if isinstance(value, dict):
+            _merge_response(captured, value)
+        else:
+            captured.setdefault("unparsed_events", []).append(value)
+    result: dict[str, Any] = _joined(captured)
+    return result
+
+
 def _merge_response(target: dict[str, Any], incoming: dict[str, Any]) -> None:
     """Assemble provider deltas for diagnostics independently of tool parsing.
 
@@ -830,6 +892,8 @@ def _merge_response(target: dict[str, Any], incoming: dict[str, Any]) -> None:
             # Content can switch from strings to thinking blocks and back.
             # Preserve ordered fragments rather than merging unrelated block positions.
             previous = target.get(key)
+            if isinstance(previous, _TextParts):
+                previous = previous.text()
             if not isinstance(previous, list):
                 target[key] = [{"type": "text", "text": previous}] if isinstance(previous, str) and previous else []
             if isinstance(value, list):
@@ -861,7 +925,10 @@ def _merge_response(target: dict[str, Any], incoming: dict[str, Any]) -> None:
                 target.setdefault(key, []).extend(copy.deepcopy(value))
         elif isinstance(value, str) and key in {"content", "reasoning", "reasoning_content", "text", "summary", "arguments", "name", "refusal"}:
             previous = target.get(key)
-            target[key] = previous + value if isinstance(previous, str) else value
+            if isinstance(previous, _TextParts):
+                previous.parts.append(value)
+            else:
+                target[key] = _TextParts([previous, value]) if isinstance(previous, str) else value
         else:
             target[key] = value
 

@@ -84,6 +84,10 @@ def schedule_history_merge(owner: StepCompactor, steps: list[HistoryStep], clien
     system = Message.system(load_prompt("historical-summary-prompt.md", max_characters=MERGE_MAX_CHARS))
     source: dict[str, Any] = {"steps": []}
     batch = []
+    budget = int(limit * .85) - reserve
+    # A running estimate avoids re-measuring the growing source per step; an
+    # exact measurement below trims the same prefix the per-step check kept.
+    estimate = message_tokens([system, Message.user(source)])
     for step in steps[:boundary]:
         if step.id in covered or step.summary is None:
             continue
@@ -93,11 +97,16 @@ def schedule_history_merge(owner: StepCompactor, steps: list[HistoryStep], clien
                                    for call in original["tool_calls"]],
                     "artifacts": step.context_messages(compressed=True)[0].content.get("artifacts", [])}
         summary = step._disk_summary["summary"] if hasattr(step, "_disk_summary") else step.summary
-        source["steps"].append({**metadata, "compressed_summary": summary})
-        if message_tokens([system, Message.user(source)]) + reserve > int(limit * .85):
-            source["steps"].pop()
+        entry = {**metadata, "compressed_summary": summary}
+        source["steps"].append(entry)
+        estimate += message_tokens([Message.user(entry)]) - 32
+        if estimate > budget:
             break
         batch.append(step)
+    del source["steps"][len(batch):]
+    while source["steps"] and message_tokens([system, Message.user(source)]) > budget:
+        source["steps"].pop()
+    del batch[len(source["steps"]):]
     from .requestbody import value_tokens
     if len(batch) < MERGE_INTERVAL or value_tokens(source) < MERGE_MIN_TOKENS:
         return

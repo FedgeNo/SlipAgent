@@ -39,10 +39,7 @@ class FileText(TextSource):
         with self.path.open("rb") as binary:
             binary.seek(self.offset)
             if self.quoted:
-                import io
-                from .inspection import JSONRecordReader
-                with io.TextIOWrapper(binary, encoding="utf-8") as source:
-                    yield from JSONRecordReader(source).string()
+                yield from _quoted_chunks(binary, self.size, self.path)
             else:
                 import codecs
                 decoder = codecs.getincrementaldecoder("utf-8")()
@@ -62,6 +59,46 @@ class FileText(TextSource):
 
     def __len__(self) -> int:
         return self.characters
+
+
+def _quoted_chunks(binary: Any, size: int, path: Path) -> Iterator[str]:
+    """Decode one stored JSON string in bounded blocks with the C decoder.
+
+    Blocks end before a backslash that may start an incomplete escape and after
+    complete UTF-8 characters, so each block is a valid JSON string body.
+    """
+    import codecs
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    remaining = size
+    pending = ""
+    opened = False
+    while remaining:
+        block = binary.read(min(65536, remaining))
+        if not block:
+            raise OSError(f"Incomplete request source: {path}")
+        remaining -= len(block)
+        text = pending + decoder.decode(block, final=not remaining)
+        if not opened:
+            if not text.startswith('"'):
+                raise ValueError(f"Stored text is not a JSON string: {path}")
+            text, opened = text[1:], True
+        if remaining:
+            # The longest escape is six characters (\uXXXX).
+            cut = len(text)
+            backslash = text.rfind("\\", max(0, cut - 6))
+            if backslash >= 0:
+                start = backslash
+                while start > 0 and text[start - 1] == "\\":
+                    start -= 1
+                if (backslash - start) % 2 == 0:
+                    cut = backslash
+            text, pending = text[:cut], text[cut:]
+        else:
+            if not text.endswith('"'):
+                raise ValueError(f"Unterminated stored JSON string: {path}")
+            text = text[:-1]
+        if text:
+            yield json.loads('"' + text + '"')
 
 
 def text_chunks(value: str | TextSource) -> Iterator[str]:

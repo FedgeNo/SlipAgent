@@ -325,3 +325,32 @@ def test_cli_reports_missing_prompt_without_traceback(monkeypatch, capsys):
     monkeypatch.setattr(cli, "_dispatch", dispatch)
     assert cli.main([]) == 2
     assert capsys.readouterr().err == "slipagent: Missing prompt file: /example/prompts/missing.txt. Restore this file in the prompts folder.\n"
+
+
+def test_prompt_edits_apply_on_next_use_with_caching(tmp_path, monkeypatch):
+    import json
+    import os
+    from slipagent import prompts
+
+    monkeypatch.setattr(prompts, "prompt_directory", lambda: tmp_path)
+    note = tmp_path / "note.md"
+    note.write_text("first")
+    assert prompts.load_prompt("note.md") == "\nfirst\n"
+    note.write_text("second, longer")
+    assert prompts.load_prompt("note.md") == "\nsecond, longer\n"
+    # Same size: the modification time alone identifies the change.
+    stamp = note.stat().st_mtime_ns
+    note.write_text("second, LONGER")
+    os.utime(note, ns=(stamp, stamp + 1_000_000))
+    assert prompts.load_prompt("note.md") == "\nsecond, LONGER\n"
+
+    profiles = tmp_path / "model-profiles.json"
+    profiles.write_text(json.dumps({"m": {"tool_channel": "native"}}))
+    profile = prompts.model_prompt_profile("m")
+    profile["tool_channel"] = "changed by caller"
+    assert prompts.model_prompt_profile("m") == {"tool_channel": "native"}
+    profiles.write_text(json.dumps({"m": {"tool_channel": "embedded"}}))
+    assert prompts.model_prompt_profile("m") == {"tool_channel": "embedded"}
+    profiles.unlink()
+    with pytest.raises(prompts.PromptError, match="Missing prompt file"):
+        prompts.load_prompt("model-profiles.json")

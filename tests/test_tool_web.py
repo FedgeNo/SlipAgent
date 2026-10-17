@@ -444,3 +444,42 @@ async def test_network_transport_pins_address_and_preserves_host(monkeypatch) ->
         assert captured[0].extensions["sni_hostname"] == "docs.example.com"
     finally:
         await transport.aclose()
+
+
+async def test_fetch_tries_each_public_address_after_connection_failure(monkeypatch) -> None:
+    import socket
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: [
+        (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("2606:4700::6810:84e5", 443, 0, 0)),
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.215.14", 443)),
+    ])
+    tried = []
+
+    def handler(request):
+        tried.append(request.extensions["validated_address"])
+        if ":" in request.extensions["validated_address"]:
+            raise httpx.ConnectError("network unreachable", request=request)
+        return httpx.Response(200, text="Reached over IPv4", headers={"Content-Type": "text/plain"})
+
+    tool = FetchPageTool()
+    rebind(tool, handler)
+    try:
+        result = await tool.invoke({"url": "https://dual.example.com"})
+        assert not result.is_error and "Reached over IPv4" in result.content
+        assert tried == ["2606:4700::6810:84e5", "93.184.215.14"]
+    finally:
+        await tool.aclose()
+
+
+@pytest.mark.parametrize("headers, body, expected", [
+    ({"Content-Type": "text/plain; charset=iso-8859-1"}, "café".encode("latin-1"), "café"),
+    ({"Content-Type": "text/html"}, '<html><head><meta charset="shift_jis"></head><body>日本語</body></html>'.encode("shift_jis"), "日本語"),
+    ({"Content-Type": "text/plain; charset=not-a-codec"}, "naïve".encode("utf-8"), "naïve"),
+])
+async def test_fetch_decodes_declared_charsets(headers, body, expected) -> None:
+    tool = FetchPageTool()
+    rebind(tool, lambda request: httpx.Response(200, content=body, headers=headers))
+    try:
+        result = await tool.invoke({"url": "https://example.com"})
+        assert not result.is_error and expected in result.content
+    finally:
+        await tool.aclose()

@@ -270,3 +270,60 @@ async def test_summary_comparison_uses_the_same_json_records_for_all_tool_profil
         view = await history.view(messages, [], keep_steps=5, context_length=1_000_000, max_output=8192,
                                   native_tools=native, text_tool_history=not native)
     assert context_records(view)[0] == {"record_type": "history_step", "representation": "compressed", "step_id": step.id, "compressed_summary": step.summary}
+
+
+def archived_code_history(lines):
+    from slipagent.toolbatch import tool_message
+    from slipagent.tools.base import ToolResult
+    from slipagent.turnstore import TurnStore
+
+    code = "".join(f"    def f{i}(x):\n        return x + {i}\n" for i in range(lines))
+    call = ToolCall("c1", "read_file", {"path": "a.py"})
+    messages = [Message.system("System."), Message.user("Read it"), Message.assistant("Reading.", [call]),
+                tool_message(call, ToolResult.ok(code))]
+    history = ConversationHistory()
+    history.sync(messages)
+    history.store = TurnStore()
+    history.store.archive(history.steps[0], messages)
+    history.steps[0].observed = True
+    messages.append(Message.user("Next question"))
+    return history, messages, code
+
+
+async def test_history_is_costed_in_its_sent_form():
+    from slipagent.records import record_message
+
+    history, messages, code = archived_code_history(3000)
+    try:
+        labelled = message_tokens([record_message(history.steps[0].context_messages()[0].content)])
+
+        async def included(length):
+            view = await history.view(messages, [], keep_steps=10, context_length=length, max_output=256)
+            return code[-200:] in content_text(view[-1].content)
+
+        low, high = 4096, 400_000
+        while low < high:
+            middle = (low + high) // 2
+            low, high = (low, middle) if await included(middle) else (middle + 1, high)
+        # The step is kept once its sent size fits, below its labelled-text size.
+        assert int(low * .85) - 256 < labelled
+    finally:
+        history.clear()
+
+
+async def test_archived_history_costs_are_measured_once(monkeypatch):
+    from slipagent.sources import FileText
+
+    history, messages, code = archived_code_history(300)
+    reads = []
+    original = FileText.chunks
+    monkeypatch.setattr(FileText, "chunks", lambda self: (reads.append(self.characters), original(self))[1])
+    try:
+        await history.view(messages, [], keep_steps=10, context_length=200_000, max_output=256)
+        first = reads.count(len(code))
+        reads.clear()
+        await history.view(messages, [], keep_steps=10, context_length=200_000, max_output=256)
+        # Later requests read the archived result only to assemble the request.
+        assert first == 2 and reads.count(len(code)) == 1
+    finally:
+        history.clear()

@@ -93,6 +93,14 @@ def message_tokens(messages: list[Message]) -> int:
     return sum(value_tokens(wire_message(message)) for message in messages)
 
 
+def history_bytes(records: list[Any]) -> int:
+    """Encoded size of history records as sent in the user-input payload."""
+    from .data_text import RenderedContent
+    from .sources import json_chunks
+    rendered = RenderedContent(JSONInput({"history": [linked_tool_results(record) for record in records]}))
+    return sum(len(chunk.encode("utf-8")) for chunk in json_chunks(rendered, indent=None))
+
+
 def tool_history_as_text(messages: list[Message]) -> list[Message]:
     """Project canonical history for endpoints without native tool support.
 
@@ -650,20 +658,54 @@ class ConversationHistory:
         narratives = historical_records(self.steps)
         parts: dict[tuple[int, bool], list[Message]] = {}
         costs: dict[tuple[int, bool], int] = {}
+        empty_history = history_bytes([])
+
+        def part_cost(index: int, form: tuple[bool, bool], part: list[Message]) -> int:
+            # Measure history in its sent projection. Archived steps are
+            # immutable, so each form is measured once until its record or
+            # summary state changes; the assembled request is still checked.
+            step = self.steps[index]
+            disk = step.__dict__.get("_disk") if isinstance(step, CompletedStep) else None
+            attached = overthinking and index >= len(self.steps) - reasoning_history_steps
+            key = (*form, attached, filtered_thoughts, step.summary, getattr(step, "reasoning_summary", None),
+                   getattr(step, "compaction_status", None), getattr(step, "compaction_error", None))
+            cache: dict[Any, tuple[Any, int]] | None = (
+                step.__dict__.setdefault("_sent_bytes", {}) if disk is not None else None)
+            entry = cache.get(key) if cache is not None else None
+            if entry is not None and entry[0] is disk:
+                size = entry[1]
+            else:
+                size = history_bytes([message.content for message in part]) - empty_history
+                if cache is not None:
+                    cache[key] = (disk, size)
+            return math.ceil(size / 3 * token_scale)
+
+        def narrative_cost(record: dict[str, Any]) -> int:
+            anchor = self.steps[record["step_id"] - 1]
+            entry: tuple[Any, int] | None = (
+                anchor.__dict__.get("_narrative_bytes") if isinstance(anchor, CompletedStep) else None)
+            if entry is not None and entry[0] is record:
+                size = entry[1]
+            else:
+                size = history_bytes([record]) - empty_history
+                if isinstance(anchor, CompletedStep):
+                    anchor.__dict__["_narrative_bytes"] = (record, size)
+            return math.ceil(size / 3 * token_scale)
 
         def supplied(index: int, compressed: bool) -> tuple[list[Message], int]:
             key = (index, compressed)
             if key not in parts:
                 original = context_part(index)
-                chosen = original
+                chosen, cost = original, part_cost(index, (False, True), original)
                 # An unavailable summary is not memory. Retain the original
                 # rather than replacing evidence with a failure notice.
                 if compressed and self.steps[index].summary is not None:
                     compact = context_part(index, compressed=True)
+                    compact_cost = part_cost(index, (True, True), compact)
                     raw = context_part(index, include_summary=False)
-                    if tokens(compact) < tokens(raw):
-                        chosen = compact
-                parts[key], costs[key] = chosen, tokens(chosen)
+                    if compact_cost < part_cost(index, (False, False), raw):
+                        chosen, cost = compact, compact_cost
+                parts[key], costs[key] = chosen, cost
             return parts[key], costs[key]
 
         # keep_steps remains accepted for older callers; the retained posts,
@@ -678,7 +720,7 @@ class ConversationHistory:
             merged = [record for record in narratives if record["step_ids"][-1] <= boundary]
             covered = {step_id for record in merged for step_id in record["step_ids"]}
             selected: list[tuple[int, list[Message], int]] = [
-                (record["step_id"], [record_message(record)], tokens([record_message(record)]))
+                (record["step_id"], [record_message(record)], narrative_cost(record))
                 for record in merged
             ]
             for index in range(start, len(self.steps)):
@@ -726,7 +768,7 @@ class ConversationHistory:
                     break
                 candidate = assemble(excerpt + failure_context)
                 cost = tokens(candidate)
-                if tokens(candidate) <= rendered_limit:
+                if cost <= rendered_limit:
                     return candidate
                 excerpt_budget -= max(1, cost - rendered_limit)
         raise ContextError("Current input and latest tool results exceed the context budget even without older history; originals and summaries are preserved.")
@@ -785,7 +827,8 @@ class RecallHistoryTool(Tool):
             if step_id > len(self.history.steps):
                 return ToolResult.error(f"No history step {step_id}. Available steps: 1–{len(self.history.steps)}.")
             step = self.history.steps[step_id - 1]
-            structured = step.record()
+            if section == "all" and sections is None and call_id is None:
+                structured = step.record()
             if section == "user":
                 structured = [message.content or "" for message in self.history.steps[step_id - 1].messages
                               if message.role == "user"]

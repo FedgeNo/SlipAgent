@@ -257,10 +257,15 @@ class StepCompactor:
                 if max_tokens is None:
                     reserve = min(reserve, max(256, context_limit // 8))
                 reserve = min(reserve, capabilities.max_completion_tokens or reserve)
-                while source['history'] and message_tokens(messages) + reserve > int(context_limit * .85):
-                    source['history'].pop(0)
-                    source['history_omitted'] += 1
-                if message_tokens(messages) + reserve > int(context_limit * .85):
+                budget = int(context_limit * .85) - reserve
+                total = message_tokens(messages)
+                while source['history'] and total > budget:
+                    # Drop by each entry's estimated share, then measure exactly once more.
+                    while source['history'] and total > budget:
+                        total -= message_tokens([Message.user(source['history'].pop(0))]) - 32
+                        source['history_omitted'] += 1
+                    total = message_tokens(messages)
+                if total > budget:
                     raise CompactionBudgetError("the complete step exceeds the selected model's compaction context budget")
             options: dict[str, Any] = {}
             if isinstance(client, APIClient):

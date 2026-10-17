@@ -32,6 +32,9 @@ def isolated_session_storage(tmp_path: Path, system_temp_root: Path, monkeypatch
     monkeypatch.setattr(tempfile, "tempdir", str(system_temp))
     python_path = [GUARD_DIRECTORY, *os.environ.get("PYTHONPATH", "").split(os.pathsep)]
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join(path for path in python_path if path))
+    # MCP servers inherit a minimal environment; test servers keep the offline guard.
+    from slipagent import mcp
+    monkeypatch.setattr(mcp, "INHERITED_ENV", (*mcp.INHERITED_ENV, "PYTHONPATH"))
 
 
 @pytest.fixture(scope="session")

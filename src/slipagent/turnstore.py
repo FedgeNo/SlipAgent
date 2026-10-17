@@ -44,6 +44,12 @@ class ArchivedMessage(Message):
         return self.to_record() == other.to_record() and self.reasoning_model == other.reasoning_model
 
 
+def resident_content(message: Message) -> Any:
+    """Return message content, leaving archived large text as file references."""
+    stored = getattr(message, "_stored", None)
+    return message.content if stored is None else stored.get("content")
+
+
 def _relocate(value: Any, path: Path) -> Any:
     if isinstance(value, FileText):
         return FileText(path, value.offset, value.size, value.characters, value.quoted)

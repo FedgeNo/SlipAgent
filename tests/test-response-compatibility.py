@@ -67,16 +67,14 @@ def test_explicit_markers_inside_json_reply_are_recognized(text):
 
 
 @pytest.mark.parametrize('carrier', CARRIERS)
-@pytest.mark.parametrize('style', ['fence', 'quote', 'indent', 'example'])
+@pytest.mark.parametrize('style', ['fence', 'quote', 'indent'])
 def test_examples_do_not_become_actions(carrier, style):
     if style == 'fence':
         text = 'Example:\n```\n' + carrier + '\n```'
     elif style == 'quote':
         text = '> ' + carrier.replace('\n', '\n> ')
-    elif style == 'indent':
-        text = '    ' + carrier.replace('\n', '\n    ')
     else:
-        text = 'Example:\n' + carrier
+        text = '    ' + carrier.replace('\n', '\n    ')
     result = parse_agent_response(text, [], tools=[SPEC], xml_tool_calls=True)
     assert result.text == text and result.calls == []
 

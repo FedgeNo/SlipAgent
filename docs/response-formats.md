@@ -146,8 +146,7 @@ answer's format. Their contents never request tools. Unfinished blocks and
 thought-only replies remain terminal text. Separate API reasoning fields retain
 their existing handling.
 
-Quoted, indented, and prose-surrounded fenced examples remain literal. An explicit
-`Example:`, `Sample:`, or `Illustration:` label also protects unfenced examples.
+Quoted, indented, and prose-surrounded fenced examples remain literal.
 A response consisting entirely of a JSON fence is a call carrier when its body
 is a call. Whole XML fences require the model's `xml_tool_calls` profile setting.
 Tool markers at the start of a JSON reply string are also recognized; XML

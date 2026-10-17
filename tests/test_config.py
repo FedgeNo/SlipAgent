@@ -11,77 +11,91 @@ from slipagent.config import (
     DEFAULT_MODEL,
     Config,
     ConfigError,
+    data_directory,
     dotenv_path,
     find_dotenv,
+    ignored_project_settings,
     load_dotenv,
     save_dotenv_value,
 )
 
 
-def test_dotenv_loads_simple_pairs(tmp_path: Path) -> None:
-    (tmp_path / ".env").write_text(
+def own_dotenv(text: str) -> Path:
+    path = data_directory() / ".env"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_dotenv_loads_simple_pairs() -> None:
+    path = own_dotenv(
         "# a comment\n"
         "OPENROUTER_API_KEY=sk-or-v1-abc\n"
         "\n"
         "export OPENROUTER_MODEL=some/model\n"
         'OPENROUTER_TITLE="quoted title"\n',
-        encoding="utf-8",
     )
     env: dict[str, str] = {}
 
-    loaded = load_dotenv(tmp_path, env)
+    loaded = load_dotenv(env)
 
-    assert loaded == tmp_path / ".env"
+    assert loaded == path
     assert env["OPENROUTER_API_KEY"] == "sk-or-v1-abc"
     assert env["OPENROUTER_MODEL"] == "some/model"
     assert env["OPENROUTER_TITLE"] == "quoted title"
 
 
-def test_dotenv_does_not_override_existing_values(tmp_path: Path) -> None:
-    (tmp_path / ".env").write_text("OPENROUTER_MODEL=from-file\n", encoding="utf-8")
+def test_dotenv_does_not_override_existing_values() -> None:
+    own_dotenv("OPENROUTER_MODEL=from-file\n")
     env = {"OPENROUTER_MODEL": "from-shell"}
 
-    load_dotenv(tmp_path, env)
+    load_dotenv(env)
 
     assert env["OPENROUTER_MODEL"] == "from-shell"
 
 
-def test_dotenv_can_be_disabled(tmp_path: Path) -> None:
-    (tmp_path / ".env").write_text("OPENROUTER_API_KEY=sk-or-v1-abc\n", encoding="utf-8")
+def test_dotenv_can_be_disabled() -> None:
+    own_dotenv("OPENROUTER_API_KEY=sk-or-v1-abc\n")
     env = {"SLIPAGENT_NO_DOTENV": "1"}
 
-    assert load_dotenv(tmp_path, env) is None
+    assert load_dotenv(env) is None
     assert "OPENROUTER_API_KEY" not in env
 
 
-def test_dotenv_finds_nearest_file_up_the_tree(tmp_path: Path) -> None:
-    (tmp_path / ".env").write_text("OPENROUTER_MODEL=top\n", encoding="utf-8")
-    nested = tmp_path / "a" / "b"
-    nested.mkdir(parents=True)
-    (tmp_path / "a" / ".env").write_text("OPENROUTER_MODEL=mid\n", encoding="utf-8")
+def test_project_dotenv_is_never_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    own = own_dotenv("OPENROUTER_MODEL=own\n")
+    project = tmp_path / "project" / "nested"
+    project.mkdir(parents=True)
+    (tmp_path / "project" / ".env").write_text(
+        "OPENROUTER_API_KEY=project-key\nOPENROUTER_BASE_URL=https://elsewhere.invalid\n"
+        "SLIPAGENT_STATE_DIR=/elsewhere\nDATABASE_URL=postgres://app\n", encoding="utf-8")
+    monkeypatch.chdir(project)
 
     env: dict[str, str] = {}
-    load_dotenv(nested, env)
+    assert load_dotenv(env) == own
+    assert env == {"OPENROUTER_MODEL": "own"}
+    assert ignored_project_settings(project) == (
+        tmp_path / "project" / ".env", ["OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "SLIPAGENT_STATE_DIR"])
 
-    assert env["OPENROUTER_MODEL"] == "mid"
+
+def test_project_dotenv_without_slipagent_settings_is_not_reported(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("DATABASE_URL=postgres://app\n", encoding="utf-8")
+    assert ignored_project_settings(tmp_path) is None
 
 
 def test_dotenv_falls_back_to_the_install_directory(tmp_path: Path, monkeypatch) -> None:
-    """A `.env` beside the install is used when the cwd has none.
-
-    This is what lets one credential work from any project directory.
-    """
+    """A `.env` beside an older install is used when the data directory has none."""
     from slipagent import config as config_module
     install = tmp_path / "install" / "slipagent"
     install.mkdir(parents=True)
     monkeypatch.setattr(config_module, "__file__", str(install / "config.py"))
     env_file = install.parent / ".env"
     env_file.write_text("OPENROUTER_API_KEY=install-test-key\n")
-    project = tmp_path / "project"
-    project.mkdir()
     environ: dict[str, str] = {}
-    assert load_dotenv(project, environ) == env_file
+    assert load_dotenv(environ) == env_file
     assert environ["OPENROUTER_API_KEY"] == "install-test-key"
+    # The loaded installation file is SlipAgent's own, not an ignored project file.
+    assert ignored_project_settings(install.parent) is None
 
 
 def test_config_requires_a_key() -> None:
@@ -167,23 +181,23 @@ def test_save_sets_owner_only_permissions(tmp_path: Path) -> None:
     assert oct(target.stat().st_mode)[-3:] == "600"
 
 
-def test_find_dotenv_does_not_mutate_the_environment(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    (tmp_path / ".env").write_text("OPENROUTER_API_KEY=sk-or-v1-abc\n", encoding="utf-8")
+def test_find_dotenv_does_not_mutate_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    path = own_dotenv("OPENROUTER_API_KEY=sk-or-v1-abc\n")
     # Start from a known-empty environment so the assertion holds whether or not
     # the surrounding shell exports these variables.
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
-    assert find_dotenv(tmp_path) == tmp_path / ".env"
-    assert "OPENROUTER_API_KEY" not in os.environ
+    assert find_dotenv() == path
+    assert os.environ.get("OPENROUTER_API_KEY") != "secret-project-key"
 
 
-def test_dotenv_path_reports_the_file_that_would_be_used(tmp_path: Path) -> None:
-    target = tmp_path / ".env"
-    target.write_text("OPENROUTER_API_KEY=sk-or-v1-abc\n", encoding="utf-8")
-
-    assert dotenv_path(tmp_path) == target
+def test_dotenv_path_reports_the_file_that_would_be_used(tmp_path: Path, monkeypatch) -> None:
+    from slipagent import config as config_module
+    # Isolate from any `.env` above this checkout's real install location.
+    monkeypatch.setattr(config_module, "__file__", str(tmp_path / "install" / "slipagent" / "config.py"))
+    assert dotenv_path() == data_directory() / ".env"
+    target = own_dotenv("OPENROUTER_API_KEY=sk-or-v1-abc\n")
+    assert dotenv_path() == target
 
 
 @pytest.mark.parametrize("changes", [{"max_steps": 0}, {"max_steps": -1},
@@ -211,3 +225,63 @@ def test_dotenv_save_failure_preserves_existing_credentials(tmp_path, monkeypatc
         save_dotenv_value(target, "OPENROUTER_API_KEY", "new")
     assert target.read_text() == "OPENROUTER_API_KEY=old\n"
     assert list(tmp_path.iterdir()) == [target]
+
+
+def test_startup_notice_names_ignored_settings_without_values(tmp_path: Path, monkeypatch, capsys) -> None:
+    import argparse
+    from slipagent import cli
+
+    monkeypatch.delenv("SLIPAGENT_NO_DOTENV", raising=False)
+    (tmp_path / ".env").write_text("OPENROUTER_API_KEY=secret-project-key\nAPP_PORT=8000\n", encoding="utf-8")
+    cli._notice_ignored_project_settings(argparse.Namespace(workspace=str(tmp_path)))
+    error = capsys.readouterr().err
+    assert "OPENROUTER_API_KEY" in error and str(tmp_path / ".env") in error
+    assert "secret-project-key" not in error and "APP_PORT" not in error
+    assert os.environ.get("OPENROUTER_API_KEY") != "secret-project-key"
+
+
+def test_startup_notice_respects_disabled_dotenv(tmp_path: Path, capsys) -> None:
+    import argparse
+    from slipagent import cli
+
+    (tmp_path / ".env").write_text("OPENROUTER_API_KEY=secret-project-key\n", encoding="utf-8")
+    cli._notice_ignored_project_settings(argparse.Namespace(workspace=str(tmp_path)))
+    assert capsys.readouterr().err == ""
+
+
+async def test_commands_do_not_receive_dotenv_values_but_keep_exported_ones(tmp_path: Path, monkeypatch) -> None:
+    import asyncio
+    from slipagent import config as config_module
+    from slipagent.tools.shell import RunCommandTool
+    from slipagent.workspace import Workspace
+
+    monkeypatch.delenv("SLIPAGENT_NO_DOTENV", raising=False)
+    monkeypatch.setattr(config_module, "_DOTENV_NAMES", set())
+    monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "exported-by-user")
+    own_dotenv("MISTRAL_API_KEY=from-slipagent-dotenv\nOPENROUTER_API_KEY=shadowed\n")
+    # Undo the loaded value after the test; monkeypatch restores only what it set.
+    monkeypatch.setenv("MISTRAL_API_KEY", "placeholder")
+    monkeypatch.delenv("MISTRAL_API_KEY")
+    load_dotenv()
+    assert os.environ["MISTRAL_API_KEY"] == "from-slipagent-dotenv"
+    child = config_module.command_environment()
+    assert "MISTRAL_API_KEY" not in child and child["OPENROUTER_API_KEY"] == "exported-by-user"
+    result = await RunCommandTool(Workspace(tmp_path)).run(
+        'printf "%s|%s" "${MISTRAL_API_KEY-unset}" "$OPENROUTER_API_KEY"')
+    assert "unset|exported-by-user" in result.content
+    assert "from-slipagent-dotenv" not in result.content
+
+
+def test_mcp_servers_receive_a_minimal_environment(monkeypatch) -> None:
+    from slipagent.mcp import server_environment
+
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("LC_ALL", "C.UTF-8")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:8080")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "secret")
+    monkeypatch.setenv("TERM", "() { :; }; echo injected")
+    env = server_environment({"EXA_API_KEY": "configured", "PATH": "/opt/server/bin"})
+    assert env["PATH"] == "/opt/server/bin" and env["EXA_API_KEY"] == "configured"
+    assert env["LC_ALL"] == "C.UTF-8" and env["HTTPS_PROXY"] == "http://proxy.invalid:8080"
+    assert "OPENROUTER_API_KEY" not in env and "TERM" not in env

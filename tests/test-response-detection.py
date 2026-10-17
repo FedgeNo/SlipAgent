@@ -258,3 +258,33 @@ def test_legacy_summary_record_is_detected_without_model_metadata():
     value["tool_calls"] = [FLAT]
     result = parse_agent_response(json.dumps(value), [], tools=[SPEC])
     assert result.text == "Reading." and result.calls[0].arguments == {"value": "A"}
+
+
+TAGGED = '<tool_call>{"name": "record", "arguments": {"value": "A"}}</tool_call>'
+
+
+@pytest.mark.parametrize("prefix", [
+    "For example, the failing input is:\n\n    record(1)\n\nNow I will record it.",
+    "Example:",
+    "Sample output:\n```\nfirst\n```",
+])
+def test_prose_labels_do_not_suppress_top_level_carriers(prefix):
+    result = parse_agent_response(prefix + "\n" + TAGGED, [], tools=[SPEC])
+    assert [call.arguments for call in result.calls] == [{"value": "A"}]
+    assert result.text == prefix
+
+
+def test_prose_detection_scales_linearly():
+    import time
+
+    def elapsed(lines):
+        text = "\n".join(f"Line {i}: ordinary prose explaining the change." for i in range(lines))
+        best = float("inf")
+        for _ in range(3):
+            start = time.perf_counter()
+            parse_agent_response(text, [], tools=[SPEC])
+            best = min(best, time.perf_counter() - start)
+        return best
+
+    # Linear work grows about 8x; the previous per-line prefix search grew about 64x.
+    assert elapsed(16000) < elapsed(2000) * 24

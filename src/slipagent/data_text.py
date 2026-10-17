@@ -49,7 +49,7 @@ def content_chunks(value: Any) -> Iterator[str]:
     if isinstance(value, TextSource):
         yield from value.chunks()
     elif isinstance(value, JSONInput):
-        blocks: list[Any] = []
+        blocks: list[tuple[Any, int]] = []
 
         payload = dict(value.data)
         if "history" in payload:
@@ -66,9 +66,8 @@ def content_chunks(value: Any) -> Iterator[str]:
                         if key not in call:
                             continue
                         child = call[key]
-                        text = child if isinstance(child, (str, FileText)) else child
-                        blocks.append(text)
-                        characters = len(text) if isinstance(text, (str, FileText)) else sum(map(len, json_chunks(text)))
+                        characters = len(child) if isinstance(child, (str, FileText)) else sum(map(len, json_chunks(child)))
+                        blocks.append((child, characters))
                         result[key] = {"tool_result_block": len(blocks), "characters": characters,
                                        "format": "text" if isinstance(child, (str, FileText)) else "json"}
                     calls.append(result)
@@ -76,8 +75,7 @@ def content_chunks(value: Any) -> Iterator[str]:
                 history.append(projected)
             payload["history"] = history
         yield from json_chunks(payload)
-        for index, text in enumerate(blocks, 1):
-            characters = len(text) if isinstance(text, (str, FileText)) else sum(map(len, json_chunks(text)))
+        for index, (text, characters) in enumerate(blocks, 1):
             yield f"\n\nTool Result Block {index} ({characters} characters):\n"
             yield from text_chunks(text) if isinstance(text, (str, FileText)) else json_chunks(text)
     elif isinstance(value, MessageSections):

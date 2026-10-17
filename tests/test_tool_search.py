@@ -348,3 +348,51 @@ async def test_list_dir_empty(workspace: Workspace) -> None:
     result = await ListDirTool(workspace).invoke({})
 
     assert "is empty" in content_text(result.content)
+
+
+SEPARATED = "line1\n# section\f break\nline3 has   sep\r\nmac\rtarget = 1\n"
+
+
+async def test_line_numbers_agree_across_read_grep_and_edit(tmp_path: Path):
+    from slipagent.tools.files import EditFileTool, ReadFileTool
+
+    (tmp_path / "f.py").write_text(SEPARATED, encoding="utf-8", newline="")
+    workspace = Workspace(tmp_path)
+    read = await ReadFileTool(workspace).run("f.py")
+    assert "(5 lines, showing 1-5)" in read.content and "     5\ttarget = 1" in read.content
+    assert "     2\t# section\f break" in read.content
+    found = await GrepTool(workspace).run("target")
+    assert found.content.splitlines()[1] == "f.py:5: target = 1"
+    edited = await EditFileTool(workspace).run("f.py", "target = 1", "target = 2")
+    from slipagent.tools.editing import edit_result_line
+    assert "at line 5" in edited.content and edit_result_line(edited.content) == 5
+    assert "No newline at end of file" not in edited.content
+
+
+async def test_grep_batches_preserve_order_counts_and_limits(tmp_path: Path, monkeypatch):
+    from slipagent.tools import search
+
+    monkeypatch.setattr(search, "GREP_BATCH_FILES", 3)
+    for index in range(10):
+        (tmp_path / f"f{index}.txt").write_bytes(f"needle {index}\nskip\n".encode() + b"\xff caf\xc3\xa9 needle\n")
+    workspace = Workspace(tmp_path)
+    expected = [f"{workspace.relative(path)}:{number}: {line}"
+                for path in workspace.iter_files(tmp_path)
+                for number, line in ((1, f"needle {path.stem[1:]}"), (3, "� café needle"))]
+    result = await GrepTool(workspace).run("needle")
+    assert result.content.splitlines()[0].startswith("20 match(es) for 'needle' in 10 of 10 file(s)")
+    assert result.content.splitlines()[1:] == expected
+    limited = await GrepTool(workspace).run("needle", max_results=7)
+    assert limited.content.splitlines()[1:] == expected[:7] and "7-result limit" in limited.content
+    assert limited.content.startswith("7+ match(es)")
+
+
+@pytest.mark.parametrize("pattern", ["^target", "= 1$", r"\btarget\b", r"(?<=\r)target", r"(?!x)target"])
+async def test_line_context_patterns_still_match_each_line(tmp_path: Path, pattern):
+    (tmp_path / "f.py").write_text(SEPARATED, encoding="utf-8", newline="")
+    result = await GrepTool(Workspace(tmp_path)).run(pattern)
+    if pattern == r"(?<=\r)target":
+        # Lines are matched individually, so a line never sees its predecessor's ending.
+        assert result.content.startswith("No matches")
+    else:
+        assert result.content.splitlines()[1] == "f.py:5: target = 1"

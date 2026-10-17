@@ -323,12 +323,21 @@ async def test_command_rejects_blank(project: Workspace) -> None:
     assert "must not be empty" in content_text(result.content)
 
 
-async def test_command_output_is_truncated(project: Workspace) -> None:
+async def test_command_output_is_truncated(project: Workspace, monkeypatch) -> None:
+    import shlex
+    import sys
+    from slipagent.tools import shell
+
+    # Exercise several pipe chunks and both retained ends at a small ceiling.
+    limit = 100_000
+    monkeypatch.setattr(shell, "MAX_OUTPUT_CHARS", limit)
+    monkeypatch.setattr(shell._truncate, "__defaults__", (limit,))
+    code = "print('BEGINNING'); print('x' * 300000); print('FINAL DIAGNOSTIC')"
     result = await RunCommandTool(project).invoke(
-        {"command": "python3 -c \"print('BEGINNING'); print('x' * 32000100); print('FINAL DIAGNOSTIC')\""}
+        {"command": shlex.join([sys.executable, "-c", code])}
     )
 
-    assert "[output truncated at 32000000 chars]" in content_text(result.content)
+    assert f"[output truncated at {limit} chars]" in content_text(result.content)
     stdout = result.content.split("--- stdout ---\n", 1)[1]
     assert stdout.startswith("BEGINNING\n")
     assert "FINAL DIAGNOSTIC" in stdout

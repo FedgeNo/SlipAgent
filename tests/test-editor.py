@@ -54,7 +54,8 @@ def test_editor_diff_and_save_without_git(tmp_path, monkeypatch, original, edite
 
 def test_editing_pages_preserves_large_file_and_line_endings(tmp_path):
     path = tmp_path / "large.txt"
-    text = "original\r\n" * 100_000
+    # A megabyte spans many pages without making the diff index 100,000 lines.
+    text = ("original" + "x" * 1024 + "\r\n") * 1025
     path.write_bytes(text.encode())
     editor = FileEditor(path)
     try:

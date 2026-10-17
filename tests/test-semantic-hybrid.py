@@ -165,10 +165,18 @@ class HybridTests(unittest.TestCase):
 
     def test_exact_ties_keep_chunk_ids_after_reopening(self):
         self.store.add_chunks([Chunk(f"{i}.py", 1, 1, "identical") for i in range(20)], [[1, 0, 0]] * 20)
-        first = self.store.search([1, 0, 0], query_text="nothing")
-        self.store.close()
-        self.assertEqual(self.store.search([1, 0, 0], query_text="nothing"), first)
-        self.assertEqual([row["id"] for row in first], list(range(1, 11)))
+        for query in ("nothing", "identical"):
+            with self.subTest(query=query):
+                first = self.store.search([1, 0, 0], query_text=query)
+                self.store.close()
+                self.assertEqual(self.store.search([1, 0, 0], query_text=query), first)
+                ids = [row["id"] for row in first]
+                self.assertEqual(len(ids), 10)
+                self.assertEqual(ids, sorted(ids))
+                # Approximate search can omit duplicate vectors. Keyword hits
+                # supply every candidate for the assertion over the full tie set.
+                if query == "identical":
+                    self.assertEqual(ids, list(range(1, 11)))
 
 
 class CPUTests(unittest.TestCase):

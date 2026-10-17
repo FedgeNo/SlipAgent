@@ -33,16 +33,20 @@ def test_large_single_line_uses_disk_indexes_and_bounded_memory(tmp_path):
 def test_large_json_record_is_written_and_decoded_in_chunks(tmp_path):
     store = ArtifactStore(64_000_000)
     store.use_directory(tmp_path)
-    text = 'quoted "text" \\ literal\\n 😀\n'
+    # Keep a multi-megabyte escaped payload without repeating 150,000 tiny writes.
+    text = 'quoted "text" \\ literal\\n 😀 ' + 'x' * 1000 + '\n'
+    repetitions = 4096
     tracemalloc.start()
     try:
-        record = store.save("command", (text for _ in range(150_000)), kind="command_output",
+        record = store.save("command", (text for _ in range(repetitions)), kind="command_output",
                             call_id="id", step_id=1, error="stderr\nlast")
         snapshot = artifact_snapshot(store.record_path(record["record_id"]), record)
         _, peak = tracemalloc.get_traced_memory()
         assert peak < 2_000_000
         assert snapshot[0] == "command" and snapshot[1] == ""
         assert snapshot[2] == text.removesuffix("\n")
+        assert snapshot[repetitions + 1] == text.removesuffix("\n")
+        assert snapshot.logical_count == repetitions + 7
         assert snapshot[-1] == "last"
     finally:
         tracemalloc.stop()

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import compileall
 import os
+import shutil
 import tempfile
 
 import pytest
@@ -13,7 +15,7 @@ from offline.sitecustomize import GUARD_DIRECTORY
 
 
 @pytest.fixture(autouse=True)
-def isolated_session_storage(tmp_path: Path, tmp_path_factory, monkeypatch):
+def isolated_session_storage(tmp_path: Path, system_temp_root: Path, monkeypatch):
     """Tests and children use dummy credentials, guarded networking and scratch state."""
     for name in tuple(os.environ):
         if name.startswith(("OPENROUTER_", "NVIDIA_", "KILO_", "MISTRAL_", "GEMINI_", "SLIPAGENT_", "EXA_")):
@@ -21,12 +23,33 @@ def isolated_session_storage(tmp_path: Path, tmp_path_factory, monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setenv("SLIPAGENT_NO_DOTENV", "1")
     monkeypatch.setenv("SLIPAGENT_STATE_DIR", str(tmp_path / "session-state"))
-    system_temp = tmp_path_factory.mktemp("system-temp")
+    # tmp_path already has a unique name. Avoid rescanning every earlier test's
+    # numbered temp directories, while keeping system temp outside its workspace.
+    system_temp = system_temp_root / tmp_path.name
+    system_temp.mkdir()
     for name in ("TMPDIR", "TEMP", "TMP"):
         monkeypatch.setenv(name, str(system_temp))
     monkeypatch.setattr(tempfile, "tempdir", str(system_temp))
     python_path = [GUARD_DIRECTORY, *os.environ.get("PYTHONPATH", "").split(os.pathsep)]
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join(path for path in python_path if path))
+
+
+@pytest.fixture(scope="session")
+def system_temp_root(tmp_path_factory):
+    return tmp_path_factory.mktemp("system-temp")
+
+
+@pytest.fixture(scope="session")
+def reload_source(tmp_path_factory):
+    """Compile one immutable template per worker; each test edits its own copy."""
+    package_root = tmp_path_factory.mktemp("reload-source")
+    repository = Path(__file__).resolve().parents[1]
+    shutil.copytree(repository / "src" / "slipagent", package_root / "slipagent",
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    shutil.copytree(repository / "prompts", package_root / "slipagent" / "prompts")
+    shutil.copyfile(Path(__file__).with_name("data_text_reader.py"), package_root / "data_text_reader.py")
+    assert compileall.compile_dir(package_root, quiet=2)
+    return package_root
 
 
 @pytest.fixture()

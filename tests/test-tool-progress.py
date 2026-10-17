@@ -30,13 +30,16 @@ async def test_shell_streams_before_exit_and_preserves_final_output(workspace):
         chunks.append(text)
         seen.set()
     quote = subprocess.list2cmdline if os.name == "nt" else shlex.join
-    command = quote([sys.executable, "-u", "-c", "import time; print('FIRST'); time.sleep(0.8); print('LAST')"])
+    command = quote([sys.executable, "-u", "-c",
+        "import time\nfrom pathlib import Path\nprint('FIRST')\n"
+        "while not Path('release').exists():\n    time.sleep(.005)\nprint('LAST')"])
     token = command_output.set(publish)
     task = asyncio.create_task(RunCommandTool(workspace).run(command))
     try:
         await asyncio.wait_for(seen.wait(), 3)
         assert not task.done()
-        result = await task
+        (workspace.root / "release").touch()
+        result = await asyncio.wait_for(task, 3)
     finally:
         if not task.done():
             task.cancel()

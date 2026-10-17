@@ -15,7 +15,7 @@ from prompt_toolkit.output.vt100 import Vt100_Output
 
 from slipagent.artifacts import ArtifactStore
 from slipagent.context import CompletedStep
-from slipagent.compaction import StepCompactor, COMPACTION_QUEUE_SIZE
+from slipagent.compaction import StepCompactor
 from slipagent.editor import FileEditor
 from slipagent.terminal import TerminalUI
 from slipagent.tools.files import ReadFileTool, WriteFileTool, EditFileTool
@@ -286,6 +286,11 @@ def test_indexed_page_boundaries_do_not_split_graphemes():
 
 
 async def test_compaction_materializes_only_active_work_and_drains_deferred_steps(monkeypatch):
+    from slipagent import compaction
+
+    # Cross the ready-queue boundary three times without a large history scan.
+    queue_size = 3
+    monkeypatch.setattr(compaction, "COMPACTION_QUEUE_SIZE", queue_size)
     release, started = asyncio.Event(), asyncio.Event()
     active = peak = calls = materialized = 0
     class Client:
@@ -307,13 +312,14 @@ async def test_compaction_materializes_only_active_work_and_drains_deferred_step
         return original(step)
     monkeypatch.setattr(CompletedStep, "compaction_input", counted)
     owner = StepCompactor(lambda usage: None, lambda error: pytest.fail(error))
-    steps = [CompletedStep(n + 1, "Request", [Message.user("Request"), Message.assistant("Reply")]) for n in range(100)]
+    steps = [CompletedStep(n + 1, "Request", [Message.user("Request"), Message.assistant("Reply")])
+             for n in range(queue_size * 3 + 1)]
     client = Client()
     try:
         for step in steps:
             owner.submit(step, client, "test", None, None, conversation=steps)
         assert materialized == 0 and len(owner.jobs) == 1
-        assert len(owner.__dict__["_ready"]) <= COMPACTION_QUEUE_SIZE
+        assert len(owner.__dict__["_ready"]) == queue_size
         await asyncio.wait_for(started.wait(), 1)
         assert materialized == 1 and calls == 1
         assert any(step.compaction_status == "deferred" for step in steps)

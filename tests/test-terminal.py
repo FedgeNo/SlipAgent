@@ -39,7 +39,7 @@ async def test_opening_menu_takes_keyboard_focus(display, origin):
             else:
                 choice = asyncio.create_task(ui.choose("Models", [("a", "First"), ("b", "Second")]))
             await wait_until(lambda: ui._menu_future is not None)
-            await asyncio.sleep(.05)
+            await wait_until(lambda: ui.app.layout.current_window is ui._menu_window)
             assert ui.app.layout.current_window is ui._menu_window
             pipe.send_text("\x1b[B")
             await wait_until(lambda: ui._menu_index == 1)
@@ -84,6 +84,36 @@ async def wait_until(predicate) -> None:
     async with asyncio.timeout(3):
         while not predicate():
             await asyncio.sleep(.02)
+
+
+async def render_after(ui, action, *, pipe=None):
+    """Wait for a real draw after the action, including queued terminal input."""
+    rendered = asyncio.Event()
+    processed = pipe is None
+
+    def after_key(sender):
+        nonlocal processed
+        processed = True
+        ui.app.invalidate()
+
+    def after_render(sender):
+        if processed and not ui.app.key_processor.input_queue:
+            rendered.set()
+
+    ui.app.key_processor.after_key_press += after_key
+    ui.app.after_render += after_render
+    try:
+        action()
+        if pipe is None:
+            ui.app.invalidate()
+        await asyncio.wait_for(rendered.wait(), 3)
+    finally:
+        ui.app.key_processor.after_key_press -= after_key
+        ui.app.after_render -= after_render
+
+
+async def send_keys(ui, pipe, text):
+    await render_after(ui, lambda: pipe.send_text(text), pipe=pipe)
 
 
 @pytest.mark.parametrize("row", [17, 18])
@@ -368,8 +398,7 @@ async def test_shift_tab_cycles_panels_without_changing_draft(display, tmp_path)
             for _ in range(60):
                 if predicate():
                     return
-                pipe.send_text(sequence)
-                await asyncio.sleep(.03)
+                await send_keys(ui, pipe, sequence)
             await wait_until(predicate)
         try:
             await wait_until(lambda: "Ready" in snapshot()[17])
@@ -434,9 +463,8 @@ async def test_inspection_focus_reveals_selection_and_up_stays_at_first_item(dis
             assert screen.buffer[1][75].reverse
             pipe.send_text("\t")
             await wait_until(lambda: ui.app.layout.current_window is ui._calls_window)
-            pipe.send_text("\x1b[B" * 20 + "\x1b[A" * 40)
+            await send_keys(ui, pipe, "\x1b[B" * 20 + "\x1b[A" * 40)
             await wait_until(lambda: ui._inspection_selection(False) == (1, "29"))
-            await asyncio.sleep(.1)
             assert "tool-29" in snapshot()[10]
             assert screen.buffer[10][75].reverse
         finally:
@@ -464,10 +492,9 @@ async def test_user_prompt_background_fills_feed_without_copy_padding(display, i
             for columns in (100, 80):
                 size[0] = Size(rows=24, columns=columns)
                 screen.resize(lines=24, columns=columns)
-                ui.app.invalidate()
+                await render_after(ui, ui.app.invalidate)
                 width = columns - columns // 4 - 1 if inspect else columns - 1
                 await wait_until(lambda: ui._wrapped_columns == width)
-                await asyncio.sleep(.05)
                 lines = snapshot()
                 first = next(i for i, line in enumerate(lines) if "> wide" in line)
                 last = next(i for i, line in enumerate(lines) if "Final prompt line" in line)
@@ -573,8 +600,7 @@ async def test_menu_back_link_cancels_only_when_its_word_is_clicked(display):
             start = snapshot()[23].index("back")
             assert screen.buffer[23][start].underscore
             assert not screen.buffer[23][start - 2].underscore
-            pipe.send_text(f"\x1b[<0;{start + 8};24M\x1b[<0;{start + 8};24m")
-            await asyncio.sleep(.05)
+            await send_keys(ui, pipe, f"\x1b[<0;{start + 8};24M\x1b[<0;{start + 8};24m")
             assert not choice.done()
             pipe.send_text(f"\x1b[<35;{start + 1};24M")
             await wait_until(lambda: snapshot() and screen.buffer[23][start].reverse)
@@ -1034,9 +1060,8 @@ async def test_editor_standard_page_keys_overlap_and_retain_edits(display, tmp_p
             await wait_until(lambda: "line-012" in "\n".join(snapshot()[:17]))
             # Start with the cursor at the bottom of the viewport, as an editor
             # normally does after consecutive downward movement.
-            panel.move_cursor(12)
+            await render_after(ui, lambda: panel.move_cursor(12))
             await wait_until(lambda: buffer.document.cursor_position_row == 13)
-            await asyncio.sleep(.05)
             before = snapshot()[1:17]
             height = panel.input.window.render_info.window_height
             pipe.send_text("\x1b[6~")
@@ -1392,9 +1417,8 @@ async def test_editor_click_opens_visible_neighbor_section_at_clicked_position(d
             ui.app.invalidate()
             await wait_until(lambda: "line 032" in "\n".join(snapshot()[:17]))
             row = next(i for i, text in enumerate(snapshot()[:17]) if text.startswith("line 032"))
-            pipe.send_text(f"\x1b[<0;5;{row + 1}M\x1b[<0;5;{row + 1}m")
+            await send_keys(ui, pipe, f"\x1b[<0;5;{row + 1}M\x1b[<0;5;{row + 1}m")
             await wait_until(lambda: panel.page == 1)
-            await asyncio.sleep(.05)
             assert panel.input.buffer.document.cursor_position_row == 0
             assert panel.input.buffer.document.cursor_position_col == 4
             assert not panel.dirty()
@@ -1422,9 +1446,8 @@ async def test_editor_vertical_navigation_keeps_cursor_at_edges(display, tmp_pat
                 for index in range(1, 45):
                     previous = (panel.page, panel.input.buffer.cursor_position)
                     key = ("\x1b[B" if direction > 0 else "\x1b[A") if step == 1 else ("\x1b[<65;5;5M" if direction > 0 else "\x1b[<64;5;5M")
-                    pipe.send_text(key)
+                    await send_keys(ui, pipe, key)
                     await wait_until(lambda: (panel.page, panel.input.buffer.cursor_position) != previous)
-                    await asyncio.sleep(.035)
                     if index * step >= 16:
                         assert panel.input.window.render_info.cursor_position.y == (15 if direction > 0 else 0), (index, direction, panel.page, panel.input.window.vertical_scroll, snapshot()[:17])
             assert panel.page == 0 and panel.input.buffer.cursor_position == 0
@@ -1451,8 +1474,7 @@ async def test_read_only_viewer_scrolls_targets_lines_keeps_work_running_and_esc
             assert "Still working." in snapshot()[17]
             ui.write("background result arrived")
             ui.refresh()
-            pipe.send_text("no editing\x13")
-            await asyncio.sleep(.05)
+            await send_keys(ui, pipe, "no editing\x13")
             assert ui.input.text == "unfinished draft"
             assert ui.working
             pipe.send_text("\x1b[F")
@@ -1603,8 +1625,7 @@ async def test_feed_link_styling_and_mouse_target_follow_text(display, tmp_path,
                     pipe.send_text(f"\x1b[<35;{x + 1};{y + 1}M")
                     await wait_until(lambda: snapshot() and not screen.buffer[y][left].reverse)
                     assert ui.__dict__.get("_hovered_control") != hover
-                    pipe.send_text(f"\x1b[<0;{x + 1};{y + 1}M\x1b[<0;{x + 1};{y + 1}m")
-                    await asyncio.sleep(.05)
+                    await send_keys(ui, pipe, f"\x1b[<0;{x + 1};{y + 1}M\x1b[<0;{x + 1};{y + 1}m")
                     assert not ui._viewer_active
                     assert ui._viewer.request == 0
                     request.assert_not_awaited()
@@ -2256,8 +2277,7 @@ async def test_long_reasoning_stream_keeps_input_and_stop_responsive(display):
             await wait_until(lambda: "Considering" in "\n".join(snapshot()[:17]))
             for word in ["Now ", "check ", "the ", "result."]:
                 ui.write_chunk("\x1b[2m" + word + "\x1b[0m")
-                pipe.send_text(word)
-                await asyncio.sleep(.04)
+                await send_keys(ui, pipe, word)
             await wait_until(lambda: "Now check the result." in snapshot()[18])
             pipe.send_text("\x15/stop\r")
             assert await asyncio.wait_for(ui.read_line(), 1) == "/stop"
@@ -2399,8 +2419,7 @@ async def test_menu_arrows_reveal_whole_items_with_minimum_scroll(display, item_
                 pipe.send_text("\x1b[B")
                 top = max(top, item_rows * index + min(item_rows, 5) - 5)
                 await assert_selection(index, top)
-            pipe.send_text("\x1b[B" * 3)
-            await asyncio.sleep(.05)
+            await send_keys(ui, pipe, "\x1b[B" * 3)
             await assert_selection(11, top)
             for index in range(10, -1, -1):
                 pipe.send_text("\x1b[A")
@@ -2512,11 +2531,9 @@ async def test_ready_commands_link_preserves_draft_and_inserts_command(display):
         try:
             await wait_until(lambda: "Ready  Commands" in snapshot()[17])
             assert screen.buffer[17][7].underscore
-            pipe.send_text("\x1b[<35;60;18M")
-            await asyncio.sleep(0.1)
+            await send_keys(ui, pipe, "\x1b[<35;60;18M")
             assert ui.__dict__.get("_hovered_control") != "commands"
-            pipe.send_text("\x1b[<0;60;18M\x1b[<0;60;18m")
-            await asyncio.sleep(0.1)
+            await send_keys(ui, pipe, "\x1b[<0;60;18M\x1b[<0;60;18m")
             assert ui._menu_future is None
             pipe.send_text("unfinished draft")
             await wait_until(lambda: "unfinished draft" in snapshot()[18])
@@ -2570,8 +2587,7 @@ async def test_viewer_exit_link_replaces_commands_and_closes_only_on_its_words(d
             assert screen.buffer[17][start].underscore
             assert not screen.buffer[17][start - 2].underscore
             blank = 21 if columns == 40 else 70
-            pipe.send_text(f"\x1b[<35;{blank};18M\x1b[<0;{blank};18M\x1b[<0;{blank};18m")
-            await asyncio.sleep(0.1)
+            await send_keys(ui, pipe, f"\x1b[<35;{blank};18M\x1b[<0;{blank};18M\x1b[<0;{blank};18m")
             assert ui._viewer_active
             assert ui.__dict__.get("_hovered_control") != "exit-viewer"
             pipe.send_text(f"\x1b[<35;{start + 1};18M")
@@ -2595,11 +2611,9 @@ async def test_menu_blank_rows_do_not_hover_or_select_the_last_item(display):
         choice = asyncio.create_task(ui.choose("Menu", [("one", "One"), ("two", "Two")]))
         try:
             await wait_until(lambda: "› One" in snapshot()[18])
-            pipe.send_text("\x1b[<35;70;22M")
-            await asyncio.sleep(0.1)
+            await send_keys(ui, pipe, "\x1b[<35;70;22M")
             assert ui.__dict__.get("_hovered_control") is None
-            pipe.send_text("\x1b[<0;70;22M\x1b[<0;70;22m")
-            await asyncio.sleep(0.1)
+            await send_keys(ui, pipe, "\x1b[<0;70;22M\x1b[<0;70;22m")
             assert not choice.done()
             # A real menu row remains clickable across the available width.
             pipe.send_text("\x1b[<0;70;20M\x1b[<0;70;20m")
@@ -2629,13 +2643,12 @@ async def test_project_directory_link_requires_opener_and_disables_after_failure
             if available:
                 pipe.send_text("\x1b[<35;2;24M")
                 await wait_until(lambda: snapshot() and screen.buffer[23][0].reverse)
-            pipe.send_text("\x1b[<0;2;24M\x1b[<0;2;24m")
+            await send_keys(ui, pipe, "\x1b[<0;2;24M\x1b[<0;2;24m")
             if available:
                 await wait_until(lambda: "Could not open" in "\n".join(snapshot()))
                 launch.assert_called_once_with(tmp_path, ("test-opener",))
                 assert not screen.buffer[23][0].underscore
             else:
-                await asyncio.sleep(.05)
                 launch.assert_not_called()
             assert ui._lines.empty()
         finally:
@@ -2719,7 +2732,7 @@ async def test_tool_directory_links_wrap_hover_click_and_preserve_selection(disp
             with set_app(ui.app):
                 ui._select_transcript(event(MouseEventType.MOUSE_DOWN))
                 ui._select_transcript(event(MouseEventType.MOUSE_UP))
-                await asyncio.sleep(.05)
+                await wait_until(lambda: launch.called)
                 launch.assert_called_once_with(directory, ("test-opener",))
                 ui._select_transcript(event(MouseEventType.MOUSE_DOWN))
                 ui._select_transcript(event(MouseEventType.MOUSE_UP, Point(x=x + 5, y=y)))
@@ -3741,8 +3754,7 @@ async def test_mouse_wheel_scrolls_transcript_without_changing_input(display, mo
             scrolled = snapshot()[:17]
             assert "output 49" not in "\n".join(scrolled)
             assert snapshot()[18:] == footer
-            ui.write("new output")
-            await asyncio.sleep(.2)
+            await render_after(ui, lambda: ui.write("new output"))
             assert snapshot()[:17] == scrolled
             pipe.send_text(f"\x1b[<65;1;{mouse_row}M" * 30)
             await wait_until(lambda: "new output" in "\n".join(snapshot()[:17]))
@@ -3772,8 +3784,7 @@ async def test_wheel_scrolls_inside_wrapped_lines_and_survives_resize(display) -
             assert not any(row.startswith("29xxx") for row in snapshot()[:9])
             size[0] = Size(rows=16, columns=80)
             screen.resize(lines=16, columns=80)
-            ui.app.invalidate()
-            await asyncio.sleep(.2)
+            await render_after(ui, ui.app.invalidate)
             pipe.send_text("\x1b[<64;1;5M" * 30)
             await wait_until(lambda: snapshot()[0].startswith("00xxx"))
             pipe.send_text("\x1b[<65;1;5M" * 30)

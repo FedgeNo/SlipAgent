@@ -58,24 +58,33 @@ def test_streamed_request_inspection_matches_json_inspection(content):
 
 
 def test_large_context_retains_only_indexes_and_a_bounded_row_cache():
-    request = json.dumps({"messages": [{"role": "user", "content": ("0123456789 " * 10 + "\n") * 20000}]})
-    tracemalloc.start()
-    view = ContextView.from_request(request)
-    try:
-        gc.collect()
-        hidden_bytes = tracemalloc.get_traced_memory()[0]
-        assert hidden_bytes < len(request) // 4
-        content = view.content(120)
-        for index in range(content.line_count):
-            content.get_line(index)
-        gc.collect()
-        visible_bytes = tracemalloc.get_traced_memory()[0]
-        assert visible_bytes < len(request) // 2
-        assert content.get_line(content.line_count - 2)[0][1] == ""
-        assert len(view.cache) <= 128
-    finally:
-        view.close()
-        tracemalloc.stop()
+    # Compare growth across 4 and 32 cache capacities. Fixed file buffers cancel
+    # out, so retaining the input or every displayed row still fails at this size.
+    measurements = []
+    for lines in (512, 4096):
+        request = json.dumps({"messages": [{"role": "user", "content": ("0123456789 " * 10 + "\n") * lines}]})
+        tracemalloc.start()
+        view = ContextView.from_request(request)
+        try:
+            gc.collect()
+            hidden_bytes = tracemalloc.get_traced_memory()[0]
+            content = view.content(120)
+            for index in range(content.line_count):
+                content.get_line(index)
+            gc.collect()
+            visible_bytes = tracemalloc.get_traced_memory()[0]
+            assert hidden_bytes < 500_000
+            assert visible_bytes < 1_000_000
+            assert content.get_line(content.line_count - 2)[0][1] == ""
+            assert len(view.cache) <= 128
+            measurements.append((len(request), hidden_bytes, visible_bytes))
+        finally:
+            view.close()
+            tracemalloc.stop()
+    small, large = measurements
+    growth = large[0] - small[0]
+    assert large[1] - small[1] < growth // 4
+    assert large[2] - small[2] < growth // 2
 
 
 @pytest.mark.parametrize("usage", [0, 123, 456])

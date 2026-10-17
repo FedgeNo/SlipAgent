@@ -27,6 +27,37 @@ from slipagent.config import DEFAULT_MODEL
 from offline.sitecustomize import GUARD_DIRECTORY
 
 
+class DrainingHTTPServer(ThreadingHTTPServer):
+    """Own accepted sockets so shutdown can release idle request handlers."""
+
+    def __init__(self, *args, **kwargs):
+        self.connections: set[socket.socket] = set()
+        self.connection_lock = threading.Lock()
+        super().__init__(*args, **kwargs)
+
+    def get_request(self):
+        connection, address = super().get_request()
+        with self.connection_lock:
+            self.connections.add(connection)
+        return connection, address
+
+    def shutdown_request(self, request):
+        try:
+            super().shutdown_request(request)
+        finally:
+            with self.connection_lock:
+                self.connections.discard(request)
+
+    def close_connections(self):
+        with self.connection_lock:
+            connections = tuple(self.connections)
+        for connection in connections:
+            try:
+                connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass  # A handler may have closed it after the snapshot.
+
+
 class StubOpenRouter:
     """A tiny HTTP server that speaks just enough of the OpenRouter API."""
 
@@ -35,7 +66,7 @@ class StubOpenRouter:
         self.include_memory = include_memory
         self.requests: list[dict[str, Any]] = []
         self.summary_requests: list[dict[str, Any]] = []
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._make_handler())
+        self._server = DrainingHTTPServer(("127.0.0.1", 0), self._make_handler())
         self._server.daemon_threads = False
         self.port = self._server.server_address[1]
         # Teardown should not spend the server's default half-second poll
@@ -118,6 +149,7 @@ class StubOpenRouter:
         else:
             os.environ["NVIDIA_BASE_URL"] = self._previous_nvidia_url
         self._server.shutdown()
+        self._server.close_connections()
         self._server.server_close()
         self._thread.join(timeout=5)
 
@@ -245,8 +277,9 @@ def test_stub_shutdown_drains_a_connection_without_headers():
     try:
         assert accepted.wait(2)
         closer.start()
-        assert stopped.wait(7), "Stub shutdown waited indefinitely for unused request headers"
+        assert stopped.wait(2), "Stub shutdown must close unused connections instead of waiting for headers"
         assert not stub._thread.is_alive()
+        assert not stub._server.connections
     finally:
         connection.close()
         if closer.ident is None:

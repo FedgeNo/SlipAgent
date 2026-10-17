@@ -63,9 +63,9 @@ async def test_new_prompt_replaces_active_prompt_without_forcing_old_source_reca
         assert "Request only recall_history" not in wire
 
 
-@pytest.mark.parametrize("window", [5, 50])
-async def test_current_prompt_and_its_source_survive_compression_without_task_updates(window):
-    text = "ORIGINAL USER PROMPT λ\nCONSTRAINT " * 600
+@pytest.mark.parametrize("window,repetitions", [(5, 600), (50, 60)], ids=["5", "50"])
+async def test_current_prompt_and_its_source_survive_compression_without_task_updates(window, repetitions):
+    text = "ORIGINAL USER PROMPT λ\nCONSTRAINT " * repetitions
     tool = RecordingTool()
     client = PlainClient([completion("Inspecting", [ToolCall(str(index), "record", {"value": str(index)})])
                           for index in range(window + 2)] + [completion("Done")])

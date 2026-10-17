@@ -112,17 +112,20 @@ async def test_grep_clamps_an_oversized_max_results(workspace: Workspace) -> Non
     assert f"must be <= {MAX_GREP_RESULTS}" in content_text(result.content)
 
 
-async def test_grep_run_clamps_directly(workspace: Workspace) -> None:
+async def test_grep_run_clamps_directly(workspace: Workspace, monkeypatch) -> None:
     """The clamp holds even when validation is bypassed by calling run()."""
-    from slipagent.tools.search import MAX_GREP_RESULTS
+    from slipagent.tools import search
 
-    (workspace.root / "many.py").write_text("x = 1\n" * (MAX_GREP_RESULTS + 50), encoding="utf-8")
+    limit = 7
+    monkeypatch.setattr(search, "MAX_GREP_RESULTS", limit)
 
-    result = await GrepTool(workspace).run(pattern="x = 1", max_results=MAX_GREP_RESULTS + 100)
+    (workspace.root / "many.py").write_text("x = 1\n" * (limit + 2), encoding="utf-8")
+
+    result = await GrepTool(workspace).run(pattern="x = 1", max_results=limit + 1)
 
     body = result.content.splitlines()[1:]
-    assert len(body) == MAX_GREP_RESULTS
-    assert f"stopped at the {MAX_GREP_RESULTS}-result limit" in content_text(result.content)
+    assert len(body) == limit
+    assert f"stopped at the {limit}-result limit" in content_text(result.content)
 
 
 async def test_grep_preserves_long_lines_and_searches_large_files(workspace: Workspace) -> None:

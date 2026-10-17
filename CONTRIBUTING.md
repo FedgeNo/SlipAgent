@@ -112,7 +112,24 @@ supply a mock transport or local server, including for startup metadata/quota.
 
 Prefer events or controlled deadlines over real sleeps when testing lifecycle
 races. Keep actual process termination/reaping assertions. Stub-server shutdown
-uses a short poll interval so teardown does not add half a second per server.
+stops accepting requests, closes idle connections, and joins handlers; teardown
+does not wait for unused clients to send headers.
+Terminal tests use `send_keys()` and `render_after()` to await processed input
+and a completed draw, including when the expected result is no visible change.
+
+Boundary tests can lower a test-local limit and cross it with a small fixture.
+Memory tests use payloads larger than their allocation ceiling, or compare
+allocation growth at two sizes so fixed buffers cannot hide retained copies.
+Use wider rows when short rows repeat the same parsing or disk operation.
+Retain checks for first/last data, untouched pages, and chunk boundaries.
+Reload tests copy a compiled source template prepared once per worker. Each
+test retains its own files and interpreter, and generation validation still
+compiles the actual edited source. Avoid editing source during a suite run.
+
+Compare timings with the same worker count and similar machine load. A focused
+sample gives a quick before/after check; the complete suite checks isolation
+and reports remaining costs. `--junitxml=agents/test-timings.xml` records timings
+for every test without adding another profiling dependency.
 
 The focused file above is an example; select tests for the behavior changed.
 Use `tests/test-runtime.py` for live-state changes, `test_cli_e2e.py` for command

@@ -81,15 +81,10 @@ asyncio.run(main())
 
 
 @pytest.fixture
-def run_copy(tmp_path: Path):
+def run_copy(tmp_path: Path, reload_source):
     package_root = tmp_path / "source"
-    shutil.copytree(
-        Path(__file__).resolve().parents[1] / "src" / "slipagent", package_root / "slipagent",
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-    )
+    shutil.copytree(reload_source, package_root)
     project = tmp_path / "project"
-    shutil.copytree(Path(__file__).resolve().parents[1] / "prompts", package_root / "slipagent" / "prompts")
-    shutil.copyfile(Path(__file__).with_name("data_text_reader.py"), package_root / "data_text_reader.py")
     project.mkdir()
 
     def run(body: str) -> None:

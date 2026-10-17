@@ -1727,7 +1727,14 @@ class TerminalUI:
         complete = len(flow.rows)
         self._line_count = complete + len(preview)
 
+        def is_current() -> bool:
+            return (self._flow is flow and self._wrapped_columns == columns
+                    and layouts.states.get(columns) is state)
+
         def get_line(index: int) -> StyleAndTextTuples:
+            # Render info can outlive a replaced or evicted file-backed layout.
+            if not is_current():
+                return []
             if index < complete:
                 fragments = fill_prompt(flow.get_row(index))
                 bounds = self._selection_bounds()
@@ -1797,6 +1804,7 @@ class TerminalUI:
         content = UIContent(get_line=get_line, line_count=self._line_count + 1,
                             cursor_position=Point(x=0, y=max(0, self._line_count - 1)), show_cursor=False)
         content.__dict__["focus_rows"] = flow.linked_rows()
+        content.__dict__["is_current"] = is_current
         return content
 
     def _append_transcript_record(self, flow: WrappedTranscript, index: int) -> None:

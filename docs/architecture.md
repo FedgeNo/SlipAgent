@@ -1106,7 +1106,10 @@ discarding the latest event notification.
 the alternate Inspect width in an application-owned task, yielding between
 records. Both layouts consume new output incrementally. Theme/source changes,
 transcript replacement, and reload invalidate them; closing cancels prewarming
-before its files close.
+before its files close. Each rendered feed snapshot checks that its layout is
+still active and retained. Retired snapshots return empty rows, and mouse routing
+rejects their hit maps until redraw. Keyboard link highlighting preserves that
+validity check, so a stale click cannot activate a replacement action.
 `ActionControl` retains rendered handlers for keyboard activation and focus styling;
 keyboard Enter invokes the same enabled action as a left click.
 Mouse presses use the same focus owner before native mouse dispatch, so input

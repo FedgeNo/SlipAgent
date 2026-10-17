@@ -343,6 +343,51 @@ async def test_wrapping_cache_is_bounded_and_reset_on_theme_or_clear(ui):
     assert 'Replacement' in text and 'Original' not in text
 
 
+@pytest.mark.parametrize('change', ['clear', 'theme', 'source', 'width', 'close'])
+@pytest.mark.parametrize('highlighted', [False, True])
+async def test_mouse_ignores_retired_feed_before_redraw(ui, change, highlighted, monkeypatch):
+    terminal, _ = ui
+    terminal.write_suggestion('Original action')
+    terminal.write('Following row')
+    render(terminal)
+    if highlighted:
+        terminal._focus.focus(terminal.transcript)
+        press(terminal, Keys.Tab)
+        assert terminal.transcript.content.__dict__.get('_keyboard_key') is not None
+    info = terminal.transcript.render_info
+    row = next(row for row, source in info.visible_line_to_row_col.items()
+               if 'Original action' in ''.join(part[1] for part in info.ui_content.get_line(source[0])))
+    position = terminal.app.renderer._last_screen.visible_windows_to_write_positions[terminal.transcript]
+    point = Point(position.xpos + 2, position.ypos + row)
+    terminal._route_mouse_wheel(terminal.app)
+    handler = terminal.app.renderer.mouse_handlers.mouse_handlers[point.y][point.x]
+    invoked = []
+    monkeypatch.setattr(terminal, '_submit_suggestion', invoked.append)
+    if change == 'clear':
+        terminal.clear_transcript()
+        terminal.write_suggestion('Replacement action')
+        terminal.write('Following row')
+        terminal._transcript_content(info.window_width)
+    elif change in ('theme', 'source'):
+        terminal.configure_markdown(**({'theme': 'light'} if change == 'theme' else {'source': True}))
+        terminal._transcript_content(info.window_width)
+    elif change == 'width':
+        # Focus discovery can rewrap without replacing the rendered hit map.
+        terminal._transcript_content(73)
+        terminal._transcript_content(74)
+    else:
+        terminal.close()
+    with set_app(terminal.app):
+        for kind in (MouseEventType.MOUSE_DOWN, MouseEventType.MOUSE_MOVE, MouseEventType.MOUSE_UP):
+            handler(MouseEvent(point, kind, MouseButton.LEFT, frozenset()))
+    assert invoked == []
+    assert not terminal._selection_dragging
+    assert info.ui_content.get_line(info.visible_line_to_row_col[row][0]) == []
+    if change != 'close':
+        click(terminal, terminal.transcript, x=2, y=0)
+        assert invoked == ['Replacement action' if change == 'clear' else 'Original action']
+
+
 @pytest.mark.parametrize('close', [False, True])
 async def test_pending_prewarm_is_cancelled_before_storage_closes(ui, close):
     terminal, _ = ui

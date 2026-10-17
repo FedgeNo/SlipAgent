@@ -78,6 +78,10 @@ class FocusCoordinator:
                     and position.ypos <= point.y < position.ypos + position.height):
                 if window not in live:
                     return False
+                info = window.render_info
+                is_current = info.ui_content.__dict__.get("is_current") if info is not None else None
+                if is_current is not None and not is_current():
+                    return False
                 target = window.__dict__.get("_focus_target")
                 if target is not None:
                     panel = target()

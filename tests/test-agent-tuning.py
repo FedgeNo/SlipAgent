@@ -135,10 +135,17 @@ async def test_reasoning_depth_preserves_archived_originals(depth):
         await registry.aclose()
 
 
-async def test_plan_objective_has_leeway_beyond_its_advertised_length():
+async def test_plan_objective_and_tasks_have_leeway_beyond_their_advertised_length():
     from slipagent.tools.planning import UpdatePlanTool
     stages = [{"task": "Inspect", "status": "pending", "evidence": ""}]
     tool = UpdatePlanTool()
     assert not (await tool.run(objective="x" * 1000, stages=stages)).is_error
     refused = await tool.run(objective="x" * 1001, stages=stages)
     assert refused.is_error and "at most 500 characters" in str(refused.content)
+    long_task = [{**stages[0], "task": "y" * 1000}]
+    assert not (await tool.run(objective="Goal", stages=long_task)).is_error
+    refused = await tool.run(objective="Goal", stages=[{**stages[0], "task": "y" * 1001}])
+    assert refused.is_error and "at most 500 characters" in str(refused.content)
+    assert not (await tool.run(objective="Goal", stages=[{**stages[0], "evidence": "z" * 2000}])).is_error
+    refused = await tool.run(objective="Goal", stages=[{**stages[0], "evidence": "z" * 2001}])
+    assert refused.is_error and "evidence of at most 1000 characters" in str(refused.content)

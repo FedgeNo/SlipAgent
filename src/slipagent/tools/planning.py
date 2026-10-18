@@ -26,10 +26,11 @@ class UpdatePlanTool(Tool):
     }
 
     async def run(self, objective: str, stages: list[dict[str, Any]]) -> ToolResult:
-        # The schema advertises 500 characters; accept up to 1000 so a slightly long goal is not refused.
+        # Accept twice the advertised lengths (500 for the objective and tasks, 1000 for
+        # evidence) so a slightly long field is not refused.
         if not objective.strip() or len(objective) > 1000 or not 1 <= len(stages) <= 8:
             return ToolResult.error("Use a nonempty objective of at most 500 characters and 1–8 stages.")
-        if any(not stage['task'].strip() or len(stage['task']) > 500 or len(stage['evidence']) > 1000
+        if any(not stage['task'].strip() or len(stage['task']) > 1000 or len(stage['evidence']) > 2000
                for stage in stages):
             return ToolResult.error("Each stage needs a nonempty task (at most 500 characters) and evidence of at most 1000 characters.")
         if sum(stage['status'] == 'in_progress' for stage in stages) > 1:

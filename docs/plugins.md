@@ -72,7 +72,9 @@ class Renderer:
 - **Targets:** classes of reloadable modules. The stable frame (`runtime`, `config`,
   `types`, `plugins`, and the rest of `runtime.CORE_MODULES`) can't be overridden.
   Module-level functions can't be overridden; override the class methods that
-  call them.
+  call them. Entry points such as `protocol.parse_agent_response` delegate to a
+  class (`protocol.ResponseParser`, `api.ResponseReader`, `tools.shell.ProcessCapture`,
+  `context.HistoryText`, and others), so each step is one method to override.
 - **One target module per file.** A file may replace several classes of `cli`, but
   not classes of both `cli` and `agent`, because names resolve from a single target
   module. Use two files for that.

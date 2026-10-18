@@ -281,7 +281,7 @@ class APIClient:
                         on_raw_response(response)
                     if response.status_code >= 400:
                         await response.aread()
-                        captured = _response_body(response)
+                        captured = ResponseReader()._response_body(response)
                         error = _build_error(response)
                         error.retry_after = response.headers.get("retry-after")
                         if not single_attempt and response.status_code in RETRYABLE_STATUS and await self.wait_retry(attempt, error):
@@ -292,8 +292,8 @@ class APIClient:
                     # Gateways and test servers may return a regular completion.
                     if "application/json" in response.headers.get("content-type", ""):
                         await response.aread()
-                        captured = _response_body(response)
-                        raw = _decode_json(response)
+                        captured = ResponseReader()._response_body(response)
+                        raw = ResponseReader()._decode_json(response)
                         embedded = raw.get("error")
                         code = embedded.get("code") if isinstance(embedded, dict) else None
                         if type(code) is int:
@@ -459,9 +459,9 @@ class APIClient:
                 continue
 
             if on_response is not None:
-                on_response(_response_body(response))
+                on_response(ResponseReader()._response_body(response))
             if response.status_code < 400:
-                raw = _decode_json(response)
+                raw = ResponseReader()._decode_json(response)
                 error_body = raw.get("error")
                 code = error_body.get("code") if isinstance(error_body, dict) else None
                 if type(code) is not int or code not in RETRYABLE_STATUS:
@@ -531,40 +531,302 @@ class APIClient:
         return random.uniform(ceiling / 2, ceiling)
 
 
-def _parse_retry_after(value: str | None) -> float | None:
-    if not value:
-        return None
-    try:
-        seconds = float(value.strip())
-        return max(0.0, seconds) if math.isfinite(seconds) else None
-    except ValueError:
-        try:
-            date = parsedate_to_datetime(value)
-            return max(0.0, (date - datetime.now(timezone.utc)).total_seconds())
-        except (ValueError, TypeError, OverflowError):
+class ResponseReader:
+    """Read provider responses: completions, streamed reasoning and content, errors, and retry hints."""
+
+    def _parse_retry_after(self, value: str | None) -> float | None:
+        if not value:
             return None
+        try:
+            seconds = float(value.strip())
+            return max(0.0, seconds) if math.isfinite(seconds) else None
+        except ValueError:
+            try:
+                date = parsedate_to_datetime(value)
+                return max(0.0, (date - datetime.now(timezone.utc)).total_seconds())
+            except (ValueError, TypeError, OverflowError):
+                return None
 
-
-def _reasoning_text(delta: dict[str, Any]) -> list[str]:
-    for key in ("reasoning", "reasoning_content"):
-        value = delta.get(key)
-        if isinstance(value, str) and value:
-            return [value]
-    texts: list[str] = []
-    content = delta.get("content")
-    if isinstance(content, list):
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "thinking":
-                parts = block.get("thinking")
-                if isinstance(parts, list):
-                    texts.extend(part["text"] for part in parts if isinstance(part, dict)
-                                 and part.get("type") == "text" and isinstance(part.get("text"), str))
-    for detail in delta.get("reasoning_details") or []:
-        if isinstance(detail, dict) and detail.get("type") in {"reasoning.text", "reasoning.summary"}:
-            value = detail.get("text") or detail.get("summary")
+    def _reasoning_text(self, delta: dict[str, Any]) -> list[str]:
+        for key in ("reasoning", "reasoning_content"):
+            value = delta.get(key)
             if isinstance(value, str) and value:
-                texts.append(value)
-    return texts
+                return [value]
+        texts: list[str] = []
+        content = delta.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "thinking":
+                    parts = block.get("thinking")
+                    if isinstance(parts, list):
+                        texts.extend(part["text"] for part in parts if isinstance(part, dict)
+                                     and part.get("type") == "text" and isinstance(part.get("text"), str))
+        for detail in delta.get("reasoning_details") or []:
+            if isinstance(detail, dict) and detail.get("type") in {"reasoning.text", "reasoning.summary"}:
+                value = detail.get("text") or detail.get("summary")
+                if isinstance(value, str) and value:
+                    texts.append(value)
+        return texts
+
+    def _decode_json(self, response: httpx.Response) -> dict[str, Any]:
+        try:
+            payload = response.json()
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise APIResponseError(
+                "API provider returned a non-JSON response.",
+                status_code=response.status_code,
+                body=response.text[:2000],
+            ) from exc
+        if not isinstance(payload, dict):
+            raise APIResponseError(
+                "API provider returned an unexpected JSON shape.",
+                status_code=response.status_code,
+                body=response.text[:2000],
+            )
+        return payload
+
+    def _is_context_overflow(self, detail: str) -> bool:
+        """Recognize explicit input-size errors in either HTTP or streamed payloads."""
+        lower = detail.casefold()
+        overflow = any(code in lower for code in ("context_length_exceeded", "context_window_exceeded", "prompt_too_long"))
+        overflow = overflow or (any(term in lower for term in ("context length", "context window", "input tokens", "prompt tokens"))
+                                and any(term in lower for term in ("exceed", "too long", "too many", "requested", "resulted in")))
+        return overflow
+
+    def _build_error(self, response: httpx.Response) -> APIResponseError:
+        status = response.status_code
+        detail = self._extract_error_message(response)
+        if status in {400, 413} and self._is_context_overflow(detail):
+            return APIContextError(
+                f"API provider context limit exceeded ({status}): {detail}",
+                status_code=status, body=response.text[:2000],
+            )
+
+        if status == 401:
+            return APIAuthError(
+                f"API provider rejected the API key (401): {detail}",
+                status_code=status,
+                body=response.text[:2000],
+            )
+        if status == 402 or status == 403 and "key limit exceeded" in detail.casefold():
+            return APILimitError(
+                f"API provider key limit reached ({status}): {detail}. "
+                f"Check the account limits in your API provider's dashboard.",
+                status_code=status,
+                body=response.text[:2000],
+            )
+        if status == 429:
+            return APILimitError(
+                f"API provider rate limit hit ({status}): {detail}",
+                status_code=status,
+                body=response.text[:2000],
+            )
+        return APIResponseError(
+            f"API provider request failed ({status}): {detail}",
+            status_code=status,
+            body=response.text[:2000],
+        )
+
+    def _extract_error_message(self, response: httpx.Response) -> str:
+        try:
+            payload = response.json()
+        except (json.JSONDecodeError, ValueError):
+            text = response.text.strip()
+            return text[:500] if text else "no response body"
+
+        if isinstance(payload, dict):
+            error = payload.get("error")
+            if isinstance(error, dict):
+                message = error.get("message")
+                code = error.get("code")
+                if message:
+                    return f"{message} (code={code})" if code else str(message)
+            if isinstance(error, str):
+                return error
+            if payload.get("message"):
+                return str(payload["message"])
+        return "no error detail"
+
+    def _response_body(self, response: httpx.Response) -> dict[str, Any]:
+        """Capture the response body before validation, without request headers."""
+        try:
+            value = response.json()
+        except ValueError:
+            return {"body": response.text}
+        return value if isinstance(value, dict) else {"body": value}
+
+    def _joined(self, value: Any) -> Any:
+        if isinstance(value, _TextParts):
+            return value.text()
+        if isinstance(value, dict):
+            return {key: self._joined(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._joined(item) for item in value]
+        return value
+
+    def _merge_events(self, events: list[str]) -> dict[str, Any]:
+        """Assemble captured stream events for diagnostics in one linear pass."""
+        captured: dict[str, Any] = {}
+        for event in events:
+            try:
+                value = json.loads(event)
+            except ValueError:
+                captured.setdefault("unparsed_events", []).append(event)
+                continue
+            if isinstance(value, dict):
+                self._merge_response(captured, value)
+            else:
+                captured.setdefault("unparsed_events", []).append(value)
+        result: dict[str, Any] = self._joined(captured)
+        return result
+
+    def _merge_response(self, target: dict[str, Any], incoming: dict[str, Any]) -> None:
+        """Assemble provider deltas for diagnostics independently of tool parsing.
+
+        Indexed arrays retain choice/call/reasoning-block identities. Text fragments
+        join in place; unknown fields remain available for inspecting provider formats.
+        """
+        for key, value in incoming.items():
+            if value is None and key in target:
+                continue
+            if key == "content" and (isinstance(value, list) or isinstance(target.get(key), list)):
+                # Content can switch from strings to thinking blocks and back.
+                # Preserve ordered fragments rather than merging unrelated block positions.
+                previous = target.get(key)
+                if isinstance(previous, _TextParts):
+                    previous = previous.text()
+                if not isinstance(previous, list):
+                    target[key] = [{"type": "text", "text": previous}] if isinstance(previous, str) and previous else []
+                if isinstance(value, list):
+                    target[key].extend(copy.deepcopy(value))
+                elif isinstance(value, str):
+                    target[key].append({"type": "text", "text": value})
+                else:
+                    target[key].append(copy.deepcopy(value))
+                continue
+            if isinstance(value, dict):
+                if not isinstance(target.get(key), dict):
+                    target[key] = {}
+                self._merge_response(target[key], value)
+            elif isinstance(value, list):
+                if key in {"choices", "tool_calls", "reasoning_details", "content"}:
+                    items = target.setdefault(key, [])
+                    for position, part in enumerate(value):
+                        if not isinstance(part, dict):
+                            items.append(copy.deepcopy(part))
+                            continue
+                        index = part.get("index", position)
+                        match = next((item for i, item in enumerate(items)
+                                      if isinstance(item, dict) and item.get("index", i) == index), None)
+                        if match is None:
+                            match = {}
+                            items.append(match)
+                        self._merge_response(match, part)
+                else:
+                    target.setdefault(key, []).extend(copy.deepcopy(value))
+            elif isinstance(value, str) and key in {"content", "reasoning", "reasoning_content", "text", "summary", "arguments", "name", "refusal"}:
+                previous = target.get(key)
+                if isinstance(previous, _TextParts):
+                    previous.parts.append(value)
+                else:
+                    target[key] = _TextParts([previous, value]) if isinstance(previous, str) else value
+            else:
+                target[key] = value
+
+    def _content_parts(self, content: Any) -> tuple[str, list[dict[str, Any]]]:
+        """Read text/tool blocks without mistaking reasoning or unknown data for text."""
+        if content is None:
+            return "", []
+        if isinstance(content, str):
+            return content, []
+        if not isinstance(content, list):
+            raise ResponseFormatError("Assistant content must be text or an array of content blocks.")
+        texts, calls = [], []
+        for block in content:
+            if not isinstance(block, dict):
+                raise ResponseFormatError("Assistant content blocks must be objects.")
+            if block.get("type") in {"text", "output_text"} and isinstance(block.get("text"), str):
+                texts.append(block["text"])
+            elif block.get("type") == "tool_use":
+                calls.append(block)
+            elif block.get("type") == "thinking":
+                parts = block.get("thinking")
+                if not isinstance(parts, list) or any(not isinstance(part, dict)
+                        or part.get("type") != "text" or not isinstance(part.get("text"), str) for part in parts):
+                    raise ResponseFormatError("Thinking content must contain text blocks.")
+            else:
+                raise ResponseFormatError("Unsupported assistant content block; expected text or tool_use.")
+        return "".join(texts), calls
+
+    def _parse_completion(self, raw: dict[str, Any]) -> Completion:
+        if raw.get("error") and self._is_context_overflow(str(raw["error"])):
+            raise APIContextError(f"API provider context limit exceeded: {raw['error']}")
+        choices = raw.get("choices") or []
+        if not choices:
+            raise APIResponseError(
+                f"API provider response contained no choices: {str(raw)[:500]}"
+            )
+
+        try:
+            if not isinstance(choices, list) or not isinstance(choices[0], dict):
+                raise ValueError("choices must contain objects")
+            first = choices[0]
+            wire = first.get("message")
+            if not isinstance(wire, dict) or wire.get("role", "assistant") != "assistant":
+                raise ValueError("message must be an assistant object")
+            content = ""
+            calls = []
+            response_error = None
+            response_excerpt = ""
+            try:
+                content, blocks = self._content_parts(wire.get("content"))
+                calls = combine_calls(normalize_calls(wire.get("tool_calls")),
+                                      normalize_calls(wire.get("function_call")), normalize_calls(blocks))
+            except ResponseFormatError as exc:
+                response_error = str(exc)
+                response_excerpt = json.dumps(
+                    {"invalid_message_prefix": json.dumps(wire, ensure_ascii=True)[:1500]}, indent=2,
+                )
+            separated: dict[str, list[str]] = {"content": [], "reasoning": []}
+            thoughts = ThoughtStream(lambda kind, text: separated[kind].append(text))
+            thoughts.add(content)
+            thoughts.finish()
+            message = Message.assistant("".join(separated["content"]) or None, calls)
+            details = wire.get("reasoning_details")
+            if details is not None:
+                if not isinstance(details, list) or any(not isinstance(detail, dict) for detail in details):
+                    raise ValueError("reasoning_details must be an array of objects")
+                # Ordinary reasoning is one string. Keep opaque provider metadata
+                # in the local original; outgoing requests exclude both forms.
+                if any(detail.get("signature") or detail.get("type") == "reasoning.encrypted" for detail in details):
+                    message.reasoning_details = copy.deepcopy(details)
+            message.reasoning = "".join([*self._reasoning_text(wire), *separated["reasoning"]]) or None
+            return Completion(
+                message=message,
+                model=raw.get("model", ""),
+                finish_reason=first.get("finish_reason"),
+                usage=Usage.from_api(raw.get("usage")),
+                response_error=response_error, response_excerpt=response_excerpt,
+            )
+        except (ValueError, TypeError, AttributeError, OverflowError) as exc:
+            raise APIResponseError(f"API provider returned a malformed completion: {exc}") from exc
+
+
+# Entry points for other modules; plugins override the methods above.
+def _parse_retry_after(value: str | None) -> float | None:
+    return ResponseReader()._parse_retry_after(value)
+
+
+def _build_error(response: httpx.Response) -> APIResponseError:
+    return ResponseReader()._build_error(response)
+
+
+def _merge_events(events: list[str]) -> dict[str, Any]:
+    return ResponseReader()._merge_events(events)
+
+
+def _parse_completion(raw: dict[str, Any]) -> Completion:
+    return ResponseReader()._parse_completion(raw)
 
 
 class FirstOutputDeadline:
@@ -712,7 +974,7 @@ class _StreamCompletion:
             if not isinstance(raw, dict):
                 raise ValueError("stream event must be an object")
             if raw.get("error"):
-                if _is_context_overflow(str(raw["error"])):
+                if ResponseReader()._is_context_overflow(str(raw["error"])):
                     raise APIContextError(f"API provider stream context limit exceeded: {raw['error']}")
                 code = raw["error"].get("code") if isinstance(raw["error"], dict) else None
                 raise APIResponseError(f"API provider stream failed: {raw['error']}",
@@ -738,12 +1000,12 @@ class _StreamCompletion:
                         raise ValueError("reasoning_details must be an array of objects")
                     for detail in details:
                         self._add_reasoning_detail(detail)
-                for text in _reasoning_text(delta):
+                for text in ResponseReader()._reasoning_text(delta):
                     self.reasoning.append(text)
                     self.on_delta("reasoning", text)
                 content = delta.get("content")
                 if content is not None:
-                    content, blocks = _content_parts(content)
+                    content, blocks = ResponseReader()._content_parts(content)
                     self.tool_blocks.extend(blocks)
                     self.thoughts.add(content)
                 fragments = delta.get("tool_calls") or []
@@ -840,98 +1102,6 @@ class _StreamCompletion:
         })
 
 
-def _decode_json(response: httpx.Response) -> dict[str, Any]:
-    try:
-        payload = response.json()
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise APIResponseError(
-            "API provider returned a non-JSON response.",
-            status_code=response.status_code,
-            body=response.text[:2000],
-        ) from exc
-    if not isinstance(payload, dict):
-        raise APIResponseError(
-            "API provider returned an unexpected JSON shape.",
-            status_code=response.status_code,
-            body=response.text[:2000],
-        )
-    return payload
-
-
-def _is_context_overflow(detail: str) -> bool:
-    """Recognize explicit input-size errors in either HTTP or streamed payloads."""
-    lower = detail.casefold()
-    overflow = any(code in lower for code in ("context_length_exceeded", "context_window_exceeded", "prompt_too_long"))
-    overflow = overflow or (any(term in lower for term in ("context length", "context window", "input tokens", "prompt tokens"))
-                            and any(term in lower for term in ("exceed", "too long", "too many", "requested", "resulted in")))
-    return overflow
-
-
-def _build_error(response: httpx.Response) -> APIResponseError:
-    status = response.status_code
-    detail = _extract_error_message(response)
-    if status in {400, 413} and _is_context_overflow(detail):
-        return APIContextError(
-            f"API provider context limit exceeded ({status}): {detail}",
-            status_code=status, body=response.text[:2000],
-        )
-
-    if status == 401:
-        return APIAuthError(
-            f"API provider rejected the API key (401): {detail}",
-            status_code=status,
-            body=response.text[:2000],
-        )
-    if status == 402 or status == 403 and "key limit exceeded" in detail.casefold():
-        return APILimitError(
-            f"API provider key limit reached ({status}): {detail}. "
-            f"Check the account limits in your API provider's dashboard.",
-            status_code=status,
-            body=response.text[:2000],
-        )
-    if status == 429:
-        return APILimitError(
-            f"API provider rate limit hit ({status}): {detail}",
-            status_code=status,
-            body=response.text[:2000],
-        )
-    return APIResponseError(
-        f"API provider request failed ({status}): {detail}",
-        status_code=status,
-        body=response.text[:2000],
-    )
-
-
-def _extract_error_message(response: httpx.Response) -> str:
-    try:
-        payload = response.json()
-    except (json.JSONDecodeError, ValueError):
-        text = response.text.strip()
-        return text[:500] if text else "no response body"
-
-    if isinstance(payload, dict):
-        error = payload.get("error")
-        if isinstance(error, dict):
-            message = error.get("message")
-            code = error.get("code")
-            if message:
-                return f"{message} (code={code})" if code else str(message)
-        if isinstance(error, str):
-            return error
-        if payload.get("message"):
-            return str(payload["message"])
-    return "no error detail"
-
-
-def _response_body(response: httpx.Response) -> dict[str, Any]:
-    """Capture the response body before validation, without request headers."""
-    try:
-        value = response.json()
-    except ValueError:
-        return {"body": response.text}
-    return value if isinstance(value, dict) else {"body": value}
-
-
 class _TextParts:
     """Text fragments joined once after all diagnostic events are merged."""
 
@@ -942,162 +1112,3 @@ class _TextParts:
         return "".join(self.parts)
 
 
-def _joined(value: Any) -> Any:
-    if isinstance(value, _TextParts):
-        return value.text()
-    if isinstance(value, dict):
-        return {key: _joined(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_joined(item) for item in value]
-    return value
-
-
-def _merge_events(events: list[str]) -> dict[str, Any]:
-    """Assemble captured stream events for diagnostics in one linear pass."""
-    captured: dict[str, Any] = {}
-    for event in events:
-        try:
-            value = json.loads(event)
-        except ValueError:
-            captured.setdefault("unparsed_events", []).append(event)
-            continue
-        if isinstance(value, dict):
-            _merge_response(captured, value)
-        else:
-            captured.setdefault("unparsed_events", []).append(value)
-    result: dict[str, Any] = _joined(captured)
-    return result
-
-
-def _merge_response(target: dict[str, Any], incoming: dict[str, Any]) -> None:
-    """Assemble provider deltas for diagnostics independently of tool parsing.
-
-    Indexed arrays retain choice/call/reasoning-block identities. Text fragments
-    join in place; unknown fields remain available for inspecting provider formats.
-    """
-    for key, value in incoming.items():
-        if value is None and key in target:
-            continue
-        if key == "content" and (isinstance(value, list) or isinstance(target.get(key), list)):
-            # Content can switch from strings to thinking blocks and back.
-            # Preserve ordered fragments rather than merging unrelated block positions.
-            previous = target.get(key)
-            if isinstance(previous, _TextParts):
-                previous = previous.text()
-            if not isinstance(previous, list):
-                target[key] = [{"type": "text", "text": previous}] if isinstance(previous, str) and previous else []
-            if isinstance(value, list):
-                target[key].extend(copy.deepcopy(value))
-            elif isinstance(value, str):
-                target[key].append({"type": "text", "text": value})
-            else:
-                target[key].append(copy.deepcopy(value))
-            continue
-        if isinstance(value, dict):
-            if not isinstance(target.get(key), dict):
-                target[key] = {}
-            _merge_response(target[key], value)
-        elif isinstance(value, list):
-            if key in {"choices", "tool_calls", "reasoning_details", "content"}:
-                items = target.setdefault(key, [])
-                for position, part in enumerate(value):
-                    if not isinstance(part, dict):
-                        items.append(copy.deepcopy(part))
-                        continue
-                    index = part.get("index", position)
-                    match = next((item for i, item in enumerate(items)
-                                  if isinstance(item, dict) and item.get("index", i) == index), None)
-                    if match is None:
-                        match = {}
-                        items.append(match)
-                    _merge_response(match, part)
-            else:
-                target.setdefault(key, []).extend(copy.deepcopy(value))
-        elif isinstance(value, str) and key in {"content", "reasoning", "reasoning_content", "text", "summary", "arguments", "name", "refusal"}:
-            previous = target.get(key)
-            if isinstance(previous, _TextParts):
-                previous.parts.append(value)
-            else:
-                target[key] = _TextParts([previous, value]) if isinstance(previous, str) else value
-        else:
-            target[key] = value
-
-
-def _content_parts(content: Any) -> tuple[str, list[dict[str, Any]]]:
-    """Read text/tool blocks without mistaking reasoning or unknown data for text."""
-    if content is None:
-        return "", []
-    if isinstance(content, str):
-        return content, []
-    if not isinstance(content, list):
-        raise ResponseFormatError("Assistant content must be text or an array of content blocks.")
-    texts, calls = [], []
-    for block in content:
-        if not isinstance(block, dict):
-            raise ResponseFormatError("Assistant content blocks must be objects.")
-        if block.get("type") in {"text", "output_text"} and isinstance(block.get("text"), str):
-            texts.append(block["text"])
-        elif block.get("type") == "tool_use":
-            calls.append(block)
-        elif block.get("type") == "thinking":
-            parts = block.get("thinking")
-            if not isinstance(parts, list) or any(not isinstance(part, dict)
-                    or part.get("type") != "text" or not isinstance(part.get("text"), str) for part in parts):
-                raise ResponseFormatError("Thinking content must contain text blocks.")
-        else:
-            raise ResponseFormatError("Unsupported assistant content block; expected text or tool_use.")
-    return "".join(texts), calls
-
-
-def _parse_completion(raw: dict[str, Any]) -> Completion:
-    if raw.get("error") and _is_context_overflow(str(raw["error"])):
-        raise APIContextError(f"API provider context limit exceeded: {raw['error']}")
-    choices = raw.get("choices") or []
-    if not choices:
-        raise APIResponseError(
-            f"API provider response contained no choices: {str(raw)[:500]}"
-        )
-
-    try:
-        if not isinstance(choices, list) or not isinstance(choices[0], dict):
-            raise ValueError("choices must contain objects")
-        first = choices[0]
-        wire = first.get("message")
-        if not isinstance(wire, dict) or wire.get("role", "assistant") != "assistant":
-            raise ValueError("message must be an assistant object")
-        content = ""
-        calls = []
-        response_error = None
-        response_excerpt = ""
-        try:
-            content, blocks = _content_parts(wire.get("content"))
-            calls = combine_calls(normalize_calls(wire.get("tool_calls")),
-                                  normalize_calls(wire.get("function_call")), normalize_calls(blocks))
-        except ResponseFormatError as exc:
-            response_error = str(exc)
-            response_excerpt = json.dumps(
-                {"invalid_message_prefix": json.dumps(wire, ensure_ascii=True)[:1500]}, indent=2,
-            )
-        separated: dict[str, list[str]] = {"content": [], "reasoning": []}
-        thoughts = ThoughtStream(lambda kind, text: separated[kind].append(text))
-        thoughts.add(content)
-        thoughts.finish()
-        message = Message.assistant("".join(separated["content"]) or None, calls)
-        details = wire.get("reasoning_details")
-        if details is not None:
-            if not isinstance(details, list) or any(not isinstance(detail, dict) for detail in details):
-                raise ValueError("reasoning_details must be an array of objects")
-            # Ordinary reasoning is one string. Keep opaque provider metadata
-            # in the local original; outgoing requests exclude both forms.
-            if any(detail.get("signature") or detail.get("type") == "reasoning.encrypted" for detail in details):
-                message.reasoning_details = copy.deepcopy(details)
-        message.reasoning = "".join([*_reasoning_text(wire), *separated["reasoning"]]) or None
-        return Completion(
-            message=message,
-            model=raw.get("model", ""),
-            finish_reason=first.get("finish_reason"),
-            usage=Usage.from_api(raw.get("usage")),
-            response_error=response_error, response_excerpt=response_excerpt,
-        )
-    except (ValueError, TypeError, AttributeError, OverflowError) as exc:
-        raise APIResponseError(f"API provider returned a malformed completion: {exc}") from exc

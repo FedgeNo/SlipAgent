@@ -331,7 +331,7 @@ async def test_command_output_is_truncated(project: Workspace, monkeypatch) -> N
     # Exercise several pipe chunks and both retained ends at a small ceiling.
     limit = 100_000
     monkeypatch.setattr(shell, "MAX_OUTPUT_CHARS", limit)
-    monkeypatch.setattr(shell._truncate, "__defaults__", (limit,))
+    monkeypatch.setattr(shell.CommandOutput._truncate, "__defaults__", (limit,))
     code = "print('BEGINNING'); print('x' * 300000); print('FINAL DIAGNOSTIC')"
     result = await RunCommandTool(project).invoke(
         {"command": shlex.join([sys.executable, "-c", code])}

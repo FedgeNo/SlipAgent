@@ -74,6 +74,11 @@ MODEL_BLACKLIST = {
     "thedrummer/cydonia-24b-v4.1": "Creative writing",
     "thedrummer/skyfall-36b-v2": "Roleplay and storytelling",
     "thedrummer/unslopnemo-12b": "Roleplay and adventure writing",
+    # OpenRouter answers 403: served only to apps on its public apps list.
+    "thinkingmachines/inkling": "Restricted to listed OpenRouter apps",
+    "thinkingmachines/inkling:free": "Restricted to listed OpenRouter apps",
+    "thinkingmachines/inkling-small": "Restricted to listed OpenRouter apps",
+    "thinkingmachines/inkling-small:free": "Restricted to listed OpenRouter apps",
     "writer/palmyra-creative-122b": "Creative writing",
     "writer/palmyra-fin-70b-32k": "Financial analysis",
     "writer/palmyra-med-70b": "Medical analysis",

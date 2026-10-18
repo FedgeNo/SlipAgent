@@ -56,7 +56,8 @@ from .terminal import TerminalUI, SuggestedPrompt
 from .submissions import Submission, cancelled, suggested as submitted_suggestion
 from .inputqueue import input_queue
 from .palette import ERROR_COLOR, MUTED_COLOR, THOUGHT_COLOR, USER_BACKGROUND_COLOR, USER_COLOR, USER_TEXT_COLOR, TOOL_COLOR, LINK_COLOR, WARNING_COLOR, foreground_code
-from .runtime import RuntimeFrame
+from .runtime import CORE_MODULES, RuntimeFrame
+from . import plugins
 from .repomap import RepositoryMap
 from .tools.blocking import run_blocking
 from .sessionstate import Session as Session
@@ -682,6 +683,11 @@ class Launcher:
         args = self.args
         if getattr(args, "no_session", False) and getattr(args, "resume", None):
             raise ConfigError("--resume cannot be combined with --no-session.")
+        # Overrides apply before any session object exists, so constructors use them too.
+        plugins.disabled = getattr(args, "no_plugins", False)
+        if not plugins.__dict__.get("applied_to_live"):
+            plugins.applied_to_live = True
+            await run_blocking(plugins.apply_to_live, CORE_MODULES)
         config = Config.from_env(
             api_key=args.api_key,
             provider=getattr(args, "provider", None),
@@ -914,6 +920,11 @@ class Launcher:
             session.reloader = frame
             edits = registry.services.get("user_edits")
             agent.on_boundary = edits.checkpoint if edits is not None else lambda: frame.checkpoint(boundary=True)
+            frame.report_plugins(plugins.reports)
+        else:
+            for report in plugins.reports:
+                for text in report.notices():
+                    renderer.emit(literal(f"  {text}"))
         if args.model and model_error is None and not getattr(args, "json_events", False):
             try:
                 await run_blocking(save_model_choice, config.model, config.provider)
@@ -2411,6 +2422,8 @@ def build_parser() -> argparse.ArgumentParser:
     advanced.add_argument("--python", default=None,
                           help="Project Python interpreter path, overriding .slipagent/project.json and venv discovery.")
     advanced.add_argument("--no-reload", action="store_true", help="Disable automatic component reloads.")
+    advanced.add_argument("--no-plugins", action="store_true",
+                          help="Skip every plugin in the plugins folder for this run (also SLIPAGENT_NO_PLUGINS=1).")
     return parser
 
 

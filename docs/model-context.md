@@ -531,6 +531,7 @@ Useful flags:
 | `--no-color` | Disable ANSI color output. |
 | `--no-mcp` | Skip globally configured MCP servers. |
 | `--no-reload` | Disable automatic source reloads for this process. |
+| `--no-plugins` | Skip every file in the plugins folder for this process; `SLIPAGENT_NO_PLUGINS=1` does the same. |
 | `--resume [id]` | Restore a saved project session; omitted ID means latest. |
 | `--no-session` | Disable durable conversation and command-log storage. |
 | `--mcp` | Connect MCP servers even in one-shot mode. |

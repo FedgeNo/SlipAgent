@@ -1219,8 +1219,18 @@ behavior reloads after it preserve the component owners and their selections.
 
 `runtime.py` is the stable frame. Its `CORE_MODULES` set also pins package root,
 configuration, wire types, their `data_text` renderer, workspace, tool base, MCP
-connections, `lifecycle`, typed `resources`, and `work` ownership contracts.
-These classes/state contracts must agree for the session's lifetime. Editing a
+connections, `lifecycle`, typed `resources`, `work` ownership contracts, and the
+`plugins` loader. These classes/state contracts must agree for the session's lifetime.
+
+User plugins in `data_directory()/plugins/` are watched with the package source
+under separate `:plugins/` keys and are never imported as components. Each
+reload stages the candidate, then `plugins.overlay` applies every plugin's
+members onto the candidate classes before the component API, layout, registry,
+and terminal checks; the normal merge then carries them to the live classes, and
+a rejected generation leaves them as they were. A plugin that fails to load or
+apply is rolled back on its own and reported once; the generation continues.
+Startup applies the same overlay to the live classes once per process before the
+session is built. `--no-plugins` or `SLIPAGENT_NO_PLUGINS=1` skips them. Editing a
 pinned module requires a restart; most agent, tool, UI, API, task, and context
 behavior is reloadable when layouts remain compatible.
 

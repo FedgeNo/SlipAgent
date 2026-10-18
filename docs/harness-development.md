@@ -122,7 +122,7 @@ accepted generation continues to run.
 
 The authoritative restart boundary is `CORE_MODULES` in `runtime.py`. It includes
 the stable runtime/configuration, wire/data, workspace, tool-base, MCP, lifecycle,
-resource, and work contracts, plus the semantic backend whose worker keeps native
+resource, work, and plugin-loader contracts, plus the semantic backend whose worker keeps native
 model and database state. Changes to inheritance, slots, dataclass fields, or
 removed classes also require restart. See the exact
 [reload transaction contract](architecture.md#reload-transactions).

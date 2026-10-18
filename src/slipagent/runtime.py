@@ -20,6 +20,7 @@ from pathlib import Path
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
+from . import plugins
 from .tools.base import Tool, ToolRegistry
 from .types import Message
 from .lifecycle import Lifetime, finish_cleanup
@@ -33,7 +34,7 @@ CORE_MODULES = frozenset({"", "runtime", "config", "types", "data_text", "worksp
 CORE_MODULES |= frozenset({"semantic", "semantic.cpu", "semantic.embed", "semantic.indexer",
                            "semantic.retrieval", "semantic.search", "semantic.storage",
                            "semantic.watcher", "semantic.service"})
-CORE_MODULES |= frozenset({"sources"})
+CORE_MODULES |= frozenset({"sources", "plugins"})
 POLL_INTERVAL = .5
 _CLASS_INTERNALS = frozenset({
     "__dict__", "__weakref__", "__slots__", "__module__", "__classcell__",
@@ -182,7 +183,9 @@ class RuntimeFrame:
                 if "__pycache__" not in path.parts]
 
     def _sources(self) -> dict[str, bytes]:
-        return {os.path.relpath(path, self.root): path.read_bytes() for path in self._paths()}
+        # Plugin files are watched with application source but keyed apart from package paths.
+        return {**{os.path.relpath(path, self.root): path.read_bytes() for path in self._paths()},
+                **plugins.plugin_sources()}
 
     def _stamps(self) -> dict[str, tuple[int, int, int]]:
         """Cheap per-file identity for the _paths set; contents are read only after it changes."""
@@ -196,6 +199,7 @@ class RuntimeFrame:
                         path = os.path.join(directory, name)
                         metadata = os.stat(path)
                         stamps[os.path.relpath(path, self.root)] = (metadata.st_ino, metadata.st_mtime_ns, metadata.st_size)
+        stamps.update(plugins.plugin_stamps())
         return stamps
 
     @staticmethod
@@ -292,7 +296,8 @@ class RuntimeFrame:
     def _stage(self, sources: dict[str, bytes], prefix: str) -> dict[str, types.ModuleType]:
         changed_core = [
             name for name in self._applied.keys() | sources.keys()
-            if _module_name(name) in CORE_MODULES and self._applied.get(name) != sources.get(name)
+            if not name.startswith(plugins.PLUGIN_KEY + "/")
+            and _module_name(name) in CORE_MODULES and self._applied.get(name) != sources.get(name)
         ]
         if changed_core:
             raise ReloadError(f"Restart required for frame/contract edits: {', '.join(sorted(changed_core))}. Core modules cannot be changed without restart as they contain shared state and wire-level contracts.")
@@ -309,6 +314,7 @@ class RuntimeFrame:
             return {
                 _module_name(filename): importlib.import_module(f"{prefix}.{_module_name(filename)}")
                 for filename in sources if filename.endswith(".py") and _module_name(filename) not in CORE_MODULES
+                and not filename.startswith(plugins.PLUGIN_KEY + "/")
             }
         finally:
             sys.meta_path.remove(loader)
@@ -359,6 +365,9 @@ class RuntimeFrame:
             # before removing its namespace if this reload is cancelled.
             staging = asyncio.create_task(asyncio.to_thread(self._stage, sources, prefix))
             modules = await finish_cleanup(staging)
+            # Plugins apply to the candidate before every check, so a plugin that
+            # breaks a contract is rejected exactly like an edit that does.
+            reports = await asyncio.to_thread(self._overlay, modules, sources)
             # Input can start work while staging. Defer the atomic commit until
             # the session is idle again or paused at its own batch boundary.
             if self.busy or self.session.agent.running and not boundary:
@@ -498,6 +507,7 @@ class RuntimeFrame:
             self._component_classes = {key: classes.get(value, value) for key, value in declared.items()}
             self.generation += 1
             self._notice(f"Applied component reload {self.generation}.")
+            self.report_plugins(reports)
         finally:
             # Each resource uses the cleanup implementation that created it.
             try:
@@ -513,6 +523,22 @@ class RuntimeFrame:
                     _drop_namespace(prefix)
                 if previous_namespace is not None:
                     _drop_namespace(previous_namespace)
+
+    def _overlay(self, modules: dict[str, types.ModuleType], sources: dict[str, bytes]) -> list[plugins.PluginReport]:
+        selected = {name: content for name, content in sources.items() if name.startswith(plugins.PLUGIN_KEY + "/")}
+        return plugins.overlay(modules.get, lambda component: sources.get(plugins.component_file(component)),
+                               selected, CORE_MODULES)
+
+    def report_plugins(self, reports: list[plugins.PluginReport]) -> None:
+        """Show plugin problems once each; unchanged warnings stay quiet on later reloads."""
+        plugins.reports = reports
+        shown: set[str] = self.__dict__.setdefault("_plugin_notices", set())
+        current = {(text, bool(report.error)) for report in reports for text in report.notices()}
+        for text, error in sorted(current):
+            if text not in shown:
+                self._notice(text, error=error)
+        shown.clear()
+        shown.update(text for text, _ in current)
 
     def close(self) -> None:
         if self.namespace is not None:

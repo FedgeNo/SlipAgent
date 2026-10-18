@@ -118,8 +118,9 @@ for you or the agent to correct.
 
 The persistent frame and shared contracts require a restart:
 `runtime.py`, `config.py`, `types.py`, `data_text.py`, `workspace.py`, `tools/base.py`,
-`mcp.py`, `lifecycle.py`, `resources.py`, `work.py`, `sources.py`, the `semantic/`
-package, and the package's root `__init__.py`. Changing startup/lifecycle setup
+`mcp.py`, `lifecycle.py`, `resources.py`, `work.py`, `sources.py`, `plugins.py`, the
+`semantic/` package, and the package's root `__init__.py`. Plugin files are not
+package source: saving one reloads like any compatible edit. Changing startup/lifecycle setup
 or a constructor does not reinitialize existing persistent objects. Class
 removals and changes to inheritance, slots, or dataclass field layouts also
 require a restart. Use `session.extensions` for additional persistent component

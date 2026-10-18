@@ -327,8 +327,11 @@ class Renderer:
         self._tool_group = False
         restored_step = 0
         restored_calls: dict[str, ToolCall] = {}
+        prompt_records: list[int] = []
         for index, message in enumerate(messages):
             if message.role == "user":
+                if self.terminal is not None:
+                    prompt_records.append(self.terminal.record_count())
                 self.user_prompt(message.content or "", queued=index in (queued_messages or {}))
             elif message.role == "assistant":
                 restored_step += 1
@@ -382,6 +385,9 @@ class Renderer:
         for text in pending:
             self.user_prompt(text, queued=True)
         if self.terminal is not None:
+            if len(prompt_records) > 2:
+                # Show the last two exchanges now; earlier ones lay out in the background.
+                self.terminal.show_tail_first(prompt_records[-2])
             self.terminal.scroll_to_end()
 
     def _erase(self) -> None:

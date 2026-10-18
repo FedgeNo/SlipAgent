@@ -26,6 +26,8 @@ from slipagent.mcp import config_path
 from slipagent.config import DEFAULT_MODEL
 from offline.sitecustomize import GUARD_DIRECTORY
 
+pytestmark = pytest.mark.slow  # Real CLI subprocesses; run with --slow.
+
 
 class DrainingHTTPServer(ThreadingHTTPServer):
     """Own accepted sockets so shutdown can release idle request handlers."""

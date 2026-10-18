@@ -5,7 +5,8 @@
 ## Development
 
 ```bash
-.venv/bin/python -m pytest          # full suite, up to four parallel workers
+.venv/bin/python -m pytest          # suite without slow tests, up to four parallel workers
+.venv/bin/python -m pytest --slow   # everything, including tests marked slow
 .venv/bin/python -m pytest -n 0     # serial execution for debugging
 .venv/bin/python -m mypy            # strict type checking
 ```

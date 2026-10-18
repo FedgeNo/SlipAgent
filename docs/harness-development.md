@@ -6,6 +6,14 @@ and coding agents use the same files, tests, and reload rules. Read the reposito
 [`AGENTS.md`](../AGENTS.md), [contributor workflow](../CONTRIBUTING.md), and
 [internal contracts](architecture.md) before changing the harness.
 
+> [!WARNING]
+> **A plain `pytest` run does not run every test.** Tests marked `slow` (the
+> real-CLI end-to-end tests in `tests/test_cli_e2e.py`, the reload subprocess
+> tests in `tests/test-retired-imports.py`, and a few long terminal, layout, and
+> indexing checks) are left out by default because they take too long to run on
+> every change. Run `.venv/bin/python -m pytest --slow` before committing changes
+> to the CLI, terminal, transcript, reload, or session code, and before a release.
+
 ## Find The Running Checkout
 
 A managed development install uses `python3 install.py --dev`, or
@@ -136,7 +144,8 @@ Use this checkout's interpreter explicitly:
 ```
 
 The first command is an example; choose a focused regression for the change.
-The full suite uses up to four workers. Existing uv-created environments may
+The full suite uses up to four workers and leaves out tests marked `slow`;
+add `--slow` to include them. Existing uv-created environments may
 have no pip; use the environment installation steps in
 [`CONTRIBUTING.md`](../CONTRIBUTING.md#start-with-the-correct-environment).
 Do not recreate an existing environment to work around a missing installer.

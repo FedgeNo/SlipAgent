@@ -818,6 +818,7 @@ async def test_cancelled_save_finishes_publication_and_records_diff_before_clean
     ("界 café 👩🏽‍💻 content ", 70, 240, "\n", False),
     ("very long text ", 12, 5000, "\n", True),
 ])
+@pytest.mark.slow
 @pytest.mark.parametrize("edit", [False, True])
 async def test_repeated_wrap_toggles_and_saves_preserve_long_lines_and_diff(
     display, tmp_path, word, count, length, ending, final_newline, edit,
@@ -1480,6 +1481,7 @@ async def test_editor_click_opens_visible_neighbor_section_at_clicked_position(d
             await task
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("step", [1, 3])
 @pytest.mark.parametrize("wrapped", [False, True])
 async def test_editor_vertical_navigation_keeps_cursor_at_edges(display, tmp_path, step, wrapped):
@@ -2382,6 +2384,7 @@ def display():
     return sink, size, output, screen, snapshot
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("ending", ["ready", "escape", "exit", "eof"])
 async def test_startup_scrolls_welcome_keeps_input_live_and_drains(display, tmp_path, ending):
     from slipagent.cli import _read_line, _start_repl
@@ -2439,6 +2442,7 @@ async def test_startup_scrolls_welcome_keeps_input_live_and_drains(display, tmp_
             await app
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("item_rows, details", [(1, 0), (2, 7), (7, 33)])
 async def test_menu_arrows_reveal_whole_items_with_minimum_scroll(display, item_rows, details):
     sink, size, output, screen, snapshot = display
@@ -4107,3 +4111,39 @@ async def test_silent_request_shows_deadline_and_ctrl_n_skips(display, monkeypat
         finally:
             ui.close()
             await task
+
+
+async def test_restored_transcript_shows_its_end_first_and_completes_in_background(display):
+    from slipagent.types import Message
+    sink, _, output, _, _ = display
+    messages = []
+    for turn in range(6):
+        messages += [Message.user(f"question {turn}"), Message(role="assistant", content=f"**Answer {turn}.**\n\n" + "word " * 400)]
+
+    def rows(content):
+        return ["".join(part[1] for part in content.get_line(i)) for i in range(content.line_count)]
+
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda columns: "status", sink, input=pipe, output=output)
+        renderer = Renderer(Style(False), sink, verbose=False)
+        renderer.terminal = ui
+        try:
+            await renderer.restore_transcript(messages, [])
+            first = rows(ui._transcript_content(80))
+            assert ui.__dict__.get("_tail_from") is not None
+            assert any("question 4" in row for row in first) and not any("question 0" in row for row in first)
+            for _ in range(1000):
+                if ui.__dict__.get("_tail_from") is None:
+                    break
+                await asyncio.sleep(0.01)
+                ui._transcript_content(80)
+            complete = rows(ui._transcript_content(80))
+            assert ui.__dict__.get("_tail_from") is None
+            assert any("question 0" in row for row in complete)
+            assert complete[-len(first):] == first
+            ui.show_tail_first(0)
+            ui._end_tail_layout()
+            ui._wrapped_columns = 0
+            assert rows(ui._transcript_content(80)) == complete
+        finally:
+            ui.close()

@@ -83,6 +83,7 @@ async def test_descriptor_validation_rejects_regular_file_swapped_for_fifo(tmp_p
     assert result.is_error and path.is_fifo()
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("columns", [40, 59, 60, 100])
 async def test_existing_main_regions_are_reachable_at_every_width(ui, tmp_path, columns):
     terminal, size = ui

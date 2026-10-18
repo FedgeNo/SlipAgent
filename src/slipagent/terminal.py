@@ -43,7 +43,7 @@ from .clipboard import clipboard_sequence, copy_to_clipboard
 from .explorer import folder_opener, open_folder
 from .viewerpanels import ViewerDeck, TextViewerPanel, DiffViewerPanel, FileViewerPanel, file_signature
 from .inspection import IndexedText, field_snapshot, artifact_snapshot, build_snapshot
-from .transcriptlayouts import TranscriptLayouts
+from .transcriptlayouts import TranscriptLayouts, WrappedLayout
 from .types import ToolCall
 from .diffcomments import attach_reference, diff_reference
 from .statusline import NOTICE_SECONDS, PULSE_FRAMES, TIP_SECONDS, StatusLine
@@ -152,6 +152,15 @@ class InputWindow(TranscriptWindow):
             super()._scroll(ui_content, width, height)
         else:
             Window._scroll(self, ui_content, width, height)
+
+
+def _append_record(flow: WrappedTranscript, record: tuple[Any, ...]) -> None:
+    if record[0]:
+        _, text, first, final, reasoning = record
+        flow.append_markdown(text, first=first, final=final, reasoning=reasoning)
+    else:
+        _, text, first, indents, extra_style = record
+        flow.append(text, first=first, continuation_indents=indents, extra_style=extra_style)
 
 
 class TerminalUI:
@@ -1339,6 +1348,7 @@ class TerminalUI:
     def clear_transcript(self) -> None:
         """Replace display storage while retaining the input draft and application."""
         self._ensure_transcript()
+        self._end_tail_layout()
         self._remove_diff_reference()
         self.clear_queued_prompts()
         archive = TranscriptFile()
@@ -1438,6 +1448,24 @@ class TerminalUI:
         self.write_markdown(text, first=True, final=True)
         self._wrapped_columns = 0
         return True
+
+    def record_count(self) -> int:
+        """Records written so far; a position for `show_tail_first`."""
+        self._ensure_transcript()
+        return len(self._raw_output)
+
+    def show_tail_first(self, start: int) -> None:
+        """Lay out records from `start` first; earlier ones join when the full layout is ready."""
+        self._end_tail_layout()
+        if 0 < start < len(self._raw_output):
+            self.__dict__["_tail_from"] = start
+        self.app.invalidate()
+
+    def _end_tail_layout(self) -> None:
+        self.__dict__.pop("_tail_from", None)
+        tail = self.__dict__.pop("_tail_layout", None)
+        if tail is not None:
+            tail[1].flow.close()
 
     def last_markdown(self) -> str:
         self._ensure_transcript()
@@ -1732,22 +1760,43 @@ class TerminalUI:
         def create(columns: int) -> WrappedTranscript:
             return WrappedTranscript(columns, theme=self._markdown_theme, color=color, source=self._markdown_source)
         state = layouts.state(columns, create)
-        if self._flow is not state.flow:
+        total = len(self._raw_output)
+        tail_from = self.__dict__.get("_tail_from")
+        shown = state
+        if tail_from is not None and (state.count < total or columns in layouts.tasks):
+            # A restored transcript shows its end at once; the full layout builds in the background.
+            tail = self.__dict__.get("_tail_layout")
+            if tail is None or tail[0] != (columns, layouts.key):
+                if tail is not None:
+                    tail[1].flow.close()
+                tail = ((columns, layouts.key), WrappedLayout(create(columns), count=tail_from))
+                self.__dict__["_tail_layout"] = tail
+            shown = tail[1]
+            layouts.build_in_thread(columns, total, create, self._transcript_record, _append_record,
+                                    self.app.create_background_task, done=self.app.invalidate)
+        elif tail_from is not None:
+            self._end_tail_layout()
+        if self._flow is not shown.flow:
             self._selection_start = self._selection_end = None
             self._selection_dragging = False
-        self._flow = flow = state.flow
+        previous_rows = self._line_count
+        switched = tail_from is not None and shown is state
+        self._flow = flow = shown.flow
         self._wrapped_columns = columns
-        layouts.update(state, len(self._raw_output), self._append_transcript_record)
-        self._wrapped_count = len(self._raw_output)
+        layouts.update(shown, total, self._append_transcript_record)
+        self._wrapped_count = total
         terminal_columns = self.output.get_size().columns
         full = max(1, terminal_columns - 1)
         narrow = MainArea.split_width(terminal_columns)
-        if terminal_columns >= 60 and columns in (full, narrow):
-            layouts.warm(narrow if columns == full else full, len(self._raw_output), create,
+        if shown is state and terminal_columns >= 60 and columns in (full, narrow):
+            layouts.warm(narrow if columns == full else full, total, create,
                          self._append_transcript_record, self.app.create_background_task)
         preview = flow.content_rows()
         complete = len(flow.rows)
         self._line_count = complete + len(preview)
+        if switched and not self.transcript._following:
+            # Rows added above the shown tail must not move what the reader is looking at.
+            self.transcript.vertical_scroll += max(0, self._line_count - previous_rows)
 
         def is_current() -> bool:
             return (self._flow is flow and self._wrapped_columns == columns
@@ -1830,15 +1879,17 @@ class TerminalUI:
         return content
 
     def _append_transcript_record(self, flow: WrappedTranscript, index: int) -> None:
+        _append_record(flow, self._transcript_record(index))
+
+    def _transcript_record(self, index: int) -> tuple[Any, ...]:
+        """Everything needed to lay out one record, readable off the event loop."""
         if index in self._markdown_chunks:
-            flow.append_markdown(self._raw_output[index], first=index in self._block_starts,
-                                 final=index in self._markdown_finals, reasoning=index in self._reasoning_chunks)
-        else:
-            flow.append(self._raw_output[index], first=index in self._block_starts,
-                        continuation_indents=self._continuation_indents.get(index),
-                        extra_style="".join(f" class:{kind}-{index}" for kind in
-                                           ("directory", "file", "artifact", "suggestion")
-                                           if index in self.__dict__.get(f"_{kind}_links", {})))
+            return (True, self._raw_output[index], index in self._block_starts,
+                    index in self._markdown_finals, index in self._reasoning_chunks)
+        return (False, self._raw_output[index], index in self._block_starts,
+                self._continuation_indents.get(index),
+                "".join(f" class:{kind}-{index}" for kind in ("directory", "file", "artifact", "suggestion")
+                        if index in self.__dict__.get(f"_{kind}_links", {})))
 
     async def read_line(self) -> str | None:
         while True:

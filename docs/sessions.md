@@ -31,7 +31,9 @@ You can also use `/resume <id>` or `/resume latest`, or launch with
 `slipagent --resume latest`. Resume reuses the saved journal, restores numbered
 originals, summaries, task state, pending input, usage and command logs, and
 keeps the currently selected model/settings. Project/system instructions are
-refreshed from the running installation. Type `continue` when ready; resume
+refreshed from the running installation. The feed shows the last two exchanges
+immediately; earlier ones join above them as soon as they are laid out in the
+background, without moving your scroll position. Type `continue` when ready; resume
 does not start model requests or replay tools by itself. A started tool with
 no saved result is marked as having an unknown outcome; an unstarted tool is
 marked as not run. Inspect uncertain effects before retrying.

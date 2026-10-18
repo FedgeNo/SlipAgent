@@ -57,6 +57,7 @@ def test_streamed_request_inspection_matches_json_inspection(content):
         body.temporary.cleanup()
 
 
+@pytest.mark.slow
 def test_large_context_retains_only_indexes_and_a_bounded_row_cache():
     # Compare growth across 4 and 32 cache capacities. Fixed file buffers cancel
     # out, so retaining the input or every displayed row still fails at this size.

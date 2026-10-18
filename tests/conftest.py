@@ -14,6 +14,23 @@ from slipagent.workspace import Workspace
 from offline.sitecustomize import GUARD_DIRECTORY
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption("--slow", action="store_true", help="Also run tests marked slow.")
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line("markers", "slow: long, stable tests that run only with --slow")
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    if config.getoption("--slow") or "slow" in (config.getoption("-m") or ""):
+        return
+    slow = [item for item in items if item.get_closest_marker("slow") is not None]
+    if slow:
+        config.hook.pytest_deselected(items=slow)
+        items[:] = [item for item in items if item.get_closest_marker("slow") is None]
+
+
 @pytest.fixture(autouse=True)
 def isolated_session_storage(tmp_path: Path, system_temp_root: Path, monkeypatch):
     """Tests and children use dummy credentials, guarded networking and scratch state."""

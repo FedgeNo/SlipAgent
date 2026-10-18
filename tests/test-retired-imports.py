@@ -2,7 +2,10 @@
 
 from importlib import import_module
 
+import pytest
+
 run_copy = import_module('test-runtime').run_copy
+pytestmark = pytest.mark.slow  # Reload subprocesses; run with --slow.
 
 
 def test_retained_callback_imports_latest_accepted_helpers(run_copy):

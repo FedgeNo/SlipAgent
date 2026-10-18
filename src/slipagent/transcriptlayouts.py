@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections import OrderedDict
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
@@ -55,9 +56,51 @@ class TranscriptLayouts:
             append(state.flow, state.count)
             state.count += 1
 
+    def build_in_thread(self, width: int, total: int, create: Callable[[int], WrappedTranscript],
+                        record: Callable[[int], Any], append: Callable[[WrappedTranscript, Any], None],
+                        spawn: Callable[[Coroutine[Any, Any, None]], asyncio.Task[None]],
+                        done: Callable[[], None] | None = None) -> None:
+        """Lay out records in a worker thread, so long Markdown never stalls input.
+
+        Records are read on the event loop first; the worker touches only its own
+        layout, which callers must not use while this width's task is running.
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        state = self.state(width, create)
+        if state.count >= total or width in self.tasks:
+            return
+        records = [record(index) for index in range(state.count, total)]
+        stop = threading.Event()
+
+        def work() -> None:
+            for item in records:
+                if stop.is_set():
+                    return
+                append(state.flow, item)
+                state.count += 1
+            state.flow.content_rows()
+
+        async def prepare() -> None:
+            try:
+                await asyncio.to_thread(work)
+            except BaseException:
+                stop.set()
+                raise
+            finally:
+                if self.tasks.get(width) is asyncio.current_task():
+                    self.tasks.pop(width, None)
+            if done is not None and self.states.get(width) is state:
+                done()
+
+        self.tasks[width] = spawn(prepare())
+
     def warm(self, width: int, total: int, create: Callable[[int], WrappedTranscript],
              append: Callable[[WrappedTranscript, int], None],
-             spawn: Callable[[Coroutine[Any, Any, None]], asyncio.Task[None]]) -> None:
+             spawn: Callable[[Coroutine[Any, Any, None]], asyncio.Task[None]],
+             done: Callable[[], None] | None = None) -> None:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -76,6 +119,8 @@ class TranscriptLayouts:
                     await asyncio.sleep(0)
                 if self.states.get(width) is state:
                     state.flow.content_rows()
+                    if done is not None:
+                        done()
             finally:
                 if self.tasks.get(width) is asyncio.current_task():
                     self.tasks.pop(width, None)

@@ -7,6 +7,14 @@ first. The [README](README.md) covers running the application;
 The [harness editing guide](docs/harness-development.md) connects tool
 documentation, extension steps, live reload, verification, and release baselines.
 
+> [!WARNING]
+> **A plain `pytest` run does not run every test.** Tests marked `slow` (the
+> real-CLI end-to-end tests in `tests/test_cli_e2e.py`, the reload subprocess
+> tests in `tests/test-retired-imports.py`, and a few long terminal, layout, and
+> indexing checks) are left out by default because they take too long to run on
+> every change. Run `.venv/bin/python -m pytest --slow` before committing changes
+> to the CLI, terminal, transcript, reload, or session code, and before a release.
+
 ## Start With the Correct Environment
 
 `python3 install.py --dev` (Windows: `py -3 install.py --dev`) creates a permanent `source` checkout with development dependencies under the OS-specific installation directory documented in the README. Git metadata and uncommitted application edits are included on initial installation. Its source tree and interpreter are recorded in `installation.json`; Linux/macOS also provide a `current` shortcut. Work and commit in that permanent checkout. Back up edits before updating. Run the installer from a fresh download to replace installed application files while retaining installed Git metadata, configuration, and the virtual environment. Alternatively, update the installed checkout using Git and run its installer to refresh dependencies and the launcher. Installer unit checks use pure planning helpers and mocked OS services, without real installs or filesystem-changing tool calls.
@@ -99,6 +107,10 @@ scheduling by default. Each test still owns its temporary files, ports, session
 storage, and source copies. Use `-n 0` for debugging or a small focused check;
 use `--durations=20` to inspect slow tests. Install the updated `[dev]` extra if
 pytest reports that `-n` is unrecognized.
+
+Tests marked `slow` (real CLI subprocesses, reload subprocesses, and a few long
+layout and indexing checks) are left out by default; add `--slow` to include them,
+or `-m slow` to run only them. Mark a test `slow` only when it is long and stable.
 
 `tests/offline/sitecustomize.py` blocks external DNS and socket connections in
 pytest and Python subprocesses before I/O occurs. Loopback stub servers remain

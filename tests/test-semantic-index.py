@@ -8,6 +8,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from slipagent.semantic import Chunk, Searcher, Store
 from slipagent.fileio import open_regular
 
@@ -221,6 +223,7 @@ class IndexTests(unittest.TestCase):
         self.assertEqual(self.index(max_lines=1, overlap=0), 150)
         self.assertEqual([len(batch) for batch in self.embedder.batches], [64, 64, 22])
 
+    @pytest.mark.slow
     def test_streaming_index_bounds_source_memory_even_for_one_long_line(self):
         self.searcher.cancelled = lambda: False
         self.embedder.token_count = lambda text: 2

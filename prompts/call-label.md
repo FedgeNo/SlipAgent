@@ -1,0 +1,1 @@
+Optional. A short, plain-language description of what this call does and why, for people watching who may not read code, such as "Reading the install guide" or "Running the tests after the fix". Present tense, under ten words. The harness shows it with the call and removes it before the tool runs.

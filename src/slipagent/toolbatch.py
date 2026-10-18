@@ -8,6 +8,7 @@ from .activity import command_output
 from .batching import run_batch
 from .checkpoints import FileCheckpoints, current_checkpoint
 from .checks import EDIT_TOOLS, check_edit_batch
+from .calllabels import tool_arguments
 from .tools.base import ToolRegistry, ToolResult, current_invocation, validate_arguments, _binds_arguments
 from .tools.discovery import UNAVAILABLE_BATCH
 from .types import Message, ToolCall
@@ -42,7 +43,7 @@ class ToolBatch:
             lambda chunk: self.emit(AgentEvent(kind="tool_output", step=self.step, text=chunk, tool_call=tool_call))
         )
         try:
-            result = await self.registry.invoke(tool_call.name, tool_call.arguments)
+            result = await self.registry.invoke(tool_call.name, tool_arguments(tool_call.arguments))
         except Exception as exc:
             result = ToolResult.error(f"Tool dispatch failed: {type(exc).__name__}: {exc}. Effects may be partial; inspect before retrying.")
         finally:
@@ -83,8 +84,9 @@ class ToolBatch:
         problems = []
         for call in calls:
             tool = self.registry.get(call.name)
-            problem = (validate_arguments(tool.parameters, call.arguments, allow_unknown=not tool.strict_arguments)
-                       or _binds_arguments(tool.run, call.arguments)) if tool is not None else "unknown tool"
+            arguments = tool_arguments(call.arguments)
+            problem = (validate_arguments(tool.parameters, arguments, allow_unknown=not tool.strict_arguments)
+                       or _binds_arguments(tool.run, arguments)) if tool is not None else "unknown tool"
             if problem:
                 problems.append(f"{call.name}: {problem}")
         if problems:

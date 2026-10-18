@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .calllabels import tool_arguments
 from .prompts import load_prompt
 
 import hashlib
@@ -46,7 +47,8 @@ class LoopGuard:
                     if log.step_id == step_id and log.call_id == call.id:
                         content = content.removesuffix("\n" + log.notice())
                         break
-            records.append((call.name, call.arguments, result.is_error, content))
+            # Rewording a label does not make a repeated call new.
+            records.append((call.name, tool_arguments(call.arguments), result.is_error, content))
             calls.append(call.to_record())
         if not records:
             self.reset()

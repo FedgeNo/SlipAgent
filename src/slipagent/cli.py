@@ -464,7 +464,14 @@ class Renderer:
             self.emit(self.style.dim(f"  Retrying in {seconds}s."), separate=False)
 
     def _tool_heading(self, call: ToolCall) -> None:
-        self.emit(self.style.magenta(f"  ⚙ {call.brief()}"), block=self._model_block, tool=True)
+        from .calllabels import call_label, raw_call
+        label = call_label(call)
+        if label:
+            # The label is for everyone; the exact call stays visible beneath it.
+            self.emit(self.style.magenta(f"  ⚙ {label}") + "\n" + self.style.thought(f"    {raw_call(call)}"),
+                      block=self._model_block, tool=True)
+        else:
+            self.emit(self.style.magenta(f"  ⚙ {raw_call(call)}"), block=self._model_block, tool=True)
         if self.terminal is not None and call.name != "edit_file":
             path = call.arguments.get("path")
             if path is None and call.name == "list_dir":

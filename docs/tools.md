@@ -12,6 +12,14 @@ join subsequent system prompts and API tool lists for the conversation.
 Only tools whose full definitions are supplied in the current request can run.
 If a response calls an unavailable tool, the entire batch returns errors without
 executing any calls. Load deferred tools in a separate response before using them.
+
+Every advertised tool, except `answer`, also accepts an optional `call_label`: a
+short plain-language description of the call, such as "Reading the install guide",
+for people who don't read code. The feed shows the label in the tool color with the
+exact call beneath it in grey; a call without a label is shown alone in the tool
+color. The label stays in the saved call but is removed before the tool runs, and
+repetition checks ignore it. Tools that define their own `call_label` argument keep
+theirs. The parameter's wording is in `prompts/call-label.md`.
 System definitions separate core and loaded tools, keyed by name in indented
 JSON. Harness-generated input JSON also uses indentation; file contents and
 command-output strings retain their original text.

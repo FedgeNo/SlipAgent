@@ -571,6 +571,10 @@ class Agent:
         return [spec for spec in specs if spec.name in allowed]
 
     def _visible_specs(self, specs: list[ToolSpec]) -> list[ToolSpec]:
+        from .calllabels import labeled_spec
+        return [labeled_spec(spec) for spec in self._selected_specs(specs)]
+
+    def _selected_specs(self, specs: list[ToolSpec]) -> list[ToolSpec]:
         from .tools.discovery import tool_catalog
         catalog = tool_catalog(self.registry)
         filtered = self._filter_specs(specs)

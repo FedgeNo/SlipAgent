@@ -117,6 +117,11 @@ class TurnStore:
             first, last = grouped["step_ids"][0], grouped["step_ids"][-1]
             step._disk_group = self.write(f"{first:08d}-{last:08d}.grouped.json", grouped)
             step._disk_group_state = grouped
+        era = getattr(step, "era_summary", None)
+        if era is not None and step.__dict__.get("_disk_era_state") is not era:
+            first, last = era["step_ids"][0], era["step_ids"][-1]
+            step._disk_era = self.write(f"{first:08d}-{last:08d}.era.json", era)
+            step._disk_era_state = era
 
     def refresh_input(self, step: CompletedStep) -> None:
         """Replace archived input after a durable unsent-message discard."""

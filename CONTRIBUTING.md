@@ -196,11 +196,12 @@ valid recovery using disposable package copies when modifying this machinery.
   analysis in one record. Older steps use a whole-step summary when it costs
   fewer tokens than the original representation; otherwise they include originals
   and available analysis. Budget the combined record. Use the model allowance,
-  subject to an explicit `--context-tokens` cap. Keep the newest third of selected
-  individual posts full and offer smaller summaries for the older two thirds.
-  Retain eligible grouped narratives while reducing the individual-post window;
-  preserve unseen tool results, using labelled excerpts when necessary. Reconsider
-  omitted records on each request so they can return when space becomes available.
+  subject to an explicit `--context-tokens` cap. Send every step in full until the
+  history exceeds the budget, then compress from the oldest end only as far as
+  needed: step summaries up to two thirds of the steps, then 20-turn narratives,
+  then 100-turn eras, then newer summaries, then omission from the beginning.
+  Preserve unseen tool results, using labelled excerpts when necessary. Start each
+  request from full originals so records return when space becomes available.
 - Summarize each completed step in a separate background request containing its
   prompt, reply, calls, results and thoughts, plus up to 25 preceding steps for
   context. Compress only the completed target step; return factual memory and filtered

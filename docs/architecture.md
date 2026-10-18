@@ -50,9 +50,10 @@ fields. Working-model user input serializes one complete, indented JSON object; 
 sections, compression inputs, and terminal output use labelled literal text.
 Journals and HTTP transport encode JSON only at their destination boundaries.
 Completed turns have three disk representations: `NNNNNNNN.raw.json`, an
-individual `NNNNNNNN.compressed.json`, and an occasional
-`FIRST-LAST.grouped.json` narrative made from individual summary files. Grouped
-records retain covered turn numbers, call IDs, and artifact references. The
+individual `NNNNNNNN.compressed.json`, a `FIRST-LAST.grouped.json` narrative
+for each 20-turn block made from individual summary files, and a
+`FIRST-LAST.era.json` for each 100-turn block made from its five narratives.
+Grouped records retain covered turn numbers, call IDs, and artifact references. The
 append-only session journal remains the recovery authority; resume rebuilds the
 file-backed indexes, including for older sessions. Completed Calls inspector
 records also use file-backed strings; opening a call streams its fields into
@@ -175,15 +176,17 @@ Context construction proceeds in this order:
    `data_text.py`; the HTTP client then encodes the provider transport envelope.
    Tool-result text is copied verbatim into length-labelled blocks, with references in the JSON metadata. Explicitly structured results use pretty-printed JSON blocks. JSON-looking strings are never implicitly decoded. Literal rendering remains available
    for system data sections, compression input, and archive retrieval.
-   The newest third of the retained individual-post window targets full originals,
-   rounded up. Older posts use economical summaries; unavailable summaries retain
-   originals when space permits. Under context pressure, the oldest individual
-   post leaves the candidate and the ratio is recalculated. There is no fixed
-   older-record count limit. Historical narratives accompany this window and
-   replace only their explicitly listed older source records without duplication.
-   Boundaries and representation caches belong to one view: later requests can
-   restore omitted records as large calls age into smaller summaries. There is
-   no persistent omission marker. `--context-tokens` can cap total working context.
+   Every step is sent in full while the history fits the budget. Over budget,
+   `ConversationHistory.view` applies reductions from the oldest end until the
+   estimate fits and the assembled request measures within the limit: step
+   summaries up to two thirds of the steps, then each wholly summarized 20-turn
+   narrative, then each 100-turn era, then summaries in the newest third (never
+   the unseen batch), then omission from the very beginning. A summary replaces
+   its original only when smaller. A narrative or era replaces exactly the
+   records covering its listed source steps. Representation costs are cached per
+   archived step and record, so selection is one pass. Each request starts again
+   from full originals; there is no persistent omission marker.
+   `--context-tokens` can cap total working context.
    `records.py` represents saved full steps with `record_type`, `representation`, `user_prompts`,
    `agent_response`, `tool_calls`, and `tool_results`. Prompts remain an array so
    queued inputs retain their boundaries. Calls use `call_id`, `tool_name`, and
@@ -565,16 +568,19 @@ symlinks. File tools, checkpoint reads, editor loading and indexed viewers share
 that reader. Built-in text reads and exact-edit inputs keep the 32 MB bound.
 
 After archiving a complete batch, `Agent._archive_step` submits it to
-`StepCompactor`, a registry-owned service. One worker processes a ready queue of
-at most 32 original-step references. Further steps retain deferred request
+`StepCompactor`, a registry-owned service. One dispatcher runs step summaries
+(oldest first), then due narratives and eras, with at most one job per
+background provider at a time; a single slot runs jobs in order on the
+dispatcher task. The ready queue holds at most 32 original-step references. Further steps retain deferred request
 metadata on their originals and refill the queue as it drains. Only the active
 request copies its immutable original prompt, response, calls, results, thoughts,
 and up to 25 earlier steps. CLI sessions attach `CompressionProviders` and the
 session-owned `ModelRouting` service. Both compactors use one selection/retry
 loop, rotating through each configured provider's best ranked free model.
-The free working provider is excluded when alternatives exist; a paid working
-provider may also supply a free compression model. A sole provider does both,
-with a notice encouraging more keys. Each attempt uses its destination's own
+The selected coding provider is always excluded. `CompressionProviders.slots`
+counts the remaining providers; selection prefers providers not busy with another
+job. With none left, a notice asks for another provider's key and summaries are
+marked unavailable. Each attempt uses its destination's own
 profile; every failure advances rotation, including failures during capability
 lookup, context checking, and response validation. Concurrent jobs also avoid
 their own last failed provider when alternatives remain. The compactor owns
@@ -608,11 +614,11 @@ of primary step accounting. Both compactors omit temperature regardless of the
 working model's explicit setting, and use the selected destination's
 reasoning/routing settings for each attempt.
 
-`historymerge.py` schedules a separate narrative over original first-pass
-summaries. It requires 20 completed turns since the last attempt, 20 ready and
-unmerged source turns outside the newest third, and 12,000 estimated source
-tokens. A frozen bounded batch must fit the selected provider/model context.
-Only one merge job runs at a time. Both compactors call `StepCompactor.request`:
+`historymerge.py` provides the narrative and era jobs. A fixed 20-turn block is
+ready once every turn has a first-pass summary or a failed first pass (a gap);
+a fixed block of five narratives is ready once they all exist. The complete
+source must fit the provisional route budget; sources are never truncated. All
+jobs call `StepCompactor.request`:
 transient transport failures retry persistently with shared API backoff. Other
 failures advance providers and exclude that route for compression; a context
 fit failure excludes it only from this job. Failures are scoped to provider/model,
@@ -620,20 +626,22 @@ except HTTP 401, which excludes the provider for both uses. Failed routes are
 reused only after healthy candidates run out. Stop after more than the greater
 of five or the remaining ranked free candidate count nontransient failures.
 Explicitly unrouted embedded callers retain five invalid-response retries.
-Validation stays inside the retry loop and publication follows validation. A final failure retains the initial
-attempt marker; another merge job requires 20 further turns since that marker.
-Small turns need not cross the size threshold for many
-more turns. One response contains only a narrative `summary`, capped at 12,000
-characters and required to cost less than the source summaries plus metadata.
-It is a cross-turn account, not a list of per-step recaps. Its prompt preserves
-attribution, uncertainty, source turn citations and exact retrieval identifiers.
+Validation stays inside the retry loop and publication follows validation. A final failure retains the
+attempt marker; that block is attempted again once 20 further turns have passed.
+One response contains only a `summary`, capped at 12,000 characters and required
+to cost less than the records it replaces. A narrative is a cross-turn account,
+not a list of per-step recaps. Its prompt preserves attribution, uncertainty,
+source turn citations and exact retrieval identifiers.
 
-The last source `CompletedStep` owns a `historical_summary` record. The record
-retains `step_ids` and `sources` (turn IDs, call IDs, names and artifact references)
-copied by the harness, independent of generated prose. The most recent step
-stores `history_merge_attempt` before dispatch; journal `history_merge` events
-persist both fields. Resume validates IDs, metadata shape and non-overlap before
-restoring them; fork retains the records and spacing markers. These optional
+The block's last `CompletedStep` owns its `historical_summary` record, and the
+last step of a 100-turn block owns its `era_summary`. Narratives retain
+`step_ids` and `sources` (turn IDs, call IDs, names and artifact references)
+copied by the harness, independent of generated prose; eras retain `step_ids`.
+Anchors store `history_merge_attempt` and `era_attempt` before dispatch; journal
+`history_merge` events persist all four fields. Resume validates block alignment,
+IDs and metadata shape; narratives that do not match a fixed block are not
+restored, and their blocks are summarized again. Fork retains the records and
+attempt markers. These optional
 attributes initialize lazily on existing mutable completed-step objects, so no
 stable dataclass layout changes. The existing compactor owns all merge tasks,
 generation guards, usage callbacks and reset/shutdown cancellation. No working

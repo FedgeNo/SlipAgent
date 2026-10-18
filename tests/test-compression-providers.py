@@ -15,7 +15,7 @@ from slipagent.compressionproviders import CompressionProviders
 from slipagent.modelrouting import ModelRouting
 from slipagent.nvidia import ULTRA_MODEL
 from slipagent.context import CompletedStep
-from slipagent.historymerge import schedule_history_merge
+from slipagent.compressionproviders import CompressionUnavailableError
 from slipagent.providers import create_client
 from slipagent.types import Message, ModelInfo
 from test_agent import StubClient, completion
@@ -85,7 +85,7 @@ async def test_turn_and_group_compression_share_rotation_and_own_limits(routing)
             await owner.wait()
             assert step.summary and step.compaction_status == "complete"
         history, _ = history_with_posts(32)
-        schedule_history_merge(owner, history.steps, primary, "working-model", None, 50)
+        owner.track(history.steps, primary, "working-model", None, 50)
         await owner.wait()
         assert not errors
         assert [provider for provider, _ in requests] == ["nvidia", "kilo", "nvidia"]
@@ -93,7 +93,7 @@ async def test_turn_and_group_compression_share_rotation_and_own_limits(routing)
         assert [body["model"] for _, body in requests] == [ULTRA_MODEL, ULTRA_MODEL + ":free", ULTRA_MODEL]
         assert all(not body.get("tools") for _, body in requests)
         assert all("temperature" not in body for _, body in requests)
-        assert getattr(history.steps[20], "historical_summary", None)
+        assert getattr(history.steps[19], "historical_summary", None)
     finally:
         await owner.aclose()
     assert all(client._client.is_closed for client in clients)
@@ -110,7 +110,9 @@ async def test_rotation_follows_provider_switch_and_single_alternative(routing):
         del options["openrouter"]
         assert (await router.select(set()))[0].provider == "kilo"
         del options["kilo"]
-        assert (await router.select(set()))[0].provider == "nvidia"
+        # The coding provider never serves background work.
+        with pytest.raises(CompressionUnavailableError):
+            await router.select(set())
     finally:
         await router.aclose()
 
@@ -141,31 +143,31 @@ async def test_retry_uses_next_alternative_provider(routing, monkeypatch):
         await owner.aclose()
 
 
-async def test_single_provider_compresses_on_working_provider(routing):
+async def test_single_provider_serves_coding_only_and_keeps_originals(routing):
     router, _, options, requests, _ = routing
     options.pop("nvidia")
     options.pop("kilo")
     errors = []
     owner = StepCompactor(lambda usage: None, errors.append)
     owner.routing = router
-    step = CompletedStep(1, "Inspect", [Message.user("Inspect"), Message.assistant("Original answer")])
+    first = CompletedStep(1, "Inspect", [Message.user("Inspect"), Message.assistant("Original answer")])
+    second = CompletedStep(2, "Again", [Message.user("Again"), Message.assistant("Second answer")])
     try:
-        owner.submit(step, StubClient([]), "working", None, 50)
+        owner.submit(first, StubClient([]), "working", None, 50)
         await owner.wait()
-        assert step.compaction_status == "complete"
-        assert step.summary is not None
-        assert "Original answer" in step.full_text()
-        owner.submit(step, StubClient([]), "working", None, 50)
+        owner.submit(second, StubClient([]), "working", None, 50)
         await owner.wait()
-        assert not errors
-        assert [provider for provider, _ in requests] == ["openrouter", "openrouter"]
+        assert not requests
+        assert first.summary is None and first.compaction_status == "failed"
+        assert "Original answer" in first.full_text()
+        assert len(errors) == 1 and "Compression unavailable" in errors[0]
         assert len(router.models.session.notices) == 1
-        assert "Add more provider API keys" in router.models.session.notices[0]
+        assert "serves coding requests only" in router.models.session.notices[0]
     finally:
         await owner.aclose()
 
 
-async def test_paid_working_model_allows_its_provider_free_model(routing):
+async def test_paid_working_model_still_reserves_its_provider(routing):
     router, _, _, _, _ = routing
     session = router.models.session
     session.agent.model = "paid"
@@ -173,10 +175,49 @@ async def test_paid_working_model_allows_its_provider_free_model(routing):
                                    pricing={"prompt": "1", "completion": "1"}))
     try:
         choices = [await router.select(set()) for _ in range(4)]
-        assert [client.provider for client, model in choices] == ["openrouter", "nvidia", "kilo", "openrouter"]
-        assert all(model.id != "paid" for client, model in choices)
+        assert [client.provider for client, model in choices] == ["nvidia", "kilo", "nvidia", "kilo"]
+        assert await router.slots() == 2
     finally:
         await router.aclose()
+
+
+async def test_background_jobs_run_one_per_provider_at_a_time(routing, monkeypatch):
+    from slipagent.api import APIClient
+    router, _, options, _, _ = routing
+    active, peak, providers = [], [], []
+    original = APIClient.chat
+
+    async def chat(client, **kwargs):
+        active.append(client.provider)
+        providers.append(client.provider)
+        peak.append(len(active))
+        assert active.count(client.provider) == 1
+        await asyncio.sleep(0.01)
+        active.remove(client.provider)
+        return await original(client, **kwargs)
+
+    monkeypatch.setattr(APIClient, "chat", chat)
+    owner = StepCompactor(lambda usage: None, lambda error: pytest.fail(error))
+    owner.routing = router
+    steps = [CompletedStep(number, "Inspect", [Message.user("Inspect"), Message.assistant(f"Answer {number}")])
+             for number in range(1, 7)]
+    try:
+        for step in steps:
+            owner.submit(step, StubClient([]), "working", None, 50, conversation=steps)
+        await owner.wait()
+        assert all(step.summary for step in steps)
+        assert max(peak) == 2 and set(providers) == {"nvidia", "kilo"}
+        del options["kilo"]
+        peak.clear()
+        more = [CompletedStep(number, "Inspect", [Message.user("Inspect"), Message.assistant(f"Answer {number}")])
+                for number in range(7, 10)]
+        for step in more:
+            owner.submit(step, StubClient([]), "working", None, 50, conversation=steps + more)
+        await owner.wait()
+        assert all(step.summary for step in more)
+        assert max(peak) == 1
+    finally:
+        await owner.aclose()
 
 
 async def test_unknown_working_price_keeps_its_provider_reserved(routing):
@@ -227,7 +268,7 @@ async def test_every_failure_moves_to_another_provider(routing, monkeypatch, gro
     try:
         if grouped:
             history, _ = history_with_posts(32)
-            schedule_history_merge(owner, history.steps, StubClient([]), "working", None, 50)
+            owner.track(history.steps, StubClient([]), "working", None, 50)
         else:
             owner.submit(step, StubClient([]), "working", None, 50)
         await owner.wait()
@@ -235,7 +276,7 @@ async def test_every_failure_moves_to_another_provider(routing, monkeypatch, gro
         assert attempts == expected
         assert [client.provider for client in clients] == ["nvidia", "kilo"]
         if grouped:
-            assert getattr(history.steps[20], "historical_summary", None)
+            assert getattr(history.steps[19], "historical_summary", None)
         else:
             assert step.summary and "Original" in step.full_text()
         if failure in {429, 503, "timeout", "budget"}:

@@ -269,10 +269,13 @@ class SessionJournal:
         failure = getattr(step, "request_failure", None)
         if failure is not None:
             self._append("request_failure", id=step.id, failure=failure)
-        if getattr(step, "historical_summary", None) is not None or getattr(step, "history_merge_attempt", 0) > 0:
+        if (getattr(step, "historical_summary", None) is not None or getattr(step, "history_merge_attempt", 0) > 0
+                or getattr(step, "era_summary", None) is not None or getattr(step, "era_attempt", 0) > 0):
             self._append("history_merge", id=step.id,
                          summary=getattr(step, "historical_summary", None),
-                         attempted_at=getattr(step, "history_merge_attempt", 0))
+                         attempted_at=getattr(step, "history_merge_attempt", 0),
+                         era=getattr(step, "era_summary", None),
+                         era_attempted_at=getattr(step, "era_attempt", 0))
 
     def tool_started(self, step_id: int, call_id: str) -> None:
         self._append("tool_start", step=step_id, call_id=call_id)
@@ -474,23 +477,26 @@ class SessionJournal:
                     batch = history.steps[previous]
                     if isinstance(batch, CompletedStep) and batch.has_results:
                         batch.observed = False
-            from .historymerge import validate_historical_record
-            covered: set[int] = set()
+            from .historymerge import MERGE_INTERVAL, aligned, validate_era_record, validate_historical_record
             for step_id, saved in data.get("history_merges", {}).items():
                 if type(step_id) is not int or not 1 <= step_id <= len(history.steps):
                     raise ValueError("invalid historical summary anchor")
-                attempted = saved.get("attempted_at", 0)
-                if type(attempted) is not int or attempted not in (0, step_id):
-                    raise ValueError("invalid historical merge attempt")
                 step = history.steps[step_id - 1]
-                setattr(step, "history_merge_attempt", attempted)
+                for attempt_key, attribute in (("attempted_at", "history_merge_attempt"), ("era_attempted_at", "era_attempt")):
+                    attempted = saved.get(attempt_key, 0)
+                    if type(attempted) is not int or (attempted and not step_id <= attempted <= len(history.steps)):
+                        raise ValueError("invalid historical merge attempt")
+                    setattr(step, attribute, attempted)
                 record = saved.get("summary")
-                if record is not None:
+                # Narratives from before fixed 20-turn blocks are not served;
+                # their blocks are summarized again in the background.
+                if record is not None and aligned(record, MERGE_INTERVAL) and record.get("step_id") == step_id:
                     validate_historical_record(record, step_id, len(history.steps))
-                    if covered.intersection(record["step_ids"]):
-                        raise ValueError("overlapping historical summaries")
-                    covered.update(record["step_ids"])
                     setattr(step, "historical_summary", record)
+                era = saved.get("era")
+                if era is not None:
+                    validate_era_record(era, step_id, len(history.steps))
+                    setattr(step, "era_summary", era)
             data["history"] = history
             data["usage"] = Usage.from_api(data["state"]["usage"])
             return data

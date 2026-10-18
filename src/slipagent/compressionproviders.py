@@ -1,9 +1,14 @@
-"""One provider rotation shared by every background compression attempt."""
+"""One provider rotation shared by every background compression attempt.
+
+The selected coding provider serves only working requests; background jobs use
+the other configured providers, at most one job per provider at a time.
+"""
 
 from __future__ import annotations
 
+from collections import Counter
+
 from .api import APIClient
-from .modelpricing import price_label
 from .modelrouting import ModelRouting
 from .providers import PROVIDERS, create_client
 from .types import ModelInfo
@@ -20,33 +25,41 @@ class CompressionProviders:
         self.clients: dict[tuple[str, str, str], APIClient] = {}
         self.single_provider_notified = False
 
-    async def select(self, excluded: set[str], *, failed_provider: str | None = None,
-                     revision: int | None = None) -> tuple[APIClient, ModelInfo]:
+    async def background(self) -> list[ModelInfo]:
+        """Ranked compression models on every provider except the coding provider."""
         ranked = await self.models.candidates("compression", include_failed=True)
+        foreground = self.models.session.client.provider
+        return [model for model in ranked if model.provider != foreground]
+
+    async def slots(self) -> int:
+        """How many background jobs may run at once: one per eligible provider."""
+        return len({model.provider for model in await self.background()})
+
+    async def select(self, excluded: set[str], *, failed_provider: str | None = None,
+                     revision: int | None = None, busy: Counter[str] | None = None) -> tuple[APIClient, ModelInfo]:
+        """Choose the next background route; `busy` counts providers serving other jobs."""
+        ranked = await self.background()
         if revision is not None and revision != self.models.revision:
             excluded.clear()
             failed_provider = None
         session = self.models.session
-        working = next((model for model in session._catalog or []
-                        if model.provider == session.client.provider and model.id == session.agent.model), None)
-        paid = working is not None and price_label(working.pricing).startswith("$")
-        if not paid:
-            others = [model for model in ranked if model.provider != session.client.provider]
-            if others:
-                ranked = others
         if not ranked:
+            if self.models.credentials.keys() <= {session.client.provider}:
+                if not self.single_provider_notified:
+                    self.models.notice("One provider is available, and it serves coding requests only. "
+                                       "Add another provider's API key to enable history summaries.")
+                    self.single_provider_notified = True
+                raise CompressionUnavailableError("no provider other than the selected coding provider is available")
             raise CompressionUnavailableError("no eligible ranked free compression models; check provider keys or update SlipAgent")
-        if len({model.provider for model in ranked}) == 1 and len(self.models.credentials) == 1:
-            if not self.single_provider_notified:
-                self.models.notice("One provider is available for coding and compression. "
-                                   "Add more provider API keys to spread requests and improve availability.")
-                self.single_provider_notified = True
         failures = self.models.failed["compression"] | excluded
         healthy = [model for model in ranked if model.selector not in failures]
         available = healthy or ranked
         alternatives = [model for model in available if model.provider != failed_provider]
         if alternatives:
             available = alternatives
+        idle = [model for model in available if busy is None or busy[model.provider] <= 0]
+        if idle:
+            available = idle
         # Advance before any network await so concurrent turn/group jobs share
         # the same order. Each provider contributes its best remaining model.
         providers = list(PROVIDERS)
@@ -61,6 +74,8 @@ class CompressionProviders:
         if client is None:
             client = create_client(provider, **settings)
             self.clients[key] = client
+        if busy is not None:
+            busy[provider] += 1
         return client, model
 
     async def aclose(self) -> None:

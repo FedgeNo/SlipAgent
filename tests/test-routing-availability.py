@@ -89,7 +89,7 @@ async def test_catalog_expiry_skips_deleted_models_and_restores_returning_models
                 await routing.prepare_working()
                 assert session.agent.model == other.id
             else:
-                assert (await compression.select(set()))[1] is other
+                assert (await routing.candidates("compression"))[0] is other
             assert model_score(best.provider, best.id) == retained_rank
             assert best.selector not in routing.failed[purpose]
             clock.now += 301
@@ -97,7 +97,7 @@ async def test_catalog_expiry_skips_deleted_models_and_restores_returning_models
                 await routing.enable()
                 assert session.agent.model == best.id
             else:
-                assert (await compression.select(set()))[1] is best
+                assert (await routing.candidates("compression"))[0] is best
             assert catalog.await_count == 3
         finally:
             await compression.aclose()

@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from slipagent.api import APIConfigError
+from slipagent.compressionproviders import CompressionUnavailableError
 from slipagent.config import Config
 from slipagent.mistral import MistralClient
 from slipagent.providers import active_providers, fetch_catalog
@@ -103,8 +104,10 @@ async def test_mistral_activation_routes_its_ranked_free_model(tmp_path, model_i
         try:
             await session.model_routing().enable()
             assert session.agent.model == model_id
-            destination, model = await router.select(set())
-            assert destination.provider == "mistral" and model.id == model_id
+            assert (await router.models.candidates("compression"))[0].id == model_id
+            # The sole provider serves coding; background summaries need another one.
+            with pytest.raises(CompressionUnavailableError):
+                await router.select(set())
         finally:
             await router.aclose()
 

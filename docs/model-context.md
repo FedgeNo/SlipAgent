@@ -331,38 +331,46 @@ remain available unless the session itself is deleted.
 
 Each working request identifies the source step of the active requests in system guidance; their exact text belongs in the structured user-input object. Steps after tool batches explicitly explain that control returned automatically without a new user instruction: assess results against that goal and return an answer without tools when it is fulfilled. This guidance is assembled for the outgoing request only; it is not saved in conversation history or background summaries. Historical requests provide background rather than independently requesting more work.
 
-The newest **one third** of retained individual posts targets full originals,
-rounded up; the older **two thirds** use economical summaries. Missing summaries
-retain originals rather than failure notices when space permits. History uses
-the model's context allowance, subject to `--context-tokens`, after reserving
-instructions, tools, output and estimation headroom. The oldest individual posts
-leave the view as needed, recalculating the split at each window size. There is
-no fixed 100-summary cap. `--context-steps` remains accepted for compatibility
-but no longer controls selection. Newly returned tool results reach the working
-model intact, or as explicit excerpts if even the latest batch cannot fit.
+**History is sent in full until it would exceed the context budget.** The budget
+is 85% of the model's context allowance, subject to `--context-tokens`, after
+reserving instructions, tools, output and the current input. Sizes are estimated
+from the bytes of each record and scaled by measured calibration.
 
-Selection starts fresh on every request, so omitted records can return as large
-posts age into summaries. Originals remain retrievable even when omitted.
-Project instructions and the retained user prompt stay pinned outside the window.
+When the full history does not fit, SlipAgent compresses **from the oldest end,
+only as far as needed**, and stops as soon as the request fits:
 
-Older summaries can also become **one historical narrative across many turns**.
-A separate background call requires at least **20 completed turns since the last
-merge attempt**, at least **20 eligible older summaries**, and at least **12,000
-estimated tokens** of source summaries and metadata. Small ordinary turns can
-therefore go much longer between merges. Only one merge job runs at a time. Its
-retries belong to that job; after final failure, at least 20 turns must pass from
-its initial attempt before another job can start. Per-step summarization
-continues independently as described below.
+1. Individual steps are replaced by their summaries, oldest first, until up to
+   **two thirds** of the steps are summarized. A step whose summary is missing or
+   no smaller keeps its original.
+2. Each fixed block of **20 steps** (1–20, 21–40, …) that lies wholly in the
+   summarized part is replaced by its **narrative**, oldest first.
+3. Each fixed block of **five narratives** (steps 1–100, 101–200, …) is replaced
+   by its **era**, oldest first.
+4. Steps in the newest third are summarized, oldest first. The latest tool
+   results the model has not seen stay full.
+5. Only then is history omitted, starting at the very beginning of the
+   conversation.
 
-Each narrative is built from the original individual summaries, never a previous
-merged narrative. It combines related work rather than recapping every step.
-The prompt requires source turn citations, and the harness preserves the full
-source turn list, call IDs, tool names and artifact references separately.
-`recall_history` can retrieve exact turns or search the full archive when a turn
-number is unknown. Narratives accompany the rolling window without duplicating
-their individual source summaries. Merge results and attempt spacing persist
+Selection starts fresh on every request, so steps return to full text whenever
+room allows, for example after a large result has moved into summarized history.
+`--context-steps` remains accepted for compatibility but does not control
+selection. Newly returned tool results reach the working model intact, or as
+explicit excerpts if even the latest batch cannot fit. Originals remain
+retrievable even when omitted. Project instructions and the retained user prompt
+stay pinned outside the history.
+
+Narratives and eras are written in the background as soon as their inputs
+exist: a narrative once all 20 steps of its block have first-pass summaries
+(a step whose summary failed is left out as a gap), and an era once all five
+narratives of its block exist. Every level is kept, so any request can use
+whichever level fits. Each narrative is built from its steps' individual
+summaries and each era from its five narratives. The prompts require source turn
+citations; narratives also keep the source turn list, call IDs, tool names and
+artifact references copied by the harness. `recall_history` can retrieve exact
+turns or search the full archive when a turn number is unknown. A failed block
+is attempted again after 20 more turns. Results and attempt markers persist
 across resume and fork; reset cancels pending work. Invalid or non-shrinking
-narratives leave the original summaries intact.
+narratives and eras leave the summaries they would replace intact.
 
 **One separate background request starts after each complete tool batch returns**,
 or immediately after a reply without tools. It receives that step's prompt,
@@ -379,11 +387,10 @@ participate when their own API key and a ranked free model are available:
 OpenRouter, NVIDIA, Kilo, Mistral, and Google. Each attempt uses its destination's
 own capabilities and context/output limits.
 
-A free working model's provider is reserved for coding when alternatives exist.
-A paid working model's provider can also supply a separate free compression
-model. Unknown working-model pricing keeps its provider reserved as well.
-If only one provider is available, it handles both coding and compression;
-SlipAgent encourages adding provider keys to improve availability.
+The selected coding provider serves only working requests, whatever its model
+costs. Background summaries use the other providers. If no other provider is
+available, nothing is summarized: requests send originals, omit the oldest
+history when needed, and SlipAgent asks for another provider's API key.
 
 Any compression failure sends the retry to another provider when possible.
 Transient failures retain the model's eligibility. Permanent/model-format
@@ -397,10 +404,12 @@ Background clients are separate from the working client and close with the sessi
 The summarizer returns a JSON object with separate factual `summary` and filtered
 `reasoning_summary` strings, each limited to 6,000 characters. Short steps
 should get short summaries. The working model continues without waiting.
-One worker runs first-pass summaries, with at most 32 ready references. Further
-steps wait on their retained originals and enter the ready queue as it drains.
-Only the active request copies its payload; deferred summaries select their
-compression provider when they run. An occasional historical merge can run alongside it.
+One dispatcher runs every background summary: step summaries oldest first, then
+narratives, then eras. It runs **at most one job per background provider at a
+time**, so with one background provider every summary runs in turn. The ready
+queue holds at most 32 step references. Further steps wait on their retained
+originals and enter the queue as it drains. Only an active job copies its payload,
+and each job selects its provider when it starts.
 
 Unseen tool results reach the next working request even if their summary has
 already finished. An oversized new batch uses JSON excerpt records with separate
@@ -505,7 +514,7 @@ Useful flags:
 | `-w, --workspace` | Project root and default path boundary. |
 | `--danger` | Disable workspace path confinement at startup, including unattended one-shot tasks; no confirmation prompt. |
 | `--max-steps` | Cap working model requests per run, including response retries (default 200); background summaries are separate. |
-| `--context-steps` | Deprecated compatibility option; selection now targets the newest third of retained posts in full. |
+| `--context-steps` | Deprecated compatibility option; it does not control history selection. |
 | `--context-tokens` | Optional total working-context cap, including output reserve; at least 4096, bounded by endpoint limits. Archived originals are preserved. |
 | `--reasoning-history-steps` | Archived thoughts from 0–25 recent steps (default 25); 0 supplies outcomes without archived thoughts. Does not disable current-turn reasoning. |
 | `--raw-reasoning-history` | Use original thoughts instead of filtered thoughts for controlled comparisons. Compression still runs. |

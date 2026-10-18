@@ -36,7 +36,8 @@ class PlainClient(StubClient):
     """Keep working replies plain so task memory cannot depend on an echo."""
 
     async def chat(self, **kwargs):
-        if content_text(kwargs["messages"][0].content).lstrip().startswith("# Summarizing the Previous Turn"):
+        if content_text(kwargs["messages"][0].content).lstrip().startswith(("# Summarizing the Previous Turn",
+                                                                             "# Merging Older Conversation")):
             return await super().chat(**kwargs)
         self.calls.append({**kwargs, "messages": list(kwargs["messages"])})
         return self.responses.pop(0)
@@ -79,7 +80,7 @@ async def test_current_prompt_and_its_source_survive_compression_without_task_up
         wire = "\n".join(content_text(message.content) for message in unpack_context(request["messages"]))
         assert text in wire
         assert 'originated at step_id 1' in wire
-    assert any(record["representation"] == "compressed" for record in context_records(client.calls[-1]["messages"]))
+    assert all(step.summary for step in agent.history.steps)
     assert not any(event.kind == "retry" for event in events)
 
 

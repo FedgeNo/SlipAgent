@@ -104,10 +104,17 @@ def context_body(content: str | None) -> str:
     return text
 
 
+MERGE_REPLY = "Earlier turns inspected the requested files and recorded their observations."
+
+
 def summary_response(body):
     """Serve isolated compaction without consuming the scripted working steps."""
     messages = body.get("messages", [])
-    if not messages or not (messages[0].get("content") or "").lstrip().startswith("# Summarizing the Previous Turn"):
+    heading = (messages[0].get("content") or "").lstrip() if messages else ""
+    if heading.startswith("# Merging Older Conversation"):
+        return {"choices": [{"message": {"role": "assistant", "content": json.dumps({"summary": MERGE_REPLY})},
+                             "finish_reason": "stop"}], "usage": {"prompt_tokens": 0, "completion_tokens": 0, "cost": 0}}
+    if not heading.startswith("# Summarizing the Previous Turn"):
         return None
     source = input_data(messages[1]["content"])
     text = f"User: {source['user_prompt'][:300]}; agent: {source['agent_response'][:300]}; results: {str(source['tool_results'])[:300]}"
@@ -206,8 +213,12 @@ class StubClient:
         self.include_memory = include_memory
         self.calls: list[dict[str, Any]] = []
         self.summary_calls: list[dict[str, Any]] = []
+        self.merge_calls: list[dict[str, Any]] = []
 
     async def chat(self, **kwargs: Any) -> Completion:
+        if content_text(kwargs["messages"][0].content).lstrip().startswith("# Merging Older Conversation"):
+            self.merge_calls.append(kwargs)
+            return Completion(Message.assistant(json.dumps({"summary": MERGE_REPLY})), "stub", usage=Usage(cost=0))
         if content_text(kwargs["messages"][0].content).lstrip().startswith("# Summarizing the Previous Turn"):
             self.summary_calls.append(kwargs)
             source = decode_json_content(kwargs["messages"][1].content)

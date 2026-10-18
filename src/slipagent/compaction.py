@@ -1,9 +1,11 @@
 """Whole-step summaries and filtered thoughts, queued after complete tool batches.
 
-One worker summarizes immutable completed steps in order. A bounded ready queue
-holds references; deferred steps retain request metadata on their originals.
-The worker materializes one request at a time, rotating configured background
-providers and using up to 25 preceding steps as context. It never executes tools.
+One dispatcher runs every background summary: completed steps oldest first,
+then 20-turn narratives, then 100-turn eras (see `historymerge`). It runs one
+job per background provider at a time, so a single provider serializes them all.
+A bounded ready queue holds step references; deferred steps retain request
+metadata on their originals. Each step job materializes its request when it
+starts, using up to 25 preceding steps as context. It never executes tools.
 Reset cancels jobs and invalidates late results. The registry owns this service
 so it survives behavior reloads and closes before the shared API client.
 """
@@ -14,9 +16,9 @@ import asyncio
 import copy
 import json
 import re
-from collections import deque
+from collections import Counter, deque
 from itertools import chain
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any, TypeVar
 
 from .capabilities import RequestProfile, model_context_limit
@@ -112,6 +114,19 @@ class StepCompactor:
             queue.append(step)
         else:
             step.compaction_status = "deferred"
+        if conversation is not None:
+            self.__dict__["_route"] = (client, model, capabilities, max_tokens)
+        self.dispatch()
+
+    def track(self, conversation: list[HistoryStep], client: APIClient, model: str,
+              capabilities: RequestProfile | None, max_tokens: int | None) -> None:
+        """Schedule any due narratives and eras for a conversation on this route."""
+        self.__dict__["_conversation"] = conversation
+        self.__dict__["_route"] = (client, model, capabilities, max_tokens)
+        self.dispatch()
+
+    def dispatch(self) -> None:
+        """Start the dispatcher unless this generation's is already running."""
         generation = self.generation
         name = f"slipagent-step-compactor-{generation}"
         if not any(job.get_name() == name and not job.done() for job in self.jobs):
@@ -119,15 +134,21 @@ class StepCompactor:
             job = asyncio.create_task(self._drain(generation, previous), name=name)
             self.jobs.add(job)
             job.add_done_callback(self.jobs.discard)
-        if conversation is not None:
-            from .historymerge import schedule_history_merge
-            schedule_history_merge(self, conversation, client, model, capabilities, max_tokens)
 
-    async def _drain(self, generation: int, previous: tuple[asyncio.Task[None], ...]) -> None:
-        if previous:
-            await asyncio.gather(*previous, return_exceptions=True)
-        queue = self.__dict__["_ready"]
-        while generation == self.generation:
+    async def slots(self) -> int:
+        """One background job per eligible provider; one without provider routing."""
+        routing = self.routing
+        if routing is None:
+            return 1
+        try:
+            return max(1, await routing.slots())
+        except Exception:
+            # Selection reports why routing is unavailable on the job itself.
+            return 1
+
+    def _next_job(self, active: set[Any], generation: int) -> tuple[Any, Coroutine[Any, Any, None]] | None:
+        queue = self.__dict__.setdefault("_ready", deque())
+        while True:
             if not queue:
                 for step in chain(self.__dict__.get("_conversation", []), self.__dict__.get("_standalone_steps", [])):
                     if getattr(step, "_compaction_request", None) is not None:
@@ -135,25 +156,59 @@ class StepCompactor:
                         if len(queue) == COMPACTION_QUEUE_SIZE:
                             break
             if not queue:
-                self.__dict__.pop("_standalone_steps", None)
-                return
+                break
             step = queue.popleft()
             request = step.__dict__.pop("_compaction_request", None)
-            if request is None:
+            if request is not None:
+                return ("step", step.id), self._summarize_step(step, request, generation)
+        conversation = self.__dict__.get("_conversation")
+        route = self.__dict__.get("_route")
+        if conversation is None or route is None:
+            return None
+        from .historymerge import ready_job
+        return ready_job(self, conversation, active, route)
+
+    async def _drain(self, generation: int, previous: tuple[asyncio.Task[None], ...]) -> None:
+        if previous:
+            await asyncio.gather(*previous, return_exceptions=True)
+        running: dict[asyncio.Task[None], Any] = {}
+        while generation == self.generation:
+            slots = await self.slots()
+            if slots == 1 and not running:
+                # A single slot runs jobs in order on this task, as one worker.
+                job = self._next_job(set(), generation)
+                if job is None:
+                    self.__dict__.pop("_standalone_steps", None)
+                    return
+                await job[1]
                 continue
-            client, model, capabilities, max_tokens, history, conversation, frozen = request
-            source = copy.deepcopy(frozen.compaction_input())
-            if not isinstance(client, APIClient):
-                from .sources import materialize
-                source = materialize(source)
-            source['history'] = copy.deepcopy([prior.context_messages(compressed=prior.summary is not None)[0].content
-                                              for prior in history if prior.id < step.id])
-            source['history_omitted'] = 0
-            step.compaction_status = "pending"
-            await self._compact(step, source, client, model, capabilities, max_tokens, generation)
-            if conversation is not None and generation == self.generation:
-                from .historymerge import schedule_history_merge
-                schedule_history_merge(self, conversation, client, model, capabilities, max_tokens)
+            while generation == self.generation and len(running) < slots:
+                job = self._next_job(set(running.values()), generation)
+                if job is None:
+                    break
+                key, work = job
+                task: asyncio.Task[None] = asyncio.create_task(work, name=f"slipagent-summary-{key[0]}-{key[1]}")
+                running[task] = key
+                self.jobs.add(task)
+                task.add_done_callback(self.jobs.discard)
+            if not running:
+                self.__dict__.pop("_standalone_steps", None)
+                return
+            done, _ = await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                running.pop(task)
+
+    async def _summarize_step(self, step: CompletedStep, request: tuple[Any, ...], generation: int) -> None:
+        client, model, capabilities, max_tokens, history, conversation, frozen = request
+        source = copy.deepcopy(frozen.compaction_input())
+        if not isinstance(client, APIClient):
+            from .sources import materialize
+            source = materialize(source)
+        source['history'] = copy.deepcopy([prior.context_messages(compressed=prior.summary is not None)[0].content
+                                          for prior in history if prior.id < step.id])
+        source['history_omitted'] = 0
+        step.compaction_status = "pending"
+        await self._compact(step, source, client, model, capabilities, max_tokens, generation)
 
     async def _compact(self, step: CompletedStep, source: dict[str, Any], client: APIClient, model: str,
                        capabilities: RequestProfile | None, max_tokens: int | None, generation: int) -> None:
@@ -192,53 +247,67 @@ class StepCompactor:
         excluded: set[str] = set()
         failed_provider: str | None = None
         revision = self.routing.models.revision if self.routing is not None else 0
-        while generation == self.generation:
-            routing = self.routing
-            selected = None
-            try:
-                if routing is not None:
-                    if revision != routing.models.revision:
-                        excluded.clear()
-                        failed_provider = None
-                        repairs = 0
-                    client, selected = await routing.select(excluded, failed_provider=failed_provider, revision=revision)
-                    if revision != routing.models.revision:
-                        repairs = 0
-                    revision = routing.models.revision
-                    model = selected.id
-                    capabilities = await client.model_capabilities(model)
-                    if capabilities is None:
-                        raise ValueError(f"{selected.selector} did not provide model capabilities")
-                    max_tokens = min(8192, capabilities.max_completion_tokens or 8192)
-                    self.__dict__.pop("_routing_error", None)
-                return await operation(client, model, capabilities, max_tokens)
-            except Exception as exc:
-                if generation != self.generation:
-                    return None
-                if routing is None:
-                    retry = await self.wait_request_retry(client, attempt, exc)
-                elif isinstance(exc, CompressionUnavailableError) or selected is None:
-                    raise
-                else:
-                    failed_provider = selected.provider
-                    if not transient_error(exc):
-                        excluded.add(selected.selector)
-                        if revision == routing.models.revision and not isinstance(exc, CompactionBudgetError):
-                            routing.models.reject(selected, "compression", exc)
-                        repairs += 1
-                    count = len(await routing.models.candidates("compression", include_failed=True))
-                    if not count or repairs > max(COMPACTION_RETRIES, count):
-                        raise
-                    if transient_error(exc):
+        # Each job holds at most one background provider; other jobs prefer idle ones.
+        busy: Counter[str] = self.__dict__.setdefault("_busy", Counter())
+        held: list[str] = []
+        try:
+            while generation == self.generation:
+                routing = self.routing
+                selected = None
+                try:
+                    if routing is not None:
+                        if revision != routing.models.revision:
+                            excluded.clear()
+                            failed_provider = None
+                            repairs = 0
+                        # Release this job's provider before choosing again so it
+                        # counts as idle only for this job's own retry.
+                        for provider in held:
+                            busy[provider] -= 1
+                        held.clear()
+                        client, selected = await routing.select(excluded, failed_provider=failed_provider,
+                                                                revision=revision, busy=busy)
+                        held.append(selected.provider)
+                        if revision != routing.models.revision:
+                            repairs = 0
+                        revision = routing.models.revision
+                        model = selected.id
+                        capabilities = await client.model_capabilities(model)
+                        if capabilities is None:
+                            raise ValueError(f"{selected.selector} did not provide model capabilities")
+                        max_tokens = min(8192, capabilities.max_completion_tokens or 8192)
+                        self.__dict__.pop("_routing_error", None)
+                    return await operation(client, model, capabilities, max_tokens)
+                except Exception as exc:
+                    if generation != self.generation:
+                        return None
+                    if routing is None:
                         retry = await self.wait_request_retry(client, attempt, exc)
+                    elif isinstance(exc, CompressionUnavailableError) or selected is None:
+                        raise
                     else:
-                        # Reuse a failed route only when alternatives run out.
-                        await asyncio.sleep(min(2 ** min(repairs - 1, 5), 30))
-                        retry = True
-                if not retry:
-                    raise
-                attempt += 1
-        return None
+                        failed_provider = selected.provider
+                        if not transient_error(exc):
+                            excluded.add(selected.selector)
+                            if revision == routing.models.revision and not isinstance(exc, CompactionBudgetError):
+                                routing.models.reject(selected, "compression", exc)
+                            repairs += 1
+                        count = len(await routing.background())
+                        if not count or repairs > max(COMPACTION_RETRIES, count):
+                            raise
+                        if transient_error(exc):
+                            retry = await self.wait_request_retry(client, attempt, exc)
+                        else:
+                            # Reuse a failed route only when alternatives run out.
+                            await asyncio.sleep(min(2 ** min(repairs - 1, 5), 30))
+                            retry = True
+                    if not retry:
+                        raise
+                    attempt += 1
+            return None
+        finally:
+            for provider in held:
+                busy[provider] -= 1
 
     async def wait_request_retry(self, client: APIClient, attempt: int, error: Exception) -> bool:
         """Share transport and malformed-reply recovery across both compactors."""

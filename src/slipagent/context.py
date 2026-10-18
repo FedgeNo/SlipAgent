@@ -13,7 +13,8 @@ from .prompts import load_prompt
 
 import json
 import math
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from itertools import chain
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -79,6 +80,7 @@ HISTORY_GUIDANCE: dict[str, Callable[[list[dict[str, Any]]], bool]] = {
     "history-excerpts.md": lambda records: any(record.get("representation") == "excerpt" for record in records),
     "history-failed-requests.md": lambda records: any("request_failure" in record for record in records),
     "history-narratives.md": lambda records: any(record.get("representation") == "historical_summary" for record in records),
+    "history-eras.md": lambda records: any(record.get("representation") == "era_summary" for record in records),
 }
 
 
@@ -289,6 +291,8 @@ class CompletedStep(HistoryStep):
     _disk_summary_state: Any
     _disk_group: dict[str, Any]
     _disk_group_state: Any
+    _disk_era: dict[str, Any]
+    _disk_era_state: Any
 
     @property
     def request(self) -> str:
@@ -668,8 +672,7 @@ class ConversationHistory:
                 if batch.has_results and not (batch.observed if isinstance(batch, CompletedStep) else batch.results_summarized):
                     unseen_results = previous
         required_start = unseen_results if unseen_results is not None else len(self.steps) - int(required_last)
-        from .historymerge import historical_records
-        narratives = historical_records(self.steps)
+        from .historymerge import era_records, historical_records
         parts: dict[tuple[int, bool], list[Message]] = {}
         costs: dict[tuple[int, bool], int] = {}
         empty_history = history_bytes([])
@@ -694,16 +697,16 @@ class ConversationHistory:
                     cache[key] = (disk, size)
             return math.ceil(size / 3 * token_scale)
 
-        def narrative_cost(record: dict[str, Any]) -> int:
+        def narrative_cost(record: dict[str, Any], cache: str = "_narrative_bytes") -> int:
             anchor = self.steps[record["step_id"] - 1]
             entry: tuple[Any, int] | None = (
-                anchor.__dict__.get("_narrative_bytes") if isinstance(anchor, CompletedStep) else None)
+                anchor.__dict__.get(cache) if isinstance(anchor, CompletedStep) else None)
             if entry is not None and entry[0] is record:
                 size = entry[1]
             else:
                 size = history_bytes([record]) - empty_history
                 if isinstance(anchor, CompletedStep):
-                    anchor.__dict__["_narrative_bytes"] = (record, size)
+                    anchor.__dict__[cache] = (record, size)
             return math.ceil(size / 3 * token_scale)
 
         def supplied(index: int, compressed: bool) -> tuple[list[Message], int]:
@@ -722,47 +725,109 @@ class ConversationHistory:
                 parts[key], costs[key] = chosen, cost
             return parts[key], costs[key]
 
-        # keep_steps remains accepted for older callers; the retained posts,
-        # rather than an absolute call count, determine the full-history share.
-        for start in range(len(self.steps) + 1):
-            if start > required_start:
-                break
-            count = len(self.steps) - start
-            if required_last and not count:
-                break
-            boundary = len(self.steps) - (count + 2) // 3
-            merged = [record for record in narratives if record["step_ids"][-1] <= boundary]
-            covered = {step_id for record in merged for step_id in record["step_ids"]}
-            selected: list[tuple[int, list[Message], int]] = [
-                (record["step_id"], [record_message(record)], narrative_cost(record))
-                for record in merged
-            ]
-            for index in range(start, len(self.steps)):
-                if index < boundary and self.steps[index].id in covered:
-                    continue
-                part, cost = supplied(index, index < boundary and index != unseen_results)
-                selected.append((self.steps[index].id, part, cost))
-            selected.sort(key=lambda entry: entry[0])
-            while True:
-                chosen = [message for _, part, _ in selected for message in part]
-                if sum(cost for _, _, cost in selected) + tail_tokens <= available:
-                    candidate = assemble(chosen)
-                    if tokens(candidate) <= rendered_limit:
-                        return candidate
-                if count == 1 and not pending and self.steps[-1].summary is not None:
-                    compact, compact_cost = supplied(len(self.steps) - 1, True)
-                    prefix = [entry for entry in selected if entry[0] != len(self.steps)]
-                    if sum(entry[2] for entry in prefix) + compact_cost + tail_tokens <= available:
-                        candidate = assemble([message for _, part, _ in prefix for message in part] + compact)
-                        if tokens(candidate) <= rendered_limit:
-                            return candidate
-                # Preserve narratives while reducing the individual-post window.
-                # Once only the required latest post remains, oldest narratives
-                # can leave the view too. Their archives remain untouched.
-                if start == required_start and selected and selected[0][0] < start + 1:
-                    selected.pop(0)
-                    continue
-                break
+        # Selection starts from full originals on every request and compresses
+        # only what the budget requires, always from the oldest end: step
+        # summaries up to two thirds of the steps, then 20-turn narratives, then
+        # 100-turn eras, then newer step summaries, then dropping the oldest
+        # history. keep_steps remains accepted for older callers.
+        count = len(self.steps)
+        FULL, STEP, NARRATIVE, ERA, DROPPED = range(5)
+        level = [FULL] * count
+        unit_records: dict[int, dict[str, Any]] = {}
+        unit_costs = [supplied(index, False)[1] for index in range(count)]
+        record_costs: dict[int, int] = {}
+        total = sum(unit_costs) + tail_tokens
+
+        def compressible(index: int) -> bool:
+            return index != unseen_results and not (pending and index == count - 1)
+
+        def summarize_step(index: int) -> bool:
+            nonlocal total
+            if level[index] != FULL or not compressible(index):
+                return False
+            cost = supplied(index, True)[1]
+            if cost >= unit_costs[index]:
+                return False  # Missing or larger summaries keep the original evidence.
+            total -= unit_costs[index] - cost
+            level[index], unit_costs[index] = STEP, cost
+            return True
+
+        def merge_into(record: dict[str, Any], form: int, cache: str, cap: int) -> bool:
+            # One record replaces every unit that covers its source steps.
+            nonlocal total
+            members = [step_id - 1 for step_id in record["step_ids"]]
+            if any(index >= cap or not compressible(index) or level[index] >= form for index in members):
+                return False
+            current: dict[int, int] = {}
+            for index in members:
+                if level[index] in (NARRATIVE, ERA):
+                    covering = unit_records[index]
+                    current[-id(covering)] = record_costs[id(covering)]
+                else:
+                    current[index] = unit_costs[index]
+            cost = narrative_cost(record, cache)
+            if cost >= sum(current.values()):
+                return False
+            total += cost - sum(current.values())
+            for index in members:
+                level[index] = form
+                unit_records[index] = record
+            record_costs[id(record)] = cost
+            return True
+
+        def drop_oldest() -> bool:
+            nonlocal total
+            index = next((index for index in range(count) if level[index] != DROPPED), None)
+            if index is None or index >= required_start or index == unseen_results:
+                return False
+            if level[index] in (NARRATIVE, ERA):
+                record = unit_records[index]
+                members = [member for member in range(count)
+                           if level[member] == level[index] and unit_records.get(member) is record]
+                total -= record_costs[id(record)]
+            else:
+                members = [index]
+                total -= unit_costs[index]
+            for member in members:
+                level[member] = DROPPED
+            return True
+
+        def reductions() -> Iterator[None]:
+            cap = 2 * count // 3
+            for index in range(cap):
+                if summarize_step(index):
+                    yield
+            for record in historical_records(self.steps):
+                if merge_into(record, NARRATIVE, "_narrative_bytes", cap):
+                    yield
+            for record in era_records(self.steps):
+                if merge_into(record, ERA, "_era_bytes", cap):
+                    yield
+            for index in range(cap, count):
+                if summarize_step(index):
+                    yield
+            while drop_oldest():
+                yield
+
+        def selection() -> list[Message]:
+            entries: list[tuple[int, list[Message]]] = []
+            emitted: set[int] = set()
+            for index in range(count):
+                if level[index] in (FULL, STEP):
+                    entries.append((self.steps[index].id, supplied(index, level[index] == STEP)[0]))
+                elif level[index] in (NARRATIVE, ERA):
+                    record = unit_records[index]
+                    if record["step_id"] not in emitted:
+                        emitted.add(record["step_id"])
+                        entries.append((record["step_id"], [record_message(record)]))
+            entries.sort(key=lambda entry: entry[0])
+            return [message for _, part in entries for message in part]
+
+        for _ in chain([None], reductions()):
+            if total <= available:
+                candidate = assemble(selection())
+                if tokens(candidate) <= rendered_limit:
+                    return candidate
         if required_last:
             failure_context: list[Message] = []
             excerpt_index = len(self.steps) - 1

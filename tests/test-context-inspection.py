@@ -84,7 +84,8 @@ async def test_agent_snapshots_include_retry_prompt_and_matching_tool_results():
 
 async def test_snapshot_uses_selected_compacted_context_and_stays_immutable():
     requests, events = [], []
-    original = " ".join(f"OLD ORIGINAL RESPONSE item {index}." for index in range(100))
+    # Larger than the model's context, so it must be summarized once it is history.
+    original = " ".join(f"OLD ORIGINAL RESPONSE item {index}." for index in range(100_000))
     def transport(request):
         if request.method == "GET":
             return httpx.Response(200, json={"data": [{"id": "test", "context_length": 1000000}]})

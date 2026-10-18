@@ -100,7 +100,7 @@ async def test_large_recent_originals_use_the_model_allowance_above_200000_token
     view = await history.view(messages, [], keep_steps=50,
                               context_length=1_000_000, max_output=8192)
     supplied = [context_body(message.content) for message in unpack_context(view) if message.role == "assistant"]
-    assert supplied == ['SUMMARY 1', 'SUMMARY 2', 'SUMMARY 3', *answers[-2:]]
+    assert supplied == answers
     assert 200_000 < message_tokens(view) < 850_000 - 8192
 
 
@@ -140,14 +140,27 @@ async def test_combined_history_is_budgeted_and_does_not_duplicate_steps():
     assert len(history.steps) == 12
 
 
-async def test_newest_third_remains_full_without_a_fixed_five_post_floor():
+async def test_history_that_fits_is_never_summarized():
     answers = [f"ANSWER {index} " * 200 for index in range(8)]
     history, messages = conversation(answers)
     view = await history.view(messages, [], keep_steps=1,
                               context_length=1_000_000, max_output=8192)
     supplied = [context_body(message.content) for message in unpack_context(view) if message.role == "assistant"]
-    assert supplied[-3:] == answers[-3:]
-    assert supplied[:-3] == [f'SUMMARY {index}' for index in range(1, 6)]
+    assert supplied == answers
+
+
+async def test_over_budget_summarizes_only_the_oldest_steps_needed():
+    answers = [f"ANSWER {index} " * 2000 for index in range(9)]
+    history, messages = conversation(answers)
+    full = await history.view(messages, [], keep_steps=50, context_length=1_000_000, max_output=1000)
+    # Leave room for roughly six of the nine originals.
+    length = int((message_tokens(full) - 2 * message_tokens([Message.assistant(answers[0])]) + 1000) / .85)
+    view = await history.view(messages, [], keep_steps=50, context_length=length, max_output=1000)
+    supplied = [context_body(message.content) for message in unpack_context(view) if message.role == "assistant"]
+    summarized = [text for text in supplied if text.startswith("SUMMARY")]
+    assert 0 < len(summarized) <= 3
+    assert supplied == [f"SUMMARY {index}" for index in range(1, len(summarized) + 1)] + answers[len(summarized):]
+    assert message_tokens(view) <= int(length * .85) - 1000
 
 
 @pytest.mark.parametrize("native_tools", [False, True])
@@ -182,22 +195,26 @@ async def test_hard_allowance_can_reduce_the_full_window_below_five():
     assert message_tokens(view) <= 14_000 * .85 - 1000
 
 
-async def test_ageing_out_large_original_recovers_context_on_the_next_request():
+async def test_large_original_is_summarized_only_once_the_budget_requires_it():
     answers = ["LARGE FIRST ANSWER " * 40_000]
     history, messages = conversation(answers)
     first = await history.view(messages, [], keep_steps=50,
-                               context_length=1_000_000, max_output=8192)
+                               context_length=400_000, max_output=8192)
     assert any(context_body(message.content) == answers[0] for message in unpack_context(first))
-    messages.extend([Message.assistant("Another answer"), Message.user("New question")])
+    messages.extend([Message.assistant("Small answer"), Message.user("New question")])
     second = await history.view(messages, [], keep_steps=50,
-                                context_length=1_000_000, max_output=8192)
-    wire = "\n".join(content_text(message.content) for message in unpack_context(second))
+                                context_length=400_000, max_output=8192)
+    assert any(context_body(message.content) == answers[0] for message in unpack_context(second))
+    messages.extend([Message.assistant("LARGE SECOND ANSWER " * 20_000), Message.user("Third question")])
+    third = await history.view(messages, [], keep_steps=50,
+                               context_length=400_000, max_output=8192)
+    wire = "\n".join(content_text(message.content) for message in unpack_context(third))
     assert "LARGE FIRST ANSWER" not in wire and "SUMMARY 1" in wire
-    assert message_tokens(second) < message_tokens(first) / 10
+    assert "Small answer" in wire and "LARGE SECOND ANSWER" in wire
     assert answers[0] in history.steps[0].full_text()
 
 
-async def test_omitted_older_history_returns_after_large_turn_ages_out():
+async def test_newest_steps_are_summarized_before_any_history_is_dropped():
     answers = [f"EARLY ANSWER {index} " * 5000 for index in range(10)]
     answers += [f"Recent answer {index}" for index in range(49)]
     answers.append("LARGE RECENT ANSWER " * 10_000)
@@ -206,8 +223,8 @@ async def test_omitted_older_history_returns_after_large_turn_ages_out():
         step.summary = f"EARLY SUMMARY {step.id}: " + "detail " * 500
     first = await history.view(messages, [], keep_steps=50, context_length=90_000, max_output=1000)
     wire = "\n".join(content_text(message.content) for message in unpack_context(first))
-    assert "EARLY SUMMARY 1:" not in wire
-    assert answers[-1] in wire
+    assert "EARLY SUMMARY 1:" in wire
+    assert "LARGE RECENT ANSWER" not in wire and "SUMMARY 60" in wire
     for index in range(50):
         messages.extend([Message.assistant(f"Later answer {index}"), Message.user(f"Later question {index}")])
     second = await history.view(messages, [], keep_steps=50, context_length=90_000, max_output=1000)
@@ -238,28 +255,30 @@ async def test_equal_cost_summary_keeps_the_original(token_scale):
 
 
 async def test_mixed_older_originals_and_summaries_keep_chronological_order():
-    history, messages = conversation(["FIRST " * 500, "Second original", "THIRD " * 500]
+    history, messages = conversation(["FIRST " * 300_000, "Second original", "THIRD " * 300_000]
                                      + [f"Recent {index}" for index in range(5)])
     history.steps[1].summary = "EXPANDED SECOND SUMMARY " * 300
     view = await history.view(messages, [], keep_steps=5, context_length=1_000_000, max_output=8192)
     wire = "\n".join(content_text(message.content) for message in unpack_context(view))
-    assert wire.index("SUMMARY 1") < wire.index("Second original") < wire.index("SUMMARY 3") < wire.index("Recent 2")
-    assert "FIRST " not in wire and "THIRD " not in wire
+    # The larger summary keeps step 2's original; step 3 stays full once step 1 fits.
+    assert wire.index("SUMMARY 1") < wire.index("Second original") < wire.index("THIRD ") < wire.index("Recent 2")
+    assert "FIRST " not in wire
     assert context_records(view)[1]['compressed_summary'] == history.steps[1].summary
     assert [context_body(message.content) for message in unpack_context(view) if message.role == "user"] == [
-        "Question 2", *[f"Question {index}" for index in range(6, 9)], "Current question",
+        *[f"Question {index}" for index in range(2, 9)], "Current question",
     ]
 
 
 async def test_summary_comparison_uses_the_same_json_records_for_all_tool_profiles():
     history = ConversationHistory()
     messages = [Message.user("Read"), Message.assistant("Reading", [
-        ToolCall("a", "record", {"value": '"nested"\\value' * 100}),
+        ToolCall("a", "record", {"value": '"nested"\\value' * 3000}),
     ]), Message.tool_result("a", "Result")]
     messages += [Message.assistant(f"Recent {index}") for index in range(5)]
     history.sync(messages)
     messages.append(Message.user("Next"))
     step = history.steps[0]
+    small = 16_000  # Too small for the original step, large enough for its summary.
     original = step.context_messages()
     native_cost = message_tokens(original)
     text_cost = message_tokens(tool_history_as_text(original))
@@ -267,9 +286,9 @@ async def test_summary_comparison_uses_the_same_json_records_for_all_tool_profil
     step.summary = "The recorded tool returned Result."
     assert message_tokens(step.context_messages(compressed=True)) < native_cost
     for native in (True, False):
-        view = await history.view(messages, [], keep_steps=5, context_length=1_000_000, max_output=8192,
+        view = await history.view(messages, [], keep_steps=5, context_length=small, max_output=256,
                                   native_tools=native, text_tool_history=not native)
-    assert context_records(view)[0] == {"record_type": "history_step", "representation": "compressed", "step_id": step.id, "compressed_summary": step.summary}
+        assert context_records(view)[0] == {"record_type": "history_step", "representation": "compressed", "step_id": step.id, "compressed_summary": step.summary}
 
 
 def archived_code_history(lines):

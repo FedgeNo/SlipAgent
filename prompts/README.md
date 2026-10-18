@@ -55,7 +55,8 @@ The `z-ai/glm-5.3` and `z-ai/glm-5.3-flash` profiles use the GLM XML channel and
 | `system-history.md` | Input authority and use of historical evidence |
 | `current-turn.md` | Current-step metadata in the system prompt |
 | `background-summary-prompt.md` | Background compression of completed steps |
-| `historical-summary-prompt.md` | Occasional narrative merging of older first-pass summaries, with original turn citations and retrieval metadata |
+| `historical-summary-prompt.md` | Narrative for each fixed block of 20 turns, merged from first-pass summaries, with original turn citations and retrieval metadata |
+| `era-summary-prompt.md` | Era for each fixed block of five narratives (100 turns), with original turn citations |
 | `request-retry.md` | Failed-turn interpretation, retry counts, and respect for user stop/retry instructions |
 | `user-edits.md` | Bounded saved-edit notifications, revision acknowledgement and full-diff retrieval; included only with pending or selected historical edit observations |
 | `diff-comment.md` | Whole-diff target and retrieval guidance, included only while the current user turn carries saved-diff references |

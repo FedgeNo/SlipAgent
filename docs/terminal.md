@@ -127,6 +127,7 @@ when entering prompts, command arguments, configuration values, or file edits.
 | Open inspection options | Options link | F4 |
 | Inspect the actual model request | — | Ctrl+\ |
 | Skip a silent model (optimal mode) | — | Ctrl+N while the status line shows the countdown |
+| Keep waiting on a silent model | — | Esc while the countdown shows; Esc again cancels the turn |
 | Return to newest feed output | Scroll to Bottom link | Scroll to the end |
 | Copy or reuse selected feed text | Select, right-click, choose an action | `/copy` for the latest reply |
 

@@ -573,16 +573,36 @@ class FirstOutputDeadline:
     def __init__(self, timeout: asyncio.Timeout) -> None:
         self.timeout = timeout
         self.skipped = False
+        self.held = False
 
     def remaining(self) -> float | None:
         """Seconds left, or None while the deadline is suspended or disarmed."""
         when = self.timeout.when()
         return None if when is None else max(0.0, when - asyncio.get_running_loop().time())
 
+    def hold(self) -> None:
+        """Wait for this model without a deadline; other request failures still apply."""
+        if self.skipped:
+            return
+        self.held = True
+        try:
+            self.timeout.reschedule(None)
+        except RuntimeError:
+            # The request enters its timeout right after announcing the deadline.
+            asyncio.get_running_loop().call_soon(self._apply_hold)
+
+    def _apply_hold(self) -> None:
+        if self.held:
+            try:
+                self.timeout.reschedule(None)
+            except RuntimeError:
+                pass
+
     def skip(self) -> None:
         """Expire now; a suspended deadline expires when it resumes."""
         self.skipped = True
-        if self.timeout.when() is not None:
+        was_held, self.held = self.held, False
+        if self.timeout.when() is not None or was_held:
             try:
                 self.timeout.reschedule(asyncio.get_running_loop().time())
             except RuntimeError:
@@ -611,8 +631,10 @@ class _PacingExcluded(httpx.AsyncByteStream):
             except StopAsyncIteration:
                 return
             finally:
-                if remaining is not None:
-                    timeout.reschedule(loop.time() + (0 if self.deadline.skipped else remaining))
+                if self.deadline.skipped:
+                    timeout.reschedule(loop.time())
+                elif remaining is not None and not self.deadline.held:
+                    timeout.reschedule(loop.time() + remaining)
             yield chunk
 
 

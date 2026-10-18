@@ -204,6 +204,10 @@ def build_bindings(ui: TerminalUI) -> KeyBindings:
 
     @bindings.add("escape", filter=~in_menu & ~in_viewer & ~in_editor & ~in_setting & ~in_inspection & ~in_link & ~in_feed, eager=True)
     def stop_now(event: KeyPressEvent) -> None:
+        hold = ui.__dict__.pop("_hold_callback", None)
+        if hold is not None:
+            hold()
+            return
         callback = getattr(ui, "_interrupt_callback", None)
         if callback is not None:
             callback()

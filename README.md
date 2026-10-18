@@ -49,7 +49,8 @@ and running from a development checkout.
 
 Startup selects the highest-ranked free model and, if a model fails or stays
 silent, falls back to the next one. After 10 seconds without output the status
-line counts down; press **Ctrl+N** to skip to the next model right away.
+line counts down; press **Ctrl+N** to skip to the next model right away, or **Esc**
+to keep waiting on the current one (Esc again cancels the turn).
 
 `/model` gathers every model choice in one menu, each line showing its
 subcommand:
@@ -89,6 +90,7 @@ messages queue and are sent at the next step. **Esc** interrupts immediately;
 | --- | --- |
 | Esc | Interrupt the agent, or close a menu |
 | Ctrl+N | Skip a silent model (optimal mode) |
+| Esc during the countdown | Keep waiting on the current model |
 | Ctrl+O | Show or hide the Touched/Calls sidebar |
 | Ctrl+\\ | Show the exact context sent to the model |
 | Shift+Tab | Move between the feed, sidebar, and links |

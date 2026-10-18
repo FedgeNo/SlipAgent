@@ -4101,13 +4101,48 @@ async def test_silent_request_shows_deadline_and_ctrl_n_skips(display, monkeypat
         try:
             ui.set_working(True)
             renderer.first_output_wait(deadline, skippable=True)
-            await wait_until(lambda: any("88s until next model (Ctrl+N: next model)" in line for line in snapshot()))
+            await wait_until(lambda: any("88s until next model" in line for line in snapshot()))
+            assert ui.status_line.notification == cli.SKIP_NOTICE
             await send_keys(ui, pipe, "\x0e")
             assert skipped == [True]
             await send_keys(ui, pipe, "\x0e")
             assert skipped == [True]
             renderer.first_output_wait(None, skippable=True)
             await wait_until(lambda: not any("until next model" in line for line in snapshot()))
+            assert ui.status_line.notification == ""
+        finally:
+            ui.close()
+            await task
+
+
+async def test_esc_during_the_countdown_stays_on_the_model_and_the_next_esc_cancels(display, monkeypatch):
+    import slipagent.cli as cli
+
+    sink, _, output, _, snapshot = display
+    monkeypatch.setattr(cli, "FIRST_OUTPUT_NOTICE_SECONDS", 0)
+    interrupted = []
+    deadline = SimpleNamespace(held=False, skip=lambda: None)
+    deadline.remaining = lambda: None if deadline.held else 50.0
+    deadline.hold = lambda: setattr(deadline, "held", True)
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        ui.set_interrupt_handler(lambda: interrupted.append(True))
+        renderer = Renderer(Style(True), sink, False)
+        renderer.terminal = ui
+        task = asyncio.create_task(ui.run())
+        try:
+            ui.set_working(True)
+            await send_keys(ui, pipe, "\x1b")
+            assert interrupted == [True]  # Before the countdown, Esc interrupts as usual.
+            interrupted.clear()
+            renderer.first_output_wait(deadline, skippable=True)
+            await wait_until(lambda: ui.status_line.notification == cli.SKIP_NOTICE)
+            await send_keys(ui, pipe, "\x1b")
+            assert deadline.held and interrupted == []
+            assert ui.status_line.notification == cli.HOLD_NOTICE
+            await wait_until(lambda: not any("until next model" in line for line in snapshot()))
+            await send_keys(ui, pipe, "\x1b")
+            assert interrupted == [True]
         finally:
             ui.close()
             await task

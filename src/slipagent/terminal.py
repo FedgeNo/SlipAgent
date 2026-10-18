@@ -1150,6 +1150,10 @@ class TerminalUI:
         self.__dict__["_skip_callback"] = callback
         self.app.invalidate()
 
+    def set_hold_handler(self, callback: Callable[[], None] | None) -> None:
+        """Let the next Esc keep waiting on the current model instead of interrupting."""
+        self.__dict__["_hold_callback"] = callback
+
     def set_interrupt_handler(self, callback: Callable[[], None]) -> None:
         """Interrupt work directly, without submitting or changing the draft."""
         self._interrupt_callback = callback

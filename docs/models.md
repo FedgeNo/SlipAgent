@@ -55,6 +55,9 @@ retry when connectivity recovers. HTTP errors such as 429 and 503 still count
 as provider failures after retry exhaustion.
 After 10 seconds without model output, the status line counts down to the
 deadline; in optimal mode, **Ctrl+N** skips to the next model immediately.
+While the countdown shows, **Esc** removes the deadline for that request so the
+current model keeps its turn; other request failures still fall back as usual,
+and the next Esc cancels the turn.
 A working request that produces no output within two minutes is cancelled and
 moves directly to the next eligible model. This deadline runs from request start,
 including connection and upload time but not upload pacing waits; keepalives and empty stream markers do not

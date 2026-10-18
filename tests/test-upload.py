@@ -171,3 +171,28 @@ async def test_skipping_the_first_output_wait_ends_the_request(paced):
                 on_delta=lambda *args: None, single_attempt=True, first_output_timeout=60,
                 on_first_output=waiting), 10)
     assert deadlines[0] is not None and deadlines[0].skipped and deadlines[-1] is None
+
+
+@pytest.mark.parametrize("paced", [False, True])
+async def test_holding_the_first_output_wait_outlasts_the_timeout(paced):
+    async def handle(request):
+        await request.aread()
+        await asyncio.sleep(0.6)
+        chunk = {"choices": [{"delta": {"content": "Done"}, "finish_reason": "stop"}]}
+        return httpx.Response(200, text="data: " + json.dumps(chunk) + "\n\ndata: [DONE]\n\n",
+                              headers={"content-type": "text/event-stream"})
+
+    client_type = GoogleClient if paced else OpenRouterClient
+    async with client_type("dummy", transport=httpx.MockTransport(handle)) as client:
+        if paced:
+            client._upload_pacer = UploadPacer(30000)
+
+        def waiting(deadline):
+            if deadline is not None:
+                deadline.hold()
+
+        result = await asyncio.wait_for(client.chat(
+            model="gemini-3.6-flash" if paced else "test", messages=[Message.user("x " * 2000)],
+            on_delta=lambda *args: None, single_attempt=True, first_output_timeout=0.2,
+            on_first_output=waiting), 10)
+    assert result.text == "Done"

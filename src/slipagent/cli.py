@@ -83,6 +83,9 @@ Use /help for command details. Ctrl+\\ toggles the context view.
 QUOTA_REFRESH_INTERVAL = 15 * 60
 # Seconds without model output before the status line shows the deadline.
 FIRST_OUTPUT_NOTICE_SECONDS = 10
+HOLD_NOTICE = "Staying on this model; press Esc again to cancel the turn"
+SKIP_NOTICE = "No model output yet. Ctrl+N: next model; Esc: stay on this model"
+WAIT_NOTICE = "No model output yet. Esc: keep waiting without a timeout"
 
 HELP = all_help()
 
@@ -426,7 +429,7 @@ class Renderer:
         return self._prompt is not None
 
     def first_output_wait(self, deadline: Any, *, skippable: bool) -> None:
-        """Count down a silent request's deadline; Ctrl+N skips to the next model."""
+        """Count down a silent request's deadline; Ctrl+N skips to the next model and Esc stays."""
         ticker = self.__dict__.pop("_first_output_ticker", None)
         if ticker is not None:
             ticker.cancel()
@@ -434,10 +437,19 @@ class Renderer:
         if terminal is None:
             return
         terminal.set_skip_handler(deadline.skip if deadline is not None and skippable else None)
+        terminal.set_hold_handler(None)
         if deadline is None:
             if ticker is not None:
                 terminal.set_retry_status("")
+            if terminal.status_line.notification in (SKIP_NOTICE, WAIT_NOTICE):
+                terminal.notify("")
             return
+
+        def hold() -> None:
+            deadline.hold()
+            if deadline.held:
+                terminal.set_retry_status("")
+                terminal.notify(HOLD_NOTICE)
 
         async def tick() -> None:
             started = time.monotonic()
@@ -447,8 +459,11 @@ class Renderer:
                 # Ordinary responses start within seconds; only a long silence is shown.
                 if remaining is not None and time.monotonic() - started >= FIRST_OUTPUT_NOTICE_SECONDS:
                     action = "next model" if skippable else "timeout"
-                    hint = " (Ctrl+N: next model)" if skippable else ""
-                    terminal.set_retry_status(f"No model output yet; {math.ceil(remaining)}s until {action}{hint}")
+                    terminal.set_retry_status(f"No model output yet; {math.ceil(remaining)}s until {action}")
+                    # Esc keeps this model only while the countdown offers it.
+                    if terminal.__dict__.get("_hold_callback") is None and not getattr(deadline, "held", False):
+                        terminal.set_hold_handler(hold)
+                        terminal.notify(SKIP_NOTICE if skippable else WAIT_NOTICE)
         self.__dict__["_first_output_ticker"] = asyncio.ensure_future(tick())
 
     def retry_countdown(self, error: str, seconds: int) -> None:

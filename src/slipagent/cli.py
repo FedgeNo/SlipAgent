@@ -83,8 +83,8 @@ QUOTA_REFRESH_INTERVAL = 15 * 60
 # Seconds without model output before the status line shows the deadline.
 FIRST_OUTPUT_NOTICE_SECONDS = 10
 HOLD_NOTICE = "Staying on this model; press Esc again to cancel the turn"
-SKIP_NOTICE = "No model output yet. Ctrl+N: next model; Esc: stay on this model"
-WAIT_NOTICE = "No model output yet. Esc: keep waiting without a timeout"
+SKIP_NOTICE = "Ctrl+N: next model; Esc: stay on this model"
+WAIT_NOTICE = "Esc: keep waiting without a timeout"
 
 HELP = all_help()
 

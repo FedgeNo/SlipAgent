@@ -53,10 +53,10 @@ def component(source: str = TARGET, name: str = "widgets") -> types.ModuleType:
 
 
 def apply(module: types.ModuleType, files: dict[str, str], *, source: str = TARGET, core=frozenset(),
-          allow=None) -> list[plugins.PluginReport]:
+          approvals: plugins.Approvals | None = None) -> list[plugins.PluginReport]:
     sources = {f"{plugins.PLUGIN_KEY}/{name}": textwrap.dedent(text).encode() for name, text in files.items()}
     return plugins.overlay({"widgets": module}.get, lambda name: source.encode() if name == "widgets" else None,
-                           sources, core, allow)
+                           sources, core, approvals)
 
 
 def stamp(method: str) -> str:
@@ -251,21 +251,165 @@ def test_a_broken_plugin_does_not_stop_the_others():
     assert module.Widget().size() == 5
 
 
-def test_allow_filters_individual_overrides():
+PICK = '''
+    from slipagent.plugins import replaces
+
+    @replaces("widgets.Widget")
+    class Widget:
+        def render(self, text):
+            return "plugin"
+
+        def size(self):
+            return 9
+'''
+
+
+def test_saved_approvals_decide_each_override_and_undecided_ones_stay_off():
     module = component()
-    report = apply(module, {"pick.py": '''
-        from slipagent.plugins import replaces
+    approvals = plugins.Approvals({"pick.py": {"Widget.size": True}})
+    report = apply(module, {"pick.py": PICK}, approvals=approvals)[0]
+    assert module.Widget().render("x") == "<x>" and module.Widget().size() == 9
+    assert [(override.member, override.state) for override in report.overrides] == [
+        ("render", "pending"), ("size", "on")]
+    assert list(report.notices())[-1] == (
+        "pick.py has 1 override awaiting approval; they stay off until approved with /plugins.")
+    assert plugins.pending([report])
+
+    module = component()
+    approvals.decide("pick.py", "Widget.render", False)
+    report = apply(module, {"pick.py": PICK}, approvals=approvals)[0]
+    assert module.Widget().render("x") == "<x>" and report.overrides[0].state == "rejected"
+    assert not any("/plugins" in text for text in report.notices()) and not plugins.pending([report])
+
+
+def test_approvals_survive_a_round_trip_and_ignore_malformed_content():
+    approvals = plugins.Approvals()
+    approvals.decide("a.py", "Widget.render", True)
+    approvals.choose("widgets.Widget.render", ["b.py", "a.py"], ["b.py", "a.py"])
+    parsed = plugins.Approvals.parse(approvals.encode())
+    assert parsed == approvals
+    assert parsed.order("widgets.Widget.render", ["a.py", "b.py"]) == ["b.py", "a.py"]
+    assert parsed.order("widgets.Widget.render", ["a.py", "b.py", "c.py"]) is None
+    for content in (b"{not json", b"[]", b'{"approved": {"a.py": {"Widget.render": "yes"}}}'):
+        assert plugins.Approvals.parse(content).decision("a.py", "Widget.render") is None
+
+
+STACKABLE = {
+    "a.py": '''
+        from slipagent.plugins import replaces, original
 
         @replaces("widgets.Widget")
         class Widget:
             def render(self, text):
-                return "plugin"
+                return "a(" + original(self, text) + ")"
+    ''',
+    "b.py": '''
+        from slipagent.plugins import replaces, original
 
-            def size(self):
-                return 9
-    '''}, allow=lambda plugin, member: member == "Widget.size")[0]
-    assert module.Widget().render("x") == "<x>" and module.Widget().size() == 9
-    assert [override.member for override in report.overrides] == ["size"]
+        @replaces("widgets.Widget")
+        class Widget:
+            def render(self, text):
+                helper = lambda: original(self, text)
+                return "b(" + helper() + ")"
+    ''',
+}
+
+
+def allowed_both() -> plugins.Approvals:
+    return plugins.Approvals({"a.py": {"Widget.render": True}, "b.py": {"Widget.render": True}})
+
+
+def test_an_unresolved_conflict_applies_neither_override_and_is_reported_once():
+    module = component()
+    reports = apply(module, STACKABLE, approvals=allowed_both())
+    assert module.Widget().render("x") == "<x>"
+    assert [override.state for report in reports for override in report.overrides] == ["conflict", "conflict"]
+    assert [list(report.notices()) for report in reports] == [[
+        "widgets.Widget.render is overridden by a.py, b.py; none of them apply until one is chosen with /plugins."], []]
+    assert all(report.overrides[0].calls_original for report in reports)
+
+
+@pytest.mark.parametrize(("order", "result", "states"), [
+    (["a.py", "b.py"], "a(b(<x>))", ["on", "on"]),
+    (["b.py", "a.py"], "b(a(<x>))", ["on", "on"]),
+    (["b.py"], "b(<x>)", ["dropped", "on"]),
+])
+def test_conflict_choices_pick_one_plugin_or_a_stacking_order(order, result, states):
+    module = component()
+    approvals = allowed_both()
+    approvals.choose("widgets.Widget.render", ["a.py", "b.py"], order)
+    reports = apply(module, STACKABLE, approvals=approvals)
+    assert module.Widget().render("x") == result
+    assert [report.overrides[0].state for report in reports] == states
+    assert not any("/plugins" in text for report in reports for text in report.notices())
+
+
+def test_without_approvals_every_override_applies_stacked_in_file_name_order():
+    module = component()
+    apply(module, STACKABLE)
+    assert module.Widget().render("x") == "b(a(<x>))"
+
+
+class ScriptedChooser:
+    """Answers `TerminalUI.choose` from a script, recording each title and its option keys."""
+
+    def __init__(self, answers: list[str | None]) -> None:
+        self.answers = answers
+        self.asked: list[tuple[str, list[str]]] = []
+
+    async def choose(self, title, options, **_):
+        self.asked.append((title, [key for key, _ in options]))
+        return self.answers.pop(0)
+
+
+def menu_for(answers: list[str | None], monkeypatch) -> tuple[object, ScriptedChooser, list[object]]:
+    from slipagent import cli
+
+    chooser = ScriptedChooser(answers)
+    applied: list[object] = []
+    monkeypatch.setattr(plugins, "apply_to_live", lambda core: applied.append(core) or [])
+    session = types.SimpleNamespace(renderer=types.SimpleNamespace(terminal=chooser), reloader=None)
+    out = __import__("io").StringIO()
+    return cli.PluginMenu(session, cli.Style(False), out), chooser, applied
+
+
+async def test_the_menu_approves_new_plugins_then_asks_about_their_conflict(monkeypatch):
+    monkeypatch.setattr(plugins, "reports", apply(component(), STACKABLE, approvals=plugins.Approvals()))
+    menu, chooser, applied = menu_for(["all", "all", "b.py/a.py"], monkeypatch)
+    await menu.offer()
+    assert chooser.asked == [
+        ("Plugin a.py → Widget.render", ["all", "choose", "none"]),
+        ("Plugin b.py → Widget.render", ["all", "choose", "none"]),
+        ("widgets.Widget.render is overridden by a.py, b.py", ["a.py", "b.py", "a.py/b.py", "b.py/a.py"]),
+    ]
+    saved = plugins.load_approvals()
+    assert saved.approved == allowed_both().approved
+    assert saved.order("widgets.Widget.render", ["a.py", "b.py"]) == ["b.py", "a.py"]
+    assert len(applied) == 1
+
+    monkeypatch.setattr(plugins, "reports", apply(component(), STACKABLE, approvals=saved))
+    menu, chooser, applied = menu_for([], monkeypatch)
+    await menu.offer()
+    assert chooser.asked == [] and applied == []
+
+
+async def test_choosing_overrides_one_by_one_and_stacking_only_through_original(monkeypatch):
+    files = {**STACKABLE, "c.py": PICK}
+    plugins.save_approvals(allowed_both())
+    monkeypatch.setattr(plugins, "reports", apply(component(), files, approvals=allowed_both()))
+    menu, chooser, applied = menu_for(["choose", "allow", "reject", None], monkeypatch)
+    await menu.offer()
+    assert chooser.asked[0] == ("Plugin c.py → Widget.render, Widget.size", ["all", "choose", "none"])
+    assert [title for title, _ in chooser.asked[1:3]] == ["c.py → Widget.render", "c.py → Widget.size"]
+    # c.py replaces render without calling original(), so it can only run last in a stack.
+    title, keys = chooser.asked[3]
+    assert title == "widgets.Widget.render is overridden by a.py, b.py, c.py"
+    assert keys[:3] == ["a.py", "b.py", "c.py"]
+    assert {tuple(key.split("/")) for key in keys[3:]} == {("a.py", "b.py", "c.py"), ("b.py", "a.py", "c.py")}
+    saved = plugins.load_approvals()
+    assert saved.approved["c.py"] == {"Widget.render": True, "Widget.size": False}
+    assert saved.order("widgets.Widget.render", ["a.py", "b.py", "c.py"]) is None
+    assert len(applied) == 1
 
 
 def test_original_outside_an_override_explains_itself():
@@ -280,6 +424,13 @@ def test_plugin_files_skip_disabled_names_and_honour_the_switches(monkeypatch):
         (directory / name).write_text("")
     assert [path.name for path in plugins.plugin_files()] == ["10-a.py", "20-b.py"]
     assert set(plugins.plugin_sources()) == {f"{plugins.PLUGIN_KEY}/10-a.py", f"{plugins.PLUGIN_KEY}/20-b.py"}
+    plugins.save_approvals(plugins.Approvals({"10-a.py": {"Widget.render": True}}))
+    assert f"{plugins.PLUGIN_KEY}/{plugins.APPROVALS_NAME}" in plugins.plugin_stamps()
+    files, approvals = plugins.split_sources(plugins.plugin_sources())
+    assert set(files) == {f"{plugins.PLUGIN_KEY}/10-a.py", f"{plugins.PLUGIN_KEY}/20-b.py"}
+    assert approvals is not None and approvals.decision("10-a.py", "Widget.render") is True
+    monkeypatch.setattr(plugins, "all_plugins", True)
+    assert plugins.split_sources(plugins.plugin_sources())[1] is None
     monkeypatch.setenv(plugins.NO_PLUGINS_ENV, "1")
     assert plugins.plugin_files() == []
     monkeypatch.delenv(plugins.NO_PLUGINS_ENV)
@@ -300,6 +451,7 @@ def run_copy(tmp_path: Path, reload_source):
     def run(body: str, plugin_files: dict[str, str] | None = None) -> None:
         directory = Path(os.environ["SLIPAGENT_STATE_DIR"]) / "plugins"
         directory.mkdir(parents=True, exist_ok=True)
+        (directory / plugins.APPROVALS_NAME).write_bytes(APPROVED.encode())
         for name, text in (plugin_files or {}).items():
             (directory / name).write_text(textwrap.dedent(text))
         script = SETUP.replace("__BODY__", textwrap.indent(
@@ -312,6 +464,7 @@ def run_copy(tmp_path: Path, reload_source):
     return run
 
 
+APPROVED = plugins.Approvals({"loud.py": {"Renderer.emit": True}, "contract.py": {"Renderer.emit": True}})
 RENDERER_PLUGIN = '''
 from slipagent.plugins import replaces, original
 
@@ -374,6 +527,7 @@ def test_startup_applies_plugins_unless_disabled(tmp_path, reload_source):
     directory = Path(os.environ["SLIPAGENT_STATE_DIR"]) / "plugins"
     directory.mkdir(parents=True)
     (directory / "loud.py").write_text(RENDERER_PLUGIN)
+    (directory / plugins.APPROVALS_NAME).write_bytes(APPROVED.encode())
     script = textwrap.dedent('''
         import io, sys
         import slipagent.cli as cli
@@ -391,3 +545,36 @@ def test_startup_applies_plugins_unless_disabled(tmp_path, reload_source):
                                 capture_output=True, text=True, timeout=30)
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == expected
+
+
+def test_reapplying_to_live_classes_follows_changed_approvals(tmp_path, reload_source):
+    package_root = tmp_path / "source"
+    shutil.copytree(reload_source, package_root)
+    directory = Path(os.environ["SLIPAGENT_STATE_DIR"]) / "plugins"
+    directory.mkdir(parents=True)
+    (directory / "loud.py").write_text(RENDERER_PLUGIN)
+    script = textwrap.dedent('''
+        import io
+        import slipagent.cli as cli
+        from slipagent import plugins
+        from slipagent.runtime import CORE_MODULES
+
+        def emitted():
+            sink = io.StringIO()
+            cli.Renderer(cli.Style(False), sink, False).emit("hello")
+            return sink.getvalue().strip()
+
+        approvals = plugins.Approvals()
+        for decision in (None, True, False, True):
+            if decision is not None:
+                approvals.decide("loud.py", "Renderer.emit", decision)
+                plugins.save_approvals(approvals)
+            plugins.apply_to_live(CORE_MODULES)
+            print(emitted(), plugins.reports[0].overrides[0].state)
+    ''')
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join([GUARD_DIRECTORY, str(package_root)])}
+    result = subprocess.run([sys.executable, "-c", script], cwd=tmp_path, env=env,
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "hello pending", "PLUGIN hello on", "hello rejected", "PLUGIN hello on"]

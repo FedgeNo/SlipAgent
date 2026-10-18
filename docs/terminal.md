@@ -76,6 +76,7 @@ In the REPL:
 | `/settings` | Choose a setting from a menu showing each one's command and current value; the change applies like the typed command and queues while working |
 | `/reload` | Reload components now, or after the current model/tool batch |
 | `/generations` | Show the current component reload generation |
+| `/plugins` | Allow or reject each plugin override, and choose one plugin or a stacking order where several override the same method |
 | `/stop` | Finish the current model response and its tool batch, then stop before the next request |
 | `/exit`, `/quit` | Exit the session; cancel retry waits and let an active response/tool batch finish without another request |
 

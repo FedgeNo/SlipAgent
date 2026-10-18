@@ -525,9 +525,9 @@ class RuntimeFrame:
                     _drop_namespace(previous_namespace)
 
     def _overlay(self, modules: dict[str, types.ModuleType], sources: dict[str, bytes]) -> list[plugins.PluginReport]:
-        selected = {name: content for name, content in sources.items() if name.startswith(plugins.PLUGIN_KEY + "/")}
+        files, approvals = plugins.split_sources(sources)
         return plugins.overlay(modules.get, lambda component: sources.get(plugins.component_file(component)),
-                               selected, CORE_MODULES)
+                               files, CORE_MODULES, approvals)
 
     def report_plugins(self, reports: list[plugins.PluginReport]) -> None:
         """Show plugin problems once each; unchanged warnings stay quiet on later reloads."""

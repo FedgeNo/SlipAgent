@@ -1135,6 +1135,19 @@ class ReloadCommand(Command):
         return None
 
 
+class PluginsCommand(ExclusiveCommand):
+    name = 'plugins'
+    banner = '/plugins'
+    help = (
+        CommandHelp('/plugins', 'approve plugin overrides and choose between plugins overriding one method', '/plugins'),
+    )
+
+    async def run(self, context: CommandContext, argument: str) -> bool | None:
+        from . import cli
+        await cli.PluginMenu(context.session, context.style, context.out).menu()
+        return None
+
+
 class GenerationsCommand(Command):
     name = 'generations'
     banner = '/generations'
@@ -1281,6 +1294,7 @@ COMMANDS: tuple[Command, ...] = (
     McpCommand(),
     NewCommand(),
     ReloadCommand(),
+    PluginsCommand(),
     GenerationsCommand(),
     InitCommand(),
     StopCommand(),

@@ -16,6 +16,7 @@ import asyncio
 import re
 import getpass
 import io
+import itertools
 import json
 import math
 import os
@@ -685,6 +686,7 @@ class Launcher:
             raise ConfigError("--resume cannot be combined with --no-session.")
         # Overrides apply before any session object exists, so constructors use them too.
         plugins.disabled = getattr(args, "no_plugins", False)
+        plugins.all_plugins = getattr(args, "all_plugins", False)
         if not plugins.__dict__.get("applied_to_live"):
             plugins.applied_to_live = True
             await run_blocking(plugins.apply_to_live, CORE_MODULES)
@@ -1164,6 +1166,8 @@ class Repl:
                 return 2
             if not ready:
                 return 0
+            if renderer.terminal is not None:
+                await PluginMenu(session, style, _RendererStream(renderer)).offer()
             if session.extensions.pop("restore_transcript", False):
                 await renderer.restore_transcript(session.agent.messages, session.agent.pending,
                                                   queued_messages=session.agent.queued_messages)
@@ -2320,6 +2324,125 @@ class ModelPicker:
         return f"  {model.id:<44} {context:>8}  {price:>15}"
 
 
+class PluginMenu:
+    """Approve plugin overrides and choose between plugins overriding the same method.
+
+    Decisions are saved in plugins/.approvals.json and apply through a reload,
+    or directly to the live classes when reload is off.
+    """
+
+    def __init__(self, session: Session, style: Style, out: io.TextIOBase) -> None:
+        self.session = session
+        self.style = style
+        self.out = out
+
+    async def offer(self) -> None:
+        """Ask only about overrides without a decision and conflicts without a saved choice."""
+        if not plugins.all_plugins and plugins.pending(plugins.reports):
+            await self.menu(only_new=True)
+
+    async def menu(self, *, only_new: bool = False) -> None:
+        style, out = self.style, self.out
+        terminal = self.session.renderer.terminal
+        reports = [report for report in plugins.reports if report.overrides]
+        if not reports:
+            print(f"  No plugin overrides in {plugins.plugin_directory()}.", file=out)
+            return
+        if terminal is None:
+            print(style.dim("  Plugin approvals need an interactive terminal."), file=out)
+            return
+        approvals = await run_blocking(plugins.load_approvals)
+        changed = False
+        if only_new:
+            for report in reports:
+                new = [override for override in report.overrides
+                       if approvals.decision(report.name, override.member_key) is None]
+                if new:
+                    changed |= await self.approve(terminal, approvals, report, new)
+        else:
+            by_name = {report.name: report for report in reports}
+            while True:
+                options = [(report.name, f"{report.name}: {self.summary(report, approvals)}") for report in reports]
+                name = await terminal.choose(f"Plugins in {plugins.plugin_directory()}", options)
+                if name is None:
+                    break
+                changed |= await self.approve(terminal, approvals, by_name[name], by_name[name].overrides)
+        changed |= await self.resolve(terminal, approvals, reports, only_new=only_new)
+        if not changed:
+            return
+        await run_blocking(plugins.save_approvals, approvals)
+        if plugins.all_plugins:
+            print(style.dim("  Plugin choices saved; --all-plugins applies every override for this run."), file=out)
+        elif self.session.reloader is not None:
+            self.session.reloader.request()
+            await self.session.reloader.checkpoint()
+        else:
+            for report in await run_blocking(plugins.apply_to_live, CORE_MODULES):
+                for text in report.notices():
+                    print(f"  {text}", file=out)
+            print(style.dim("  Plugin choices applied."), file=out)
+
+    def summary(self, report: plugins.PluginReport, approvals: plugins.Approvals) -> str:
+        decisions = [approvals.decision(report.name, override.member_key) for override in report.overrides]
+        parts = [f"{decisions.count(True)} of {len(decisions)} allowed"]
+        if None in decisions:
+            parts.append(f"{decisions.count(None)} undecided")
+        return ", ".join(parts)
+
+    async def approve(self, terminal: TerminalUI, approvals: plugins.Approvals, report: plugins.PluginReport,
+                      overrides: list[plugins.Override]) -> bool:
+        listed = ", ".join(override.member_key for override in overrides)
+        action = await terminal.choose(f"Plugin {report.name} → {listed}", [
+            ("all", "Allow all"), ("choose", "Choose"), ("none", "None"),
+        ])
+        if action is None:
+            return False
+        if action != "choose":
+            for override in overrides:
+                approvals.decide(report.name, override.member_key, action == "all")
+            return True
+        changed = False
+        for override in overrides:
+            current = approvals.decision(report.name, override.member_key)
+            answer = await terminal.choose(f"{report.name} → {override.member_key}", [
+                ("allow", "Allow" + (" (current)" if current is True else "")),
+                ("reject", "Reject" + (" (current)" if current is False else "")),
+            ])
+            if answer is None:
+                break
+            approvals.decide(report.name, override.member_key, answer == "allow")
+            changed = True
+        return changed
+
+    async def resolve(self, terminal: TerminalUI, approvals: plugins.Approvals,
+                      reports: list[plugins.PluginReport], *, only_new: bool) -> bool:
+        """Choose one plugin, or a stacking order, for each method several approved overrides target."""
+        groups: dict[str, list[tuple[str, plugins.Override]]] = {}
+        for report in reports:
+            for override in report.overrides:
+                if approvals.decision(report.name, override.member_key):
+                    groups.setdefault(override.label, []).append((report.name, override))
+        changed = False
+        for label, entries in groups.items():
+            names = [name for name, _ in entries]
+            current = approvals.order(label, names)
+            if len(names) < 2 or only_new and current is not None:
+                continue
+            calls = {name: override.calls_original for name, override in entries}
+            options = [(name, f"Only {name}" + (" (current)" if current == [name] else "")) for name in names]
+            # Every override but the last must call original(), or the ones after it never run.
+            orders = itertools.permutations(names) if len(names) <= 3 else iter((names, names[::-1]))
+            for order in map(list, orders):
+                if all(calls[name] for name in order[:-1]):
+                    options.append(("/".join(order), "Stacked: " + ", then ".join(order)
+                                    + (" (current)" if current == order else "")))
+            choice = await terminal.choose(f"{label} is overridden by {', '.join(names)}", options)
+            if choice is not None:
+                approvals.choose(label, names, choice.split("/"))
+                changed = True
+        return changed
+
+
 class _RendererStream(io.TextIOBase):
     """A write-only stream that routes whole lines through the renderer.
 
@@ -2424,6 +2547,8 @@ def build_parser() -> argparse.ArgumentParser:
     advanced.add_argument("--no-reload", action="store_true", help="Disable automatic component reloads.")
     advanced.add_argument("--no-plugins", action="store_true",
                           help="Skip every plugin in the plugins folder for this run (also SLIPAGENT_NO_PLUGINS=1).")
+    advanced.add_argument("--all-plugins", action="store_true",
+                          help="Apply every plugin override for this run without asking, stacking in file-name order.")
     return parser
 
 

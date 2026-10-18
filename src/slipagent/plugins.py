@@ -18,6 +18,7 @@ from __future__ import annotations
 import ast
 import builtins
 import hashlib
+import json
 import os
 import sys
 import types
@@ -31,6 +32,7 @@ from .config import data_directory
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 PLUGIN_KEY = ":plugins"
+APPROVALS_NAME = ".approvals.json"
 NO_PLUGINS_ENV = "SLIPAGENT_NO_PLUGINS"
 FINGERPRINT_LENGTH = 12
 # Class attributes Python creates for every class body; never treated as overrides.
@@ -42,12 +44,16 @@ _CLASS_BOOKKEEPING = frozenset({
 
 # Set by `--no-plugins` for this process.
 disabled = False
+# Set by `--all-plugins`: apply every override, stacking in file-name order, without saved decisions.
+all_plugins = False
 # Live classes receive plugins once per process; reloads apply them to each candidate.
 applied_to_live = False
 # The latest status of every plugin file, from startup or the accepted reload.
 reports: list[PluginReport] = []
 # Override code object -> the implementation it replaced, for `original`.
 _previous: weakref.WeakKeyDictionary[types.CodeType, Any] = weakref.WeakKeyDictionary()
+# Original dictionaries of live classes changed by `apply_to_live`.
+_live: dict[type, dict[str, Any]] = {}
 
 
 def active() -> bool:
@@ -76,13 +82,21 @@ def source_key(path: Path) -> str:
     return f"{PLUGIN_KEY}/{path.name}"
 
 
+def _watched() -> list[Path]:
+    """Plugin files plus saved decisions, so changing either starts a reload."""
+    files = plugin_files()
+    if files and (plugin_directory() / APPROVALS_NAME).is_file():
+        files.append(plugin_directory() / APPROVALS_NAME)
+    return files
+
+
 def plugin_sources() -> dict[str, bytes]:
-    return {source_key(path): path.read_bytes() for path in plugin_files()}
+    return {source_key(path): path.read_bytes() for path in _watched()}
 
 
 def plugin_stamps() -> dict[str, tuple[int, int, int]]:
     stamps = {}
-    for path in plugin_files():
+    for path in _watched():
         metadata = path.stat()
         stamps[source_key(path)] = (metadata.st_ino, metadata.st_mtime_ns, metadata.st_size)
     return stamps
@@ -181,6 +195,19 @@ class Override:
     member: str
     status: str  # "ok", "changed", "unstamped", or "added"
     fingerprint: str | None = None
+    # "on", "pending" (no decision), "rejected", "conflict" (unresolved), or "dropped" (another plugin chosen).
+    state: str = "on"
+    calls_original: bool = False
+    # Plugins whose approved overrides target this member, when more than one does.
+    contenders: list[str] = field(default_factory=list)
+
+    @property
+    def member_key(self) -> str:
+        return f"{self.target.rpartition('.')[2]}.{self.member}"
+
+    @property
+    def label(self) -> str:
+        return f"{self.target}.{self.member}"
 
 
 @dataclass
@@ -197,12 +224,92 @@ class PluginReport:
             yield f"Plugin {self.name} disabled: {self.error}"
             return
         for override in self.overrides:
+            if override.state != "on":
+                continue
             if override.status == "changed":
-                yield (f"{self.name} overrides {override.target}.{override.member}, which has changed since "
+                yield (f"{self.name} overrides {override.label}, which has changed since "
                        "this override was written. Review it with /plugin diff, then restamp it.")
             elif override.status == "unstamped":
-                yield (f"{self.name} overrides {override.target}.{override.member} without @overrides; "
+                yield (f"{self.name} overrides {override.label} without @overrides; "
                        f"add @overrides(\"{override.fingerprint}\") to be warned when it changes.")
+        pending = sum(override.state == "pending" for override in self.overrides)
+        if pending:
+            yield (f"{self.name} has {pending} override{'' if pending == 1 else 's'} awaiting approval; "
+                   "they stay off until approved with /plugins.")
+        for override in self.overrides:
+            if override.state == "conflict" and override.contenders[0] == self.name:
+                yield (f"{override.label} is overridden by {', '.join(override.contenders)}; "
+                       "none of them apply until one is chosen with /plugins.")
+
+
+@dataclass
+class Approvals:
+    """Saved decisions: approval per plugin file and `Class.member`, and conflict choices.
+
+    A conflict choice is the run order (first runs first) of the plugins kept for
+    one `module.Class.member`, valid only while the same plugins contend for it.
+    """
+
+    approved: dict[str, dict[str, bool]] = field(default_factory=dict)
+    conflicts: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+
+    @classmethod
+    def parse(cls, content: bytes | None) -> Approvals:
+        try:
+            data = json.loads(content) if content else {}
+        except ValueError:
+            return cls()
+        if not isinstance(data, dict):
+            return cls()
+        approved = {
+            plugin: {member: value for member, value in members.items() if isinstance(value, bool)}
+            for plugin, members in (data.get("approved") or {}).items() if isinstance(members, dict)
+        }
+        conflicts = {
+            label: {"plugins": list(choice["plugins"]), "order": list(choice["order"])}
+            for label, choice in (data.get("conflicts") or {}).items()
+            if isinstance(choice, dict) and isinstance(choice.get("plugins"), list)
+            and isinstance(choice.get("order"), list)
+        }
+        return cls(approved, conflicts)
+
+    def encode(self) -> bytes:
+        return (json.dumps({"approved": self.approved, "conflicts": self.conflicts},
+                           indent=2, sort_keys=True) + "\n").encode()
+
+    def decision(self, plugin: str, member: str) -> bool | None:
+        return self.approved.get(plugin, {}).get(member)
+
+    def decide(self, plugin: str, member: str, approved: bool) -> None:
+        self.approved.setdefault(plugin, {})[member] = approved
+
+    def order(self, label: str, contenders: list[str]) -> list[str] | None:
+        choice = self.conflicts.get(label)
+        if choice is None or sorted(choice["plugins"]) != sorted(contenders):
+            return None
+        return [plugin for plugin in choice["order"] if plugin in contenders] or None
+
+    def choose(self, label: str, contenders: list[str], order: list[str]) -> None:
+        self.conflicts[label] = {"plugins": sorted(contenders), "order": list(order)}
+
+
+def approvals_path() -> Path:
+    return plugin_directory() / APPROVALS_NAME
+
+
+def load_approvals() -> Approvals:
+    try:
+        return Approvals.parse(approvals_path().read_bytes())
+    except OSError:
+        return Approvals()
+
+
+def save_approvals(approvals: Approvals) -> None:
+    path = approvals_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_bytes(approvals.encode())
+    os.replace(temporary, path)
 
 
 def _load(name: str, path: str, source: bytes) -> tuple[types.ModuleType, _Names]:
@@ -260,82 +367,157 @@ def _members(stand_in: type) -> list[tuple[str, Any]]:
             if symbol not in _CLASS_BOOKKEEPING]
 
 
+@dataclass
+class _Member:
+    plugin: str
+    stand_in: type
+    target: type
+    value: Any
+    override: Override
+
+
+def _calls_original(code: types.CodeType) -> bool:
+    return "original" in code.co_names or any(
+        isinstance(constant, types.CodeType) and _calls_original(constant) for constant in code.co_consts)
+
+
+def _inspect(name: str, path: str, source: bytes, module_of: Callable[[str], types.ModuleType | None],
+             source_of: Callable[[str], bytes | None], core: frozenset[str], report: PluginReport) -> list[_Member]:
+    """Load one plugin and check every member against the application, without applying any."""
+    module, names = _load(name, path, source)
+    stand_ins = _stand_ins(module)
+    if not stand_ins:
+        raise ValueError("no class is marked with @replaces")
+    targets = {stand_in.__slipagent_replaces__[0] for stand_in in stand_ins}  # type: ignore[attr-defined]
+    if len(targets) != 1:
+        raise ValueError(f"one file may target one module; found {', '.join(sorted(targets))}")
+    component = targets.pop()
+    report.target = component
+    if component in core:
+        raise ValueError(f"{component} is part of the stable frame and cannot be overridden")
+    target_module = module_of(component)
+    if target_module is None:
+        raise ValueError(f"module {component} does not exist")
+    names.module = target_module
+    application = source_of(component)
+    members = []
+    for stand_in in stand_ins:
+        class_name = stand_in.__slipagent_replaces__[1]  # type: ignore[attr-defined]
+        target = target_module.__dict__.get(class_name)
+        if not isinstance(target, type) or target.__module__ != target_module.__name__:
+            raise ValueError(f"class {component}.{class_name} does not exist")
+        label = f"{component}.{class_name}"
+        _check_layout(stand_in, target, label)
+        for symbol, value in _members(stand_in):
+            function = _function(value)
+            stamp = getattr(function, "__slipagent_fingerprint__", None)
+            current = fingerprint(application, class_name, symbol) if application is not None else None
+            if symbol not in target.__dict__:
+                if stamp is not None:
+                    raise ValueError(f"{label}.{symbol} no longer exists")
+                status = "added"
+            elif stamp is None:
+                status = "unstamped"
+            else:
+                status = "ok" if stamp == current else "changed"
+            override = Override(label, symbol, status, current,
+                                calls_original=function is not None and _calls_original(function.__code__))
+            members.append(_Member(name, stand_in, target, value, override))
+    return members
+
+
+def _restore(snapshots: dict[type, dict[str, Any]]) -> None:
+    for target, snapshot in snapshots.items():
+        for symbol in tuple(target.__dict__):
+            if symbol not in snapshot and symbol not in _CLASS_BOOKKEEPING:
+                delattr(target, symbol)
+        for symbol, value in snapshot.items():
+            if symbol not in _CLASS_BOOKKEEPING and target.__dict__.get(symbol) is not value:
+                setattr(target, symbol, value)
+
+
 def overlay(module_of: Callable[[str], types.ModuleType | None], source_of: Callable[[str], bytes | None],
-            plugins: dict[str, bytes], core: frozenset[str],
-            allow: Callable[[str, str], bool] | None = None) -> list[PluginReport]:
-    """Apply plugin members onto component classes; one failing plugin leaves no trace.
+            plugins: dict[str, bytes], core: frozenset[str], approvals: Approvals | None = None,
+            snapshots: dict[type, dict[str, Any]] | None = None) -> list[PluginReport]:
+    """Apply approved plugin members onto component classes; a failing plugin leaves no trace.
 
     `module_of` returns a component module (for example "cli") from the live
     package or a reload candidate. `source_of` returns its application source for
-    fingerprints. `allow(plugin, "Class.member")` filters overrides.
+    fingerprints. Without `approvals`, every member applies and plugins that
+    override the same member stack in file-name order. `snapshots` receives the
+    original dictionary of every class changed.
     """
     reports = []
+    loaded: list[_Member] = []
     for key, source in sorted(plugins.items()):
         name = key.rpartition("/")[2]
+        if not name.endswith(".py") or name.startswith(("_", ".")):
+            continue
         path = str(plugin_directory() / name)
         report = PluginReport(name, path)
         reports.append(report)
-        snapshots: dict[type, dict[str, Any]] = {}
-        registered: list[types.CodeType] = []
         try:
-            module, names = _load(name, path, source)
-            stand_ins = _stand_ins(module)
-            if not stand_ins:
-                raise ValueError("no class is marked with @replaces")
-            targets = {stand_in.__slipagent_replaces__[0] for stand_in in stand_ins}  # type: ignore[attr-defined]
-            if len(targets) != 1:
-                raise ValueError(f"one file may target one module; found {', '.join(sorted(targets))}")
-            component = targets.pop()
-            report.target = component
-            if component in core:
-                raise ValueError(f"{component} is part of the stable frame and cannot be overridden")
-            target_module = module_of(component)
-            if target_module is None:
-                raise ValueError(f"module {component} does not exist")
-            names.module = target_module
-            application = source_of(component)
-            for stand_in in stand_ins:
-                class_name = stand_in.__slipagent_replaces__[1]  # type: ignore[attr-defined]
-                target = target_module.__dict__.get(class_name)
-                if not isinstance(target, type) or target.__module__ != target_module.__name__:
-                    raise ValueError(f"class {component}.{class_name} does not exist")
-                label = f"{component}.{class_name}"
-                _check_layout(stand_in, target, label)
-                for symbol, value in _members(stand_in):
-                    if allow is not None and not allow(name, f"{class_name}.{symbol}"):
-                        continue
-                    function = _function(value)
-                    stamp = getattr(function, "__slipagent_fingerprint__", None)
-                    existing = target.__dict__.get(symbol)
-                    current = fingerprint(application, class_name, symbol) if application is not None else None
-                    if existing is None:
-                        if stamp is not None:
-                            raise ValueError(f"{label}.{symbol} no longer exists")
-                        status = "added"
-                    elif stamp is None:
-                        status = "unstamped"
-                    else:
-                        status = "ok" if stamp == current else "changed"
-                    report.overrides.append(Override(label, symbol, status, current))
-                    snapshots.setdefault(target, dict(target.__dict__))
-                    if existing is not None and function is not None:
-                        _previous[function.__code__] = existing
-                        registered.append(function.__code__)
-                    setattr(target, symbol, _retarget(value, stand_in, target))
-            report.enabled = True
+            members = _inspect(name, path, source, module_of, source_of, core, report)
         except Exception as exc:
-            for target, snapshot in snapshots.items():
-                for symbol in tuple(target.__dict__):
-                    if symbol not in snapshot and symbol not in _CLASS_BOOKKEEPING:
-                        delattr(target, symbol)
-                for symbol, value in snapshot.items():
-                    if symbol not in _CLASS_BOOKKEEPING and target.__dict__.get(symbol) is not value:
-                        setattr(target, symbol, value)
-            for code in registered:
-                _previous.pop(code, None)
             report.error = f"{type(exc).__name__}: {exc}"
-            report.overrides.clear()
+            continue
+        report.overrides = [member.override for member in members]
+        report.enabled = True
+        loaded.extend(members)
+
+    contending: dict[str, list[_Member]] = {}
+    for member in loaded:
+        override = member.override
+        decision = True if approvals is None else approvals.decision(member.plugin, override.member_key)
+        override.state = "on" if decision else "pending" if decision is None else "rejected"
+        if decision:
+            contending.setdefault(override.label, []).append(member)
+    applied: list[_Member] = []
+    for label, members in contending.items():
+        if len(members) > 1:
+            contenders = [member.plugin for member in members]
+            for member in members:
+                member.override.contenders = contenders
+            if approvals is not None:
+                order = approvals.order(label, contenders)
+                for member in members:
+                    if order is None:
+                        member.override.state = "conflict"
+                    elif member.plugin not in order:
+                        member.override.state = "dropped"
+                by_plugin = {member.plugin: member for member in members}
+                # The first in run order wraps the rest, so it is applied last.
+                members = [by_plugin[plugin] for plugin in reversed(order or [])]
+        applied.extend(members)
+
+    touched = snapshots if snapshots is not None else {}
+    registered: list[types.CodeType] = []
+    try:
+        for member in applied:
+            target, symbol = member.target, member.override.member
+            touched.setdefault(target, dict(target.__dict__))
+            function = _function(member.value)
+            previous = target.__dict__.get(symbol)
+            if previous is not None and function is not None:
+                _previous[function.__code__] = previous
+                registered.append(function.__code__)
+            setattr(target, symbol, _retarget(member.value, member.stand_in, target))
+    except Exception as exc:
+        _restore(touched)
+        touched.clear()
+        for code in registered:
+            _previous.pop(code, None)
+        for report in reports:
+            if report.enabled:
+                report.enabled = False
+                report.error = f"could not apply plugins: {type(exc).__name__}: {exc}"
+                report.overrides.clear()
     return reports
+
+
+def pending(reports: list[PluginReport]) -> bool:
+    """Whether any override awaits approval or any conflict awaits a choice."""
+    return any(override.state in {"pending", "conflict"} for report in reports for override in report.overrides)
 
 
 def component_file(component: str) -> str:
@@ -344,8 +526,20 @@ def component_file(component: str) -> str:
     return relative + "/__init__.py" if (PACKAGE_ROOT / relative / "__init__.py").exists() else relative + ".py"
 
 
+def split_sources(sources: dict[str, bytes]) -> tuple[dict[str, bytes], Approvals | None]:
+    """Plugin files and the saved decisions to apply, or None for `--all-plugins`."""
+    approvals_key = f"{PLUGIN_KEY}/{APPROVALS_NAME}"
+    files = {key: content for key, content in sources.items()
+             if key.startswith(PLUGIN_KEY + "/") and key != approvals_key}
+    return files, None if all_plugins else Approvals.parse(sources.get(approvals_key))
+
+
 def apply_to_live(core: frozenset[str]) -> list[PluginReport]:
-    """Apply plugins to the running package at startup, before session objects exist."""
+    """Apply plugins to the running package, first undoing any earlier application.
+
+    Startup calls this before session objects exist. Without a reload frame it
+    runs again after approvals change.
+    """
     import importlib
 
     def module_of(component: str) -> types.ModuleType | None:
@@ -360,5 +554,8 @@ def apply_to_live(core: frozenset[str]) -> list[PluginReport]:
             return None
 
     global reports
-    reports = overlay(module_of, source_of, plugin_sources(), core)
+    _restore(_live)
+    _live.clear()
+    files, approvals = split_sources(plugin_sources())
+    reports = overlay(module_of, source_of, files, core, approvals, _live)
     return reports

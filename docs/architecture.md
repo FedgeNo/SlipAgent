@@ -1224,13 +1224,20 @@ connections, `lifecycle`, typed `resources`, `work` ownership contracts, and the
 
 User plugins in `data_directory()/plugins/` are watched with the package source
 under separate `:plugins/` keys and are never imported as components. Each
-reload stages the candidate, then `plugins.overlay` applies every plugin's
-members onto the candidate classes before the component API, layout, registry,
-and terminal checks; the normal merge then carries them to the live classes, and
+reload stages the candidate, then `plugins.overlay` applies the approved members
+of every plugin onto the candidate classes before the component API, layout,
+registry, and terminal checks; the normal merge then carries them to the live classes, and
 a rejected generation leaves them as they were. A plugin that fails to load or
 apply is rolled back on its own and reported once; the generation continues.
 Startup applies the same overlay to the live classes once per process before the
-session is built. `--no-plugins` or `SLIPAGENT_NO_PLUGINS=1` skips them. Editing a
+session is built. Approvals and conflict choices live in `plugins/.approvals.json`,
+which is watched with the plugin files: an override without a decision stays off,
+and a method that several approved overrides target applies none of them until a
+run order is chosen. The REPL asks about undecided overrides and conflicts once the
+terminal is up, and `/plugins` reopens every decision; without a reload frame the
+menu reapplies plugins to the live classes after restoring their original members.
+`--all-plugins` applies everything in file-name order without consulting the saved
+choices. `--no-plugins` or `SLIPAGENT_NO_PLUGINS=1` skips them. Editing a
 pinned module requires a restart; most agent, tool, UI, API, task, and context
 behavior is reloadable when layouts remain compatible.
 

@@ -133,3 +133,12 @@ async def test_reasoning_depth_preserves_archived_originals(depth):
         assert all(step.messages[-1].reasoning for step in agent.history.steps)
     finally:
         await registry.aclose()
+
+
+async def test_plan_objective_has_leeway_beyond_its_advertised_length():
+    from slipagent.tools.planning import UpdatePlanTool
+    stages = [{"task": "Inspect", "status": "pending", "evidence": ""}]
+    tool = UpdatePlanTool()
+    assert not (await tool.run(objective="x" * 1000, stages=stages)).is_error
+    refused = await tool.run(objective="x" * 1001, stages=stages)
+    assert refused.is_error and "at most 500 characters" in str(refused.content)

@@ -1237,7 +1237,9 @@ run order is chosen. The REPL asks about undecided overrides and conflicts once 
 terminal is up, and `/plugins` reopens every decision; without a reload frame the
 menu reapplies plugins to the live classes after restoring their original members.
 `--all-plugins` applies everything in file-name order without consulting the saved
-choices. `--no-plugins` or `SLIPAGENT_NO_PLUGINS=1` skips them. Editing a
+choices. `plugintools.py`, a reloadable module, reads plugin files statically
+for `/plugin copy`, `/plugin diff`, and `/plugin restamp`; baselines of copied
+application source live in `plugins/.baseline/<file>.json`. `--no-plugins` or `SLIPAGENT_NO_PLUGINS=1` skips them. Editing a
 pinned module requires a restart; most agent, tool, UI, API, task, and context
 behavior is reloadable when layouts remain compatible.
 

@@ -2345,8 +2345,9 @@ class PluginMenu:
         style, out = self.style, self.out
         terminal = self.session.renderer.terminal
         reports = [report for report in plugins.reports if report.overrides]
+        if not only_new:
+            self.listing()
         if not reports:
-            print(f"  No plugin overrides in {plugins.plugin_directory()}.", file=out)
             return
         if terminal is None:
             print(style.dim("  Plugin approvals need an interactive terminal."), file=out)
@@ -2368,9 +2369,13 @@ class PluginMenu:
                     break
                 changed |= await self.approve(terminal, approvals, by_name[name], by_name[name].overrides)
         changed |= await self.resolve(terminal, approvals, reports, only_new=only_new)
-        if not changed:
-            return
-        await run_blocking(plugins.save_approvals, approvals)
+        if changed:
+            await run_blocking(plugins.save_approvals, approvals)
+            await self.apply()
+
+    async def apply(self) -> None:
+        """Apply changed plugin files or decisions now: through a reload, or directly without one."""
+        style, out = self.style, self.out
         if plugins.all_plugins:
             print(style.dim("  Plugin choices saved; --all-plugins applies every override for this run."), file=out)
         elif self.session.reloader is not None:
@@ -2381,6 +2386,83 @@ class PluginMenu:
                 for text in report.notices():
                     print(f"  {text}", file=out)
             print(style.dim("  Plugin choices applied."), file=out)
+
+    STATES = {"on": "approved", "pending": "awaiting approval", "rejected": "rejected",
+              "conflict": "conflict unresolved", "dropped": "another plugin chosen"}
+    STATUSES = {"changed": "changed upstream", "unstamped": "unstamped", "added": "new member"}
+
+    def listing(self) -> None:
+        style, out = self.style, self.out
+        print(f"  Plugins in {plugins.plugin_directory()}", file=out)
+        if not plugins.reports:
+            print(style.dim("  none; /plugin copy <module.Class>[.method] starts one."), file=out)
+        for report in plugins.reports:
+            if report.error:
+                print(style.red(f"  {report.name}: disabled: {report.error}"), file=out)
+                continue
+            print(f"  {report.name} → {report.target}", file=out)
+            for override in report.overrides:
+                notes = [self.STATES[override.state]]
+                if override.status in self.STATUSES:
+                    notes.append(self.STATUSES[override.status])
+                text = f"    {override.member_key}: {', '.join(notes)}"
+                print(style.warning(text) if override.status == "changed" and override.state == "on"
+                      else text if override.state == "on" else style.dim(text), file=out)
+
+    async def command(self, argument: str) -> None:
+        """`/plugin copy|diff|restamp ...`."""
+        from .plugintools import PluginToolError, PluginTools
+
+        style, out = self.style, self.out
+        action, _, rest = argument.strip().partition(" ")
+        words = rest.split()
+        tools = PluginTools()
+        try:
+            if action == "copy" and len(words) <= 2:
+                target = words[0] if words else await self.pick_target(tools)
+                if not target:
+                    return
+                path, members = await run_blocking(tools.copy, target, words[1] if len(words) > 1 else "")
+                approvals = await run_blocking(plugins.load_approvals)
+                for member in members:
+                    approvals.decide(path.name, member, True)
+                await run_blocking(plugins.save_approvals, approvals)
+                print(f"  Wrote {', '.join(members)} to {path}; approved. Edit and save it to change behavior.",
+                      file=out)
+                await self.apply()
+            elif action == "diff" and len(words) <= 1:
+                lines = await run_blocking(tools.diff, words[0] if words else "")
+                for line in lines or ["No override has changed upstream."]:
+                    print("  " + (style.green(line) if line.startswith("+") and not line.startswith("+++")
+                                  else style.red(line) if line.startswith("-") and not line.startswith("---")
+                                  else line), file=out)
+            elif action == "restamp" and 1 <= len(words) <= 2:
+                members = await run_blocking(tools.restamp, words[0], words[1] if len(words) > 1 else "")
+                print(f"  Restamped {', '.join(members)}." if members else "  Every override is already current.",
+                      file=out)
+                if members:
+                    await self.apply()
+            else:
+                print("  usage: /plugin copy [module.Class[.method] [file]] | /plugin diff [file] | "
+                      "/plugin restamp <file> [method]", file=out)
+        except (PluginToolError, OSError) as exc:
+            print(style.red(f"  {exc}"), file=out)
+
+    async def pick_target(self, tools: Any) -> str:
+        """Choose a class, then the whole class or one method, from the application."""
+        terminal = self.session.renderer.terminal
+        if terminal is None:
+            print("  usage: /plugin copy <module.Class>[.method] [file]", file=self.out)
+            return ""
+        targets = await run_blocking(tools.targets)
+        target = await terminal.choose("Copy into a plugin", [(target, target) for target in targets])
+        if target is None:
+            return ""
+        methods = await run_blocking(tools.methods, target)
+        method = await terminal.choose(f"Copy from {target}", [("", "Whole class"), *((name, name) for name in methods)])
+        if method is None:
+            return ""
+        return f"{target}.{method}" if method else target
 
     def summary(self, report: plugins.PluginReport, approvals: plugins.Approvals) -> str:
         decisions = [approvals.decision(report.name, override.member_key) for override in report.overrides]

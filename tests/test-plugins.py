@@ -578,3 +578,116 @@ def test_reapplying_to_live_classes_follows_changed_approvals(tmp_path, reload_s
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == [
         "hello pending", "PLUGIN hello on", "hello rejected", "PLUGIN hello on"]
+
+
+@pytest.fixture
+def workshop(tmp_path, monkeypatch):
+    """Plugin tools over a fake package whose `widgets` module is TARGET."""
+    from slipagent.plugintools import PluginTools
+
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "widgets.py").write_text(TARGET)
+    (package / "config.py").write_text("class Config:\n    pass\n")
+    monkeypatch.setattr(plugins, "PACKAGE_ROOT", package)
+    return PluginTools()
+
+
+def load(path: Path, module: types.ModuleType, approvals: plugins.Approvals | None = None,
+         source: str | None = None) -> plugins.PluginReport:
+    application = source if source is not None else (plugins.PACKAGE_ROOT / "widgets.py").read_text()
+    return plugins.overlay({"widgets": module}.get, lambda name: application.encode(),
+                           {plugins.source_key(path): path.read_bytes()}, frozenset({"config"}), approvals)[0]
+
+
+def test_copying_a_class_writes_stamped_methods_that_load_cleanly(workshop):
+    assert workshop.targets() == ["widgets.Base", "widgets.Widget"]
+    path, members = workshop.copy("widgets.Widget")
+    assert path.name == "widgets-widget.py"
+    assert members == ["Widget.render", "Widget.size", "Widget.greet"]
+    module = component()
+    report = load(path, module)
+    assert not report.error and [override.status for override in report.overrides] == ["ok", "ok", "ok"]
+    assert module.Widget().render("x") == "<x>" and module.Widget().greet() == "widget"
+    assert workshop.load_baseline(path)["Widget.size"] == "def size(self):\n    return 1"
+
+
+def test_copying_methods_one_at_a_time_appends_to_the_same_stand_in(workshop):
+    workshop.copy("widgets.Widget.render", "mine")
+    path, _ = workshop.copy("widgets.Widget.size", "mine.py")
+    workshop.copy("widgets.Base.greet", "mine")
+    source = path.read_text()
+    assert source.count('@replaces("widgets.Widget")') == 1 and source.count('@replaces("widgets.Base")') == 1
+    module = component()
+    report = load(path, module)
+    assert [(override.target, override.member, override.status) for override in report.overrides] == [
+        ("widgets.Widget", "render", "ok"), ("widgets.Widget", "size", "ok"), ("widgets.Base", "greet", "ok")]
+    from slipagent.plugintools import PluginToolError
+    with pytest.raises(PluginToolError, match="already defines Widget.render"):
+        workshop.copy("widgets.Widget.render", "mine")
+    with pytest.raises(PluginToolError, match="stable frame"):
+        workshop.copy("config.Config", "other")
+    with pytest.raises(PluginToolError, match="names no module.Class"):
+        workshop.copy("widgets.Missing")
+    with pytest.raises(PluginToolError, match="does not exist"):
+        workshop.copy("widgets.Widget.missing")
+
+
+def test_diff_shows_the_upstream_change_and_restamp_records_it(workshop):
+    path, _ = workshop.copy("widgets.Widget.render", "mine")
+    assert workshop.diff("mine") == []
+    changed = TARGET.replace('return f"<{text}>"', 'return f"<<{text}>>"')
+    (plugins.PACKAGE_ROOT / "widgets.py").write_text(changed)
+    assert load(path, component(changed)).overrides[0].status == "changed"
+    diff = workshop.diff("mine")
+    assert '-    return f"<{text}>"' in diff and '+    return f"<<{text}>>"' in diff
+    assert workshop.diff() == diff
+    assert workshop.restamp("mine") == ["Widget.render"]
+    assert workshop.diff("mine") == [] and workshop.restamp("mine") == []
+    assert load(path, component(changed)).overrides[0].status == "ok"
+
+
+def test_restamp_stamps_unstamped_overrides_and_adds_the_import(workshop):
+    path = workshop.resolve_file("bare")
+    path.parent.mkdir(parents=True)
+    path.write_text(textwrap.dedent('''
+        from slipagent.plugins import replaces
+
+        @replaces("widgets.Widget")
+        class Widget:
+            @staticmethod
+            def size():
+                return 2
+
+            def helper(self):
+                return "mine"
+    '''))
+    assert load(path, component()).overrides[0].status == "unstamped"
+    from slipagent.plugintools import PluginToolError
+    with pytest.raises(PluginToolError, match="no override of an application method named helper"):
+        workshop.restamp("bare", "helper")
+    assert workshop.restamp("bare", "size") == ["Widget.size"]
+    module = component()
+    report = load(path, module)
+    assert [override.status for override in report.overrides] == ["ok", "added"]
+    assert module.Widget().size() == 2
+
+
+async def test_plugin_copy_approves_what_it_wrote_and_the_listing_shows_each_state(workshop, monkeypatch):
+    menu, chooser, applied = menu_for(["widgets.Widget", "size"], monkeypatch)
+    await menu.command("copy")
+    assert [title for title, _ in chooser.asked] == ["Copy into a plugin", "Copy from widgets.Widget"]
+    assert plugins.load_approvals().approved == {"widgets-widget.py": {"Widget.size": True}}
+    assert len(applied) == 1 and "Wrote Widget.size" in menu.out.getvalue()
+
+    files = {**STACKABLE, "c.py": PICK}
+    approvals = allowed_both()
+    approvals.decide("c.py", "Widget.size", False)
+    monkeypatch.setattr(plugins, "reports", apply(component(), files, approvals=approvals))
+    menu, _, _ = menu_for([], monkeypatch)
+    menu.listing()
+    assert menu.out.getvalue().splitlines()[1:] == [
+        "  a.py → widgets", "    Widget.render: conflict unresolved, unstamped",
+        "  b.py → widgets", "    Widget.render: conflict unresolved, unstamped",
+        "  c.py → widgets", "    Widget.render: awaiting approval, unstamped", "    Widget.size: rejected, unstamped",
+    ]

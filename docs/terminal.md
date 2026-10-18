@@ -76,7 +76,10 @@ In the REPL:
 | `/settings` | Choose a setting from a menu showing each one's command and current value; the change applies like the typed command and queues while working |
 | `/reload` | Reload components now, or after the current model/tool batch |
 | `/generations` | Show the current component reload generation |
-| `/plugins` | Allow or reject each plugin override, and choose one plugin or a stacking order where several override the same method |
+| `/plugins` | List each plugin, its target, and the state of every override; then allow or reject overrides, and choose one plugin or a stacking order where several override the same method |
+| `/plugin copy [module.Class[.method]] [file]` | Copy a class's methods, or one method, into a plugin file with fingerprints, save the copied source as its baseline, and approve it; without a target, choose one from menus |
+| `/plugin diff [file]` | Show how each application method changed since a plugin copied it |
+| `/plugin restamp <file> [method]` | After review, record current fingerprints and baselines, stamping unstamped overrides |
 | `/stop` | Finish the current model response and its tool batch, then stop before the next request |
 | `/exit`, `/quit` | Exit the session; cancel retry waits and let an active response/tool batch finish without another request |
 

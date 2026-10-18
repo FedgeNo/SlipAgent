@@ -1139,12 +1139,26 @@ class PluginsCommand(ExclusiveCommand):
     name = 'plugins'
     banner = '/plugins'
     help = (
-        CommandHelp('/plugins', 'approve plugin overrides and choose between plugins overriding one method', '/plugins'),
+        CommandHelp('/plugins', 'list plugins and the state of each override, then approve them or resolve conflicts', '/plugins'),
     )
 
     async def run(self, context: CommandContext, argument: str) -> bool | None:
         from . import cli
         await cli.PluginMenu(context.session, context.style, context.out).menu()
+        return None
+
+
+class PluginCommand(ExclusiveCommand):
+    name = 'plugin'
+    help = (
+        CommandHelp('/plugin copy [target] [file]', 'copy module.Class or module.Class.method into a plugin file, stamped and approved', '/plugin copy '),
+        CommandHelp('/plugin diff [file]', 'show how application methods changed since plugins copied them', '/plugin diff '),
+        CommandHelp('/plugin restamp <file> [method]', 'record the current fingerprints after reviewing a change', '/plugin restamp '),
+    )
+
+    async def run(self, context: CommandContext, argument: str) -> bool | None:
+        from . import cli
+        await cli.PluginMenu(context.session, context.style, context.out).command(argument)
         return None
 
 
@@ -1295,6 +1309,7 @@ COMMANDS: tuple[Command, ...] = (
     NewCommand(),
     ReloadCommand(),
     PluginsCommand(),
+    PluginCommand(),
     GenerationsCommand(),
     InitCommand(),
     StopCommand(),

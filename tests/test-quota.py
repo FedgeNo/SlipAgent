@@ -48,13 +48,13 @@ async def test_quota_updates_after_fifteen_minutes_and_can_increase(quota_sessio
     ])
     monkeypatch.setattr(session.client, "key_info", info)
     try:
-        await cli._refresh_quota(session)
+        await cli.Quota(session).refresh()
         assert session.free_calls == 80
         clock[0] += 899
-        await cli._refresh_quota(session)
+        await cli.Quota(session).refresh()
         assert info.await_count == 1
         clock[0] += 1
-        await cli._refresh_quota(session)
+        await cli.Quota(session).refresh()
         assert session.free_calls == 100
         assert info.await_count == 2
     finally:
@@ -91,11 +91,11 @@ async def test_repl_refreshes_quota_without_input_or_waiting_for_model_and_stops
 
     monkeypatch.setattr(cli, "QUOTA_REFRESH_INTERVAL", .02, raising=False)
     monkeypatch.setattr(cli.sys, "stdin", io.StringIO())
-    monkeypatch.setattr(cli, "_read_line", read_line)
+    monkeypatch.setattr(cli.Repl, "read_line", read_line)
     monkeypatch.setattr(session.client, "key_info", key_info)
     monkeypatch.setattr(Agent, "run", run)
     async with asyncio.timeout(2):
-        assert await cli.run_repl(session) == 0
+        assert await cli.Repl(session).run() == 0
     assert session.free_calls == 100
     count = len(calls)
     await asyncio.sleep(.05)
@@ -114,11 +114,11 @@ async def test_quota_refresh_ignores_response_for_replaced_key(quota_session, mo
         return KeyInfo.from_api(quota_payload(10)["data"])
 
     monkeypatch.setattr(session.client, "key_info", old_key_info)
-    refresh = asyncio.create_task(cli._refresh_quota(session))
+    refresh = asyncio.create_task(cli.Quota(session).refresh())
     try:
         await started.wait()
         await session.use_api_key("replacement-key")
-        cli._cache_quota(session, KeyInfo.from_api(quota_payload(100)["data"]))
+        cli.Quota(session).cache(KeyInfo.from_api(quota_payload(100)["data"]))
         finish.set()
         await refresh
         assert session.free_calls == 100
@@ -133,7 +133,7 @@ async def test_successful_refresh_without_quota_clears_old_readout(quota_session
     session.free_calls = 80
     monkeypatch.setattr(session.client, "key_info", AsyncMock(return_value=KeyInfo()))
     try:
-        await cli._refresh_quota(session)
+        await cli.Quota(session).refresh()
         assert session.free_calls is None
     finally:
         await session.client.aclose()
@@ -150,13 +150,13 @@ async def test_failed_refresh_keeps_last_value_and_waits_for_next_interval(quota
     ])
     monkeypatch.setattr(session.client, "key_info", info)
     try:
-        await cli._refresh_quota(session)
+        await cli.Quota(session).refresh()
         assert session.free_calls == 80
         clock[0] += 899
-        await cli._refresh_quota(session)
+        await cli.Quota(session).refresh()
         assert info.await_count == 1
         clock[0] += 1
-        await cli._refresh_quota(session)
+        await cli.Quota(session).refresh()
         assert session.free_calls == 100
         assert info.await_count == 2
     finally:
@@ -167,8 +167,8 @@ async def test_each_command_response_forms_one_output_block(quota_session):
     session = quota_session
     try:
         session.renderer.emit("previous output")
-        await cli._handle_command(session, "/help")
-        await cli._handle_command(session, "/cost")
+        await cli.CommandRunner(session).handle("/help")
+        await cli.CommandRunner(session).handle("/cost")
         output = session.renderer.stream.getvalue()
         assert output.startswith("\nprevious output\n\n" + cli.HELP)
         assert cli.HELP + "\n\n  in=" in output

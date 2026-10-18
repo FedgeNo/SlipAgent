@@ -366,7 +366,7 @@ class RuntimeFrame:
                 return
             required = {
                 "agent": ("Agent", "build_system_prompt"), "context": ("ConversationHistory", "RecallHistoryTool"),
-                "cli": ("Renderer", "_execute_command", "_handle_command", "_read_line", "_run_request", "_refresh_quota", "_shutdown"),
+                "cli": ("Renderer", "Repl", "CommandRunner", "Quota"),
                 "terminal": ("TerminalUI",),
                 "tools": ("build_default_registry",),
             }
@@ -375,7 +375,9 @@ class RuntimeFrame:
                     raise ReloadError(f"Missing component API in {name}")
             methods: dict[str, dict[str, tuple[str, ...]]] = {
                 "agent": {"Agent": ("run", "_step", "_stop_notice", "enqueue", "request_stop")},
-                "cli": {"Renderer": ("emit", "handle", "user_prompt", "draw_prompt", "end_prompt")},
+                "cli": {"Renderer": ("emit", "handle", "user_prompt", "draw_prompt", "end_prompt"),
+                        "Repl": ("read_line", "run_request", "shutdown"),
+                        "CommandRunner": ("execute", "handle"), "Quota": ("refresh",)},
                 "context": {"ConversationHistory": ("view", "sync", "save_response", "clear")},
                 "openrouter": {"OpenRouterClient": ("chat", "key_info", "list_models", "aclose")},
                 "api": {"APIClient": ("chat", "prepare_payload", "model_capabilities", "aclose")},

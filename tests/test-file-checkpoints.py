@@ -177,7 +177,7 @@ async def test_rewind_command_requires_confirmation_and_reports_current_files(wo
     write_batch(store, 1, [(path, "edited")])
     terminal.choose = AsyncMock(side_effect=[store.listing()[0]["id"], confirmation])
     try:
-        await cli._handle_command(session, "/rewind")
+        await cli.CommandRunner(session).handle("/rewind")
         assert terminal.choose.await_count == 2
         assert path.read_text() == ("original" if confirmation == "restore" else "edited")
         assert bool(registry.context_notes.get("file_rewind")) == (confirmation == "restore")

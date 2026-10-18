@@ -213,7 +213,7 @@ async def test_journal_rejects_discards_outside_unsent_queue(tmp_path, target):
 
 
 async def test_queue_command_plain_output_and_task_guard(tmp_path, metadata_server):
-    session = await cli.build_session(cli.build_parser().parse_args(['--no-mcp', '-w', str(tmp_path)]))
+    session = await cli.Launcher(cli.build_parser().parse_args(['--no-mcp', '-w', str(tmp_path)])).build_session()
     session.renderer.stream = io.StringIO()
     session.agent.client = StubClient([completion('Answer')])
     try:
@@ -223,30 +223,30 @@ async def test_queue_command_plain_output_and_task_guard(tmp_path, metadata_serv
         session.agent.enqueue('full first line\nfull last line')
         session.agent.enqueue('keep this')
         session.agent._drain_pending()
-        await cli._handle_command(session, '/queue')
+        await cli.CommandRunner(session).handle('/queue')
         assert 'full first line\nfull last line' in session.renderer.stream.getvalue()
-        await cli._handle_command(session, '/task new')
+        await cli.CommandRunner(session).handle('/task new')
         assert session.agent.history.task is task
-        await cli._handle_command(session, '/queue discard 1')
+        await cli.CommandRunner(session).handle('/queue discard 1')
         assert [text for _, text in input_queue(session.agent).snapshot()] == ['keep this']
-        await cli._handle_command(session, '/queue 1')
+        await cli.CommandRunner(session).handle('/queue 1')
         assert session.renderer.stream.getvalue().endswith('keep this\n')
         for argument in ['0', '-1', 'discard', 'discard 1 2', '９', '9' * 5000]:
-            await cli._handle_command(session, '/queue ' + argument)
+            await cli.CommandRunner(session).handle('/queue ' + argument)
         assert session.agent.pending or session.agent.queued_messages
-        await cli._handle_command(session, '/queue discard 1')
+        await cli.CommandRunner(session).handle('/queue discard 1')
         assert not session.agent.pending and not session.agent.queued_messages
         assert session.agent.history.task is task
         assert task.sources == {1: ['Current task']}
-        await cli._handle_command(session, '/task new')
+        await cli.CommandRunner(session).handle('/task new')
         assert session.agent.history.task is not task
     finally:
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 @pytest.mark.parametrize('action', ['view', 'discard', None, 'delivered'])
 async def test_interactive_queue_inspects_full_text_or_discards_selected(tmp_path, metadata_server, action):
-    session = await cli.build_session(cli.build_parser().parse_args(['--no-mcp', '-w', str(tmp_path)]))
+    session = await cli.Launcher(cli.build_parser().parse_args(['--no-mcp', '-w', str(tmp_path)])).build_session()
     session.renderer.stream = io.StringIO()
     calls, viewed = [], []
     session.agent.enqueue('First\nmessage')
@@ -270,7 +270,7 @@ async def test_interactive_queue_inspects_full_text_or_discards_selected(tmp_pat
     # fixture observes full messages and mutation without running an application.
     session.agent.on_event = None
     try:
-        await cli._handle_command(session, '/queue')
+        await cli.CommandRunner(session).handle('/queue')
         assert calls[0][0] == 'Pending Messages'
         assert 'Second\nmessage' in calls[0][1][1][1]
         if action == 'view':
@@ -284,7 +284,7 @@ async def test_interactive_queue_inspects_full_text_or_discards_selected(tmp_pat
             assert session.agent.pending == ['First\nmessage', 'Second\nmessage']
     finally:
         session.renderer.terminal = None
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 async def test_discard_refreshes_queued_previews_without_adding_to_feed():

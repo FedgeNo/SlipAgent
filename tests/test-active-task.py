@@ -11,7 +11,7 @@ import pytest
 from test_agent import unpack_context, context_records
 
 from slipagent.agent import Agent
-from slipagent.cli import Renderer, Session, Style, _handle_command
+from slipagent.cli import Renderer, Session, Style, CommandRunner
 from slipagent.context import ConversationHistory, HistoryStep, message_tokens
 from slipagent.protocol import ResponseFormatError, parse_response
 from slipagent.tools.base import ToolRegistry

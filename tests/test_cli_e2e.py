@@ -1088,25 +1088,25 @@ def test_mcp_remove_without_name_reports_usage(project_dir: Path) -> None:
 
 
 async def test_build_session_honors_workspace_environment(tmp_path, monkeypatch, metadata_server) -> None:
-    from slipagent.cli import build_parser, build_session, _shutdown
+    from slipagent.cli import build_parser, Launcher, Repl
     monkeypatch.setenv("SLIPAGENT_NO_DOTENV", "1")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test")
     monkeypatch.setenv("SLIPAGENT_WORKSPACE", str(tmp_path))
-    session = await build_session(build_parser().parse_args(["--no-mcp"]))
+    session = await Launcher(build_parser().parse_args(["--no-mcp"])).build_session()
     try:
         assert session.workspace.root == tmp_path
     finally:
-        await _shutdown(session)
+        await Repl(session).shutdown()
 
 
 async def test_cancelled_input_reader_does_not_lose_next_line(tmp_path, monkeypatch, metadata_server) -> None:
     import asyncio
     import io
-    from slipagent.cli import build_parser, build_session, _shutdown, _read_line
+    from slipagent.cli import build_parser, Launcher, Repl
 
     monkeypatch.setenv("SLIPAGENT_NO_DOTENV", "1")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test")
-    session = await build_session(build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    session = await Launcher(build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)])).build_session()
     session.renderer.stream = io.StringIO()
     reading = threading.Event()
     release = threading.Event()
@@ -1121,18 +1121,18 @@ async def test_cancelled_input_reader_does_not_lose_next_line(tmp_path, monkeypa
             return ""
     source = Input()
     monkeypatch.setattr(sys, "stdin", source)
-    task = asyncio.create_task(_read_line(session, session.renderer.style))
+    task = asyncio.create_task(Repl(session).read_line(session.renderer.style))
     try:
         await asyncio.to_thread(reading.wait, 1)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
         release.set()
-        line = await _read_line(session, session.renderer.style)
+        line = await Repl(session).read_line(session.renderer.style)
         assert line == "next task\n"
     finally:
         release.set()
-        await _shutdown(session)
+        await Repl(session).shutdown()
 
 
 def test_followup_during_final_response_is_answered(project_dir: Path) -> None:
@@ -1199,28 +1199,29 @@ def test_followup_during_final_response_is_answered(project_dir: Path) -> None:
 @pytest.mark.parametrize("command", ["/reset", "/resume", "/fork", "/delete", "/danger", "/danger off", "/overthinking on", "/overthinking off", "/key secret", "/mcp remove stub", "/model new/model"])
 async def test_mutating_commands_wait_until_turn_finishes(tmp_path, monkeypatch, command, metadata_server) -> None:
     import io
-    from slipagent.cli import build_parser, build_session, _shutdown, _handle_command
+    from slipagent.cli import build_parser, Launcher, Repl, CommandRunner
     monkeypatch.setenv("SLIPAGENT_NO_DOTENV", "1")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test")
-    session = await build_session(build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    session = await Launcher(build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)])).build_session()
     out = io.StringIO()
     session.renderer.stream = out
     session.agent.running = True
     try:
-        await _handle_command(session, command)
+        await CommandRunner(session).handle(command)
         assert "Queued /" in out.getvalue()
         assert session.extensions["deferred_commands"] == [command]
         assert session.agent.messages
         assert session.api_key == "test"
     finally:
         session.agent.running = False
-        await _shutdown(session)
+        await Repl(session).shutdown()
 
 
 async def test_command_help_accepts_optional_slash_without_executing_command(tmp_path, metadata_server):
     import io
     from slipagent import cli
-    session = await cli.build_session(cli.build_parser().parse_args(['--no-mcp', '-w', str(tmp_path)]))
+    from slipagent.commands import command_help
+    session = await cli.Launcher(cli.build_parser().parse_args(['--no-mcp', '-w', str(tmp_path)])).build_session()
     output = io.StringIO()
     session.renderer.stream = output
     try:
@@ -1229,7 +1230,7 @@ async def test_command_help_accepts_optional_slash_without_executing_command(tmp
             for argument in (topic, '/' + topic):
                 output.seek(0)
                 output.truncate()
-                assert not await cli._handle_command(session, '/help ' + argument)
+                assert not await cli.CommandRunner(session).handle('/help ' + argument)
                 replies.append(output.getvalue().strip())
             assert replies[0] == replies[1]
             assert f'Help: /{topic}' in replies[0]
@@ -1240,10 +1241,10 @@ async def test_command_help_accepts_optional_slash_without_executing_command(tmp
                 assert '/model <model>' in replies[0] and '[subcommand]' in replies[0]
                 assert '/models' not in replies[0]
         assert not (tmp_path / 'AGENTS.md').exists()
-        assert cli._command_help('') == cli.HELP
-        assert 'No help found' in cli._command_help('/nonexistent')
+        assert command_help('') == cli.HELP
+        assert 'No help found' in command_help('/nonexistent')
     finally:
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 async def test_planning_commands(tmp_path, metadata_server):
@@ -1253,7 +1254,7 @@ async def test_planning_commands(tmp_path, metadata_server):
     assert parser.parse_args([]).planning
     assert parser.parse_args(["--planning"]).planning
     assert not parser.parse_args(["--no-planning"]).planning
-    session = await cli.build_session(parser.parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    session = await cli.Launcher(parser.parse_args(["--no-mcp", "-w", str(tmp_path)])).build_session()
     output = io.StringIO()
     session.renderer.stream = output
     try:
@@ -1261,7 +1262,7 @@ async def test_planning_commands(tmp_path, metadata_server):
         for command, enabled in [("/planning off", False), ("/planning off", False),
                                  ("/planning", True), ("/planning on", True),
                                  ("/planning invalid", True)]:
-            await cli._handle_command(session, command)
+            await cli.CommandRunner(session).handle(command)
             assert session.agent.planning is enabled
             assert ("update_plan" in session.registry) is enabled
             view = await session.agent._context_view(session.registry.specs(), 1)
@@ -1269,69 +1270,69 @@ async def test_planning_commands(tmp_path, metadata_server):
             assert "# Working Plan" not in content_text(view[0].content)
         assert "usage: /planning [on|off]" in output.getvalue()
         for argument in ("", "on", "off"):
-            assert cli._changes_session("planning", argument)
+            assert cli.CommandRunner(None).changes_session("planning", argument)
     finally:
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 async def test_overthinking_commands(tmp_path, metadata_server):
     import io
     from slipagent import cli
-    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    session = await cli.Launcher(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)])).build_session()
     output = io.StringIO()
     session.renderer.stream = output
     try:
         assert session.agent.overthinking
-        await cli._handle_command(session, "/overthinking off")
+        await cli.CommandRunner(session).handle("/overthinking off")
         assert not session.agent.overthinking
-        await cli._handle_command(session, "/overthinking off")
+        await cli.CommandRunner(session).handle("/overthinking off")
         assert not session.agent.overthinking
-        await cli._handle_command(session, "/reset")
+        await cli.CommandRunner(session).handle("/reset")
         assert not session.agent.overthinking
-        await cli._handle_command(session, "/overthinking")
+        await cli.CommandRunner(session).handle("/overthinking")
         assert session.agent.overthinking
-        await cli._handle_command(session, "/overthinking")
+        await cli.CommandRunner(session).handle("/overthinking")
         assert session.agent.overthinking
-        await cli._handle_command(session, "/overthinking off")
+        await cli.CommandRunner(session).handle("/overthinking off")
         assert not session.agent.overthinking
-        await cli._handle_command(session, "/overthinking on")
+        await cli.CommandRunner(session).handle("/overthinking on")
         assert session.agent.overthinking
-        await cli._handle_command(session, "/overthinking invalid")
+        await cli.CommandRunner(session).handle("/overthinking invalid")
         assert session.agent.overthinking
         assert "usage: /overthinking [on|off]" in output.getvalue()
         assert "Overthinking Mode OFF" in output.getvalue()
         assert "Overthinking Mode ON" in output.getvalue()
     finally:
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 async def test_danger_commands_preserve_mode_through_reset_and_resume(tmp_path, metadata_server):
     import io
     from slipagent import cli
-    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    session = await cli.Launcher(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)])).build_session()
     output = io.StringIO()
     session.renderer.stream = output
     try:
         assert not session.workspace.access.danger
-        await cli._handle_command(session, "/danger")
+        await cli.CommandRunner(session).handle("/danger")
         assert session.workspace.access.danger
-        await cli._handle_command(session, "/danger")
+        await cli.CommandRunner(session).handle("/danger")
         assert session.workspace.access.danger  # Repeating the command keeps it enabled.
-        await cli._handle_command(session, "/reset")
-        await cli._handle_command(session, "/resume latest")
+        await cli.CommandRunner(session).handle("/reset")
+        await cli.CommandRunner(session).handle("/resume latest")
         assert session.workspace.access.danger
         session.agent.running = True
-        await cli._handle_command(session, "/danger status")
+        await cli.CommandRunner(session).handle("/danger status")
         assert "Danger mode ON" in output.getvalue()
         session.agent.running = False
-        await cli._handle_command(session, "/danger off")
+        await cli.CommandRunner(session).handle("/danger off")
         assert not session.workspace.access.danger
-        await cli._handle_command(session, "/danger invalid")
+        await cli.CommandRunner(session).handle("/danger invalid")
         assert "usage: /danger" in output.getvalue()
         assert not session.workspace.access.danger
     finally:
         session.agent.running = False
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 @pytest.mark.parametrize("selection", [None, "/tools", "/reset", "/quit", "/models"])
@@ -1342,17 +1343,17 @@ async def test_menu_inserts_selection_without_dispatch(tmp_path, monkeypatch, me
     from slipagent import cli
     from slipagent.terminal import TerminalUI
 
-    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    session = await cli.Launcher(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)])).build_session()
     output = io.StringIO()
     terminal = Mock(spec=TerminalUI)
     terminal.choose = AsyncMock(return_value=selection)
     terminal.write.side_effect = lambda text, **kwargs: output.write(text)
     session.renderer.terminal = terminal
     models = AsyncMock()
-    monkeypatch.setattr(cli, "_models_command", models)
+    monkeypatch.setattr(cli.ModelPicker, "browse", models)
     session.agent.running = True
     try:
-        assert await cli._handle_command(session, "/menu") is False
+        assert await cli.CommandRunner(session).handle("/menu") is False
         terminal.choose.assert_awaited_once_with("Commands", cli.MENU_OPTIONS)
         if selection is not None:
             terminal.insert_command.assert_called_once_with(selection)
@@ -1363,7 +1364,7 @@ async def test_menu_inserts_selection_without_dispatch(tmp_path, monkeypatch, me
         assert not session.extensions.get("deferred_commands")
     finally:
         session.agent.running = False
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 def test_menu_without_terminal_reports_how_to_get_commands(project_dir):
@@ -1384,7 +1385,7 @@ async def test_resume_picker_lists_all_sessions_and_restores_only_the_selected_o
     from slipagent.terminal import TerminalUI
     from slipagent.types import Message
 
-    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    session = await cli.Launcher(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)])).build_session()
     journal = session.registry.services["session_journal"]
     output = io.StringIO()
     terminal = Mock(spec=TerminalUI)
@@ -1407,7 +1408,7 @@ async def test_resume_picker_lists_all_sessions_and_restores_only_the_selected_o
         current_messages = list(session.agent.messages)
         terminal.choose = AsyncMock(return_value=None if cancel else ids[2])
 
-        assert await cli._handle_command(session, "/resume") is False
+        assert await cli.CommandRunner(session).handle("/resume") is False
         terminal.choose.assert_awaited_once()
         title, options = terminal.choose.call_args.args
         assert title == "Resume Session"
@@ -1432,7 +1433,7 @@ async def test_resume_picker_lists_all_sessions_and_restores_only_the_selected_o
             terminal.scroll_to_end.assert_called_once()
             terminal.set_title.assert_called_with("Saved Session 2 | SlipAgent")
     finally:
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 @pytest.mark.parametrize("scenario", ["empty", "unreadable", "invalid", "disabled"])
@@ -1446,7 +1447,7 @@ async def test_resume_picker_errors_preserve_active_session(tmp_path, monkeypatc
     args = ["--no-mcp", "-w", str(tmp_path)]
     if scenario == "disabled":
         args.append("--no-session")
-    session = await cli.build_session(cli.build_parser().parse_args(args))
+    session = await cli.Launcher(cli.build_parser().parse_args(args)).build_session()
     output = io.StringIO()
     terminal = Mock(spec=TerminalUI)
     terminal.choose = AsyncMock(return_value="f" * 32)
@@ -1464,7 +1465,7 @@ async def test_resume_picker_errors_preserve_active_session(tmp_path, monkeypatc
             monkeypatch.setattr(journal, "listing", lambda: [
                 {"id": "f" * 32, "title": "Missing session", "created": "2026-01-01", "current": "False"}
             ])
-        assert await cli._handle_command(session, "/resume") is False
+        assert await cli.CommandRunner(session).handle("/resume") is False
         expected = {"empty": "no saved sessions", "unreadable": "Cannot list saved sessions",
                     "invalid": "Cannot resume", "disabled": "session persistence is disabled"}
         assert expected[scenario] in output.getvalue()
@@ -1474,12 +1475,12 @@ async def test_resume_picker_errors_preserve_active_session(tmp_path, monkeypatc
         if scenario != "invalid":
             terminal.choose.assert_not_awaited()
     finally:
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 def test_mcp_command_preserves_quoted_arguments() -> None:
-    from slipagent.cli import _split_mcp_command
-    _, spec, _ = _split_mcp_command('add stub python "path with spaces/server.py"')
+    from slipagent.commands import McpCommand
+    _, spec, _ = McpCommand().split('add stub python "path with spaces/server.py"')
     assert spec.args == ["path with spaces/server.py"]
 
 
@@ -1502,7 +1503,7 @@ async def test_interrupted_repl_turn_cancels_agent(tmp_path, monkeypatch, metada
     from slipagent import cli
     monkeypatch.setenv("SLIPAGENT_NO_DOTENV", "1")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test")
-    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    session = await cli.Launcher(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)])).build_session()
     session.renderer.stream = io.StringIO()
     started = asyncio.Event()
     cancelled = asyncio.Event()
@@ -1517,8 +1518,8 @@ async def test_interrupted_repl_turn_cancels_agent(tmp_path, monkeypatch, metada
     async def read(*args):
         await asyncio.Event().wait()
     monkeypatch.setattr(cli.Agent, "run", run)
-    monkeypatch.setattr(cli, "_read_line", read)
-    step = asyncio.create_task(cli._run_request(session, "go", session.renderer.style))
+    monkeypatch.setattr(cli.Repl, "read_line", read)
+    step = asyncio.create_task(cli.Repl(session).run_request("go", session.renderer.style))
     try:
         await started.wait()
         step.cancel()
@@ -1529,7 +1530,7 @@ async def test_interrupted_repl_turn_cancels_agent(tmp_path, monkeypatch, metada
         for task in running:
             task.cancel()
         await asyncio.gather(*running, return_exceptions=True)
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 @pytest.mark.skipif(os.name != "posix", reason="requires a POSIX pseudoterminal")

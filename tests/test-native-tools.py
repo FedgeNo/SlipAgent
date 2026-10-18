@@ -11,7 +11,7 @@ from test_agent import unpack_api_context, context_records
 
 from slipagent.agent import Agent
 from slipagent.capabilities import ModelCapabilities
-from slipagent.cli import Renderer, Session, Style, _model_command
+from slipagent.cli import Renderer, Session, Style, ModelPicker
 from slipagent.openrouter import OpenRouterClient
 from slipagent.protocol import ResponseFormatError, parse_response
 from slipagent.tools.base import ToolRegistry
@@ -313,13 +313,13 @@ async def test_selection_refreshes_and_caches_native_support_between_calls(tmp_p
         agent = Agent(client, ToolRegistry(), "test/model")
         session = Session(agent, agent.registry, client, Renderer(Style(False), io.StringIO(), False),
                           Workspace(tmp_path), "test", client.base_url, None, None)
-        await _model_command(session, "test/model", Style(False), io.StringIO())
+        await ModelPicker(session, Style(False), io.StringIO()).menu("test/model")
         assert (await client.model_capabilities("test/model")).native_tools
         await agent.run("Inspect the project.")
         await agent.run("Continue.")
         assert len(router.gets) == 2
         router.parameters["test/model"] = ["response_format"]
-        await _model_command(session, "test/model", Style(False), io.StringIO())
+        await ModelPicker(session, Style(False), io.StringIO()).menu("test/model")
         assert not (await client.model_capabilities("test/model")).native_tools
         await agent.run("Continue.")
         await agent.run("Continue.")
@@ -338,13 +338,13 @@ async def test_startup_detects_protocol_without_an_inference_call(tmp_path, monk
     monkeypatch.setenv("OPENROUTER_API_KEY", "test")
     monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
     args = cli.build_parser().parse_args(["--model", DEFAULT_MODEL, "--no-mcp", "--no-reload", "-w", str(tmp_path)])
-    session = await cli.build_session(args)
+    session = await cli.Launcher(args).build_session()
     try:
         profile = await session.client.model_capabilities(DEFAULT_MODEL)
         assert profile.native_tools is ("tools" in params)
         assert router.requests == [] and len(router.gets) == 3
     finally:
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 def test_bool_and_number_arguments_are_not_silently_deduplicated():

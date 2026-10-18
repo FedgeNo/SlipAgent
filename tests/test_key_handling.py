@@ -16,7 +16,7 @@ import httpx
 import pytest
 
 from slipagent.agent import Agent
-from slipagent.cli import Session, Style, _key_command, _mask_key, _replace_key
+from slipagent.cli import Session, Style, KeyEntry
 from slipagent.config import data_directory, dotenv_path
 from slipagent.openrouter import OpenRouterAuthError, OpenRouterClient
 from slipagent.tools import ToolRegistry
@@ -136,7 +136,7 @@ def test_cannot_reach_paid_models_false_when_limited() -> None:
 
 
 def test_mask_key_hides_the_middle() -> None:
-    masked = _mask_key(GOOD_KEY)
+    masked = KeyEntry(None, Style(False), io.StringIO()).mask(GOOD_KEY)
 
     assert GOOD_KEY not in masked
     assert masked.startswith("sk-or-v1-a")
@@ -144,8 +144,8 @@ def test_mask_key_hides_the_middle() -> None:
 
 
 def test_mask_key_fully_hides_short_values() -> None:
-    assert _mask_key("show") == "****"
-    assert _mask_key("") == ""
+    assert KeyEntry(None, Style(False), io.StringIO()).mask("show") == "****"
+    assert KeyEntry(None, Style(False), io.StringIO()).mask("") == ""
 
 
 # --------------------------------------------------------------------------- #
@@ -158,7 +158,7 @@ async def test_key_show_reports_limits(capsys: pytest.CaptureFixture[str]) -> No
     session = make_session(client, ToolRegistry())
     out = io.StringIO()
 
-    await _key_command(session, "show", Style(enabled=False), out)
+    await KeyEntry(session, Style(enabled=False), out).command("show")
 
     text = out.getvalue()
     assert "$0.00 limit" in text
@@ -172,7 +172,7 @@ async def test_invalid_key_is_rejected_and_original_kept() -> None:
     session.api_key = GOOD_KEY
     out = io.StringIO()
 
-    await _key_command(session, f"openrouter {BAD_KEY}", Style(enabled=False), out)
+    await KeyEntry(session, Style(enabled=False), out).command(f"openrouter {BAD_KEY}")
 
     assert "rejected" in out.getvalue()
     assert session.api_key == GOOD_KEY
@@ -183,7 +183,7 @@ async def test_valid_key_is_accepted() -> None:
     session = make_session(client, ToolRegistry())
     out = io.StringIO()
 
-    await _replace_key(session, Style(enabled=False), out, candidate=GOOD_KEY)
+    await KeyEntry(session, Style(enabled=False), out).replace(candidate=GOOD_KEY)
 
     assert "key accepted" in out.getvalue()
     assert session.api_key == GOOD_KEY
@@ -203,7 +203,7 @@ async def test_bad_key_never_reaches_disk(
     session.api_key = GOOD_KEY
     out = io.StringIO()
 
-    await _key_command(session, f"openrouter {BAD_KEY}", Style(enabled=False), out)
+    await KeyEntry(session, Style(enabled=False), out).command(f"openrouter {BAD_KEY}")
 
     assert env_file.read_text() == f"OPENROUTER_API_KEY={GOOD_KEY}\n"
 
@@ -223,7 +223,7 @@ async def test_accepted_key_is_not_saved_without_consent(
     session.api_key = old_key
     out = io.StringIO()
 
-    await _key_command(session, GOOD_KEY, Style(enabled=False), out)
+    await KeyEntry(session, Style(enabled=False), out).command(GOOD_KEY)
 
     assert "key accepted" in out.getvalue()
     assert "not saved" in out.getvalue()
@@ -240,7 +240,7 @@ async def test_key_command_refuses_to_prompt_without_a_tty(
     session = make_session(client, ToolRegistry())
     out = io.StringIO()
 
-    await _key_command(session, "", Style(enabled=False), out)
+    await KeyEntry(session, Style(enabled=False), out).command("")
 
     # Non-tty: shows status rather than consuming piped input.
     assert "free quota" in out.getvalue()
@@ -261,7 +261,7 @@ async def test_stored_key_survives_a_failed_swap(
     session.api_key = GOOD_KEY
     out = io.StringIO()
 
-    await _key_command(session, f"openrouter {BAD_KEY}", Style(enabled=False), out)
+    await KeyEntry(session, Style(enabled=False), out).command(f"openrouter {BAD_KEY}")
 
     assert session.api_key == GOOD_KEY
     assert GOOD_KEY in env_file.read_text()

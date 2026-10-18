@@ -101,12 +101,12 @@ async def test_clicked_prompt_bypasses_slash_commands_and_whitespace_trimming(mo
         runs.append(text)
         return False
 
-    monkeypatch.setattr(cli, "_refresh_quota", nothing)
-    monkeypatch.setattr(cli, "_poll_quota", nothing)
-    monkeypatch.setattr(cli, "_shutdown", nothing)
-    monkeypatch.setattr(cli, "_wait_for_interrupt", nothing)
-    monkeypatch.setattr(cli, "_read_line", read)
-    monkeypatch.setattr(cli, "_run_request", run)
-    assert await cli.run_repl(session) == 0
+    monkeypatch.setattr(cli.Quota, "refresh", nothing)
+    monkeypatch.setattr(cli.Quota, "poll", nothing)
+    monkeypatch.setattr(cli.Repl, "shutdown", nothing)
+    monkeypatch.setattr(cli.Repl, "wait_for_interrupt", nothing)
+    monkeypatch.setattr(cli.Repl, "read_line", read)
+    monkeypatch.setattr(cli.Repl, "run_request", run)
+    assert await cli.Repl(session).run() == 0
     assert runs == [prompt]
     assert str(prompt) in renderer.stream.getvalue()

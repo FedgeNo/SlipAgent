@@ -183,20 +183,20 @@ async def test_deferred_definitions_and_disabled_prompts(workspace, registry, mo
 
 
 async def test_disabled_cli_and_toggle_restore_tools(tmp_path, metadata_server):
-    session = await cli.build_session(cli.build_parser().parse_args(['--no-mcp', '--no-hashline', '-w', str(tmp_path)]))
+    session = await cli.Launcher(cli.build_parser().parse_args(['--no-mcp', '--no-hashline', '-w', str(tmp_path)])).build_session()
     session.renderer.stream = io.StringIO()
     try:
         assert not HASHLINE_NAMES & set(session.registry.names)
-        await cli._handle_command(session, '/hashline on')
+        await cli.CommandRunner(session).handle('/hashline on')
         assert HASHLINE_NAMES <= set(session.registry.names)
         assert all(tool.name in session.registry.builtin_names for tool in session.reloader._builtin_tools)
-        await cli._handle_command(session, '/hashline off')
+        await cli.CommandRunner(session).handle('/hashline off')
         assert not HASHLINE_NAMES & set(session.registry.names)
-        await cli._handle_command(session, '/hashline')
+        await cli.CommandRunner(session).handle('/hashline')
         assert 'Hashline editing OFF' in session.renderer.stream.getvalue()
         assert 'read_file' in session.registry and 'edit_file' in session.registry
     finally:
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 async def test_agent_loads_reads_edits_checks_and_rewinds(workspace, registry):

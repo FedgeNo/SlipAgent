@@ -187,7 +187,7 @@ async def test_unknown_notice_is_once_per_new_model_and_excludes_routers(optimal
 
 
 async def test_reset_clears_both_purposes_and_provider_failures(optimal_session):
-    from slipagent.cli import _handle_command
+    from slipagent.cli import CommandRunner
     session, _, _ = optimal_session
     routing = session.model_routing()
     try:
@@ -197,11 +197,11 @@ async def test_reset_clears_both_purposes_and_provider_failures(optimal_session)
             routing.failed["compression"].add("openrouter::first")
             routing.failed_providers.add("openrouter")
             session.agent.model = "second"
-            await _handle_command(session, command)
+            await CommandRunner(session).handle(command)
             assert session.agent.model == "first"
             assert not any(routing.failed.values()) and not routing.failed_providers
         await routing.fallback(APIResponseError("unavailable", status_code=400))
-        await _handle_command(session, "/optimal off")
+        await CommandRunner(session).handle("/optimal off")
         assert not routing.enabled and session.agent.model == "second"
         assert routing.failed["working"] == {"openrouter::first"}
     finally:
@@ -284,14 +284,14 @@ async def test_optimal_command_at_tool_boundary_keeps_task_running(optimal_sessi
     ])
     async def read(*args):
         await asyncio.Event().wait()
-    monkeypatch.setattr(cli, "_read_line", read)
+    monkeypatch.setattr(cli.Repl, "read_line", read)
     routing = session.model_routing()
     await routing.enable()
     await routing.fallback(APIResponseError("Unavailable", status_code=400))
-    task = asyncio.create_task(cli._run_request(session, "Complete this task", session.renderer.style))
+    task = asyncio.create_task(cli.Repl(session).run_request("Complete this task", session.renderer.style))
     try:
         await asyncio.wait_for(entered.wait(), 2)
-        await cli._handle_command(session, command)
+        await cli.CommandRunner(session).handle(command)
         assert not session.agent.stop_requested
         assert session.agent.model == "second"
         release.set()
@@ -437,8 +437,8 @@ async def test_model_pickers_disable_optimal_only_after_selection(optimal_sessio
     try:
         await session.model_routing().enable()
         session.renderer.terminal = SimpleNamespace(choose=AsyncMock(return_value=selection))
-        handler = cli._model_command if command == "model" else cli._models_command
-        await handler(session, "", session.renderer.style, session.renderer.stream)
+        picker = cli.ModelPicker(session, session.renderer.style, session.renderer.stream)
+        await (picker.menu("") if command == "model" else picker.browse(""))
         assert session.model_routing().enabled is (selection is None)
         assert session.agent.model == ("first" if selection is None else "paid")
     finally:
@@ -470,7 +470,7 @@ async def test_startup_defaults_to_best_rank_unless_explicitly_selected(tmp_path
     monkeypatch.setattr(cli.RepositoryMap, "snapshot", AsyncMock(return_value=""))
     args = cli.build_parser().parse_args(["--api-key", "dummy", "--workspace", str(tmp_path),
                                         "--no-mcp", "--no-reload", "--no-session", *explicit])
-    session = await cli.build_session(args)
+    session = await cli.Launcher(args).build_session()
     try:
         assert session.model_routing().enabled is (not explicit)
         assert session.agent.model == (DEFAULT_MODEL if explicit else best)
@@ -481,14 +481,14 @@ async def test_startup_defaults_to_best_rank_unless_explicitly_selected(tmp_path
             assert session.agent.model == DEFAULT_MODEL
             assert session.model_routing().failed["working"]
     finally:
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
     if not explicit:
-        fresh = await cli.build_session(args)
+        fresh = await cli.Launcher(args).build_session()
         try:
             assert fresh.agent.model == best
             assert not fresh.model_routing().failed["working"]
         finally:
-            await cli._shutdown(fresh)
+            await cli.Repl(fresh).shutdown()
 
 
 async def test_failed_startup_closes_automatically_selected_provider(tmp_path, monkeypatch):
@@ -525,25 +525,25 @@ async def test_failed_startup_closes_automatically_selected_provider(tmp_path, m
     args = cli.build_parser().parse_args(["--api-key", "dummy", "--workspace", str(tmp_path),
                                         "--no-mcp", "--no-session"])
     with pytest.raises(RuntimeError, match="reload startup failed"):
-        await cli.build_session(args)
+        await cli.Launcher(args).build_session()
     assert {client.provider for client in clients} == {"openrouter", "google"}
     assert all(client._client.is_closed for client in clients)
 
 
 async def test_next_skips_down_the_ranking_until_reset(optimal_session):
-    from slipagent.cli import _handle_command
+    from slipagent.cli import CommandRunner
     session, _, _ = optimal_session
     routing = session.model_routing()
     try:
         # With optimal off, next starts it normally at the highest score.
         session.agent.model = "second"
-        await _handle_command(session, "/optimal next")
+        await CommandRunner(session).handle("/optimal next")
         assert routing.enabled and session.agent.model == "first"
-        await _handle_command(session, "/optimal next")
+        await CommandRunner(session).handle("/optimal next")
         assert session.agent.model == "second"
         assert routing.failed["working"] == {"openrouter::first"}
         assert "Optimal skipped openrouter::first" in session.renderer.stream.getvalue()
-        await _handle_command(session, "/optimal reset")
+        await CommandRunner(session).handle("/optimal reset")
         assert session.agent.model == "first" and not routing.failed["working"]
     finally:
         await session.client.aclose()
@@ -582,16 +582,16 @@ async def test_interactive_startup_uses_saved_metadata_and_403_moves_to_the_next
     args = cli.build_parser().parse_args(["--api-key", "dummy", "--workspace", str(tmp_path),
                                         "--no-mcp", "--no-reload", "--no-session"])
 
-    first = await cli.build_session(args, defer_startup=True)
+    first = await cli.Launcher(args).build_session(defer_startup=True)
     try:
         await first.extensions.pop("startup")()
         assert first.agent.model == best
     finally:
-        await cli._shutdown(first)
+        await cli.Repl(first).shutdown()
 
     # With saved metadata, startup completes while every request stalls.
     network.clear()
-    second = await cli.build_session(args, defer_startup=True)
+    second = await cli.Launcher(args).build_session(defer_startup=True)
     try:
         await asyncio.wait_for(second.extensions.pop("startup")(), 5)
         assert second.agent.model == best and second.model_routing().enabled
@@ -601,4 +601,4 @@ async def test_interactive_startup_uses_saved_metadata_and_403_moves_to_the_next
         assert second.model_routing().failed["working"] == {f"openrouter::{best}"}
     finally:
         network.set()
-        await cli._shutdown(second)
+        await cli.Repl(second).shutdown()

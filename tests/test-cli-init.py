@@ -9,7 +9,8 @@ import pytest
 
 from slipagent.work import SessionWork
 from slipagent.agent import Agent, build_system_prompt
-from slipagent.cli import Renderer, Style, _execute_command, _init_command
+from slipagent.cli import Renderer, Style, CommandRunner
+from slipagent.commands import InitCommand, CommandContext
 from slipagent.instructions import load_project_instructions
 from slipagent.tools import ToolRegistry
 from slipagent.types import Message
@@ -31,7 +32,7 @@ def session_for(workspace):
 async def test_init_creates_only_project_scaffold_and_applies_it(workspace):
     session = session_for(workspace)
     session.agent.messages.append(Message.user("Keep my conversation."))
-    await _init_command(session, Style(False), io.StringIO())
+    await InitCommand().run(CommandContext(session, Style(False), io.StringIO()), "")
     assert sorted(path.name for path in workspace.root.iterdir()) == ["AGENTS.md"]
     content = (workspace.root / "AGENTS.md").read_text()
     assert "SlipAgent" not in content
@@ -50,7 +51,7 @@ async def test_init_preserves_and_loads_existing_user_guidance(workspace):
     path = workspace.root / "AGENTS.md"
     path.write_text("Custom project instructions.\n")
     session = session_for(workspace)
-    await _init_command(session, Style(False), io.StringIO())
+    await InitCommand().run(CommandContext(session, Style(False), io.StringIO()), "")
     assert path.read_text() == "Custom project instructions.\n"
     context = await session.agent._context_view(session.agent.registry.specs(), 1)
     assert "Custom project instructions." in "\n".join(content_text(message.content) for message in context)
@@ -67,7 +68,7 @@ async def test_init_rejects_outside_guidance_symlink(tmp_path, existing):
     session = session_for(Workspace(root))
     original = session.agent.system_prompt
     with pytest.raises(WorkspaceError, match="outside the workspace"):
-        await _init_command(session, Style(False), io.StringIO())
+        await InitCommand().run(CommandContext(session, Style(False), io.StringIO()), "")
     assert target.exists() == existing
     if existing:
         assert target.read_text() == "Outside instructions."
@@ -84,7 +85,7 @@ async def test_config_show_uses_active_model_without_disclosing_dotenv(workspace
     session.model_routing = lambda: SimpleNamespace(enabled=True)
     for command in ("/status", "/config-show"):
         session.renderer.stream = io.StringIO()
-        assert await _execute_command(session, command) is False
+        assert await CommandRunner(session).execute(command) is False
         output = session.renderer.stream.getvalue()
         assert "openrouter::selected/model (Optimal on)" in output
         assert "Planning: on" in output and "Temperature: provider default" in output
@@ -95,7 +96,7 @@ async def test_config_show_uses_active_model_without_disclosing_dotenv(workspace
 async def test_init_waits_for_active_turn_to_finish(workspace):
     session = session_for(workspace)
     session.agent.running = True
-    assert await _execute_command(session, "/init") is False
+    assert await CommandRunner(session).execute("/init") is False
     assert not (workspace.root / "AGENTS.md").exists()
     assert "Queued /init" in session.renderer.stream.getvalue()
     assert session.extensions["deferred_commands"] == ["/init"]
@@ -111,7 +112,7 @@ async def test_settings_menu_toggles_through_the_setting_command(workspace, runn
     session.renderer.terminal = MagicMock(choose=choose, _markdown_source=False)
     session.renderer.markdown_theme = "dark"
     session.agent.running = running
-    assert await _execute_command(session, "/settings") is False
+    assert await CommandRunner(session).execute("/settings") is False
     title, options = choose.call_args.args
     assert title == "Settings"
     assert options[1] == ("planning", "[planning] on — offer the working-plan tool for multi-step tasks")
@@ -125,6 +126,6 @@ async def test_settings_without_a_terminal_lists_values(workspace):
     session = session_for(workspace)
     session.registry = session.agent.registry
     session.renderer.markdown_theme = "light"
-    assert await _execute_command(session, "/settings") is False
+    assert await CommandRunner(session).execute("/settings") is False
     output = session.renderer.stream.getvalue()
     assert "/theme" in output and "light" in output and "/temperature" in output

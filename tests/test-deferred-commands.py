@@ -23,9 +23,9 @@ from test_cli_e2e import metadata_server
 async def test_commands_wait_for_tools_and_preserve_stop_and_request_budget(
     tmp_path, monkeypatch, metadata_server, commands, stop, max_steps, expected_danger, expected_calls,
 ):
-    session = await cli.build_session(cli.build_parser().parse_args([
+    session = await cli.Launcher(cli.build_parser().parse_args([
         "--no-mcp", "-w", str(tmp_path), "--max-steps", str(max_steps),
-    ]))
+    ])).build_session()
     session.renderer.stream = io.StringIO()
     entered = asyncio.Event()
     release = asyncio.Event()
@@ -52,15 +52,15 @@ async def test_commands_wait_for_tools_and_preserve_stop_and_request_budget(
     async def read(*arguments):
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(cli, "_read_line", read)
-    step = asyncio.create_task(cli._run_request(session, "Inspect the project", session.renderer.style))
+    monkeypatch.setattr(cli.Repl, "read_line", read)
+    step = asyncio.create_task(cli.Repl(session).run_request("Inspect the project", session.renderer.style))
     try:
         await asyncio.wait_for(entered.wait(), 2)
         for command in commands:
-            await cli._handle_command(session, command)
+            await cli.CommandRunner(session).handle(command)
         assert not session.workspace.access.danger
         if stop:
-            await cli._handle_command(session, "/stop")
+            await cli.CommandRunner(session).handle("/stop")
         release.set()
         assert await asyncio.wait_for(step, 5) is False
         assert session.workspace.access.danger == expected_danger
@@ -74,12 +74,12 @@ async def test_commands_wait_for_tools_and_preserve_stop_and_request_budget(
         release.set()
         step.cancel()
         await asyncio.gather(step, return_exceptions=True)
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 @pytest.mark.parametrize("outcome", ["final", "failure", "quit"])
 async def test_deferred_settings_after_final_failure_or_exit(tmp_path, monkeypatch, metadata_server, outcome):
-    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    session = await cli.Launcher(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)])).build_session()
     session.renderer.stream = io.StringIO()
     entered = asyncio.Event()
     release = asyncio.Event()
@@ -98,16 +98,16 @@ async def test_deferred_settings_after_final_failure_or_exit(tmp_path, monkeypat
     async def read(*arguments):
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(cli, "_read_line", read)
-    step = asyncio.create_task(cli._run_request(session, "Inspect the project", session.renderer.style))
+    monkeypatch.setattr(cli.Repl, "read_line", read)
+    step = asyncio.create_task(cli.Repl(session).run_request("Inspect the project", session.renderer.style))
     try:
         await asyncio.wait_for(entered.wait(), 2)
-        await cli._handle_command(session, "/danger")
+        await cli.CommandRunner(session).handle("/danger")
         assert not session.workspace.access.danger
         if outcome == "quit":
-            assert await cli._handle_command(session, "/quit")
+            assert await cli.CommandRunner(session).handle("/quit")
             # The input loop passes the exit decision to the deferred boundary.
-            assert await cli._apply_deferred_commands(session, exiting=True) == (False, True)
+            assert await cli.CommandRunner(session).apply_deferred(exiting=True) == (False, True)
         release.set()
         if outcome == "failure":
             with pytest.raises(RuntimeError, match="Test request failed"):
@@ -121,7 +121,7 @@ async def test_deferred_settings_after_final_failure_or_exit(tmp_path, monkeypat
         release.set()
         step.cancel()
         await asyncio.gather(step, return_exceptions=True)
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 @pytest.mark.parametrize("queued_setting", [False, True])
@@ -129,9 +129,9 @@ async def test_deferred_settings_after_final_failure_or_exit(tmp_path, monkeypat
 async def test_stop_holds_earlier_input_until_new_input(
     tmp_path, monkeypatch, metadata_server, queued_setting, new_input,
 ):
-    session = await cli.build_session(cli.build_parser().parse_args([
+    session = await cli.Launcher(cli.build_parser().parse_args([
         "--no-mcp", "--no-reload", "-w", str(tmp_path),
-    ]))
+    ])).build_session()
     session.renderer.stream = io.StringIO()
     entered, release = asyncio.Event(), asyncio.Event()
 
@@ -149,16 +149,16 @@ async def test_stop_holds_earlier_input_until_new_input(
     async def read(*args):
         return await lines.get()
 
-    monkeypatch.setattr(cli, "_read_line", read)
-    task = asyncio.create_task(cli._run_request(session, "Start work", session.renderer.style))
+    monkeypatch.setattr(cli.Repl, "read_line", read)
+    task = asyncio.create_task(cli.Repl(session).run_request("Start work", session.renderer.style))
     try:
         await asyncio.wait_for(entered.wait(), 2)
         if queued_setting:
-            await cli._handle_command(session, "/rename Queued title")
-            cli._queue_command(session, "Earlier queued prompt", "input")
+            await cli.CommandRunner(session).handle("/rename Queued title")
+            cli.CommandRunner(session).queue("Earlier queued prompt", "input")
         else:
             session.agent.enqueue("Earlier queued prompt")
-        await cli._handle_command(session, "/stop")
+        await cli.CommandRunner(session).handle("/stop")
         if new_input is not None:
             lines.put_nowait(new_input)
             async with asyncio.timeout(2):
@@ -171,7 +171,7 @@ async def test_stop_holds_earlier_input_until_new_input(
             assert session.agent.stopped
             assert session.agent.pending == ["Earlier queued prompt"]
             assert not session.work.deferred_commands
-            assert not await cli._run_request(session, "Inspect the next file", session.renderer.style)
+            assert not await cli.Repl(session).run_request("Inspect the next file", session.renderer.style)
         elif new_input.startswith("/"):
             assert "title: New title" in session.renderer.stream.getvalue()
         assert len(client.calls) == 2
@@ -185,4 +185,4 @@ async def test_stop_holds_earlier_input_until_new_input(
         release.set()
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()

@@ -64,7 +64,8 @@ def test_scores_are_bounded_estimates_and_have_stable_aliases():
 
 
 def test_model_display_uses_estimated_score_and_sorts_highest_first():
-    from slipagent.cli import _model_label
+    import io
+    from slipagent.cli import ModelPicker, Style
     from slipagent.modelpricing import model_order
     free = {"prompt": "0", "completion": "0"}
     high = ModelInfo("high", score=90.5, pricing=free)
@@ -72,9 +73,9 @@ def test_model_display_uses_estimated_score_and_sorts_highest_first():
     unknown = ModelInfo("unknown", pricing=free)
     paid = ModelInfo("paid", score=100.0, pricing={"prompt": "1", "completion": "1"})
     assert sorted([paid, low, unknown, high], key=model_order) == [high, low, unknown, paid]
-    assert "estimated coding score: 90.5/100" in _model_label(high)
-    assert "estimated coding score: 0.0/100" in _model_label(low)
-    assert "score:" not in _model_label(unknown)
+    assert "estimated coding score: 90.5/100" in ModelPicker(None, Style(False), io.StringIO()).label(high)
+    assert "estimated coding score: 0.0/100" in ModelPicker(None, Style(False), io.StringIO()).label(low)
+    assert "score:" not in ModelPicker(None, Style(False), io.StringIO()).label(unknown)
 
 
 @pytest.mark.parametrize("model, native, limit, output", [

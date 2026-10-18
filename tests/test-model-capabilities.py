@@ -9,7 +9,7 @@ import pytest
 from test_agent import summary_response, context_records
 
 from slipagent.agent import Agent
-from slipagent.cli import Renderer, Session, Style, _model_command
+from slipagent.cli import Renderer, Session, Style, ModelPicker
 from slipagent import cli
 from slipagent.config import DEFAULT_MODEL
 from slipagent.openrouter import OpenRouterClient, OpenRouterError
@@ -110,7 +110,7 @@ async def test_infeasible_selection_preserves_active_model(tmp_path, context, ma
         agent = Agent(client, ToolRegistry(), "test/current", max_tokens=max_output)
         session = Session(agent, agent.registry, client, Renderer(Style(False), io.StringIO(), False), Workspace(tmp_path), "test", client.base_url, None, None)
         output = io.StringIO()
-        await _model_command(session, "test/new", Style(False), output)
+        await ModelPicker(session, Style(False), output).menu("test/new")
         assert agent.model == "test/current"
         assert Config.from_env(environ={"OPENROUTER_API_KEY": "test"}).model == "test/current"
         assert "could not" in output.getvalue()
@@ -144,13 +144,13 @@ async def test_startup_model_failure_keeps_session_available(tmp_path, monkeypat
     monkeypatch.setenv("SLIPAGENT_NO_DOTENV", "1")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test")
     args = cli.build_parser().parse_args(["--no-reload", "--no-mcp", "--model", "test/tiny", "-w", str(tmp_path)])
-    session = await cli.build_session(args)
+    session = await cli.Launcher(args).build_session()
     try:
         assert session.agent.model == "test/tiny"
         assert not clients[0]._client.is_closed
         assert "model check failed" in capsys.readouterr().err
     finally:
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
     assert clients[0]._client.is_closed
     assert registries[0].get("fetch_page")._client.is_closed
     assert requests == []
@@ -264,14 +264,14 @@ async def test_selection_loads_capabilities_and_switches_without_stale_settings(
         agent = Agent(client, ToolRegistry(), "test/strict")
         renderer = Renderer(Style(False), io.StringIO(), False)
         session = Session(agent, agent.registry, client, renderer, Workspace(tmp_path), "test", client.base_url, None, None)
-        await _model_command(session, "test/plain", Style(False), io.StringIO())
+        await ModelPicker(session, Style(False), io.StringIO()).menu("test/plain")
         assert Config.from_env(environ={"OPENROUTER_API_KEY": "test"}).model == "test/plain"
         assert gets[-1].endswith("test/plain/endpoints")
         await agent.run("Do the task.")
-        await _model_command(session, "test/strict", Style(False), io.StringIO())
+        await ModelPicker(session, Style(False), io.StringIO()).menu("test/strict")
         assert Config.from_env(environ={"OPENROUTER_API_KEY": "test"}).model == "test/strict"
         await agent.run("Do the task.")
-        await _model_command(session, "test/plain", Style(False), io.StringIO())
+        await ModelPicker(session, Style(False), io.StringIO()).menu("test/plain")
         await agent.run("Do the task.")
     assert "reasoning" not in requests[0] and "reasoning" not in requests[2]
     assert requests[1]["reasoning"]["effort"] == "high"
@@ -302,7 +302,7 @@ async def test_rejected_selection_preserves_current_model_and_conversation(tmp_p
         renderer = Renderer(Style(True), io.StringIO(), False)
         session = Session(agent, agent.registry, client, renderer, Workspace(tmp_path), "test", client.base_url, None, None)
         out = io.StringIO()
-        await _model_command(session, "test/new", renderer.style, out)
+        await ModelPicker(session, renderer.style, out).menu("test/new")
         assert "could not load model properties" in out.getvalue()
         assert "\x1b[" in out.getvalue()
         assert agent.model == "test/current" and agent.messages == original
@@ -320,7 +320,7 @@ async def test_failed_reselection_retains_cached_working_properties(tmp_path):
         endpoints["test/current"] = [endpoint(["temperature"])]
         session = Session(agent, agent.registry, client, Renderer(Style(False), io.StringIO(), False), Workspace(tmp_path), "test", client.base_url, None, None)
         out = io.StringIO()
-        await _model_command(session, "test/current", Style(False), out)
+        await ModelPicker(session, Style(False), out).menu("test/current")
         assert "could not load model properties" in out.getvalue()
         assert await agent.run("Continue.") == "Done."
     assert "response_format" not in requests[-1]
@@ -343,7 +343,7 @@ async def test_startup_fetches_model_properties_and_remembers_explicit_choice(tm
     arguments = ["--no-mcp", "--no-reload", "-w", str(tmp_path)]
     if selected != DEFAULT_MODEL:
         arguments.extend(["--model", selected])
-    session = await cli.build_session(cli.build_parser().parse_args(arguments))
+    session = await cli.Launcher(cli.build_parser().parse_args(arguments)).build_session()
     try:
         assert session.agent.model == selected
         assert Config.from_env(environ={"OPENROUTER_API_KEY": "test"}).model == selected
@@ -352,7 +352,7 @@ async def test_startup_fetches_model_properties_and_remembers_explicit_choice(tm
         assert await session.agent._context_length() == 128000
         assert len(gets) == 3
     finally:
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 async def test_reselection_refreshes_reasoning_and_context_properties(tmp_path):
@@ -366,7 +366,7 @@ async def test_reselection_refreshes_reasoning_and_context_properties(tmp_path):
         models[0]["reasoning"] = {"supported_efforts": ["low", "medium"]}
         endpoints["test/model"] = [endpoint(params, context=128000)]
         session = Session(agent, agent.registry, client, Renderer(Style(False), io.StringIO(), False), Workspace(tmp_path), "test", client.base_url, None, None)
-        await _model_command(session, "test/model", Style(False), io.StringIO())
+        await ModelPicker(session, Style(False), io.StringIO()).menu("test/model")
         await agent.run("Continue.")
         assert await agent._context_length() == 128000
     assert requests[0]["reasoning"]["effort"] == "high"
@@ -382,7 +382,7 @@ async def test_non_text_model_is_rejected_on_selection(tmp_path):
         agent = Agent(client, ToolRegistry(), "test/current")
         session = Session(agent, agent.registry, client, Renderer(Style(False), io.StringIO(), False), Workspace(tmp_path), "test", client.base_url, None, None)
         out = io.StringIO()
-        await _model_command(session, "test/image", Style(False), out)
+        await ModelPicker(session, Style(False), out).menu("test/image")
         assert "must support text" in out.getvalue()
         assert agent.model == "test/current"
     assert requests == []

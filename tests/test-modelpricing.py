@@ -9,7 +9,7 @@ import pytest
 from prompt_toolkit.formatted_text import fragment_list_to_text
 from prompt_toolkit.input import create_pipe_input
 
-from slipagent.cli import _models_command, Style
+from slipagent.cli import ModelPicker, Style
 from slipagent.modelpricing import free_label, price_label
 from slipagent.terminal import TerminalUI
 from slipagent.types import ModelInfo
@@ -32,7 +32,7 @@ async def test_free_models_first_with_matching_legend(query):
     session = SimpleNamespace(catalog=AsyncMock(return_value=models), extensions={},
                               renderer=SimpleNamespace(terminal=SimpleNamespace(choose=choose)),
                               agent=SimpleNamespace(model="z-free"))
-    await _models_command(session, query, Style(False), io.StringIO())
+    await ModelPicker(session, Style(False), io.StringIO()).browse(query)
     options = choose.call_args.args[1]
     assert [value.split("::")[-1] for value, label in options][:2] == ["y-tier", "z-free"]
     assert len(options) == (2 if query else 4)

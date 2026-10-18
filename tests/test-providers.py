@@ -135,12 +135,12 @@ async def test_search_combines_providers_and_duplicate_ids_require_selection(tmp
         assert {model.provider for model in models} == {"openrouter", "nvidia"}
         fetch.assert_awaited_once()
         out = io.StringIO()
-        await cli._model_command(session, ULTRA_MODEL, cli.Style(False), out)
+        await cli.ModelPicker(session, cli.Style(False), out).menu(ULTRA_MODEL)
         assert "Select a provider explicitly" in out.getvalue()
         assert session.client is client
         choose = AsyncMock(return_value=None)
         session.renderer.terminal = type("Terminal", (), {"choose": choose})()
-        await cli._models_command(session, "nemotron", cli.Style(False), out)
+        await cli.ModelPicker(session, cli.Style(False), out).browse("nemotron")
         options = choose.call_args.args[1]
         assert {value for value, label in options} == {f"openrouter::{ULTRA_MODEL}", f"nvidia::{ULTRA_MODEL}"}
         assert all("key needed" not in label for value, label in options)
@@ -153,7 +153,7 @@ async def test_partial_catalog_failure_preserves_other_results(tmp_path, monkeyp
         monkeypatch.setattr(sessionstate, "fetch_catalog", AsyncMock(side_effect=APIResponseError("unavailable", 503)))
         assert len(await session.catalog()) == 1
         out = io.StringIO()
-        await cli._models_command(session, "nemotron", cli.Style(False), out)
+        await cli.ModelPicker(session, cli.Style(False), out).browse("nemotron")
         assert "catalog unavailable: nvidia" in out.getvalue()
 
 
@@ -305,7 +305,7 @@ async def test_provider_command_selects_and_remembers_free_default(tmp_path, mon
         select = AsyncMock()
         monkeypatch.setattr(cli.Session, "catalog", catalog)
         monkeypatch.setattr(cli.Session, "select_model", select)
-        await cli._execute_command(session, f"/provider {provider}")
+        await cli.CommandRunner(session).execute(f"/provider {provider}")
         select.assert_awaited_once_with(entry)
         catalog.assert_awaited_once_with(refresh=True)
         config = Config.from_env(environ={"OPENROUTER_API_KEY": "dummy", "NVIDIA_API_KEY": "dummy", "KILO_API_KEY": "dummy"})
@@ -322,7 +322,7 @@ async def test_provider_command_rejects_paid_or_unknown_pricing(tmp_path, monkey
         monkeypatch.setattr(cli.Session, "catalog", AsyncMock(return_value=[entry]))
         select = AsyncMock()
         monkeypatch.setattr(cli.Session, "select_model", select)
-        await cli._execute_command(session, "/provider kilo")
+        await cli.CommandRunner(session).execute("/provider kilo")
         select.assert_not_awaited()
         assert "not advertised as free" in session.renderer.stream.getvalue()
 
@@ -334,7 +334,7 @@ async def test_provider_command_does_not_substitute_missing_default(tmp_path, mo
             ModelInfo("other/free", provider="kilo", pricing={"prompt": "0", "completion": "0"})]))
         select = AsyncMock()
         monkeypatch.setattr(cli.Session, "select_model", select)
-        await cli._execute_command(session, "/provider kilo")
+        await cli.CommandRunner(session).execute("/provider kilo")
         select.assert_not_awaited()
         assert "unknown model: kilo::kilo-auto/free" in session.renderer.stream.getvalue()
 
@@ -343,10 +343,11 @@ async def test_provider_command_queues_during_work_and_help_accepts_slash(tmp_pa
     async with OpenRouterClient("dummy") as client:
         session = session_for(client, tmp_path)
         session.agent.running = True
-        await cli._execute_command(session, "/provider kilo")
+        await cli.CommandRunner(session).execute("/provider kilo")
         assert session.extensions["deferred_commands"] == ["/provider kilo"]
-        assert cli._command_help("provider") == cli._command_help("/provider")
-        assert "free default" in cli._command_help("provider")
+        from slipagent.commands import command_help
+        assert command_help("provider") == command_help("/provider")
+        assert "free default" in command_help("provider")
 
 
 async def test_list_models_activates_provider_from_explicit_key(monkeypatch, capsys):
@@ -354,7 +355,7 @@ async def test_list_models_activates_provider_from_explicit_key(monkeypatch, cap
     fetch = AsyncMock(return_value=[ModelInfo(ULTRA_MODEL, provider="nvidia")])
     monkeypatch.setattr(cli, "fetch_catalog", fetch)
     args = cli.build_parser().parse_args(["--list-models", "--provider", "nvidia", "--api-key", "dummy"])
-    assert await cli._list_models(args) == 0
+    assert await cli.Launcher(args).list_models() == 0
     fetch.assert_awaited_once()
     assert fetch.call_args.args == ("nvidia",)
     output = capsys.readouterr()
@@ -377,7 +378,7 @@ async def test_coding_listings_hide_curated_ids_and_keep_unknown_models(provider
         monkeypatch.setattr(client, "list_models", AsyncMock(return_value=entries))
         session = session_for(client, tmp_path)
         out = io.StringIO()
-        await cli._models_command(session, "", cli.Style(False), out)
+        await cli.ModelPicker(session, cli.Style(False), out).browse("")
         listing = out.getvalue()
         assert "nvidia/embed-qa-4" not in listing
         assert "nvidia/nemotron-4-340b-reward" not in listing
@@ -387,7 +388,7 @@ async def test_coding_listings_hide_curated_ids_and_keep_unknown_models(provider
         assert len(await client.list_models()) == 5
 
     args = cli.build_parser().parse_args(["--list-models"])
-    assert await cli._list_models(args) == 0
+    assert await cli.Launcher(args).list_models() == 0
     listing = capsys.readouterr().out
     assert "nvidia/embed-qa-4" not in listing
     assert "nvidia/nemotron-4-340b-reward" not in listing

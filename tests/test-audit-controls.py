@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import io
 
@@ -18,8 +19,8 @@ async def test_answer_only_followup_runs_once_unless_stopped(tmp_path, monkeypat
     session.registry.register(AnswerTool())
     session.client.responses = [completion(tool_calls=[ToolCall("a", "answer", {"text": "First done"})]), completion("Followup done")]
     queue = asyncio.Queue()
-    monkeypatch.setattr(cli, "_read_line", lambda *args: queue.get())
-    task = asyncio.create_task(cli._run_request(session, "first task", session.renderer.style))
+    monkeypatch.setattr(cli.Repl, "read_line", lambda *args: queue.get())
+    task = asyncio.create_task(cli.Repl(session).run_request("first task", session.renderer.style))
     try:
         await started.wait()
         session.agent.enqueue("queued followup")
@@ -34,7 +35,7 @@ async def test_answer_only_followup_runs_once_unless_stopped(tmp_path, monkeypat
         release.set()
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 async def test_stopped_one_shot_returns_failure(monkeypatch):
@@ -44,8 +45,8 @@ async def test_stopped_one_shot_returns_failure(monkeypatch):
                             wait_for_compaction=AsyncMock(), stopped=True)
     renderer = cli.Renderer(cli.Style(False), io.StringIO(), False)
     renderer.output_markdown = True
-    monkeypatch.setattr(cli, "_shutdown", AsyncMock())
-    assert await cli.run_one_shot(SimpleNamespace(agent=agent, renderer=renderer), "task") == 1
+    monkeypatch.setattr(cli.Repl, "shutdown", AsyncMock())
+    assert await cli.Launcher(argparse.Namespace()).run_one_shot(SimpleNamespace(agent=agent, renderer=renderer), "task") == 1
 
 
 def session_with_paused_request(tmp_path):
@@ -74,9 +75,9 @@ async def test_slow_key_status_waits_for_batch_and_can_be_interrupted(tmp_path, 
     async def catalog(*args):
         catalog_started.set()
         await asyncio.Event().wait()
-    monkeypatch.setattr(cli, "_read_line", read)
-    monkeypatch.setattr(cli, "_key_command", catalog)
-    task = asyncio.create_task(cli._run_request(session, "go", session.renderer.style))
+    monkeypatch.setattr(cli.Repl, "read_line", read)
+    monkeypatch.setattr(cli.KeyEntry, "command", catalog)
+    task = asyncio.create_task(cli.Repl(session).run_request("go", session.renderer.style))
     try:
         await started.wait()
         queue.put_nowait("/key status")
@@ -86,16 +87,16 @@ async def test_slow_key_status_waits_for_batch_and_can_be_interrupted(tmp_path, 
         assert not catalog_started.is_set()
         release.set()
         await asyncio.wait_for(catalog_started.wait(), 1)
-        cli._request_interrupt(session)
+        cli.Repl(session).request_interrupt()
         await asyncio.wait_for(task, 1)
-        await cli._wait_for_interrupt(session)
+        await cli.Repl(session).wait_for_interrupt()
         assert len(session.client.calls) == 1
         assert session.agent.stopped
     finally:
         release.set()
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 @pytest.mark.parametrize("exit_command", ["/quit", None])
@@ -105,8 +106,8 @@ async def test_shutdown_does_not_start_a_queued_run(tmp_path, monkeypatch, exit_
     queue = asyncio.Queue()
     async def read(*args):
         return await queue.get()
-    monkeypatch.setattr(cli, "_read_line", read)
-    task = asyncio.create_task(cli._run_request(session, "first task", session.renderer.style))
+    monkeypatch.setattr(cli.Repl, "read_line", read)
+    task = asyncio.create_task(cli.Repl(session).run_request("first task", session.renderer.style))
     try:
         await started.wait()
         queue.put_nowait("queued followup")
@@ -120,7 +121,7 @@ async def test_shutdown_does_not_start_a_queued_run(tmp_path, monkeypatch, exit_
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 @pytest.mark.parametrize("line", ["/reset", "next task"])
@@ -129,7 +130,7 @@ async def test_input_received_during_deferred_commands_survives_run_end(tmp_path
     session.client.responses = [completion("done")]
     queue = asyncio.Queue()
     applying, applied, consumed = asyncio.Event(), asyncio.Event(), asyncio.Event()
-    original_read = cli._read_line
+    original_read = cli.Repl.read_line
 
     async def read(*args):
         value = await queue.get()
@@ -141,10 +142,10 @@ async def test_input_received_during_deferred_commands_survives_run_end(tmp_path
         await applied.wait()
         return False, False
 
-    monkeypatch.setattr(cli, "_read_line", read)
-    monkeypatch.setattr(cli, "_apply_deferred_commands", apply)
+    monkeypatch.setattr(cli.Repl, "read_line", read)
+    monkeypatch.setattr(cli.CommandRunner, "apply_deferred", apply)
     monkeypatch.setattr(cli.sys, "stdin", io.StringIO(""))
-    task = asyncio.create_task(cli._run_request(session, "go", session.renderer.style))
+    task = asyncio.create_task(cli.Repl(session).run_request("go", session.renderer.style))
     try:
         await asyncio.wait_for(started.wait(), 1)
         release.set()
@@ -153,14 +154,14 @@ async def test_input_received_during_deferred_commands_survives_run_end(tmp_path
         await asyncio.wait_for(consumed.wait(), 1)
         applied.set()
         assert not await asyncio.wait_for(task, 1)
-        assert await asyncio.wait_for(original_read(session, session.renderer.style), 1) == line
-        assert await asyncio.wait_for(original_read(session, session.renderer.style), 1) is None
+        assert await asyncio.wait_for(original_read(cli.Repl(session), session.renderer.style), 1) == line
+        assert await asyncio.wait_for(original_read(cli.Repl(session), session.renderer.style), 1) is None
     finally:
         applied.set()
         release.set()
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 async def test_quit_stops_rate_limit_wait_without_another_request(tmp_path, monkeypatch):
@@ -179,7 +180,7 @@ async def test_quit_stops_rate_limit_wait_without_another_request(tmp_path, monk
     async def read(*args):
         return await queue.get()
 
-    monkeypatch.setattr(cli, "_read_line", read)
+    monkeypatch.setattr(cli.Repl, "read_line", read)
     client = OpenRouterClient("test", transport=httpx.MockTransport(handle))
     client.cache_capabilities("test", ModelCapabilities({}, [{"tag": "stub", "supported_parameters": ["tools"], "context_length": 1000000}]))
     registry = ToolRegistry()
@@ -191,7 +192,7 @@ async def test_quit_stops_rate_limit_wait_without_another_request(tmp_path, monk
         return backoff(attempt, retry_after)
     monkeypatch.setattr(client, "_backoff", observe_backoff)
     session = cli.Session(agent, registry, client, renderer, Workspace(tmp_path), "test", client.base_url, None, "test")
-    task = asyncio.create_task(cli._run_request(session, "go", renderer.style))
+    task = asyncio.create_task(cli.Repl(session).run_request("go", renderer.style))
     try:
         await asyncio.wait_for(waiting.wait(), 1)
         queue.put_nowait("/quit")
@@ -201,4 +202,4 @@ async def test_quit_stops_rate_limit_wait_without_another_request(tmp_path, monk
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()

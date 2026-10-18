@@ -2,7 +2,8 @@
 
 import pytest
 
-from slipagent.cli import _background_command, _changes_session, _command_help, command_menu_options
+from slipagent.cli import CommandRunner, command_menu_options
+from slipagent.commands import command_help
 
 
 @pytest.mark.parametrize("command,argument,exclusive,background", [
@@ -27,13 +28,13 @@ from slipagent.cli import _background_command, _changes_session, _command_help, 
     ("exit", "", False, False),
 ])
 def test_command_routing_keeps_reads_available_and_changes_exclusive(command, argument, exclusive, background):
-    assert _changes_session(command, argument) is exclusive
-    assert _background_command(f"/{command} {argument}".rstrip()) is background
+    assert CommandRunner(None).changes_session(command, argument) is exclusive
+    assert CommandRunner(None).runs_in_background(f"/{command} {argument}".rstrip()) is background
 
 
 def test_ordinary_text_is_never_a_background_command():
-    assert not _background_command("key status")
-    assert not _background_command("temperature")
+    assert not CommandRunner(None).runs_in_background("key status")
+    assert not CommandRunner(None).runs_in_background("temperature")
 
 
 def test_menu_inserts_only_the_command_prefix_and_help_keeps_all_variants():
@@ -44,8 +45,8 @@ def test_menu_inserts_only_the_command_prefix_and_help_keeps_all_variants():
     assert "<command>" in choices["/mcp add "]
     assert "/danger off" in choices
     assert "/overthinking [on|off]" in choices["/overthinking "]
-    assert "/overthinking [on|off]" in _command_help("overthinking")
-    assert _command_help("mcp") == _command_help("/mcp")
-    assert all(part in _command_help("mcp") for part in ("/mcp add", "/mcp save", "/mcp remove"))
-    assert "/quit" in _command_help("quit")
-    assert "/exit" in _command_help("exit")
+    assert "/overthinking [on|off]" in command_help("overthinking")
+    assert command_help("mcp") == command_help("/mcp")
+    assert all(part in command_help("mcp") for part in ("/mcp add", "/mcp save", "/mcp remove"))
+    assert "/quit" in command_help("quit")
+    assert "/exit" in command_help("exit")

@@ -24,9 +24,9 @@ wait_until = import_module("test-terminal").wait_until
 @pytest.mark.parametrize("initial_queued", [False, True])
 @pytest.mark.parametrize("removal", [None, "command", "prompt", "limited"])
 async def test_mixed_input_obeys_submission_order(tmp_path, monkeypatch, metadata_server, initial_queued, removal):
-    session = await cli.build_session(cli.build_parser().parse_args([
+    session = await cli.Launcher(cli.build_parser().parse_args([
         "--no-mcp", "--no-reload", "-w", str(tmp_path),
-    ]))
+    ])).build_session()
     session.renderer.stream = io.StringIO()
     entered, release = asyncio.Event(), asyncio.Event()
 
@@ -50,10 +50,10 @@ async def test_mixed_input_obeys_submission_order(tmp_path, monkeypatch, metadat
     async def read(*args):
         return await lines.get()
 
-    monkeypatch.setattr(cli, "_read_line", read)
+    monkeypatch.setattr(cli.Repl, "read_line", read)
     if initial_queued:
         session.agent.enqueue(Submission("original"))
-    task = asyncio.create_task(cli._run_request(session, "" if initial_queued else "original", session.renderer.style))
+    task = asyncio.create_task(cli.Repl(session).run_request("" if initial_queued else "original", session.renderer.style))
     try:
         await asyncio.wait_for(entered.wait(), 2)
         queued = [Submission(text) for text in ["  earlier correction  ", "  /temperature 0.2  ", "later correction",
@@ -86,7 +86,7 @@ async def test_mixed_input_obeys_submission_order(tmp_path, monkeypatch, metadat
         release.set()
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 @pytest.mark.parametrize("keyboard", [False, True])
@@ -201,16 +201,16 @@ async def test_question_reply_does_not_consume_queued_submission(display):
 
 
 async def test_exit_preserves_prompts_waiting_after_commands(tmp_path, metadata_server):
-    session = await cli.build_session(cli.build_parser().parse_args([
+    session = await cli.Launcher(cli.build_parser().parse_args([
         "--no-mcp", "--no-reload", "-w", str(tmp_path),
-    ]))
+    ])).build_session()
     session.renderer.stream = io.StringIO()
     try:
         session.work.deferred_commands = [Submission("/temperature 0.2"), Submission("keep for later")]
         original = session.agent.temperature
-        assert await cli._apply_deferred_commands(session, exiting=True) == (False, True)
+        assert await cli.CommandRunner(session).apply_deferred(exiting=True) == (False, True)
         assert session.agent.temperature == original
         assert session.agent.pending == ["keep for later"]
         assert not session.work.deferred_commands
     finally:
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()

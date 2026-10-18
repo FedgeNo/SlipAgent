@@ -74,7 +74,7 @@ async def main():
     try:
 __BODY__
     finally:
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 asyncio.run(main())
 '''
@@ -114,7 +114,7 @@ def test_models_before_chat_creates_provider_clients_after_reload(run_copy):
             return create_client(provider, transport=httpx.MockTransport(transport), **options)
         providers.create_client = offline_client
 
-        await cli._models_command(session, 'test/model', cli.Style(False), sink)
+        await cli.ModelPicker(session, cli.Style(False), sink).browse('test/model')
         assert 'openrouter' in sink.getvalue(), sink.getvalue()
         assert 'nvidia' in sink.getvalue(), sink.getvalue()
         for provider in ('openrouter', 'nvidia'):
@@ -153,7 +153,7 @@ def test_prompt_resource_reloads_and_rejects_invalid_template(run_copy):
 
 def test_initialized_guidance_survives_component_reload(run_copy):
     run_copy('''
-        await cli._handle_command(session, '/init')
+        await cli.CommandRunner(session).handle('/init')
         guidance = (workspace.root / 'AGENTS.md').read_text()
         assert guidance in content_text((await agent._context_view(registry.specs(), 1))[0].content)
         edit('system-prompt.md', 'You are SlipAgent,', 'You are the updated SlipAgent,')
@@ -319,7 +319,7 @@ def test_reload_updates_behavior_preserving_live_session_and_class_identities(ru
         assert session.extensions['component-data'] == {'counter': 7}
         assert old_web_client.is_closed
         assert registry.get('recall_history').history is history
-        await cli._handle_command(session, '/model')
+        await cli.CommandRunner(session).handle('/model')
         assert 'chosen model: openrouter::test/model' in sink.getvalue()
         responses.append({'role': 'assistant', 'content': 'second answer'})
         assert await agent.run('second question') == 'new behavior: second answer'
@@ -350,7 +350,7 @@ def test_invalid_edit_keeps_previous_version_and_recovers_on_next_edit(run_copy,
         context = await agent._context_view(registry.specs(), 1)
         assert 'Reload rejected' in content_text(context[0].content)
         assert 'previous code remains active' in content_text(context[0].content)
-        await cli._handle_command(session, '/model')
+        await cli.CommandRunner(session).handle('/model')
         assert 'current model: openrouter::test/model' in sink.getvalue()
         messages = sink.getvalue().count('Reload rejected')
         await frame.checkpoint()
@@ -358,14 +358,14 @@ def test_invalid_edit_keeps_previous_version_and_recovers_on_next_edit(run_copy,
         path.write_text(original.replace('"  current model: ', '"  changed model: '))
         await frame.checkpoint()
         assert frame.generation == 1, sink.getvalue()
-        await cli._handle_command(session, '/model')
+        await cli.CommandRunner(session).handle('/model')
         assert 'changed model: openrouter::test/model' in sink.getvalue()
     ''')
 
 
 def test_danger_mode_survives_component_reload(run_copy):
     run_copy('''
-        await cli._handle_command(session, '/danger')
+        await cli.CommandRunner(session).handle('/danger')
         edit('cli.py', '"  current model: ', '"  updated model: ')
         await frame.checkpoint()
         assert frame.generation == 1, sink.getvalue()
@@ -374,7 +374,7 @@ def test_danger_mode_survives_component_reload(run_copy):
         outside.write_text('external fixture')
         result = await registry.invoke('read_file', {'path': str(outside)})
         assert not result.is_error and 'external fixture' in result.content, result.content
-        await cli._handle_command(session, '/danger off')
+        await cli.CommandRunner(session).handle('/danger off')
         assert not workspace.access.danger
         assert (await registry.invoke('read_file', {'path': str(outside)})).is_error
     ''')
@@ -388,11 +388,11 @@ def test_hashes_detect_same_size_same_timestamp_edits_and_manual_reload(run_copy
         edit('cli.py', '"  current model: ', '"  updated model: ')
         assert path.stat().st_size == size
         os.utime(path, ns=(timestamp, timestamp))
-        await cli._handle_command(session, '/reload')
+        await cli.CommandRunner(session).handle('/reload')
         assert frame.generation == 2, sink.getvalue()  # pre-command edit + forced reload
-        await cli._handle_command(session, '/model')
+        await cli.CommandRunner(session).handle('/model')
         assert 'updated model: openrouter::test/model' in sink.getvalue()
-        await cli._handle_command(session, '/reload')
+        await cli.CommandRunner(session).handle('/reload')
         assert frame.generation == 3
     ''')
 
@@ -443,7 +443,7 @@ def test_edit_waits_for_complete_tool_batch_and_next_step_uses_new_behavior(run_
         edit('agent.py', 'text = record.text.strip()', 'text = "reloaded: " + record.text.strip()')
         edit('tools/navigate.py', 'is empty.', 'EMPTY AFTER RELOAD.')
         await frame.checkpoint()
-        await cli._handle_command(session, '/reload')
+        await cli.CommandRunner(session).handle('/reload')
         assert frame.generation == 0
         release.set()
         assert await task == 'reloaded: finished', sink.getvalue()
@@ -478,8 +478,8 @@ def test_stop_with_pending_reload_does_not_take_another_model_turn(run_copy):
         task = asyncio.create_task(agent.run('start'))
         await asyncio.wait_for(started.wait(), 3)
         edit('cli.py', '"  current model: ', '"  updated model: ')
-        await cli._handle_command(session, '/reload')
-        await cli._handle_command(session, '/stop')
+        await cli.CommandRunner(session).handle('/reload')
+        await cli.CommandRunner(session).handle('/stop')
         release.set()
         await task
         assert agent.stopped and not agent.running
@@ -511,7 +511,7 @@ def test_stop_during_final_reload_prevents_queued_followup(run_copy):
         task = asyncio.create_task(agent.run('start'))
         await asyncio.wait_for(closing.wait(), 3)
         assert agent.running
-        await cli._handle_command(session, '/stop')
+        await cli.CommandRunner(session).handle('/stop')
         release.set()
         assert await task == 'done'
         assert agent.stopped and not agent.running
@@ -566,7 +566,7 @@ def test_idle_watcher_applies_edits_without_user_input(run_copy):
             async with asyncio.timeout(4):
                 while frame.generation == 0:
                     await asyncio.sleep(.05)
-            await cli._handle_command(session, '/model')
+            await cli.CommandRunner(session).handle('/model')
             assert 'updated model: openrouter::test/model' in sink.getvalue()
         finally:
             watcher.cancel()
@@ -590,7 +590,7 @@ def test_frame_and_state_layout_edits_require_restart(run_copy):
         await frame.checkpoint()
         assert frame.generation == 0
         assert 'Restart required for frame/contract edits: runtime.py' in sink.getvalue()
-        await cli._handle_command(session, '/model')
+        await cli.CommandRunner(session).handle('/model')
         assert 'current model: openrouter::test/model' in sink.getvalue()
     ''')
 
@@ -678,8 +678,8 @@ def test_repl_shutdown_drains_final_redraw_before_retiring_generation(run_copy):
                     await frame.checkpoint()
                     assert frame.generation == generation, sink.getvalue()
                 return False
-            cli._start_repl = startup
-            assert await cli.run_repl(session) == 0
+            cli.Repl.start = startup
+            assert await cli.Repl(session).run() == 0
             assert True in finished
             assert frame.namespace is None
             assert renderer.terminal is None
@@ -713,7 +713,7 @@ def test_failed_terminal_build_rolls_back_entire_candidate(run_copy):
             assert terminal.app.style is original_style
             assert terminal.input.window.height is original_height
             renderer.terminal = None
-            await cli._handle_command(session, '/model')
+            await cli.CommandRunner(session).handle('/model')
             assert 'current model: openrouter::test/model' in sink.getvalue()
             assert terminal._activity()[0][1] == 'Ready'
             renderer.terminal = None
@@ -752,7 +752,7 @@ def test_new_tool_modules_reload_and_close_with_their_own_helpers(run_copy):
         assert old_extra.closed
         assert 'Could not close' not in sink.getvalue()
         new_extra = registry.get('extra')
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
         assert new_extra.closed
     ''')
 
@@ -767,7 +767,7 @@ def test_rebuilt_tools_can_change_resource_fields_without_leaking_old_clients(ru
         assert old_fetch.is_closed and old_search.is_closed
         new_fetch = registry.get('fetch_page')._http
         assert not new_fetch.is_closed
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
         assert new_fetch.is_closed
     ''')
 
@@ -960,7 +960,7 @@ def test_renderer_failure_does_not_stop_frame_reporting_or_watching(run_copy):
             async with asyncio.timeout(4):
                 while frame.generation < 2:
                     await asyncio.sleep(.05)
-            await cli._handle_command(session, '/model')
+            await cli.CommandRunner(session).handle('/model')
             assert 'current model: openrouter::test/model' in sink.getvalue()
         finally:
             watcher.cancel()

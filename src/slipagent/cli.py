@@ -7,7 +7,7 @@ Two modes:
 
 from __future__ import annotations
 
-from .commands import BY_NAME, CommandContext, all_help, command_help, menu_options, banner_commands
+from .commands import BY_NAME, CommandContext, all_help, menu_options, banner_commands
 from .prompts import PromptError, load_prompt
 from .markdown import THEMES, MarkdownRenderer, literal
 
@@ -23,7 +23,6 @@ import shutil
 import sys
 import time
 import threading
-import shlex
 from dataclasses import asdict, dataclass
 from contextlib import AsyncExitStack
 from concurrent.futures import ThreadPoolExecutor
@@ -34,9 +33,9 @@ from typing import Any, TextIO, cast
 from .agent import Agent, AgentEvent, STEP_LIMIT_NOTICE, STOP_NOTICE, build_system_prompt
 from .automation import JsonEventStream
 from .config import Config, ConfigError, configured_provider, dotenv_path, save_dotenv_value, save_model_choice
-from .instructions import load_project_instructions, ProjectInstructions
+from .instructions import load_project_instructions
 from .lifecycle import finish_cleanup
-from .mcp import MCPManager, MCPError, ServerSpec, config_path, load_servers
+from .mcp import MCPManager, MCPError
 from .api import (
     DEFAULT_TEMPERATURE,
     APIResponseError,
@@ -153,19 +152,6 @@ def _literal_tool_output(text: str) -> str:
     return literal(text)
 
 
-def _display_tool_result(result: ToolResult, call: ToolCall | None) -> ToolResult:
-    """Keep edit recovery source in model history, outside user-facing output."""
-    if result.is_error and call is not None and call.name == "edit_file":
-        text = re.sub(
-            r"(?m)^Nearby actual source \(line numbers are not part of the file\):\n"
-            r"(?:[ ]*\d+\t[^\n]*\n)*",
-            "", result.text(),
-        )
-        text = text.replace("Read the file and copy the exact target text including whitespace.\n", "")
-        return ToolResult.error(text)
-    return result
-
-
 COMMAND_OUTPUT_TOOLS = frozenset({
     "run_command", "read_command_output", "command_jobs", "monitor_command",
     "git_status", "git_diff", "git_log", "git_add", "git_commit",
@@ -202,6 +188,24 @@ class Renderer:
         self.markdown_theme = "dark"
         self.output_markdown = False
         self.stdout_color = _use_color(sys.stdout, not style.enabled)
+
+    def display_result(self, result: ToolResult, call: ToolCall | None) -> ToolResult:
+        """Keep edit recovery source in model history, outside user-facing output."""
+        if result.is_error and call is not None and call.name == "edit_file":
+            text = re.sub(
+                r"(?m)^Nearby actual source \(line numbers are not part of the file\):\n"
+                r"(?:[ ]*\d+\t[^\n]*\n)*",
+                "", result.text(),
+            )
+            text = text.replace("Read the file and copy the exact target text including whitespace.\n", "")
+            return ToolResult.error(text)
+        return result
+
+    async def ask_input(self, prompt: str, *, password: bool = False) -> str:
+        if self.terminal is not None:
+            return await self.terminal.ask(prompt, password=password)
+        reader = getpass.getpass if password else input
+        return await asyncio.to_thread(reader, prompt)
 
     def _write(
         self, text: str, *, continuation_indents: dict[int, int] | None = None,
@@ -353,7 +357,7 @@ class Renderer:
                         and "content" in saved):
                     result = ToolResult(saved["content"], saved["status"] == "error")
                 restored_call = restored_calls.get(message.tool_call_id or "")
-                result = _display_tool_result(result, restored_call)
+                result = self.display_result(result, restored_call)
                 saved_diff = (self.terminal is not None and restored_call is not None
                               and restored_call.name in {"write_file", "edit_file", "edit_hashlines"} and not result.is_error
                               and isinstance(saved, dict)
@@ -607,7 +611,7 @@ class Renderer:
             result = event.result
             if result is None:
                 return
-            result = _display_tool_result(result, event.tool_call)
+            result = self.display_result(result, event.tool_call)
             if self.terminal is not None and event.tool_call is not None and event.tool_call.name == "grep":
                 self._tool_heading(event.tool_call)
             if self.terminal is not None and event.tool_call is not None:
@@ -669,248 +673,438 @@ class Renderer:
 # --------------------------------------------------------------------------- #
 
 
-async def build_session(args: argparse.Namespace, *, defer_startup: bool = False) -> Session:
-    if getattr(args, "no_session", False) and getattr(args, "resume", None):
-        raise ConfigError("--resume cannot be combined with --no-session.")
-    config = Config.from_env(
-        api_key=args.api_key,
-        provider=getattr(args, "provider", None),
-        model=args.model,
-        base_url=args.base_url,
-        workspace=args.workspace,
-        max_steps=args.max_steps,
-        temperature=args.temperature,
-        max_tokens=args.max_tokens,
-    )
-    try:
-        workspace = Workspace(config.workspace, danger=getattr(args, "danger", False))
-        load_project_instructions(workspace)
-    except WorkspaceError as exc:
-        raise ConfigError(str(exc)) from exc
+class Launcher:
+    def __init__(self, args: argparse.Namespace) -> None:
+        self.args = args
 
-    style = Style(_use_color(sys.stderr, args.no_color))
-    renderer = Renderer(style, sys.stderr, args.verbose)
-    renderer.markdown_theme = getattr(args, "theme", "dark")
-    renderer.output_markdown = getattr(args, "markdown", False)
-    renderer.stdout_color = _use_color(sys.stdout, args.no_color)
-
-    client = create_client(
-        config.provider, api_key=config.api_key,
-        base_url=config.base_url,
-        http_referer=config.http_referer,
-        app_title=config.app_title,
-        on_retry=renderer.retry_countdown,
-    )
-    async with AsyncExitStack() as resources:
-        resources.push_async_callback(client.aclose)
-        registry = build_default_registry(workspace)
-        if not getattr(args, "hashline", True):
-            from .tools.hashline import set_hashline
-            set_hashline(registry, False)
-        registry.services["editable_prompts"] = True
-        resources.push_async_callback(registry.aclose)
-        registry.services["project_environment"].python_override = args.python
-
-        agent = Agent(
-            client=client,
-            registry=registry,
-            model=config.model,
-            max_steps=config.max_steps,
-            temperature=config.temperature,
-            max_tokens=config.max_tokens,
-            context_steps=config.context_steps,
-            overthinking=config.overthinking,
-            planning=getattr(args, "planning", True),
-            context_tokens=getattr(args, "context_tokens", None),
-            reasoning_history_steps=getattr(args, "reasoning_history_steps", 25),
-            filtered_thoughts=not getattr(args, "raw_reasoning_history", False),
-            exposed_tools=tuple(args.tools.split(',')) if getattr(args, "tools", None) else None,
-            system_prompt=build_system_prompt(str(workspace.root)),
-            on_event=lambda event: renderer.handle(event),
+    async def build_session(self, *, defer_startup: bool = False) -> Session:
+        args = self.args
+        if getattr(args, "no_session", False) and getattr(args, "resume", None):
+            raise ConfigError("--resume cannot be combined with --no-session.")
+        config = Config.from_env(
+            api_key=args.api_key,
+            provider=getattr(args, "provider", None),
+            model=args.model,
+            base_url=args.base_url,
+            workspace=args.workspace,
+            max_steps=args.max_steps,
+            temperature=args.temperature,
+            max_tokens=args.max_tokens,
         )
+        try:
+            workspace = Workspace(config.workspace, danger=getattr(args, "danger", False))
+            load_project_instructions(workspace)
+        except WorkspaceError as exc:
+            raise ConfigError(str(exc)) from exc
 
-        # Skip automatic MCP startup for one-shot runs unless --mcp is set.
-        mcp: MCPManager | None = None
-        if not args.no_mcp and (args.mcp or not args.prompt_flag and not args.prompt and not getattr(args, "prompt_file", None)):
-            manager = MCPManager(workspace.root, registry=registry)
-            mcp = manager
-            resources.push_async_callback(manager.aclose)
+        style = Style(_use_color(sys.stderr, args.no_color))
+        renderer = Renderer(style, sys.stderr, args.verbose)
+        renderer.markdown_theme = getattr(args, "theme", "dark")
+        renderer.output_markdown = getattr(args, "markdown", False)
+        renderer.stdout_color = _use_color(sys.stdout, args.no_color)
 
-        session = Session(
-            agent=agent,
-            registry=registry,
-            client=client,
-            renderer=renderer,
-            workspace=workspace,
-            api_key=config.api_key,
+        client = create_client(
+            config.provider, api_key=config.api_key,
             base_url=config.base_url,
             http_referer=config.http_referer,
             app_title=config.app_title,
-            mcp=mcp,
+            on_retry=renderer.retry_countdown,
         )
-        async def close_selected_client() -> None:
-            if session.client is not client:
-                await session.client.aclose()
+        async with AsyncExitStack() as resources:
+            resources.push_async_callback(client.aclose)
+            registry = build_default_registry(workspace)
+            if not getattr(args, "hashline", True):
+                from .tools.hashline import set_hashline
+                set_hashline(registry, False)
+            registry.services["editable_prompts"] = True
+            resources.push_async_callback(registry.aclose)
+            registry.services["project_environment"].python_override = args.python
 
-        resources.push_async_callback(close_selected_client)
-        registry.services["first_output_wait"] = lambda deadline: renderer.first_output_wait(
-            deadline, skippable=session.model_routing().enabled)
-        session.configure_compaction()
-        if defer_startup:
-            session.extensions["startup"] = lambda: _initialize_session(session, args, config, announce=True)
-        else:
-            await _initialize_session(session, args, config)
-        resources.pop_all()
-        return session
+            agent = Agent(
+                client=client,
+                registry=registry,
+                model=config.model,
+                max_steps=config.max_steps,
+                temperature=config.temperature,
+                max_tokens=config.max_tokens,
+                context_steps=config.context_steps,
+                overthinking=config.overthinking,
+                planning=getattr(args, "planning", True),
+                context_tokens=getattr(args, "context_tokens", None),
+                reasoning_history_steps=getattr(args, "reasoning_history_steps", 25),
+                filtered_thoughts=not getattr(args, "raw_reasoning_history", False),
+                exposed_tools=tuple(args.tools.split(',')) if getattr(args, "tools", None) else None,
+                system_prompt=build_system_prompt(str(workspace.root)),
+                on_event=lambda event: renderer.handle(event),
+            )
 
+            # Skip automatic MCP startup for one-shot runs unless --mcp is set.
+            mcp: MCPManager | None = None
+            if not args.no_mcp and (args.mcp or not args.prompt_flag and not args.prompt and not getattr(args, "prompt_file", None)):
+                manager = MCPManager(workspace.root, registry=registry)
+                mcp = manager
+                resources.push_async_callback(manager.aclose)
 
-async def _initialize_session(session: Session, args: argparse.Namespace, config: Config, *,
-                              announce: bool = False) -> None:
-    """Overlap independent startup work; build context only after its services settle."""
-    renderer, registry, agent = session.renderer, session.registry, session.agent
-    model_error: APIError | None = None
-    routing = session.model_routing()
-    routing.enabled = not (args.model or getattr(args, "provider", None))
-    # Interactive startup selects from saved metadata and refreshes it afterwards.
-    cached_start = False
+            session = Session(
+                agent=agent,
+                registry=registry,
+                client=client,
+                renderer=renderer,
+                workspace=workspace,
+                api_key=config.api_key,
+                base_url=config.base_url,
+                http_referer=config.http_referer,
+                app_title=config.app_title,
+                mcp=mcp,
+            )
+            async def close_selected_client() -> None:
+                if session.client is not client:
+                    await session.client.aclose()
 
-    def notice(text: str) -> None:
-        if announce:
-            renderer.emit(renderer.style.dim(f"  {text}"), separate=False)
-
-    async def phase(label: str, operation: Callable[[], Awaitable[Any]]) -> None:
-        notice(f"{label}…")
-        action = label[0].lower() + label[1:]
-        try:
-            outcome = await operation()
-        except BaseException:
-            notice(f"Interrupted or failed while {action}.")
-            raise
-        notice(outcome if isinstance(outcome, str) else f"Finished {action}.")
-
-    async def metadata() -> str | None:
-        nonlocal model_error, cached_start
-        try:
-            if routing.enabled:
-                if announce and await session.use_cached_catalog():
-                    cached_start = True
-                    return "Model catalog: using the saved catalog; refreshing it in the background."
-                await routing.candidates("working")
+            resources.push_async_callback(close_selected_client)
+            registry.services["first_output_wait"] = lambda deadline: renderer.first_output_wait(
+                deadline, skippable=session.model_routing().enabled)
+            session.configure_compaction()
+            if defer_startup:
+                session.extensions["startup"] = lambda: self.initialize(session, config, announce=True)
             else:
-                if announce:
-                    from . import startupcache
-                    profile = await run_blocking(startupcache.cached_profile, ModelInfo(config.model, provider=config.provider),
-                                                 session.provider_identity(config.provider))
-                    if profile is not None:
-                        session.client.cache_capabilities(config.model, profile)
+                await self.initialize(session, config)
+            resources.pop_all()
+            return session
+
+    async def initialize(self, session: Session, config: Config, *, announce: bool = False) -> None:
+        """Overlap independent startup work; build context only after its services settle."""
+        args = self.args
+        renderer, registry, agent = session.renderer, session.registry, session.agent
+        model_error: APIError | None = None
+        routing = session.model_routing()
+        routing.enabled = not (args.model or getattr(args, "provider", None))
+        # Interactive startup selects from saved metadata and refreshes it afterwards.
+        cached_start = False
+
+        def notice(text: str) -> None:
+            if announce:
+                renderer.emit(renderer.style.dim(f"  {text}"), separate=False)
+
+        async def phase(label: str, operation: Callable[[], Awaitable[Any]]) -> None:
+            notice(f"{label}…")
+            action = label[0].lower() + label[1:]
+            try:
+                outcome = await operation()
+            except BaseException:
+                notice(f"Interrupted or failed while {action}.")
+                raise
+            notice(outcome if isinstance(outcome, str) else f"Finished {action}.")
+
+        async def metadata() -> str | None:
+            nonlocal model_error, cached_start
+            try:
+                if routing.enabled:
+                    if announce and await session.use_cached_catalog():
                         cached_start = True
-                        return "Model capabilities: using the saved profile; refreshing it in the background."
-                if await session.client.model_capabilities(config.model, refresh=True) is None:
-                    raise APIConfigError("The API did not supply capabilities to verify the configured model's compatibility.")
-        except APIError as exc:
-            model_error = exc
-            renderer.emit(literal(f"  model check failed: {exc} Select another model with /models or /model <slug>."))
-            return "Model capability check: failed."
-        return None
+                        return "Model catalog: using the saved catalog; refreshing it in the background."
+                    await routing.candidates("working")
+                else:
+                    if announce:
+                        from . import startupcache
+                        profile = await run_blocking(startupcache.cached_profile, ModelInfo(config.model, provider=config.provider),
+                                                     session.provider_identity(config.provider))
+                        if profile is not None:
+                            session.client.cache_capabilities(config.model, profile)
+                            cached_start = True
+                            return "Model capabilities: using the saved profile; refreshing it in the background."
+                    if await session.client.model_capabilities(config.model, refresh=True) is None:
+                        raise APIConfigError("The API did not supply capabilities to verify the configured model's compatibility.")
+            except APIError as exc:
+                model_error = exc
+                renderer.emit(literal(f"  model check failed: {exc} Select another model with /models or /model <slug>."))
+                return "Model capability check: failed."
+            return None
 
-    async def mcp() -> str:
-        if session.mcp is None:
-            return "MCP: disabled."
-        def report(state: Any) -> None:
-            if state.status == "error":
-                renderer.emit(renderer.style.warning(f"  Warning: mcp: {state.line()}"), separate=False)
+        async def mcp() -> str:
+            if session.mcp is None:
+                return "MCP: disabled."
+            def report(state: Any) -> None:
+                if state.status == "error":
+                    renderer.emit(renderer.style.warning(f"  Warning: mcp: {state.line()}"), separate=False)
+                else:
+                    notice(f"MCP: {state.line()}")
+            try:
+                states = await session.mcp.connect_all(on_state=report)
+                if not states:
+                    return "MCP: no servers configured."
+                connected = sum(state.status == "connected" for state in states)
+                failed = sum(state.status == "error" for state in states)
+                other = len(states) - connected - failed
+                return f"MCP: {connected} connected; {failed} failed." + (f" {other} disconnected." if other else "")
+            except MCPError as exc:
+                renderer.emit(renderer.style.warning(f"  Warning: mcp: {exc}"), separate=False)
+                return "MCP: connection failed."
+
+        async def repository() -> None:
+            environment = registry.resources.environment
+            if environment is not None:
+                if registry.resources.repository_map is None:
+                    registry.resources.repository_map = RepositoryMap(environment.workspace)
+                # Let an in-flight map finish before closing its workspace or reloading.
+                worker = asyncio.create_task(registry.resources.repository_map.snapshot(""))
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    await finish_cleanup(worker)
+                    raise
+
+        async def environment() -> None:
+            if registry.resources.environment is not None:
+                await registry.resources.environment.snapshot()
+
+        async def quota() -> str:
+            await Quota(session).refresh()
+            return "Quota: unavailable." if session.free_calls is None else f"Quota: {session.free_calls} free calls remaining."
+
+        async def resume() -> None:
+            if not getattr(args, "no_session", False):
+                journal = await run_blocking(SessionJournal, str(config.workspace))
+                registry.services["session_journal"] = journal
+                if getattr(args, "resume", None):
+                    data = await run_blocking(journal.load, args.resume)
+                    journal.restore(agent, data)
+                    session.extensions["restore_transcript"] = True
+                    renderer.emit(f"  Resumed {journal.session_id}; no tools were replayed.")
+
+        operations = [
+            ("Fetching the model catalog and checking model capabilities", metadata),
+            ("Connecting to MCP servers and loading their tools", mcp),
+            ("Scanning repository files and building the repository map", repository),
+            ("Finding and validating the project Python environment", environment),
+            ("Preparing session storage and restoring any requested session", resume),
+        ]
+        if announce:
+            # The quota is informational; the prompt need not wait for it.
+            Repl(session).start_background_task(Quota(session).refresh())
+        else:
+            operations.insert(4, ("Retrieving the remaining API quota", quota))
+        tasks = [asyncio.create_task(phase(label, operation)) for label, operation in operations]
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await finish_cleanup(asyncio.create_task(_gather_quietly(*tasks)))
+        if model_error is None:
+            notice("Preparing model context…")
+            try:
+                # Selection preflights context after MCP, environment, and restored history settle.
+                preview = asyncio.ensure_future(routing.enable(cached=cached_start) if routing.enabled else
+                                                agent._context_view(registry.specs(), 0, preview=True))
+                try:
+                    await asyncio.shield(preview)
+                except asyncio.CancelledError:
+                    await finish_cleanup(preview)
+                    raise
+            except APIError as exc:
+                model_error = exc
+                renderer.emit(literal(f"  model check failed: {exc} Select another model with /models or /model <slug>."))
+        if cached_start:
+            Repl(session).start_background_task(Repl(session).refresh_model_metadata())
+        if not getattr(args, "no_reload", False):
+            frame = await run_blocking(RuntimeFrame, session, sys.modules[__name__])
+            session.reloader = frame
+            edits = registry.services.get("user_edits")
+            agent.on_boundary = edits.checkpoint if edits is not None else lambda: frame.checkpoint(boundary=True)
+        if args.model and model_error is None and not getattr(args, "json_events", False):
+            try:
+                await run_blocking(save_model_choice, config.model, config.provider)
+            except (OSError, ConfigError) as exc:
+                renderer.emit(literal(f"  could not remember model choice: {exc}"))
+        notice("Startup complete." if model_error is None else "Startup finished; model capability check failed.")
+
+    async def run_one_shot(self, session: Session, prompt: str, events: JsonEventStream | None = None) -> int:
+        """Run a single task. Progress goes to stderr so stdout stays pipeable."""
+        session.renderer.show_assistant_text = False
+        failure: Exception | None = None
+        answer = ""
+        try:
+            answer = await session.agent.run(prompt)
+            await session.agent.wait_for_compaction()
+        except (APIError, WorkspaceError) as exc:
+            print(literal(f"slipagent: {exc}"), file=sys.stderr)
+            failure = exc
+        finally:
+            await Repl(session).shutdown()
+
+        if events is not None:
+            status = "completed"
+            if failure is not None:
+                status = "error"
+            elif answer == STEP_LIMIT_NOTICE:
+                status = "step_limit"
+            elif session.agent.stopped:
+                status = "stopped"
+            exit_code = 0 if status == "completed" else 1
+            events.write("run_end", status=status, exit_code=exit_code, answer=answer,
+                         error={"type": type(failure).__name__, "message": str(failure)} if failure else None,
+                         session_id=session.agent.session_id, requests=session.agent._requests,
+                         usage=asdict(session.agent.usage))
+            return exit_code
+        if failure is not None:
+            return 1
+
+        # Rendered to stdout so `slipagent -p "..." | pbcopy` behaves.
+        if session.renderer.output_markdown:
+            print(literal(answer))
+        elif getattr(session.renderer, "stdout_color", _use_color(sys.stdout, not session.renderer.style.enabled)):
+            from prompt_toolkit.formatted_text import FormattedText
+            from prompt_toolkit.shortcuts import print_formatted_text
+            rows = MarkdownRenderer(session.renderer.markdown_theme).render(answer, shutil.get_terminal_size().columns)
+            fragments = [(style, text) for row in rows for style, text, *_ in [*row.fragments, ("", "\n")]]
+            print_formatted_text(FormattedText(fragments), file=sys.stdout, end="")
+        else:
+            print(MarkdownRenderer(color=False).plain(answer))
+        return 1 if answer == STEP_LIMIT_NOTICE or session.agent.stopped else 0
+
+    async def list_models(self) -> int:
+        args = self.args
+        from .config import load_dotenv
+        load_dotenv()
+        selected = configured_provider(args.provider)
+        provider_class(selected)
+        names = active_providers(keys={selected: args.api_key} if args.api_key else None)
+        if not names:
+            keys = ", ".join(provider_class(name).key_env for name in PROVIDERS)
+            raise ConfigError(f"No active API providers. Set one of: {keys}.")
+        renderer = Renderer(Style(_use_color(sys.stderr, args.no_color)), sys.stderr, args.verbose)
+        results = await asyncio.gather(*(fetch_catalog(name, base_url=(args.base_url if name == selected else None)
+                                        or os.environ.get(provider_class(name).base_url_env),
+                                        api_key=args.api_key if name == selected else None,
+                                        on_retry=renderer.retry_countdown) for name in names),
+                                       return_exceptions=True)
+        models: list[ModelInfo] = []
+        for name, result in zip(names, results):
+            if isinstance(result, BaseException):
+                if not isinstance(result, (APIError, ConfigError)):
+                    raise result
+                print(literal(f"slipagent: {name}: {result}"), file=sys.stderr)
             else:
-                notice(f"MCP: {state.line()}")
-        try:
-            states = await session.mcp.connect_all(on_state=report)
-            if not states:
-                return "MCP: no servers configured."
-            connected = sum(state.status == "connected" for state in states)
-            failed = sum(state.status == "error" for state in states)
-            other = len(states) - connected - failed
-            return f"MCP: {connected} connected; {failed} failed." + (f" {other} disconnected." if other else "")
-        except MCPError as exc:
-            renderer.emit(renderer.style.warning(f"  Warning: mcp: {exc}"), separate=False)
-            return "MCP: connection failed."
+                models.extend(coding_models(result))
+        if not models:
+            return 1
 
-    async def repository() -> None:
-        environment = registry.resources.environment
-        if environment is not None:
-            if registry.resources.repository_map is None:
-                registry.resources.repository_map = RepositoryMap(environment.workspace)
-            # Let an in-flight map finish before closing its workspace or reloading.
-            worker = asyncio.create_task(registry.resources.repository_map.snapshot(""))
+        style = Style(_use_color(sys.stdout, args.no_color))
+        for model in sorted(models, key=model_order):
+            context = f"  {model.context_length:,} ctx" if model.context_length else ""
+            print(f"{literal(model.selector)}{style.dim(context)}")
+        print(style.dim(f"\n{len(models)} models"), file=sys.stderr)
+        return 0
+
+    def notice_ignored_project_settings(self) -> None:
+        args = self.args
+        from .config import _dotenv_disabled, dotenv_path, ignored_project_settings
+
+        if _dotenv_disabled(os.environ):
+            return
+        start = Path(getattr(args, "workspace", None) or os.environ.get("SLIPAGENT_WORKSPACE") or ".").expanduser()
+        try:
+            ignored = ignored_project_settings(start)
+        except (OSError, ConfigError, APIConfigError):
+            return
+        if ignored is not None:
+            path, names = ignored
+            print(literal(f"slipagent: ignoring {', '.join(names)} in {path}; project .env files are not read. "
+                          f"Put SlipAgent settings in {dotenv_path()} or export them."), file=sys.stderr)
+
+    def notice_project_language_servers(self) -> None:
+        args = self.args
+        from .environment import PROJECT_SETTINGS_PATH
+        from .lsp import language_servers_path
+
+        start = Path(getattr(args, "workspace", None) or os.environ.get("SLIPAGENT_WORKSPACE") or ".").expanduser()
+        try:
+            data = json.loads((start / PROJECT_SETTINGS_PATH).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if isinstance(data, dict) and data.get("language_servers"):
+            print(literal(f"slipagent: ignoring language_servers in {start / PROJECT_SETTINGS_PATH}; "
+                          f"projects cannot name commands to start. Move them to {language_servers_path()}."),
+                  file=sys.stderr)
+
+    def first_run_key(self) -> bool:
+        """Ask for a first API key before an interactive launch that has none."""
+        print("SlipAgent needs an API key from one of these providers; each offers free models:", file=sys.stderr)
+        for _, name, url in FIRST_RUN_PROVIDERS:
+            print(f"  {name:<14} {url}", file=sys.stderr)
+        try:
+            key = getpass.getpass("Paste an API key (hidden; Enter exits): ").strip()
+            if not key:
+                return False
+            provider = key_provider(key)
+            while provider is None:
+                answer = input("Which provider is this key for? (" + ", ".join(PROVIDERS) + "; Enter exits) ").strip().lower()
+                if not answer:
+                    return False
+                provider = answer if answer in PROVIDERS else None
+            implementation = provider_class(provider)
+            print(f"Using it as the {provider} key for this session.", file=sys.stderr)
+            save = input(f"Save it to {dotenv_path()} for future launches? [Y/n] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print(file=sys.stderr)
+            return False
+        os.environ[implementation.key_env] = key
+        if save in {"", "y", "yes"}:
             try:
-                await asyncio.shield(worker)
-            except asyncio.CancelledError:
-                await finish_cleanup(worker)
-                raise
+                save_dotenv_value(dotenv_path(), implementation.key_env, key)
+                print(f"Saved to {dotenv_path()}.", file=sys.stderr)
+            except (OSError, ConfigError) as exc:
+                print(f"Could not save the key: {exc}", file=sys.stderr)
+        return True
 
-    async def environment() -> None:
-        if registry.resources.environment is not None:
-            await registry.resources.environment.snapshot()
+    async def dispatch(self, prompt: str | None) -> int:
+        """Run everything inside a single event loop.
 
-    async def quota() -> str:
-        await _refresh_quota(session)
-        return "Quota: unavailable." if session.free_calls is None else f"Quota: {session.free_calls} free calls remaining."
-
-    async def resume() -> None:
-        if not getattr(args, "no_session", False):
-            journal = await run_blocking(SessionJournal, str(config.workspace))
-            registry.services["session_journal"] = journal
-            if getattr(args, "resume", None):
-                data = await run_blocking(journal.load, args.resume)
-                journal.restore(agent, data)
-                session.extensions["restore_transcript"] = True
-                renderer.emit(f"  Resumed {journal.session_id}; no tools were replayed.")
-
-    operations = [
-        ("Fetching the model catalog and checking model capabilities", metadata),
-        ("Connecting to MCP servers and loading their tools", mcp),
-        ("Scanning repository files and building the repository map", repository),
-        ("Finding and validating the project Python environment", environment),
-        ("Preparing session storage and restoring any requested session", resume),
-    ]
-    if announce:
-        # The quota is informational; the prompt need not wait for it.
-        _start_background_task(session, _refresh_quota(session))
-    else:
-        operations.insert(4, ("Retrieving the remaining API quota", quota))
-    tasks = [asyncio.create_task(phase(label, operation)) for label, operation in operations]
-    try:
-        await asyncio.gather(*tasks)
-    finally:
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        await finish_cleanup(asyncio.create_task(_gather_quietly(*tasks)))
-    if model_error is None:
-        notice("Preparing model context…")
-        try:
-            # Selection preflights context after MCP, environment, and restored history settle.
-            preview = asyncio.ensure_future(routing.enable(cached=cached_start) if routing.enabled else
-                                            agent._context_view(registry.specs(), 0, preview=True))
+        The httpx client must be created and used in the same loop, so setup and
+        execution cannot live in separate `asyncio.run` calls.
+        """
+        args = self.args
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=4, thread_name_prefix="slipagent"))
+        self.notice_ignored_project_settings()
+        self.notice_project_language_servers()
+        if args.list_models:
             try:
-                await asyncio.shield(preview)
-            except asyncio.CancelledError:
-                await finish_cleanup(preview)
-                raise
-        except APIError as exc:
-            model_error = exc
-            renderer.emit(literal(f"  model check failed: {exc} Select another model with /models or /model <slug>."))
-    if cached_start:
-        _start_background_task(session, _refresh_model_metadata(session))
-    if not getattr(args, "no_reload", False):
-        frame = await run_blocking(RuntimeFrame, session, sys.modules[__name__])
-        session.reloader = frame
-        edits = registry.services.get("user_edits")
-        agent.on_boundary = edits.checkpoint if edits is not None else lambda: frame.checkpoint(boundary=True)
-    if args.model and model_error is None and not getattr(args, "json_events", False):
+                return await self.list_models()
+            except (ConfigError, APIConfigError) as exc:
+                print(literal(f"slipagent: {exc}"), file=sys.stderr)
+                return 2
+
+        events = JsonEventStream(sys.stdout) if getattr(args, "json_events", False) else None
+        interactive = not prompt and sys.stdin.isatty() and sys.stderr.isatty() and os.environ.get("TERM") != "dumb"
+        if interactive and not args.api_key:
+            from .config import load_dotenv
+            load_dotenv()
+        if interactive and not args.api_key and not active_providers():
+            if not await asyncio.to_thread(self.first_run_key):
+                return 2
         try:
-            await run_blocking(save_model_choice, config.model, config.provider)
-        except (OSError, ConfigError) as exc:
-            renderer.emit(literal(f"  could not remember model choice: {exc}"))
-    notice("Startup complete." if model_error is None else "Startup finished; model capability check failed.")
+            session = await self.build_session(defer_startup=interactive)
+        except (ConfigError, APIError) as exc:
+            print(literal(f"slipagent: {exc}"), file=sys.stderr)
+            if events is not None:
+                events.write("run_end", status="error", exit_code=2, phase="setup",
+                             error={"type": type(exc).__name__, "message": str(exc)})
+            return 2
+
+        if prompt:
+            if events is not None:
+                previous_handler = session.agent.on_event
+                def handle(event: AgentEvent) -> None:
+                    events.event(event)
+                    if previous_handler is not None:
+                        previous_handler(event)
+                session.agent.on_event = handle
+                events.write("run_start", model=session.agent.model, provider=session.client.provider,
+                             workspace=str(session.workspace.root), session_id=session.agent.session_id)
+            return await self.run_one_shot(session, prompt, events)
+        return await Repl(session).run()
 
 
 # --------------------------------------------------------------------------- #
@@ -918,736 +1112,786 @@ async def _initialize_session(session: Session, args: argparse.Namespace, config
 # --------------------------------------------------------------------------- #
 
 
-async def run_one_shot(session: Session, prompt: str, events: JsonEventStream | None = None) -> int:
-    """Run a single task. Progress goes to stderr so stdout stays pipeable."""
-    session.renderer.show_assistant_text = False
-    failure: Exception | None = None
-    answer = ""
-    try:
-        answer = await session.agent.run(prompt)
-        await session.agent.wait_for_compaction()
-    except (APIError, WorkspaceError) as exc:
-        print(literal(f"slipagent: {exc}"), file=sys.stderr)
-        failure = exc
-    finally:
-        await _shutdown(session)
+class Repl:
+    def __init__(self, session: Session) -> None:
+        self.session = session
 
-    if events is not None:
-        status = "completed"
-        if failure is not None:
-            status = "error"
-        elif answer == STEP_LIMIT_NOTICE:
-            status = "step_limit"
-        elif session.agent.stopped:
-            status = "stopped"
-        exit_code = 0 if status == "completed" else 1
-        events.write("run_end", status=status, exit_code=exit_code, answer=answer,
-                     error={"type": type(failure).__name__, "message": str(failure)} if failure else None,
-                     session_id=session.agent.session_id, requests=session.agent._requests,
-                     usage=asdict(session.agent.usage))
-        return exit_code
-    if failure is not None:
-        return 1
-
-    # Rendered to stdout so `slipagent -p "..." | pbcopy` behaves.
-    if session.renderer.output_markdown:
-        print(literal(answer))
-    elif getattr(session.renderer, "stdout_color", _use_color(sys.stdout, not session.renderer.style.enabled)):
-        from prompt_toolkit.formatted_text import FormattedText
-        from prompt_toolkit.shortcuts import print_formatted_text
-        rows = MarkdownRenderer(session.renderer.markdown_theme).render(answer, shutil.get_terminal_size().columns)
-        fragments = [(style, text) for row in rows for style, text, *_ in [*row.fragments, ("", "\n")]]
-        print_formatted_text(FormattedText(fragments), file=sys.stdout, end="")
-    else:
-        print(MarkdownRenderer(color=False).plain(answer))
-    return 1 if answer == STEP_LIMIT_NOTICE or session.agent.stopped else 0
-
-
-async def run_repl(session: Session) -> int:
-    style = session.renderer.style
-    renderer = session.renderer
-    terminal_task: asyncio.Task[None] | None = None
-    if sys.stdin.isatty() and renderer.stream.isatty() and os.environ.get("TERM") != "dumb":
-        terminal = TerminalUI(
-            lambda columns: _status_bar(session, style, columns=columns),
-            renderer.stream, color=style.enabled,
-            status_suffix=lambda: _danger_suffix(session, style),
-            project_directory=session.workspace.root,
-        )
-        renderer.terminal = terminal
-        terminal.__dict__["_agent_input_queue"] = lambda: input_queue(session.agent)
-        from .useredits import UserEdits
-        user_edits = UserEdits(session, terminal)
-        registry_edits = session.registry.services.get("user_edits")
-        if registry_edits is not None:
-            registry_edits.close()
-        session.registry.services["user_edits"] = user_edits
-        terminal.__dict__["_user_edits"] = user_edits
-        session.agent.on_boundary = user_edits.checkpoint
-        terminal.__dict__["_artifact_store"] = session.registry.services.get("artifact_store")
-        terminal.configure_markdown(theme=renderer.markdown_theme, source=renderer.output_markdown)
-        terminal.set_interrupt_handler(lambda: _request_interrupt(session))
-        terminal_task = asyncio.create_task(terminal.run())
-    quota_task: asyncio.Task[None] | None = None
-    reload_task: asyncio.Task[None] | None = None
-    try:
+    async def run(self) -> int:
+        session = self.session
+        style = session.renderer.style
+        renderer = session.renderer
+        terminal_task: asyncio.Task[None] | None = None
+        if sys.stdin.isatty() and renderer.stream.isatty() and os.environ.get("TERM") != "dumb":
+            terminal = TerminalUI(
+                lambda columns: StatusLine(session, style).text(columns=columns),
+                renderer.stream, color=style.enabled,
+                status_suffix=lambda: StatusLine(session, style).danger_suffix(),
+                project_directory=session.workspace.root,
+            )
+            renderer.terminal = terminal
+            terminal.__dict__["_agent_input_queue"] = lambda: input_queue(session.agent)
+            from .useredits import UserEdits
+            user_edits = UserEdits(session, terminal)
+            registry_edits = session.registry.services.get("user_edits")
+            if registry_edits is not None:
+                registry_edits.close()
+            session.registry.services["user_edits"] = user_edits
+            terminal.__dict__["_user_edits"] = user_edits
+            session.agent.on_boundary = user_edits.checkpoint
+            terminal.__dict__["_artifact_store"] = session.registry.services.get("artifact_store")
+            terminal.configure_markdown(theme=renderer.markdown_theme, source=renderer.output_markdown)
+            terminal.set_interrupt_handler(lambda: self.request_interrupt())
+            terminal_task = asyncio.create_task(terminal.run())
+        quota_task: asyncio.Task[None] | None = None
+        reload_task: asyncio.Task[None] | None = None
         try:
-            ready = await _start_repl(session)
-        except (ConfigError, APIError) as exc:
-            renderer.emit(style.red(f"  Startup failed: {exc}"))
-            return 2
-        if not ready:
-            return 0
-        if session.extensions.pop("restore_transcript", False):
-            await renderer.restore_transcript(session.agent.messages, session.agent.pending,
-                                              queued_messages=session.agent.queued_messages)
-        quota_task = asyncio.create_task(_poll_quota(session))
-        reload_task = asyncio.create_task(session.reloader.watch()) if session.reloader is not None else None
-        while True:
             try:
-                line = await _read_line(session, style)
-            except EOFError:
-                renderer.emit()
-                break
-            if line is None:
-                break
-            await _wait_for_interrupt(session)
-            if cancelled(line):
-                continue
-            suggested = isinstance(line, SuggestedPrompt) or submitted_suggestion(line)
-            if not suggested:
-                line = line.strip()
-
-            if not line:
-                continue
-
-            if not suggested and line.startswith("/"):
+                ready = await self.start()
+            except (ConfigError, APIError) as exc:
+                renderer.emit(style.red(f"  Startup failed: {exc}"))
+                return 2
+            if not ready:
+                return 0
+            if session.extensions.pop("restore_transcript", False):
+                await renderer.restore_transcript(session.agent.messages, session.agent.pending,
+                                                  queued_messages=session.agent.queued_messages)
+            quota_task = asyncio.create_task(Quota(session).poll())
+            reload_task = asyncio.create_task(session.reloader.watch()) if session.reloader is not None else None
+            while True:
                 try:
-                    if await _run_interactive_command(session, line):
+                    line = await self.read_line(style)
+                except EOFError:
+                    renderer.emit()
+                    break
+                if line is None:
+                    break
+                await self.wait_for_interrupt()
+                if cancelled(line):
+                    continue
+                suggested = isinstance(line, SuggestedPrompt) or submitted_suggestion(line)
+                if not suggested:
+                    line = line.strip()
+
+                if not line:
+                    continue
+
+                if not suggested and line.startswith("/"):
+                    try:
+                        if await CommandRunner(session).run_interactive(line):
+                            break
+                    except Exception as exc:
+                        if session.reloader is not None:
+                            session.reloader.report_error(f"Command failed: {type(exc).__name__}: {exc}")
+                        else:
+                            renderer.emit(style.red(f"  ✗ Command failed: {type(exc).__name__}: {exc}"))
+                    continue
+
+                # The prompt stays live while the agent works: anything typed in
+                # the meantime is queued onto the step instead of being ignored.
+                if isinstance(line, Submission):
+                    if renderer.terminal is not None:
+                        renderer.terminal.consume_submission(line)
+                    session.agent.enqueue(line)
+                    prompt = ""
+                else:
+                    renderer.user_prompt(line)
+                    prompt = line
+                try:
+                    if await self.run_request(prompt, style):
                         break
+                except KeyboardInterrupt:
+                    # Preserve completed results; interrupted actions may be partial.
+                    renderer.emit(style.dim("  interrupted."))
+                    continue
                 except Exception as exc:
                     if session.reloader is not None:
-                        session.reloader.report_error(f"Command failed: {type(exc).__name__}: {exc}")
+                        session.reloader.report_error(str(exc))
                     else:
-                        renderer.emit(style.red(f"  ✗ Command failed: {type(exc).__name__}: {exc}"))
-                continue
-
-            # The prompt stays live while the agent works: anything typed in
-            # the meantime is queued onto the step instead of being ignored.
-            if isinstance(line, Submission):
-                if renderer.terminal is not None:
-                    renderer.terminal.consume_submission(line)
-                session.agent.enqueue(line)
-                prompt = ""
-            else:
-                renderer.user_prompt(line)
-                prompt = line
-            try:
-                if await _run_request(session, prompt, style):
-                    break
-            except KeyboardInterrupt:
-                # Preserve completed results; interrupted actions may be partial.
-                renderer.emit(style.dim("  interrupted."))
-                continue
-            except Exception as exc:
-                if session.reloader is not None:
-                    session.reloader.report_error(str(exc))
-                else:
-                    renderer.emit(style.red(f"  ✗ {exc}"))
-                continue
-    finally:
-        if reload_task is not None:
-            reload_task.cancel()
-            await _gather_quietly(reload_task)
-        if quota_task is not None:
-            quota_task.cancel()
-            await _gather_quietly(quota_task)
-        try:
-            # The final redraw still imports accepted component code. Retire
-            # that generation only after the terminal task has finished.
-            if renderer.terminal is not None:
-                renderer.terminal.close()
-            if terminal_task is not None:
-                await terminal_task
+                        renderer.emit(style.red(f"  ✗ {exc}"))
+                    continue
         finally:
-            renderer.terminal = None
-            await _shutdown(session)
-    return 0
-
-
-async def _start_repl(session: Session) -> bool:
-    """Keep input live during startup, retaining prompts until initialization settles."""
-    renderer, terminal = session.renderer, session.renderer.terminal
-    startup = session.extensions.pop("startup", None)
-
-    async def initialize() -> None:
-        await renderer.show_welcome(model=session.agent.model, workspace=session.workspace.root)
-        if startup is not None:
-            await startup()
-
-    if terminal is None:
-        await initialize()
-        return True
-    terminal.set_working(True)
-    _refresh_title(session)
-    task = asyncio.create_task(initialize())
-
-    def interrupt() -> None:
-        terminal.set_working(True, stopping=True)
-        task.cancel()
-
-    terminal.set_interrupt_handler(interrupt)
-    reader = asyncio.create_task(_read_line(session, renderer.style))
-    queued: list[str | None] = []
-    try:
-        while not task.done():
-            done, _ = await asyncio.wait({task, reader}, return_when=asyncio.FIRST_COMPLETED)
-            if reader in done:
-                line = reader.result()
-                if line is None or line.strip() in {"/exit", "/quit"}:
-                    task.cancel()
-                    return False
-                queued.append(line)
-                reader = asyncio.create_task(_read_line(session, renderer.style))
-        if task.cancelled():
-            return False
-        await task
-        return True
-    finally:
-        if reader.done() and not reader.cancelled():
-            queued.append(reader.result())
-        reader.cancel()
-        if not task.done():
-            task.cancel()
-        await finish_cleanup(asyncio.create_task(_gather_quietly(task, reader)))
-        session.extensions["startup_input_lines"] = queued
-        terminal.set_interrupt_handler(lambda: _request_interrupt(session))
-        terminal.set_working(False)
-
-
-async def _read_line(session: Session, style: Style) -> str | None:
-    """Read one line of input, drawing the prompt and readouts around it.
-
-    Returns None at end of input, which the caller treats as EOF.
-    """
-    if "pending_input_line" in session.extensions:
-        return cast(str | None, session.extensions.pop("pending_input_line"))
-    queued = session.extensions.get("startup_input_lines")
-    if queued:
-        return cast(str | None, queued.pop(0))
-    renderer = session.renderer
-    _refresh_title(session)
-    renderer.draw_prompt(_status_bar(session, style), style.user("> "))
-    if renderer.terminal is not None:
-        line = await renderer.terminal.read_line()
-        renderer.end_prompt()
-        return line
-    if session._input_future is None:
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[str | None] = loop.create_future()
-        session._input_future = future
-        source = sys.stdin
-
-        def read() -> None:
+            if reload_task is not None:
+                reload_task.cancel()
+                await _gather_quietly(reload_task)
+            if quota_task is not None:
+                quota_task.cancel()
+                await _gather_quietly(quota_task)
             try:
-                line = source.readline()
-            except (EOFError, KeyboardInterrupt):
-                line = ""
-            except Exception as exc:
+                # The final redraw still imports accepted component code. Retire
+                # that generation only after the terminal task has finished.
+                if renderer.terminal is not None:
+                    renderer.terminal.close()
+                if terminal_task is not None:
+                    await terminal_task
+            finally:
+                renderer.terminal = None
+                await self.shutdown()
+        return 0
+
+    async def start(self) -> bool:
+        """Keep input live during startup, retaining prompts until initialization settles."""
+        session = self.session
+        renderer, terminal = session.renderer, session.renderer.terminal
+        startup = session.extensions.pop("startup", None)
+
+        async def initialize() -> None:
+            await renderer.show_welcome(model=session.agent.model, workspace=session.workspace.root)
+            if startup is not None:
+                await startup()
+
+        if terminal is None:
+            await initialize()
+            return True
+        terminal.set_working(True)
+        self.refresh_title()
+        task = asyncio.create_task(initialize())
+
+        def interrupt() -> None:
+            terminal.set_working(True, stopping=True)
+            task.cancel()
+
+        terminal.set_interrupt_handler(interrupt)
+        reader = asyncio.create_task(self.read_line(renderer.style))
+        queued: list[str | None] = []
+        try:
+            while not task.done():
+                done, _ = await asyncio.wait({task, reader}, return_when=asyncio.FIRST_COMPLETED)
+                if reader in done:
+                    line = reader.result()
+                    if line is None or line.strip() in {"/exit", "/quit"}:
+                        task.cancel()
+                        return False
+                    queued.append(line)
+                    reader = asyncio.create_task(self.read_line(renderer.style))
+            if task.cancelled():
+                return False
+            await task
+            return True
+        finally:
+            if reader.done() and not reader.cancelled():
+                queued.append(reader.result())
+            reader.cancel()
+            if not task.done():
+                task.cancel()
+            await finish_cleanup(asyncio.create_task(_gather_quietly(task, reader)))
+            session.extensions["startup_input_lines"] = queued
+            terminal.set_interrupt_handler(lambda: self.request_interrupt())
+            terminal.set_working(False)
+
+    async def read_line(self, style: Style) -> str | None:
+        """Read one line of input, drawing the prompt and readouts around it.
+
+        Returns None at end of input, which the caller treats as EOF.
+        """
+        session = self.session
+        if "pending_input_line" in session.extensions:
+            return cast(str | None, session.extensions.pop("pending_input_line"))
+        queued = session.extensions.get("startup_input_lines")
+        if queued:
+            return cast(str | None, queued.pop(0))
+        renderer = session.renderer
+        self.refresh_title()
+        renderer.draw_prompt(StatusLine(session, style).text(), style.user("> "))
+        if renderer.terminal is not None:
+            line = await renderer.terminal.read_line()
+            renderer.end_prompt()
+            return line
+        if session._input_future is None:
+            loop = asyncio.get_running_loop()
+            future: asyncio.Future[str | None] = loop.create_future()
+            session._input_future = future
+            source = sys.stdin
+
+            def read() -> None:
                 try:
-                    loop.call_soon_threadsafe(future.set_exception, exc)
+                    line = source.readline()
+                except (EOFError, KeyboardInterrupt):
+                    line = ""
+                except Exception as exc:
+                    try:
+                        loop.call_soon_threadsafe(future.set_exception, exc)
+                    except RuntimeError:
+                        pass
+                    return
+                try:
+                    loop.call_soon_threadsafe(future.set_result, line or None)
                 except RuntimeError:
                     pass
-                return
-            try:
-                loop.call_soon_threadsafe(future.set_result, line or None)
-            except RuntimeError:
-                pass
 
-        # A cancelled prompt retains its read so the next prompt consumes the
-        # same line. A daemon reader does not hold up shutdown on an idle TTY.
-        threading.Thread(target=read, daemon=True).start()
-    try:
-        line = await asyncio.shield(session._input_future)
-    except (EOFError, KeyboardInterrupt):
-        line = ""
-    session._input_future = None
-    if not renderer.prompt_is_live:
-        # Cancelled mid-read (the step ended first): leave the prompt as the
-        # last thing on screen rather than ending a repaint another task owns.
-        return None
-    renderer.end_prompt()
-    # A non-tty has no cursor to park on, so restore the line ourselves.
-    if not renderer.stream.isatty():
-        print(file=renderer.stream)
-    return line or None
+            # A cancelled prompt retains its read so the next prompt consumes the
+            # same line. A daemon reader does not hold up shutdown on an idle TTY.
+            threading.Thread(target=read, daemon=True).start()
+        try:
+            line = await asyncio.shield(session._input_future)
+        except (EOFError, KeyboardInterrupt):
+            line = ""
+        session._input_future = None
+        if not renderer.prompt_is_live:
+            # Cancelled mid-read (the step ended first): leave the prompt as the
+            # last thing on screen rather than ending a repaint another task owns.
+            return None
+        renderer.end_prompt()
+        # A non-tty has no cursor to park on, so restore the line ourselves.
+        if not renderer.stream.isatty():
+            print(file=renderer.stream)
+        return line or None
 
+    async def run_request(self, prompt: str, style: Style) -> bool:
+        """Run a task while keeping the prompt usable in the background.
 
-def _fit_readout(text: str, columns: int, *, keep_end: bool = False) -> str:
-    if wcswidth(text) <= columns:
-        return text
-    if columns <= 0:
-        return ""
-    graphemes = list(iter_graphemes(text))
-    while graphemes and wcswidth("".join(graphemes)) + 1 > columns:
-        if keep_end:
-            graphemes.pop(0)
-        else:
-            graphemes.pop()
-    text = "".join(graphemes)
-    return "…" + text if keep_end else text + "…"
+        A reader task stays alive for the duration: lines that arrive mid-step are
+        queued onto the agent, and `/exit` or `/quit` finishes the step before exiting.
+        Returns True when the user asked to exit.
+        """
+        session = self.session
+        previous_boundary = getattr(session.agent, "on_boundary", None)
 
+        async def boundary() -> None:
+            if previous_boundary is not None:
+                await previous_boundary()
+            if not session.agent.has_queued_input and not session.agent.stop_requested:
+                # Optimal changes affect the next request and need no task stop.
+                commands = session.work.deferred_commands or []
+                while commands and CommandRunner(session).at_boundary(commands[0]):
+                    await CommandRunner(session).execute(commands.pop(0), at_boundary=True)
+                if not commands:
+                    session.work.deferred_commands = None
+                    session.work.resume_after_commands = None
+                    session.renderer._queued_settings_pause = False
+            # Earlier prompts must reach a request before a later command applies.
+            if session.work.deferred_commands and not session.agent.has_queued_input:
+                session.agent.request_stop()
 
-def _status_bar(session: Session, style: Style, *, columns: int | None = None) -> str:
-    """Bottom readout: workspace CWD and active model."""
-    cwd = _cwd_readout(session.workspace)
-    model = session.agent.model
-    if isinstance(getattr(session, "client", None), APIClient):
-        model = f"{session.client.provider}::{model}"
-    model = f"Model: {model}"
-    if columns is None:
-        columns = shutil.get_terminal_size(fallback=(0, 0)).columns
-    danger = _danger_suffix(session, Style(False))
-    available = max(0, columns - wcswidth(danger)) if columns else 0
-    if columns:
-        room = available - wcswidth(model + _READOUT_SEP)
-        cwd = _fit_readout(cwd, room, keep_end=True) if room >= 4 else ""
-        if not cwd:
-            model = _fit_readout(model, available)
-    parts = [part for part in (cwd, model) if part]
-    return (style.dim(_fit_readout(_READOUT_SEP.join(parts), available) if columns else _READOUT_SEP.join(parts))
-            + style.red(_fit_readout(danger, columns, keep_end=True) if columns else danger))
-
-
-def _danger_suffix(session: Session, style: Style) -> str:
-    return style.red(" | Danger Mode") if session.workspace.access.danger else ""
-
-
-def _cwd_readout(workspace: Workspace) -> str:
-    """Show the tools' working directory, abbreviating the home directory."""
-    cwd = workspace.root
-    # Abbreviate the home prefix while retaining the workspace suffix.
-    home = Path.home()
-    if cwd == home:
-        return "~"
-    try:
-        return "~/" + cwd.relative_to(home).as_posix()
-    except ValueError:
-        return str(cwd)
-
-
-async def _refresh_quota(session: Session) -> None:
-    frame = session.reloader
-    if frame is not None:
-        frame.busy += 1
-    try:
-        await _fetch_quota(session)
-    finally:
-        if frame is not None:
-            frame.busy -= 1
-
-
-async def _fetch_quota(session: Session) -> None:
-    """Fetch the authoritative free-call quota at most every fifteen minutes."""
-    now = time.monotonic()
-    if session.quota_checked_at is not None and now - session.quota_checked_at < QUOTA_REFRESH_INTERVAL:
-        return
-    session.quota_checked_at = now
-    client = session.client
-    try:
-        info = await client.key_info()
-    except (APIError, ConfigError):
-        return
-    # A response for the previous key must not overwrite the new key's quota.
-    if session.client is client and info is not None:
-        _cache_quota(session, info)
-
-
-async def _poll_quota(session: Session) -> None:
-    """Refresh independently of user input and model requests."""
-    while True:
-        checked = session.quota_checked_at
-        delay = 0.0 if checked is None else max(
-            0.0, QUOTA_REFRESH_INTERVAL - (time.monotonic() - checked),
+        session.agent.on_boundary = boundary
+        reader: asyncio.Task[str | None] | None = asyncio.create_task(
+            self.read_line(style)
         )
-        await asyncio.sleep(delay)
-        await _refresh_quota(session)
-        if session.renderer.terminal is not None:
-            session.renderer.terminal.app.invalidate()
+        agent_task: asyncio.Task[str] = asyncio.create_task(session.agent.run(prompt))
+        session.work.agent_task = agent_task
+        renderer = session.renderer
+        exiting = False
+        eof = False
+        if renderer.terminal is not None:
+            renderer.terminal.set_interrupt_handler(lambda: self.request_interrupt())
+            renderer.terminal.set_working(True)
 
+        try:
+            while True:
+                watched = {agent_task} | ({reader} if reader is not None else set())
+                done, _ = await asyncio.wait(
+                    watched, return_when=asyncio.FIRST_COMPLETED
+                )
+                # A line arriving with completion belongs to the idle REPL. Keep it
+                # for the handoff below instead of queuing it on a stopped run.
+                if reader is not None and reader in done and not agent_task.done():
+                    line = reader.result()
+                    if line is None:
+                        # EOF lets the active run finish before shutdown.
+                        reader = None
+                        exiting = True
+                        eof = True
+                    else:
+                        text = line.strip()
+                        is_command = text.startswith("/") and not (isinstance(line, SuggestedPrompt) or submitted_suggestion(line))
+                        if cancelled(line):
+                            pass
+                        elif is_command and text.split(None, 1)[0].lower() in {"/stop", "/exit", "/quit"}:
+                            if await CommandRunner(session).handle(text):
+                                renderer.emit(style.dim("  exiting."))
+                                exiting = True
+                                reader = None
+                        elif text and (is_command or session.work.deferred_commands):
+                            CommandRunner(session).queue(text, text.split(None, 1)[0].lstrip("/") if is_command else "input")
+                        elif text:
+                            if renderer.terminal is not None:
+                                renderer.terminal.consume_submission(line)
+                            session.agent.enqueue(text)
+                            if session.agent.stop_requested:
+                                session.work.resume_after_commands = True
+                        if reader is not None:
+                            reader = asyncio.create_task(self.read_line(style))
 
-async def _run_request(session: Session, prompt: str, style: Style) -> bool:
-    """Run a task while keeping the prompt usable in the background.
-
-    A reader task stays alive for the duration: lines that arrive mid-step are
-    queued onto the agent, and `/exit` or `/quit` finishes the step before exiting.
-    Returns True when the user asked to exit.
-    """
-    previous_boundary = getattr(session.agent, "on_boundary", None)
-
-    async def boundary() -> None:
-        if previous_boundary is not None:
-            await previous_boundary()
-        if not session.agent.has_queued_input and not session.agent.stop_requested:
-            # Optimal changes affect the next request and need no task stop.
-            commands = session.work.deferred_commands or []
-            while commands and _boundary_command(commands[0]):
-                await _execute_command(session, commands.pop(0), at_boundary=True)
-            if not commands:
-                session.work.deferred_commands = None
-                session.work.resume_after_commands = None
-                session.renderer._queued_settings_pause = False
-        # Earlier prompts must reach a request before a later command applies.
-        if session.work.deferred_commands and not session.agent.has_queued_input:
-            session.agent.request_stop()
-
-    session.agent.on_boundary = boundary
-    reader: asyncio.Task[str | None] | None = asyncio.create_task(
-        _read_line(session, style)
-    )
-    agent_task: asyncio.Task[str] = asyncio.create_task(session.agent.run(prompt))
-    session.work.agent_task = agent_task
-    renderer = session.renderer
-    exiting = False
-    eof = False
-    if renderer.terminal is not None:
-        renderer.terminal.set_interrupt_handler(lambda: _request_interrupt(session))
-        renderer.terminal.set_working(True)
-
-    try:
-        while True:
-            watched = {agent_task} | ({reader} if reader is not None else set())
-            done, _ = await asyncio.wait(
-                watched, return_when=asyncio.FIRST_COMPLETED
-            )
-            # A line arriving with completion belongs to the idle REPL. Keep it
-            # for the handoff below instead of queuing it on a stopped run.
-            if reader is not None and reader in done and not agent_task.done():
-                line = reader.result()
-                if line is None:
-                    # EOF lets the active run finish before shutdown.
-                    reader = None
-                    exiting = True
-                    eof = True
-                else:
-                    text = line.strip()
-                    is_command = text.startswith("/") and not (isinstance(line, SuggestedPrompt) or submitted_suggestion(line))
-                    if cancelled(line):
-                        pass
-                    elif is_command and text.split(None, 1)[0].lower() in {"/stop", "/exit", "/quit"}:
-                        if await _handle_command(session, text):
-                            renderer.emit(style.dim("  exiting."))
-                            exiting = True
-                            reader = None
-                    elif text and (is_command or session.work.deferred_commands):
-                        _queue_command(session, text, text.split(None, 1)[0].lstrip("/") if is_command else "input")
-                    elif text:
+                if agent_task in done:
+                    if session.extensions.get("interrupt_requested"):
+                        await self.wait_for_interrupt()
+                        if not exiting and session.agent.has_queued_input:
+                            renderer.emit(style.dim("  Starting queued input."))
+                            if renderer.terminal is not None:
+                                renderer.terminal.set_working(True)
+                            agent_task = asyncio.create_task(session.agent.run(""))
+                            session.work.agent_task = agent_task
+                            continue
+                        break
+                    answer = agent_task.result()
+                    resume, commands_exit = await CommandRunner(session).apply_deferred(exiting=exiting and not eof)
+                    exiting = exiting or commands_exit
+                    if resume and not exiting and answer != STEP_LIMIT_NOTICE and (answer == STOP_NOTICE or session.agent.has_queued_input):
+                        renderer.emit(style.dim("  Continuing with queued input."))
                         if renderer.terminal is not None:
-                            renderer.terminal.consume_submission(line)
-                        session.agent.enqueue(text)
-                        if session.agent.stop_requested:
-                            session.work.resume_after_commands = True
-                    if reader is not None:
-                        reader = asyncio.create_task(_read_line(session, style))
-
-            if agent_task in done:
-                if session.extensions.get("interrupt_requested"):
-                    await _wait_for_interrupt(session)
-                    if not exiting and session.agent.has_queued_input:
-                        renderer.emit(style.dim("  Starting queued input."))
+                            renderer.terminal.set_working(True)
+                        agent_task = asyncio.create_task(session.agent.run("", continue_run=True))
+                        session.work.agent_task = agent_task
+                        continue
+                    if not exiting and session.agent.has_queued_input and answer != STEP_LIMIT_NOTICE and not session.agent.stopped:
                         if renderer.terminal is not None:
                             renderer.terminal.set_working(True)
                         agent_task = asyncio.create_task(session.agent.run(""))
                         session.work.agent_task = agent_task
                         continue
                     break
-                answer = agent_task.result()
-                resume, commands_exit = await _apply_deferred_commands(session, exiting=exiting and not eof)
-                exiting = exiting or commands_exit
-                if resume and not exiting and answer != STEP_LIMIT_NOTICE and (answer == STOP_NOTICE or session.agent.has_queued_input):
-                    renderer.emit(style.dim("  Continuing with queued input."))
-                    if renderer.terminal is not None:
-                        renderer.terminal.set_working(True)
-                    agent_task = asyncio.create_task(session.agent.run("", continue_run=True))
-                    session.work.agent_task = agent_task
-                    continue
-                if not exiting and session.agent.has_queued_input and answer != STEP_LIMIT_NOTICE and not session.agent.stopped:
-                    if renderer.terminal is not None:
-                        renderer.terminal.set_working(True)
-                    agent_task = asyncio.create_task(session.agent.run(""))
-                    session.work.agent_task = agent_task
-                    continue
-                break
-            if reader is None:
-                # With no reader, wait for the active run to settle.
-                if session.extensions.get("interrupt_requested"):
-                    await _wait_for_interrupt(session)
-                    break
-                await agent_task
-    except BaseException as exc:
-        agent_task.cancel()
-        await _gather_quietly(agent_task)
-        # A failed model request still leaves an idle session where queued
-        # settings can be applied. Cancellation/exit must not start new work.
-        if not isinstance(exc, asyncio.CancelledError):
-            await _apply_deferred_commands(session, exiting=exiting)
-        if isinstance(exc, asyncio.CancelledError) and session.extensions.get("interrupt_requested"):
-            await _wait_for_interrupt(session)
-        else:
-            raise
-    finally:
-        session.agent.on_boundary = previous_boundary
-        session.work.agent_task = None
-        if reader is not None and not reader.done():
-            reader.cancel()
-        if reader is not None:
-            await _gather_quietly(reader)
-            if not exiting and not reader.cancelled() and reader.exception() is None:
-                # Input may finish while deferred commands are being applied.
-                session.extensions["pending_input_line"] = reader.result()
-        renderer.clear_prompt()
-        if renderer.terminal is not None:
-            renderer.terminal.set_working(False)
-
-    if agent_task.done() and not agent_task.cancelled():
-        failure = agent_task.exception()
-        if failure is not None:
-            raise failure
-        if exiting and session.agent.has_queued_input:
-            count = len(session.agent.pending) + len(session.agent.queued_messages)
-            subject = "message was" if count == 1 else "messages were"
-            renderer.emit(style.dim(
-                f"  {count} queued {subject} not run because the session is exiting."
-            ))
-        if session.agent.usage.cost is not None:
-            renderer.emit(style.dim(f"    ({session.agent.usage.summary()})"), separate=False)
-
-    return exiting
-
-
-def _cancel_queued_commands(session: Session, lines: list[str]) -> None:
-    """Cancel settings while retaining unsent user input for continuation."""
-    for line in lines:
-        if cancelled(line):
-            continue
-        if isinstance(line, Submission) and session.renderer.terminal is not None:
-            session.renderer.terminal.consume_submission(line)
-        if not line.startswith("/") or submitted_suggestion(line) or isinstance(line, SuggestedPrompt):
-            session.agent.enqueue(line)
-
-
-def _request_interrupt(session: Session) -> None:
-    """Signal cancellation immediately; retain cleanup outside the input loop."""
-    cleanup = session.extensions.get("interrupt_task")
-    if cleanup is not None:
-        return
-    session.extensions["interrupt_requested"] = True
-    session.extensions["interrupt_sequence"] = session.extensions.get("interrupt_sequence", 0) + 1
-    session.registry.services["interrupt_requested"] = True
-    discarded = session.extensions.pop("deferred_commands", [])
-    _cancel_queued_commands(session, discarded)
-    session.extensions["resume_after_commands"] = False
-    session.renderer._queued_settings_pause = False
-    session.agent.request_stop()
-    session.agent.stopped = True
-    task = session.extensions.get("active_agent_task")
-    command = session.extensions.get("active_command_task")
-    commands = list(session.extensions.get("command_tasks", ()))
-    for owned in [task, command, *commands]:
-        if owned is not None:
-            owned.cancel()
-    compactor = session.registry.services.get("step_compactor")
-    if compactor is not None:
-        compactor.reset()
-    session.renderer.emit(session.renderer.style.dim("  Interrupting agent work; cancelling active operations."))
-    if session.renderer.terminal is not None:
-        session.renderer.terminal.set_working(True, stopping=True)
-
-    async def drain() -> None:
-        jobs = session.registry.services.get("command_jobs")
-        job_cleanup = asyncio.create_task(jobs.stop_all()) if jobs is not None else None
-        await _gather_quietly(*[owned for owned in [task, command, *commands, job_cleanup] if owned is not None])
-        if compactor is not None:
-            await compactor.wait()
-        session.registry.services.pop("interrupt_requested", None)
-        session.renderer.emit(session.renderer.style.dim("  Interrupted. Conversation and completed results are preserved."))
-        if session.renderer.terminal is not None:
-            session.renderer.terminal.set_working(False)
-    session.extensions["interrupt_task"] = asyncio.create_task(drain())
-
-
-async def _wait_for_interrupt(session: Session) -> None:
-    task = session.extensions.get("interrupt_task")
-    if task is not None:
-        await finish_cleanup(task)
-        session.extensions.pop("interrupt_task", None)
-        session.extensions.pop("interrupt_requested", None)
-
-
-async def _run_interactive_command(session: Session, line: str) -> bool:
-    """Keep commands such as model selection cancellable from the terminal."""
-    task = asyncio.create_task(_handle_command(session, line))
-    session.work.command_task = task
-    try:
-        return await asyncio.shield(task)
-    except asyncio.CancelledError:
-        if session.extensions.get("interrupt_requested"):
-            await _wait_for_interrupt(session)
-            return False
-        task.cancel()
-        await _gather_quietly(task)
-        raise
-    finally:
-        session.work.command_task = None
-
-
-def _command_help(argument: str) -> str:
-    return command_help(argument)
-
-
-def _changes_session(command: str, argument: str) -> bool:
-    definition = BY_NAME.get(command)
-    return definition.changes_session(argument) if definition is not None else False
-
-
-def _queue_command(session: Session, line: str, command: str) -> None:
-    commands = session.work.deferred_commands
-    if commands is None:
-        commands = []
-        session.work.deferred_commands = commands
-    # Fresh input resumes after a stop; /stop clears this for older input.
-    session.work.resume_after_commands = True
-    commands.append(line)
-    pause = any(not _boundary_command(queued) for queued in commands)
-    session.renderer._queued_settings_pause = pause and bool(session.extensions.get("resume_after_commands"))
-    if pause and not session.agent.has_queued_input:
-        session.agent.request_stop()
-    if session.renderer.terminal is not None:
-        session.renderer.terminal.set_working(True, stopping=session.agent.stop_requested)
-    if session.renderer.terminal is None:
-        session.renderer.emit(session.renderer.style.dim(
-            f"  Queued /{command}; it will run after earlier input and the current tool batch."
-        ))
-
-
-def _boundary_command(line: str) -> bool:
-    """Routing commands can apply between batches without ending the task."""
-    return (not isinstance(line, SuggestedPrompt) and not submitted_suggestion(line)
-            and line.split(None, 1)[0].lower() == "/optimal")
-
-
-async def _apply_deferred_commands(session: Session, *, exiting: bool = False) -> tuple[bool, bool]:
-    """Dispatch the shared FIFO through its next prompt barrier while idle.
-
-    Command text stays outside model history and journals, including credentials.
-    The active response and every tool have settled before this is called.
-    """
-    commands = session.work.deferred_commands or []
-    if session.agent.has_queued_input and not exiting:
-        return bool(session.work.resume_after_commands), False
-    session.work.deferred_commands = None
-    interrupt_sequence = session.extensions.get("interrupt_sequence", 0)
-    resume = bool(session.work.resume_after_commands)
-    session.work.resume_after_commands = None
-    session.renderer._queued_settings_pause = False
-    if exiting:
-        _cancel_queued_commands(session, commands)
-        if commands:
-            session.renderer.emit(session.renderer.style.dim(
-                f"  {len(commands)} queued command(s) were not run because the session is exiting."
-            ))
-        return False, True
-    for position, line in enumerate(commands):
-        if cancelled(line):
-            continue
-        if not line.startswith("/") or submitted_suggestion(line) or isinstance(line, SuggestedPrompt):
-            end = position
-            while end < len(commands):
-                queued = commands[end]
-                if not cancelled(queued):
-                    if queued.startswith("/") and not (submitted_suggestion(queued) or isinstance(queued, SuggestedPrompt)):
+                if reader is None:
+                    # With no reader, wait for the active run to settle.
+                    if session.extensions.get("interrupt_requested"):
+                        await self.wait_for_interrupt()
                         break
-                    if session.renderer.terminal is not None:
-                        session.renderer.terminal.consume_submission(queued)
-                    session.agent.enqueue(queued)
-                end += 1
-            # A prompt is a barrier: later commands wait for its request.
-            session.work.deferred_commands = commands[end:] or None
-            session.work.resume_after_commands = resume
-            # Keep an explicit /stop authoritative even when a preceding
-            # queued command has now finished applying.
-            return resume, False
-        parts = line[1:].split(None, 1)
-        command = parts[0].lower()
-        argument = parts[1].strip() if len(parts) > 1 else ""
-        if BY_NAME.get(command) is not None and BY_NAME[command].replaces_task(argument):
-            resume = False
-        try:
+                    await agent_task
+        except BaseException as exc:
+            agent_task.cancel()
+            await _gather_quietly(agent_task)
+            # A failed model request still leaves an idle session where queued
+            # settings can be applied. Cancellation/exit must not start new work.
+            if not isinstance(exc, asyncio.CancelledError):
+                await CommandRunner(session).apply_deferred(exiting=exiting)
+            if isinstance(exc, asyncio.CancelledError) and session.extensions.get("interrupt_requested"):
+                await self.wait_for_interrupt()
+            else:
+                raise
+        finally:
+            session.agent.on_boundary = previous_boundary
+            session.work.agent_task = None
+            if reader is not None and not reader.done():
+                reader.cancel()
+            if reader is not None:
+                await _gather_quietly(reader)
+                if not exiting and not reader.cancelled() and reader.exception() is None:
+                    # Input may finish while deferred commands are being applied.
+                    session.extensions["pending_input_line"] = reader.result()
+            renderer.clear_prompt()
+            if renderer.terminal is not None:
+                renderer.terminal.set_working(False)
+
+        if agent_task.done() and not agent_task.cancelled():
+            failure = agent_task.exception()
+            if failure is not None:
+                raise failure
+            if exiting and session.agent.has_queued_input:
+                count = len(session.agent.pending) + len(session.agent.queued_messages)
+                subject = "message was" if count == 1 else "messages were"
+                renderer.emit(style.dim(
+                    f"  {count} queued {subject} not run because the session is exiting."
+                ))
+            if session.agent.usage.cost is not None:
+                renderer.emit(style.dim(f"    ({session.agent.usage.summary()})"), separate=False)
+
+        return exiting
+
+    def request_interrupt(self) -> None:
+        """Signal cancellation immediately; retain cleanup outside the input loop."""
+        session = self.session
+        cleanup = session.extensions.get("interrupt_task")
+        if cleanup is not None:
+            return
+        session.extensions["interrupt_requested"] = True
+        session.extensions["interrupt_sequence"] = session.extensions.get("interrupt_sequence", 0) + 1
+        session.registry.services["interrupt_requested"] = True
+        discarded = session.extensions.pop("deferred_commands", [])
+        CommandRunner(session).cancel_queued(discarded)
+        session.extensions["resume_after_commands"] = False
+        session.renderer._queued_settings_pause = False
+        session.agent.request_stop()
+        session.agent.stopped = True
+        task = session.extensions.get("active_agent_task")
+        command = session.extensions.get("active_command_task")
+        commands = list(session.extensions.get("command_tasks", ()))
+        for owned in [task, command, *commands]:
+            if owned is not None:
+                owned.cancel()
+        compactor = session.registry.services.get("step_compactor")
+        if compactor is not None:
+            compactor.reset()
+        session.renderer.emit(session.renderer.style.dim("  Interrupting agent work; cancelling active operations."))
+        if session.renderer.terminal is not None:
+            session.renderer.terminal.set_working(True, stopping=True)
+
+        async def drain() -> None:
+            jobs = session.registry.services.get("command_jobs")
+            job_cleanup = asyncio.create_task(jobs.stop_all()) if jobs is not None else None
+            await _gather_quietly(*[owned for owned in [task, command, *commands, job_cleanup] if owned is not None])
+            if compactor is not None:
+                await compactor.wait()
+            session.registry.services.pop("interrupt_requested", None)
+            session.renderer.emit(session.renderer.style.dim("  Interrupted. Conversation and completed results are preserved."))
             if session.renderer.terminal is not None:
                 session.renderer.terminal.set_working(False)
-                session.renderer.terminal.set_command_status(f"Applying /{command} (Esc to interrupt)")
-            if await _run_interactive_command(session, line):
-                return False, True
-            if session.extensions.get("interrupt_sequence", 0) != interrupt_sequence:
-                _cancel_queued_commands(session, commands[position + 1:])
-                return False, False
-        except Exception as exc:
-            session.renderer.emit(session.renderer.style.red(f"  ✗ /{command} failed: {exc}"))
-        finally:
-            if session.renderer.terminal is not None:
-                session.renderer.terminal.set_command_status("")
-    return resume, False
+        session.extensions["interrupt_task"] = asyncio.create_task(drain())
 
+    async def wait_for_interrupt(self) -> None:
+        session = self.session
+        task = session.extensions.get("interrupt_task")
+        if task is not None:
+            await finish_cleanup(task)
+            session.extensions.pop("interrupt_task", None)
+            session.extensions.pop("interrupt_requested", None)
 
-def _background_command(text: str) -> bool:
-    if not text.startswith("/"):
-        return False
-    parts = text.split(None, 1)
-    name = parts[0].lower().removeprefix("/") if parts else ""
-    argument = parts[1].strip().lower() if len(parts) > 1 else ""
-    command = BY_NAME.get(name)
-    return command.background(argument) if command is not None else False
+    def refresh_title(self) -> None:
+        session = self.session
+        terminal = session.renderer.terminal
+        if terminal is not None:
+            journal = session.registry.services.get("session_journal")
+            title = journal.title if journal is not None else session.extensions.get("title")
+            if title is None:
+                title = session_title(str(session.workspace.root))
+            terminal.set_title(title)
 
+    def start_background_task(self, work: Awaitable[Any]) -> None:
+        """Own startup work that must not delay the prompt; shutdown cancels it."""
+        session = self.session
+        tasks: set[asyncio.Task[Any]] = session.extensions.setdefault("background_tasks", set())
+        task = asyncio.ensure_future(work)
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
 
-def _start_background_command(session: Session, text: str) -> None:
-    tasks = session.work.command_tasks
-    if tasks is None:
-        tasks = set()
-        session.work.command_tasks = tasks
-    async def run() -> None:
+    async def refresh_model_metadata(self) -> None:
+        """Replace saved catalogs and profiles used at startup with current ones."""
+        session = self.session
         try:
-            await _handle_command(session, text)
-        except Exception as exc:
-            session.renderer.emit(session.renderer.style.red(f"  ✗ Command failed: {exc}"))
-    task = asyncio.create_task(run())
-    tasks.add(task)
-    task.add_done_callback(tasks.discard)
+            await session.catalog(refresh=True)
+            current = ModelInfo(session.agent.model, provider=session.client.provider)
+            targets = [current]
+            routing = session.model_routing()
+            if routing.enabled:
+                # Save the best candidate's profile so the next launch can select it from the cache.
+                best = next(iter(await routing.candidates("working")), None)
+                if best is not None and best.selector != current.selector:
+                    targets.append(best)
+            for model in targets:
+                await session.refresh_profile(model)
+        except (APIError, ConfigError, ValueError):
+            pass
+
+    async def shutdown(self) -> None:
+        """Release every resource the session owns, MCP subprocesses included.
+
+        Order matters: MCP tools hold references to their clients, so the servers
+        are stopped before the registry and HTTP client are closed.
+        """
+        session = self.session
+        await self.wait_for_interrupt()
+        tasks = list(session.extensions.get("command_tasks", ())) + list(session.extensions.get("background_tasks", ()))
+        for task in tasks:
+            task.cancel()
+        await _gather_quietly(*tasks)
+        try:
+            if session.mcp is not None:
+                await session.mcp.aclose()
+        finally:
+            try:
+                await session.registry.aclose()
+            finally:
+                try:
+                    await session.client.aclose()
+                finally:
+                    if session.reloader is not None:
+                        session.reloader.close()
 
 
-def _start_background_task(session: Session, work: Awaitable[Any]) -> None:
-    """Own startup work that must not delay the prompt; shutdown cancels it."""
-    tasks: set[asyncio.Task[Any]] = session.extensions.setdefault("background_tasks", set())
-    task = asyncio.ensure_future(work)
-    tasks.add(task)
-    task.add_done_callback(tasks.discard)
+class StatusLine:
+    def __init__(self, session: Session, style: Style) -> None:
+        self.session = session
+        self.style = style
+
+    def text(self, *, columns: int | None = None) -> str:
+        """Bottom readout: workspace CWD and active model."""
+        session, style = self.session, self.style
+        cwd = self.cwd()
+        model = session.agent.model
+        if isinstance(getattr(session, "client", None), APIClient):
+            model = f"{session.client.provider}::{model}"
+        model = f"Model: {model}"
+        if columns is None:
+            columns = shutil.get_terminal_size(fallback=(0, 0)).columns
+        danger = StatusLine(session, Style(False)).danger_suffix()
+        available = max(0, columns - wcswidth(danger)) if columns else 0
+        if columns:
+            room = available - wcswidth(model + _READOUT_SEP)
+            cwd = self.fit(cwd, room, keep_end=True) if room >= 4 else ""
+            if not cwd:
+                model = self.fit(model, available)
+        parts = [part for part in (cwd, model) if part]
+        return (style.dim(self.fit(_READOUT_SEP.join(parts), available) if columns else _READOUT_SEP.join(parts))
+                + style.red(self.fit(danger, columns, keep_end=True) if columns else danger))
+
+    def danger_suffix(self) -> str:
+        session, style = self.session, self.style
+        return style.red(" | Danger Mode") if session.workspace.access.danger else ""
+
+    def cwd(self) -> str:
+        """Show the tools' working directory, abbreviating the home directory."""
+        cwd = self.session.workspace.root
+        # Abbreviate the home prefix while retaining the workspace suffix.
+        home = Path.home()
+        if cwd == home:
+            return "~"
+        try:
+            return "~/" + cwd.relative_to(home).as_posix()
+        except ValueError:
+            return str(cwd)
+
+    def fit(self, text: str, columns: int, *, keep_end: bool = False) -> str:
+        if wcswidth(text) <= columns:
+            return text
+        if columns <= 0:
+            return ""
+        graphemes = list(iter_graphemes(text))
+        while graphemes and wcswidth("".join(graphemes)) + 1 > columns:
+            if keep_end:
+                graphemes.pop(0)
+            else:
+                graphemes.pop()
+        text = "".join(graphemes)
+        return "…" + text if keep_end else text + "…"
 
 
-async def _refresh_model_metadata(session: Session) -> None:
-    """Replace saved catalogs and profiles used at startup with current ones."""
-    try:
-        await session.catalog(refresh=True)
-        current = ModelInfo(session.agent.model, provider=session.client.provider)
-        targets = [current]
-        routing = session.model_routing()
-        if routing.enabled:
-            # Save the best candidate's profile so the next launch can select it from the cache.
-            best = next(iter(await routing.candidates("working")), None)
-            if best is not None and best.selector != current.selector:
-                targets.append(best)
-        for model in targets:
-            await session.refresh_profile(model)
-    except (APIError, ConfigError, ValueError):
-        pass
+class Quota:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    async def refresh(self) -> None:
+        session = self.session
+        frame = session.reloader
+        if frame is not None:
+            frame.busy += 1
+        try:
+            await self.fetch()
+        finally:
+            if frame is not None:
+                frame.busy -= 1
+
+    async def fetch(self) -> None:
+        """Fetch the authoritative free-call quota at most every fifteen minutes."""
+        session = self.session
+        now = time.monotonic()
+        if session.quota_checked_at is not None and now - session.quota_checked_at < QUOTA_REFRESH_INTERVAL:
+            return
+        session.quota_checked_at = now
+        client = session.client
+        try:
+            info = await client.key_info()
+        except (APIError, ConfigError):
+            return
+        # A response for the previous key must not overwrite the new key's quota.
+        if session.client is client and info is not None:
+            self.cache(info)
+
+    async def poll(self) -> None:
+        """Refresh independently of user input and model requests."""
+        session = self.session
+        while True:
+            checked = session.quota_checked_at
+            delay = 0.0 if checked is None else max(
+                0.0, QUOTA_REFRESH_INTERVAL - (time.monotonic() - checked),
+            )
+            await asyncio.sleep(delay)
+            await self.refresh()
+            if session.renderer.terminal is not None:
+                session.renderer.terminal.app.invalidate()
+
+    def cache(self, info: KeyInfo) -> None:
+        """Remember the key's remaining free calls for the status bar."""
+        session = self.session
+        session.free_calls = info.free_quota.remaining if info.free_quota is not None else None
+        session.quota_checked_at = time.monotonic()
+
+
+class CommandRunner:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    async def handle(self, line: str) -> bool:
+        session = self.session
+        terminal = session.renderer.terminal
+        if terminal is not None and terminal.__dict__.get("_editor_active"):
+            terminal.notify("Close the editor before running commands.")
+            return False
+        frame = session.reloader
+        if frame is not None:
+            await frame.checkpoint()
+            frame.busy += 1
+        try:
+            return await self.execute(line)
+        finally:
+            if frame is not None:
+                frame.busy -= 1
+                await frame.checkpoint()
+
+    async def execute(self, line: str, *, at_boundary: bool = False) -> bool:
+        """Dispatch definitions while preserving batch boundaries and finalization."""
+        session = self.session
+        parts = line[1:].split(None, 1)
+        name = parts[0].lower() if parts else ""
+        argument = parts[1].strip() if len(parts) > 1 else ""
+        command = BY_NAME.get(name)
+        if cancelled(line):
+            return False
+        if (not at_boundary and command is not None and command.changes_session(argument)
+                and (session.agent.running or session.extensions.get("deferred_commands"))):
+            self.queue(line, name)
+            return False
+        if isinstance(line, Submission) and session.renderer.terminal is not None:
+            session.renderer.terminal.consume_submission(line)
+        if command is None:
+            session.renderer.emit(session.renderer.style.red(f"  unknown command: /{name} (try /help)"))
+        else:
+            result = await command.run(CommandContext(session, session.renderer.style, _RendererStream(session.renderer)), argument)
+            if result is not None:
+                return result
+        Repl(session).refresh_title()
+        session.agent._persist()
+        return False
+
+    async def run_interactive(self, line: str) -> bool:
+        """Keep commands such as model selection cancellable from the terminal."""
+        session = self.session
+        task = asyncio.create_task(self.handle(line))
+        session.work.command_task = task
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if session.extensions.get("interrupt_requested"):
+                await Repl(session).wait_for_interrupt()
+                return False
+            task.cancel()
+            await _gather_quietly(task)
+            raise
+        finally:
+            session.work.command_task = None
+
+    def queue(self, line: str, command: str) -> None:
+        session = self.session
+        commands = session.work.deferred_commands
+        if commands is None:
+            commands = []
+            session.work.deferred_commands = commands
+        # Fresh input resumes after a stop; /stop clears this for older input.
+        session.work.resume_after_commands = True
+        commands.append(line)
+        pause = any(not self.at_boundary(queued) for queued in commands)
+        session.renderer._queued_settings_pause = pause and bool(session.extensions.get("resume_after_commands"))
+        if pause and not session.agent.has_queued_input:
+            session.agent.request_stop()
+        if session.renderer.terminal is not None:
+            session.renderer.terminal.set_working(True, stopping=session.agent.stop_requested)
+        if session.renderer.terminal is None:
+            session.renderer.emit(session.renderer.style.dim(
+                f"  Queued /{command}; it will run after earlier input and the current tool batch."
+            ))
+
+    async def apply_deferred(self, *, exiting: bool = False) -> tuple[bool, bool]:
+        """Dispatch the shared FIFO through its next prompt barrier while idle.
+
+        Command text stays outside model history and journals, including credentials.
+        The active response and every tool have settled before this is called.
+        """
+        session = self.session
+        commands = session.work.deferred_commands or []
+        if session.agent.has_queued_input and not exiting:
+            return bool(session.work.resume_after_commands), False
+        session.work.deferred_commands = None
+        interrupt_sequence = session.extensions.get("interrupt_sequence", 0)
+        resume = bool(session.work.resume_after_commands)
+        session.work.resume_after_commands = None
+        session.renderer._queued_settings_pause = False
+        if exiting:
+            self.cancel_queued(commands)
+            if commands:
+                session.renderer.emit(session.renderer.style.dim(
+                    f"  {len(commands)} queued command(s) were not run because the session is exiting."
+                ))
+            return False, True
+        for position, line in enumerate(commands):
+            if cancelled(line):
+                continue
+            if not line.startswith("/") or submitted_suggestion(line) or isinstance(line, SuggestedPrompt):
+                end = position
+                while end < len(commands):
+                    queued = commands[end]
+                    if not cancelled(queued):
+                        if queued.startswith("/") and not (submitted_suggestion(queued) or isinstance(queued, SuggestedPrompt)):
+                            break
+                        if session.renderer.terminal is not None:
+                            session.renderer.terminal.consume_submission(queued)
+                        session.agent.enqueue(queued)
+                    end += 1
+                # A prompt is a barrier: later commands wait for its request.
+                session.work.deferred_commands = commands[end:] or None
+                session.work.resume_after_commands = resume
+                # Keep an explicit /stop authoritative even when a preceding
+                # queued command has now finished applying.
+                return resume, False
+            parts = line[1:].split(None, 1)
+            command = parts[0].lower()
+            argument = parts[1].strip() if len(parts) > 1 else ""
+            if BY_NAME.get(command) is not None and BY_NAME[command].replaces_task(argument):
+                resume = False
+            try:
+                if session.renderer.terminal is not None:
+                    session.renderer.terminal.set_working(False)
+                    session.renderer.terminal.set_command_status(f"Applying /{command} (Esc to interrupt)")
+                if await self.run_interactive(line):
+                    return False, True
+                if session.extensions.get("interrupt_sequence", 0) != interrupt_sequence:
+                    self.cancel_queued(commands[position + 1:])
+                    return False, False
+            except Exception as exc:
+                session.renderer.emit(session.renderer.style.red(f"  ✗ /{command} failed: {exc}"))
+            finally:
+                if session.renderer.terminal is not None:
+                    session.renderer.terminal.set_command_status("")
+        return resume, False
+
+    def cancel_queued(self, lines: list[str]) -> None:
+        """Cancel settings while retaining unsent user input for continuation."""
+        session = self.session
+        for line in lines:
+            if cancelled(line):
+                continue
+            if isinstance(line, Submission) and session.renderer.terminal is not None:
+                session.renderer.terminal.consume_submission(line)
+            if not line.startswith("/") or submitted_suggestion(line) or isinstance(line, SuggestedPrompt):
+                session.agent.enqueue(line)
+
+    def start_background(self, text: str) -> None:
+        session = self.session
+        tasks = session.work.command_tasks
+        if tasks is None:
+            tasks = set()
+            session.work.command_tasks = tasks
+        async def run() -> None:
+            try:
+                await self.handle(text)
+            except Exception as exc:
+                session.renderer.emit(session.renderer.style.red(f"  ✗ Command failed: {exc}"))
+        task = asyncio.create_task(run())
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+
+    def at_boundary(self, line: str) -> bool:
+        """Routing commands can apply between batches without ending the task."""
+        return (not isinstance(line, SuggestedPrompt) and not submitted_suggestion(line)
+                and line.split(None, 1)[0].lower() == "/optimal")
+
+    def runs_in_background(self, text: str) -> bool:
+        if not text.startswith("/"):
+            return False
+        parts = text.split(None, 1)
+        name = parts[0].lower().removeprefix("/") if parts else ""
+        argument = parts[1].strip().lower() if len(parts) > 1 else ""
+        command = BY_NAME.get(name)
+        return command.background(argument) if command is not None else False
+
+    def changes_session(self, command: str, argument: str) -> bool:
+        definition = BY_NAME.get(command)
+        return definition.changes_session(argument) if definition is not None else False
 
 
 async def _gather_quietly(*tasks: asyncio.Task[object]) -> None:
@@ -1658,35 +1902,154 @@ async def _gather_quietly(*tasks: asyncio.Task[object]) -> None:
             pass
 
 
-async def _shutdown(session: Session) -> None:
-    """Release every resource the session owns, MCP subprocesses included.
+class KeyEntry:
+    def __init__(self, session: Session, style: Style, out: io.TextIOBase) -> None:
+        self.session = session
+        self.style = style
+        self.out = out
 
-    Order matters: MCP tools hold references to their clients, so the servers
-    are stopped before the registry and HTTP client are closed.
-    """
-    await _wait_for_interrupt(session)
-    tasks = list(session.extensions.get("command_tasks", ())) + list(session.extensions.get("background_tasks", ()))
-    for task in tasks:
-        task.cancel()
-    await _gather_quietly(*tasks)
-    try:
-        if session.mcp is not None:
-            await session.mcp.aclose()
-    finally:
-        try:
-            await session.registry.aclose()
-        finally:
+    async def command(self, argument: str) -> None:
+        session, style, out = self.session, self.style, self.out
+        if argument.lower() in ("show", "status", ""):
+            if argument == "" and sys.stdin.isatty():
+                # Bare /key on a terminal starts the interactive replacement flow.
+                await self.replace()
+                return
+            print(f"  key: {style.cyan(self.mask(session.api_key))}", file=out)
             try:
-                await session.client.aclose()
-            finally:
-                if session.reloader is not None:
-                    session.reloader.close()
+                info = await session.client.key_info()
+            except APIError as exc:
+                print(style.red(f"  could not verify key: {exc}"), file=out)
+                return
+            if info is None:
+                print(style.dim("  This provider has no key-status API; authentication is checked on inference."), file=out)
+            else:
+                Quota(session).cache(info)
+                self.describe(info)
+            return
 
+        parts = argument.split(maxsplit=1)
+        provider = None
+        candidate = argument
+        if len(parts) == 2:
+            provider, candidate = parts[0].lower(), parts[1]
+            if provider not in PROVIDERS:
+                print(style.red("  usage: /key [provider] <key>; providers: " + ", ".join(PROVIDERS)), file=out)
+                return
+        await self.replace(candidate=candidate, provider=provider)
 
-def _mask_key(key: str) -> str:
-    if len(key) <= 12:
-        return "*" * len(key)
-    return f"{key[:10]}…{key[-4:]}"
+    async def replace(self, candidate: str | None = None, provider: str | None = None) -> None:
+        session, style, out = self.session, self.style, self.out
+        if candidate is None:
+            if not sys.stdin.isatty():
+                print(
+                    style.dim(
+                        "  /key needs an interactive terminal to read a key. "
+                        f"Set {session.client.key_env}, or run `/key <key>`."
+                    ),
+                    file=out,
+                )
+                return
+            print(style.dim("  Enter an API key (input hidden; provider detected automatically)."), file=out)
+            try:
+                candidate = (await session.renderer.ask_input("  key: ", password=True)).strip()
+            except (EOFError, KeyboardInterrupt):
+                print(file=out)
+                return
+            if not candidate:
+                print(style.dim("  cancelled"), file=out)
+                return
+
+        candidate = candidate.strip()
+        if not candidate or not candidate.isascii() or any(character.isspace() or ord(character) < 32 or ord(character) == 127
+                                                          for character in candidate):
+            print(style.red("  API keys must be a single nonblank ASCII value."), file=out)
+            return
+        detected = key_provider(candidate)
+        if provider is not None and detected is not None and provider != detected:
+            print(style.red(f"  Provider mismatch: selected {provider}, detected {detected}. Use /key {detected} <key>."), file=out)
+            return
+        provider = provider or detected
+        if provider is None:
+            if not sys.stdin.isatty():
+                print(style.red("  Could not identify the provider. Use /key <provider> <key>; providers: "
+                                + ", ".join(PROVIDERS)), file=out)
+                return
+            try:
+                provider = (await session.renderer.ask_input("  provider (" + ", ".join(PROVIDERS) + "; blank cancels): ")).strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                return
+            if not provider:
+                print(style.dim("  cancelled"), file=out)
+                return
+            if provider not in PROVIDERS:
+                print(style.red("  Choose a supported provider: " + ", ".join(PROVIDERS)), file=out)
+                return
+        implementation = provider_class(provider)
+        print(style.dim(f"  provider: {provider}"), file=out)
+        try:
+            info = await session.use_api_key(candidate, provider=provider, verify=True)
+        except (APIError, ConfigError) as exc:
+            print(style.red(literal(f"  rejected: {str(exc).replace(candidate, '[key]')}")), file=out)
+            return
+
+        if info is None and not getattr(implementation, "catalog_requires_auth", False):
+            print(style.dim(f"  {provider} key updated for this session; authentication will be checked on inference."), file=out)
+        else:
+            print(f"  {provider} key accepted: {style.cyan(self.mask(candidate))}", file=out)
+            if info is not None:
+                if provider == session.client.provider:
+                    Quota(session).cache(info)
+                self.describe(info)
+
+        # Persisting replaces a credential on disk, so require explicit consent.
+        if not sys.stdin.isatty():
+            print(style.dim("  not saved (no interactive terminal)"), file=out)
+            return
+        answer = await session.renderer.ask_input(f"  save {provider} key to .env for future runs? [y/N] ")
+        if answer.strip().lower() not in {"y", "yes"}:
+            print(style.dim("  kept for this session only"), file=out)
+            return
+
+        path = dotenv_path()
+        try:
+            save_dotenv_value(path, implementation.key_env, candidate)
+            print(style.dim(f"  saved to {path}"), file=out)
+        except (OSError, ConfigError) as exc:
+            print(style.red(f"  could not save to {path}: {exc}"), file=out)
+
+    def describe(self, info: KeyInfo) -> None:
+        """Print a key's limits so the user knows what it can actually reach."""
+        style, out = self.style, self.out
+        if info.label:
+            print(literal(f"    label      {info.label}"), file=out)
+        if info.limit is not None:
+            remaining = info.limit_remaining
+            detail = f"${info.limit:.2f} limit"
+            if remaining is not None:
+                detail += f", ${remaining:.2f} remaining"
+            print(f"    spend      {detail}", file=out)
+        print(f"    usage      ${info.usage:.2f} to date", file=out)
+        if info.free_quota is not None:
+            quota = info.free_quota
+            print(
+                f"    free quota {quota.remaining}/{quota.limit} "
+                f"free-model requests left today",
+                file=out,
+            )
+        if info.cannot_reach_paid_models:
+            print(
+                style.dim(
+                    "    note       a $0 spend limit means only zero-cost models "
+                    "will respond"
+                ),
+                file=out,
+            )
+
+    def mask(self, key: str) -> str:
+        if len(key) <= 12:
+            return "*" * len(key)
+        return f"{key[:10]}…{key[-4:]}"
 
 
 def _price_cell(pricing: dict[str, Any]) -> str:
@@ -1694,46 +2057,255 @@ def _price_cell(pricing: dict[str, Any]) -> str:
     return price_label(pricing)
 
 
-def _describe_model(model: ModelInfo) -> str:
-    context = f"{model.context_length // 1000}k" if model.context_length else "-"
-    price = _price_cell(model.pricing)
-    return f"  {model.id:<44} {context:>8}  {price:>15}"
+# `/model` subcommands, shown as `[name] description` in its menu.
+MODEL_MENU = (
+    ("model", "Enter a model name or filter words; blank lists every model"),
+    ("provider", "Choose a provider and list its models, free ones first"),
+    ("free", "Choose from free models"),
+    ("optimal", "Select the best ranked free model automatically"),
+    ("next", "Skip the current model for the next ranked free model"),
+    ("reset", "Retry from the best ranked free model, clearing failures"),
+)
 
 
-def _model_label(model: ModelInfo) -> str:
-    name = f"  {model.name}" if model.name and model.name != model.id else ""
-    price = _price_cell(model.pricing)
-    if price.startswith("$"):
-        price += "/Mtok"
-    context = f"{model.context_length:,}" if model.context_length else "unknown"
-    score = f"  estimated coding score: {model.score:.1f}/100" if model.score is not None else ""
-    return f"{model.selector}{name}  {price}  context: {context}{score}"
+class ModelPicker:
+    def __init__(self, session: Session, style: Style, out: io.TextIOBase) -> None:
+        self.session = session
+        self.style = style
+        self.out = out
 
+    async def menu(self, argument: str, *, require_free: bool = False) -> None:
+        """Dispatch `/model`: a menu, a subcommand, a provider, an exact model, or filter words.
 
-def _model_table(session: Session, models: list[ModelInfo]) -> str:
-    terminal = session.renderer.terminal
-    columns = terminal.output.get_size().columns if terminal is not None else shutil.get_terminal_size((80, 24)).columns
-    rows = [[f"{model.provider}::\n{model.id}" + (f"\nEst. coding score: {model.score:.1f}/100" if model.score is not None else ""),
-             f"{model.context_length:,}" if model.context_length else "-", _price_cell(model.pricing)] for model in models]
-    headers = ["Model", "Context", "In/Out $/Mtok"]
-    context_width = max(len(headers[1]), *(len(row[1]) for row in rows))
-    price_width = max(len(headers[2]), *(len(row[2]) for row in rows))
-    # Grid borders and cell padding occupy ten columns; output is indented by two.
-    model_width = columns - context_width - price_width - 12
-    while model_width >= len(headers[0]):
-        table = tabulate(rows, headers=headers, tablefmt="outline", disable_numparse=True,
-                         colalign=("left", "right", "right"), maxcolwidths=[model_width, None, None])
-        # Tabulate also reserves header alignment space; measure the final grid.
-        excess = max(len(line) for line in table.splitlines()) + 2 - columns
-        if excess <= 0:
-            break
-        model_width -= excess
-    else:
-        # Stack fields inside each row when three columns would exceed the screen.
-        cells = [[f"Model: {row[0]}\nContext: {row[1]}\nIn/Out $/Mtok: {row[2]}"] for row in rows]
-        table = tabulate(cells, tablefmt="outline", disable_numparse=True,
-                         maxcolwidths=[max(1, columns - 6)])
-    return literal("\n".join("  " + line for line in table.splitlines()))
+        Subcommands and provider names apply only as a single word; several words search.
+        """
+        session, style, out = self.session, self.style, self.out
+        words = argument.strip()
+        action = words.lower() if len(words.split()) == 1 else ""
+        terminal = session.renderer.terminal
+        if not argument.strip():
+            routing = session.model_routing()
+            current = f"{session.client.provider}::{session.agent.model}"
+            state = f"Optimal {'on' if routing.enabled else 'off'}"
+            if terminal is None:
+                print(f"  current model: {style.cyan(current)} ({state})", file=out)
+                for name, description in MODEL_MENU:
+                    print(f"  /model {name:<9} {description}", file=out)
+                print(style.dim("  /model <provider>, <model> or <words> also select directly."), file=out)
+                return
+            action = await terminal.choose(f"Model: {current} ({state})",
+                                           [(name, f"[{name}] {description}") for name, description in MODEL_MENU]) or ""
+            if not action:
+                return
+            if action == "model":
+                try:
+                    words = (await session.renderer.ask_input("  model or filter words (blank lists every model): ")).strip()
+                except (EOFError, KeyboardInterrupt):
+                    return
+                await self.lookup(words, require_free=require_free)
+                return
+        if action == "provider":
+            await self.provider_models("")
+        elif action in PROVIDERS:
+            await self.provider_models(action)
+        elif action in {"optimal", "next", "reset"}:
+            await self.routing_action(action)
+        elif action == "free":
+            await self.browse("free")
+        else:
+            await self.lookup(words, require_free=require_free)
+
+    async def routing_action(self, action: str) -> None:
+        """Enable optimal selection, skip to the next ranked model, or retry from the top."""
+        session, style, out = self.session, self.style, self.out
+        routing = session.model_routing()
+        try:
+            await (routing.skip() if action == "next" else routing.enable())
+        except APIError as exc:
+            print(style.red(f"  {exc}"), file=out)
+
+    async def provider_models(self, provider: str) -> None:
+        """List a provider's models, free ones first, choosing the provider when none is named."""
+        session, style, out = self.session, self.style, self.out
+        if not provider:
+            terminal = session.renderer.terminal
+            if terminal is None:
+                print("  providers: " + ", ".join(PROVIDERS) + "  (/model <provider> lists its models)", file=out)
+                return
+            provider = await terminal.choose("Select Provider", [(name, name) for name in PROVIDERS]) or ""
+            if not provider:
+                return
+        await self.browse("", provider=provider)
+
+    async def provider_default(self, provider: str) -> None:
+        """Switch to a provider's free default model."""
+        session, style, out = self.session, self.style, self.out
+        if provider not in PROVIDERS:
+            print(style.red("  usage: /provider " + "|".join(PROVIDERS)), file=out)
+            return
+        await self.select(f"{provider}::{provider_class(provider).default_model}", require_free=True)
+
+    async def lookup(self, words: str, *, require_free: bool = False) -> None:
+        """Select an exact model, or list the models matching every word."""
+        session, style, out = self.session, self.style, self.out
+        try:
+            catalog = await session.catalog(refresh=True)
+        except (APIError, ConfigError) as exc:
+            print(style.red(f"  could not verify against the catalog: {exc}"), file=out)
+            return
+        if words and any(words in (model.id, model.selector) for model in catalog):
+            await self.select(words, require_free=require_free, catalog=catalog)
+        else:
+            await self.browse(words)
+
+    async def select(self, argument: str, *, require_free: bool = False,
+                     catalog: list[ModelInfo] | None = None) -> None:
+        """Switch to an exact model, verified against a freshly fetched catalog."""
+        session, style, out = self.session, self.style, self.out
+        if catalog is None:
+            try:
+                catalog = await session.catalog(refresh=True)
+            except (APIError, ConfigError) as exc:
+                print(style.red(f"  could not verify against the catalog: {exc}"), file=out)
+                return
+
+        matches = [model for model in catalog if argument in (model.id, model.selector)]
+        if not matches:
+            print(style.red(f"  unknown model: {argument}"), file=out)
+            return
+        if len(matches) > 1:
+            print(style.dim("  Select a provider explicitly with /model <provider>::<model>:"), file=out)
+            print(self.table(matches), file=out)
+            return
+        entry = matches[0]
+        if require_free:
+            try:
+                free = all(float(entry.pricing[name]) == 0 for name in ("prompt", "completion"))
+                free = free and all(float(entry.pricing.get(name, 0)) == 0
+                                    for name in ("request", "internal_reasoning"))
+            except (KeyError, TypeError, ValueError):
+                free = False
+            if not free:
+                print(style.red(f"  {entry.selector} is not advertised as free; provider unchanged."), file=out)
+                return
+        try:
+            await session.select_model(entry)
+        except (APIError, ConfigError) as exc:
+            print(style.red(f"  could not load model properties: {exc}"), file=out)
+            return
+        try:
+            await asyncio.to_thread(save_model_choice, entry.id, entry.provider)
+        except (OSError, ConfigError) as exc:
+            print(style.red(f"  could not remember model choice: {exc}"), file=out)
+        price = _price_cell(entry.pricing)
+        print(f"  switched to {style.cyan(entry.selector)}  {price}{'/Mtok' if price.startswith('$') else ''}",
+              file=out)
+        if entry.provider == "openrouter" and _price_cell(entry.pricing) == "free":
+            print(style.dim("  note: free models still work with a $0-limit key"), file=out)
+
+    async def browse(self, argument: str, *, provider: str | None = None) -> None:
+        session, style, out = self.session, self.style, self.out
+        try:
+            catalog = await session.catalog()
+        except (APIError, ConfigError) as exc:
+            print(style.red(f"  could not load the catalog: {exc}"), file=out)
+            return
+
+        for error in getattr(session, "extensions", {}).get("catalog_errors", []):
+            print(style.red(f"  catalog unavailable: {error}"), file=out)
+
+        current_model = getattr(getattr(session, "agent", None), "model", None)
+        current_provider = getattr(getattr(session, "client", None), "provider", "openrouter")
+        labels = {m.selector: self.label(m) + ("  (current)" if m.id == current_model
+                                                and m.provider == current_provider else "") for m in catalog}
+        needle = argument.strip().lower()
+        if needle:
+            words = ("free" if needle == "0" else needle).split()
+            matches = [m for m in catalog
+                       if all(word in labels[m.selector].lower() for word in words)]
+        else:
+            matches = list(catalog)
+        if provider is not None:
+            matches = [model for model in matches if model.provider == provider]
+
+        if not matches:
+            print(f"  no {provider + ' ' if provider else ''}models matching {argument!r}" if argument
+                  else f"  no {provider} models are available; check its API key", file=out)
+            return
+
+        terminal = session.renderer.terminal
+        if terminal is not None:
+            options = [
+                (model.selector, labels[model.selector])
+                for model in sorted(matches, key=model_order)
+            ]
+            selected = await terminal.choose("Select Model", options,
+                                            styles={m.selector: "class:menu-free" for m in matches
+                                                    if free_label(m.pricing) is not None},
+                                            legend=[("class:menu-free", "   "), ("", " = free")])
+            if selected is not None:
+                await self.select(selected)
+            return
+
+        free_count = sum(1 for m in catalog if free_label(m.pricing) is not None)
+        print(style.dim(
+            f"  {len(matches)} shown of {len(catalog)} "
+            f"({free_count} free — /models free)\n"
+        ), file=out)
+
+        if needle in ("free", "0"):
+            # Only reachable models matter to someone on a limited key.
+            try:
+                info = await session.client.key_info()
+            except APIError:
+                info = None
+            if info is not None and info.cannot_reach_paid_models:
+                print(style.dim(
+                    "  your key has a $0 spend limit, so only the free models "
+                    "below will respond\n"
+                ), file=out)
+
+        print(self.table(sorted(matches, key=model_order)), file=out)
+
+    def table(self, models: list[ModelInfo]) -> str:
+        session = self.session
+        terminal = session.renderer.terminal
+        columns = terminal.output.get_size().columns if terminal is not None else shutil.get_terminal_size((80, 24)).columns
+        rows = [[f"{model.provider}::\n{model.id}" + (f"\nEst. coding score: {model.score:.1f}/100" if model.score is not None else ""),
+                 f"{model.context_length:,}" if model.context_length else "-", _price_cell(model.pricing)] for model in models]
+        headers = ["Model", "Context", "In/Out $/Mtok"]
+        context_width = max(len(headers[1]), *(len(row[1]) for row in rows))
+        price_width = max(len(headers[2]), *(len(row[2]) for row in rows))
+        # Grid borders and cell padding occupy ten columns; output is indented by two.
+        model_width = columns - context_width - price_width - 12
+        while model_width >= len(headers[0]):
+            table = tabulate(rows, headers=headers, tablefmt="outline", disable_numparse=True,
+                             colalign=("left", "right", "right"), maxcolwidths=[model_width, None, None])
+            # Tabulate also reserves header alignment space; measure the final grid.
+            excess = max(len(line) for line in table.splitlines()) + 2 - columns
+            if excess <= 0:
+                break
+            model_width -= excess
+        else:
+            # Stack fields inside each row when three columns would exceed the screen.
+            cells = [[f"Model: {row[0]}\nContext: {row[1]}\nIn/Out $/Mtok: {row[2]}"] for row in rows]
+            table = tabulate(cells, tablefmt="outline", disable_numparse=True,
+                             maxcolwidths=[max(1, columns - 6)])
+        return literal("\n".join("  " + line for line in table.splitlines()))
+
+    def label(self, model: ModelInfo) -> str:
+        name = f"  {model.name}" if model.name and model.name != model.id else ""
+        price = _price_cell(model.pricing)
+        if price.startswith("$"):
+            price += "/Mtok"
+        context = f"{model.context_length:,}" if model.context_length else "unknown"
+        score = f"  estimated coding score: {model.score:.1f}/100" if model.score is not None else ""
+        return f"{model.selector}{name}  {price}  context: {context}{score}"
+
+    def describe(self, model: ModelInfo) -> str:
+        context = f"{model.context_length // 1000}k" if model.context_length else "-"
+        price = _price_cell(model.pricing)
+        return f"  {model.id:<44} {context:>8}  {price:>15}"
 
 
 class _RendererStream(io.TextIOBase):
@@ -1764,663 +2336,6 @@ class _RendererStream(io.TextIOBase):
         if self._pending:
             self._renderer.emit(self._pending, block=self._block)
             self._pending = ""
-
-
-async def _handle_command(session: Session, line: str) -> bool:
-    terminal = session.renderer.terminal
-    if terminal is not None and terminal.__dict__.get("_editor_active"):
-        terminal.notify("Close the editor before running commands.")
-        return False
-    frame = session.reloader
-    if frame is not None:
-        await frame.checkpoint()
-        frame.busy += 1
-    try:
-        return await _execute_command(session, line)
-    finally:
-        if frame is not None:
-            frame.busy -= 1
-            await frame.checkpoint()
-
-
-def _refresh_title(session: Session) -> None:
-    terminal = session.renderer.terminal
-    if terminal is not None:
-        journal = session.registry.services.get("session_journal")
-        title = journal.title if journal is not None else session.extensions.get("title")
-        if title is None:
-            title = session_title(str(session.workspace.root))
-        terminal.set_title(title)
-
-
-async def _execute_command(session: Session, line: str, *, at_boundary: bool = False) -> bool:
-    """Dispatch definitions while preserving batch boundaries and finalization."""
-    parts = line[1:].split(None, 1)
-    name = parts[0].lower() if parts else ""
-    argument = parts[1].strip() if len(parts) > 1 else ""
-    command = BY_NAME.get(name)
-    if cancelled(line):
-        return False
-    if (not at_boundary and command is not None and command.changes_session(argument)
-            and (session.agent.running or session.extensions.get("deferred_commands"))):
-        _queue_command(session, line, name)
-        return False
-    if isinstance(line, Submission) and session.renderer.terminal is not None:
-        session.renderer.terminal.consume_submission(line)
-    if command is None:
-        session.renderer.emit(session.renderer.style.red(f"  unknown command: /{name} (try /help)"))
-    else:
-        result = await command.run(CommandContext(session, session.renderer.style, _RendererStream(session.renderer)), argument)
-        if result is not None:
-            return result
-    _refresh_title(session)
-    session.agent._persist()
-    return False
-
-
-# `/model` subcommands, shown as `[name] description` in its menu.
-MODEL_MENU = (
-    ("model", "Enter a model name or filter words; blank lists every model"),
-    ("provider", "Choose a provider and list its models, free ones first"),
-    ("free", "Choose from free models"),
-    ("optimal", "Select the best ranked free model automatically"),
-    ("next", "Skip the current model for the next ranked free model"),
-    ("reset", "Retry from the best ranked free model, clearing failures"),
-)
-
-
-async def _model_command(
-    session: Session, argument: str, style: Style, out: io.TextIOBase, *, require_free: bool = False,
-) -> None:
-    """Dispatch `/model`: a menu, a subcommand, a provider, an exact model, or filter words.
-
-    Subcommands and provider names apply only as a single word; several words search.
-    """
-    words = argument.strip()
-    action = words.lower() if len(words.split()) == 1 else ""
-    terminal = session.renderer.terminal
-    if not argument.strip():
-        routing = session.model_routing()
-        current = f"{session.client.provider}::{session.agent.model}"
-        state = f"Optimal {'on' if routing.enabled else 'off'}"
-        if terminal is None:
-            print(f"  current model: {style.cyan(current)} ({state})", file=out)
-            for name, description in MODEL_MENU:
-                print(f"  /model {name:<9} {description}", file=out)
-            print(style.dim("  /model <provider>, <model> or <words> also select directly."), file=out)
-            return
-        action = await terminal.choose(f"Model: {current} ({state})",
-                                       [(name, f"[{name}] {description}") for name, description in MODEL_MENU]) or ""
-        if not action:
-            return
-        if action == "model":
-            try:
-                words = (await _ask_input(session, "  model or filter words (blank lists every model): ")).strip()
-            except (EOFError, KeyboardInterrupt):
-                return
-            await _model_lookup(session, words, style, out, require_free=require_free)
-            return
-    if action == "provider":
-        await _provider_models(session, "", style, out)
-    elif action in PROVIDERS:
-        await _provider_models(session, action, style, out)
-    elif action in {"optimal", "next", "reset"}:
-        await _routing_action(session, action, style, out)
-    elif action == "free":
-        await _models_command(session, "free", style, out)
-    else:
-        await _model_lookup(session, words, style, out, require_free=require_free)
-
-
-async def _routing_action(session: Session, action: str, style: Style, out: io.TextIOBase) -> None:
-    """Enable optimal selection, skip to the next ranked model, or retry from the top."""
-    routing = session.model_routing()
-    try:
-        await (routing.skip() if action == "next" else routing.enable())
-    except APIError as exc:
-        print(style.red(f"  {exc}"), file=out)
-
-
-async def _provider_models(session: Session, provider: str, style: Style, out: io.TextIOBase) -> None:
-    """List a provider's models, free ones first, choosing the provider when none is named."""
-    if not provider:
-        terminal = session.renderer.terminal
-        if terminal is None:
-            print("  providers: " + ", ".join(PROVIDERS) + "  (/model <provider> lists its models)", file=out)
-            return
-        provider = await terminal.choose("Select Provider", [(name, name) for name in PROVIDERS]) or ""
-        if not provider:
-            return
-    await _models_command(session, "", style, out, provider=provider)
-
-
-async def _provider_default(session: Session, provider: str, style: Style, out: io.TextIOBase) -> None:
-    """Switch to a provider's free default model."""
-    if provider not in PROVIDERS:
-        print(style.red("  usage: /provider " + "|".join(PROVIDERS)), file=out)
-        return
-    await _select_model(session, f"{provider}::{provider_class(provider).default_model}", style, out, require_free=True)
-
-
-async def _model_lookup(session: Session, words: str, style: Style, out: io.TextIOBase, *,
-                        require_free: bool = False) -> None:
-    """Select an exact model, or list the models matching every word."""
-    try:
-        catalog = await session.catalog(refresh=True)
-    except (APIError, ConfigError) as exc:
-        print(style.red(f"  could not verify against the catalog: {exc}"), file=out)
-        return
-    if words and any(words in (model.id, model.selector) for model in catalog):
-        await _select_model(session, words, style, out, require_free=require_free, catalog=catalog)
-    else:
-        await _models_command(session, words, style, out)
-
-
-async def _select_model(
-    session: Session, argument: str, style: Style, out: io.TextIOBase, *, require_free: bool = False,
-    catalog: list[ModelInfo] | None = None,
-) -> None:
-    """Switch to an exact model, verified against a freshly fetched catalog."""
-    if catalog is None:
-        try:
-            catalog = await session.catalog(refresh=True)
-        except (APIError, ConfigError) as exc:
-            print(style.red(f"  could not verify against the catalog: {exc}"), file=out)
-            return
-
-    matches = [model for model in catalog if argument in (model.id, model.selector)]
-    if not matches:
-        print(style.red(f"  unknown model: {argument}"), file=out)
-        return
-    if len(matches) > 1:
-        print(style.dim("  Select a provider explicitly with /model <provider>::<model>:"), file=out)
-        print(_model_table(session, matches), file=out)
-        return
-    entry = matches[0]
-    if require_free:
-        try:
-            free = all(float(entry.pricing[name]) == 0 for name in ("prompt", "completion"))
-            free = free and all(float(entry.pricing.get(name, 0)) == 0
-                                for name in ("request", "internal_reasoning"))
-        except (KeyError, TypeError, ValueError):
-            free = False
-        if not free:
-            print(style.red(f"  {entry.selector} is not advertised as free; provider unchanged."), file=out)
-            return
-    try:
-        await session.select_model(entry)
-    except (APIError, ConfigError) as exc:
-        print(style.red(f"  could not load model properties: {exc}"), file=out)
-        return
-    try:
-        await asyncio.to_thread(save_model_choice, entry.id, entry.provider)
-    except (OSError, ConfigError) as exc:
-        print(style.red(f"  could not remember model choice: {exc}"), file=out)
-    price = _price_cell(entry.pricing)
-    print(f"  switched to {style.cyan(entry.selector)}  {price}{'/Mtok' if price.startswith('$') else ''}",
-          file=out)
-    if entry.provider == "openrouter" and _price_cell(entry.pricing) == "free":
-        print(style.dim("  note: free models still work with a $0-limit key"), file=out)
-
-
-async def _temperature_command(
-    session: Session, argument: str, style: Style, out: io.TextIOBase,
-) -> None:
-    value = session.agent.temperature
-    if argument:
-        try:
-            value = float(argument)
-        except ValueError:
-            value = float("nan")
-        limit = session.client.max_temperature
-        if not math.isfinite(value) or not 0 <= value <= limit:
-            print(style.red(f"  temperature must be a number from 0 to {limit:g} for {session.client.provider}."), file=out)
-            return
-    try:
-        capabilities = await session.client.model_capabilities(session.agent.model)
-    except APIError as exc:
-        print(style.red(f"  could not verify temperature support: {exc}"), file=out)
-        return
-    if capabilities is None or "temperature" not in capabilities.parameters:
-        print(style.red(
-            f"  temperature control is unavailable for {session.agent.model}'s selected endpoints; "
-            "the provider default is used."
-        ), file=out)
-        return
-    if argument:
-        session.agent.temperature = value
-    if value is None:
-        print("  temperature: provider default", file=out)
-    else:
-        print(f"  temperature: {value:g}", file=out)
-
-
-async def _models_command(
-    session: Session, argument: str, style: Style, out: io.TextIOBase, *, provider: str | None = None,
-) -> None:
-    try:
-        catalog = await session.catalog()
-    except (APIError, ConfigError) as exc:
-        print(style.red(f"  could not load the catalog: {exc}"), file=out)
-        return
-
-    for error in getattr(session, "extensions", {}).get("catalog_errors", []):
-        print(style.red(f"  catalog unavailable: {error}"), file=out)
-
-    current_model = getattr(getattr(session, "agent", None), "model", None)
-    current_provider = getattr(getattr(session, "client", None), "provider", "openrouter")
-    labels = {m.selector: _model_label(m) + ("  (current)" if m.id == current_model
-                                            and m.provider == current_provider else "") for m in catalog}
-    needle = argument.strip().lower()
-    if needle:
-        words = ("free" if needle == "0" else needle).split()
-        matches = [m for m in catalog
-                   if all(word in labels[m.selector].lower() for word in words)]
-    else:
-        matches = list(catalog)
-    if provider is not None:
-        matches = [model for model in matches if model.provider == provider]
-
-    if not matches:
-        print(f"  no {provider + ' ' if provider else ''}models matching {argument!r}" if argument
-              else f"  no {provider} models are available; check its API key", file=out)
-        return
-
-    terminal = session.renderer.terminal
-    if terminal is not None:
-        options = [
-            (model.selector, labels[model.selector])
-            for model in sorted(matches, key=model_order)
-        ]
-        selected = await terminal.choose("Select Model", options,
-                                        styles={m.selector: "class:menu-free" for m in matches
-                                                if free_label(m.pricing) is not None},
-                                        legend=[("class:menu-free", "   "), ("", " = free")])
-        if selected is not None:
-            await _select_model(session, selected, style, out)
-        return
-
-    free_count = sum(1 for m in catalog if free_label(m.pricing) is not None)
-    print(style.dim(
-        f"  {len(matches)} shown of {len(catalog)} "
-        f"({free_count} free — /models free)\n"
-    ), file=out)
-
-    if needle in ("free", "0"):
-        # Only reachable models matter to someone on a limited key.
-        try:
-            info = await session.client.key_info()
-        except APIError:
-            info = None
-        if info is not None and info.cannot_reach_paid_models:
-            print(style.dim(
-                "  your key has a $0 spend limit, so only the free models "
-                "below will respond\n"
-            ), file=out)
-
-    print(_model_table(session, sorted(matches, key=model_order)), file=out)
-
-
-def _cache_quota(session: Session, info: KeyInfo) -> None:
-    """Remember the key's remaining free calls for the status bar."""
-    session.free_calls = info.free_quota.remaining if info.free_quota is not None else None
-    session.quota_checked_at = time.monotonic()
-
-
-def _describe_key_info(info: KeyInfo, style: Style, out: io.TextIOBase) -> None:
-    """Print a key's limits so the user knows what it can actually reach."""
-    if info.label:
-        print(literal(f"    label      {info.label}"), file=out)
-    if info.limit is not None:
-        remaining = info.limit_remaining
-        detail = f"${info.limit:.2f} limit"
-        if remaining is not None:
-            detail += f", ${remaining:.2f} remaining"
-        print(f"    spend      {detail}", file=out)
-    print(f"    usage      ${info.usage:.2f} to date", file=out)
-    if info.free_quota is not None:
-        quota = info.free_quota
-        print(
-            f"    free quota {quota.remaining}/{quota.limit} "
-            f"free-model requests left today",
-            file=out,
-        )
-    if info.cannot_reach_paid_models:
-        print(
-            style.dim(
-                "    note       a $0 spend limit means only zero-cost models "
-                "will respond"
-            ),
-            file=out,
-        )
-
-
-async def _key_command(
-    session: Session, argument: str, style: Style, out: io.TextIOBase
-) -> None:
-    if argument.lower() in ("show", "status", ""):
-        if argument == "" and sys.stdin.isatty():
-            # Bare /key on a terminal starts the interactive replacement flow.
-            await _replace_key(session, style, out)
-            return
-        print(f"  key: {style.cyan(_mask_key(session.api_key))}", file=out)
-        try:
-            info = await session.client.key_info()
-        except APIError as exc:
-            print(style.red(f"  could not verify key: {exc}"), file=out)
-            return
-        if info is None:
-            print(style.dim("  This provider has no key-status API; authentication is checked on inference."), file=out)
-        else:
-            _cache_quota(session, info)
-            _describe_key_info(info, style, out)
-        return
-
-    parts = argument.split(maxsplit=1)
-    provider = None
-    candidate = argument
-    if len(parts) == 2:
-        provider, candidate = parts[0].lower(), parts[1]
-        if provider not in PROVIDERS:
-            print(style.red("  usage: /key [provider] <key>; providers: " + ", ".join(PROVIDERS)), file=out)
-            return
-    await _replace_key(session, style, out, candidate=candidate, provider=provider)
-
-
-async def _replace_key(
-    session: Session,
-    style: Style,
-    out: io.TextIOBase,
-    candidate: str | None = None,
-    provider: str | None = None,
-) -> None:
-    if candidate is None:
-        if not sys.stdin.isatty():
-            print(
-                style.dim(
-                    "  /key needs an interactive terminal to read a key. "
-                    f"Set {session.client.key_env}, or run `/key <key>`."
-                ),
-                file=out,
-            )
-            return
-        print(style.dim("  Enter an API key (input hidden; provider detected automatically)."), file=out)
-        try:
-            candidate = (await _ask_input(session, "  key: ", password=True)).strip()
-        except (EOFError, KeyboardInterrupt):
-            print(file=out)
-            return
-        if not candidate:
-            print(style.dim("  cancelled"), file=out)
-            return
-
-    candidate = candidate.strip()
-    if not candidate or not candidate.isascii() or any(character.isspace() or ord(character) < 32 or ord(character) == 127
-                                                      for character in candidate):
-        print(style.red("  API keys must be a single nonblank ASCII value."), file=out)
-        return
-    detected = key_provider(candidate)
-    if provider is not None and detected is not None and provider != detected:
-        print(style.red(f"  Provider mismatch: selected {provider}, detected {detected}. Use /key {detected} <key>."), file=out)
-        return
-    provider = provider or detected
-    if provider is None:
-        if not sys.stdin.isatty():
-            print(style.red("  Could not identify the provider. Use /key <provider> <key>; providers: "
-                            + ", ".join(PROVIDERS)), file=out)
-            return
-        try:
-            provider = (await _ask_input(session, "  provider (" + ", ".join(PROVIDERS) + "; blank cancels): ")).strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            return
-        if not provider:
-            print(style.dim("  cancelled"), file=out)
-            return
-        if provider not in PROVIDERS:
-            print(style.red("  Choose a supported provider: " + ", ".join(PROVIDERS)), file=out)
-            return
-    implementation = provider_class(provider)
-    print(style.dim(f"  provider: {provider}"), file=out)
-    try:
-        info = await session.use_api_key(candidate, provider=provider, verify=True)
-    except (APIError, ConfigError) as exc:
-        print(style.red(literal(f"  rejected: {str(exc).replace(candidate, '[key]')}")), file=out)
-        return
-
-    if info is None and not getattr(implementation, "catalog_requires_auth", False):
-        print(style.dim(f"  {provider} key updated for this session; authentication will be checked on inference."), file=out)
-    else:
-        print(f"  {provider} key accepted: {style.cyan(_mask_key(candidate))}", file=out)
-        if info is not None:
-            if provider == session.client.provider:
-                _cache_quota(session, info)
-            _describe_key_info(info, style, out)
-
-    # Persisting replaces a credential on disk, so require explicit consent.
-    if not sys.stdin.isatty():
-        print(style.dim("  not saved (no interactive terminal)"), file=out)
-        return
-    answer = await _ask_input(session, f"  save {provider} key to .env for future runs? [y/N] ")
-    if answer.strip().lower() not in {"y", "yes"}:
-        print(style.dim("  kept for this session only"), file=out)
-        return
-
-    path = dotenv_path()
-    try:
-        save_dotenv_value(path, implementation.key_env, candidate)
-        print(style.dim(f"  saved to {path}"), file=out)
-    except (OSError, ConfigError) as exc:
-        print(style.red(f"  could not save to {path}: {exc}"), file=out)
-
-
-async def _ask_input(session: Session, prompt: str, *, password: bool = False) -> str:
-    if session.renderer is not None and session.renderer.terminal is not None:
-        return await session.renderer.terminal.ask(prompt, password=password)
-    reader = getpass.getpass if password else input
-    return await asyncio.to_thread(reader, prompt)
-
-
-# --------------------------------------------------------------------------- #
-# MCP
-# --------------------------------------------------------------------------- #
-
-
-def _split_mcp_command(argument: str) -> tuple[str, ServerSpec | None, str | None]:
-    """Parse `add|save|remove <name> <command> [args...]`.
-
-    Returns the subcommand, the server spec to connect, and the name to remove.
-    The command and its arguments are split on the first space after the name,
-    so `npx -y @scope/server --flag` stays one command with flags intact.
-    """
-    parts = argument.split(None, 2)
-    if not parts:
-        return "", None, None
-
-    action = parts[0].lower()
-    if action == "remove" and len(parts) >= 2:
-        return action, None, parts[1]
-
-    if action not in ("add", "save") or len(parts) < 3:
-        return action, None, None
-
-    name, rest = parts[1], parts[2].strip()
-    if not name or not rest:
-        return action, None, None
-    command_parts = shlex.split(rest)
-    if not command_parts:
-        return action, None, None
-
-    return action, ServerSpec(name=name, command=command_parts[0], args=command_parts[1:]), None
-
-
-async def _mcp_command(
-    session: Session, argument: str, style: Style, out: io.TextIOBase
-) -> None:
-    if session.mcp is None:
-        print(style.dim("  MCP is disabled for this run (--no-mcp)."), file=out)
-        return
-
-    try:
-        action, spec, removal = _split_mcp_command(argument)
-    except ValueError as exc:
-        print(style.red(f"  invalid MCP command: {exc}"), file=out)
-        return
-
-    if not action:
-        _describe_mcp(session, style, out)
-        return
-
-    if action == "remove":
-        if removal is None:
-            print(style.red("  usage: /mcp remove <name>"), file=out)
-            return
-        live = removal in session.mcp.servers
-        try:
-            saved = session.mcp.remove(removal)
-        except (MCPError, OSError) as exc:
-            print(style.red(f"  could not remove server: {exc}"), file=out)
-            return
-        await session.mcp.disconnect(removal)
-        session.mcp.servers.pop(removal, None)
-        if not live and not saved:
-            print(style.red(f"  no MCP server named {removal!r}"), file=out)
-        elif saved:
-            print(
-                style.dim(f"  removed {removal} from {config_path(session.workspace.root)}"),
-                file=out,
-            )
-        else:
-            print(style.dim(f"  disconnected {removal} for this session"), file=out)
-        return
-
-    if action not in ("add", "save") or spec is None:
-        print(
-            style.red(f"  usage: /mcp add <name> <command> [args...]  "
-                      f"(or /mcp save ...)"),
-            file=out,
-        )
-        return
-
-    try:
-        state = await session.mcp.connect(spec.name, spec)
-    except MCPError as exc:
-        print(style.red(f"  {exc}"), file=out)
-        return
-
-    if action == "save":
-        try:
-            session.mcp.add(spec.name, spec)
-        except (OSError, MCPError) as exc:
-            print(style.red(f"  connected, but could not save config: {exc}"), file=out)
-        else:
-            print(
-                style.dim(f"  saved to {config_path(session.workspace.root)}"), file=out
-            )
-
-    if state.status == "error":
-        print(style.warning(f"  Warning: {state.line()}"), file=out)
-        return
-
-    print(f"  {style.green('connected')} {literal(state.spec.name)} — {literal(state.detail)}", file=out)
-    for qualified in state.qualified:
-        print(literal(f"    {qualified}"), file=out)
-    if not state.qualified:
-        print(style.dim("    (no tools)"), file=out)
-
-
-async def _init_command(session: Session, style: Style, out: io.TextIOBase) -> None:
-    """Create missing project guidance and apply it without restarting."""
-    agents_md_path = session.workspace.resolve("AGENTS.md")
-    content = """# Project Guidance
-
-Repository-specific development notes. Unfilled sections are placeholders, not established facts or runnable commands.
-
-## Purpose and Architecture
-Not documented yet: project purpose, module responsibilities, and key invariants.
-
-## Environment and Dependencies
-Not documented yet: the project interpreter/toolchain and dependency setup.
-
-## Build and Verification
-Not documented yet: exact build, test, lint, and type-check commands.
-
-## Local Conventions
-Not documented yet: repository-specific coding conventions and restrictions.
-"""
-    try:
-        # Exclusive creation preserves existing guidance and refuses new symlinks.
-        with agents_md_path.open("x", encoding="utf-8") as handle:
-            handle.write(content)
-    except FileExistsError:
-        if not agents_md_path.is_file():
-            raise WorkspaceError("AGENTS.md must be a regular file")
-        action = "AGENTS.md already exists"
-    else:
-        action = "created AGENTS.md"
-
-    load_project_instructions(session.workspace)
-    session.agent.registry.services.setdefault("project_instructions", ProjectInstructions(session.workspace))
-    prompt = build_system_prompt(str(session.workspace.root))
-    session.agent.system_prompt = prompt
-    if session.agent.messages and session.agent.messages[0].role == "system":
-        session.agent.messages[0] = Message.system(prompt)
-    else:
-        session.agent.messages.insert(0, Message.system(prompt))
-    # Reloads rebuild the harness prompt around this updated project guidance.
-    if session.reloader is not None:
-        session.reloader._project_instructions = prompt
-    print(f"  {action}; project guidance loaded", file=out)
-
-
-def _describe_mcp(session: Session, style: Style, out: io.TextIOBase) -> None:
-    """List configured servers, live connections, and contributed tools."""
-    manager = session.mcp
-    assert manager is not None
-
-    error = manager.config_error()
-    if error:
-        print(style.red(f"  {error}"), file=out)
-        return
-
-    try:
-        configured = load_servers(manager.workspace)
-    except MCPError as exc:
-        print(style.red(f"  {exc}"), file=out)
-        return
-
-    live = {name: state for name, state in manager.servers.items()}
-    if not configured and not live:
-        print(
-            style.dim(
-                f"  no MCP servers configured ({config_path(manager.workspace)}).\n"
-                f"  add one with: /mcp add <name> <command> [args...]"
-            ),
-            file=out,
-        )
-        return
-
-    if configured:
-        connected = sum(name in configured and state.status == "connected" for name, state in live.items())
-        print(
-            style.dim(
-                f"  {connected}/{len(configured)} configured server(s) connected "
-                f"({config_path(manager.workspace)})"
-            ),
-            file=out,
-        )
-    else:
-        print(style.dim("  no globally saved servers; showing this session only"), file=out)
-
-    for name in sorted(set(configured) | set(live)):
-        state = live.get(name)
-        if state is not None:
-            print(f"  {style.cyan(name)}: {literal(state.status)} — {literal(state.detail)}", file=out)
-            for qualified in state.qualified:
-                print(literal(f"    {qualified}"), file=out)
-        else:
-            spec = configured[name]
-            marker = "not connected" if name in configured else "session only"
-            print(style.dim(f"  {name}: {marker} — {spec.command_line()}"), file=out)
 
 
 # --------------------------------------------------------------------------- #
@@ -2498,40 +2413,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-async def _list_models(args: argparse.Namespace) -> int:
-    from .config import load_dotenv
-    load_dotenv()
-    selected = configured_provider(args.provider)
-    provider_class(selected)
-    names = active_providers(keys={selected: args.api_key} if args.api_key else None)
-    if not names:
-        keys = ", ".join(provider_class(name).key_env for name in PROVIDERS)
-        raise ConfigError(f"No active API providers. Set one of: {keys}.")
-    renderer = Renderer(Style(_use_color(sys.stderr, args.no_color)), sys.stderr, args.verbose)
-    results = await asyncio.gather(*(fetch_catalog(name, base_url=(args.base_url if name == selected else None)
-                                    or os.environ.get(provider_class(name).base_url_env),
-                                    api_key=args.api_key if name == selected else None,
-                                    on_retry=renderer.retry_countdown) for name in names),
-                                   return_exceptions=True)
-    models: list[ModelInfo] = []
-    for name, result in zip(names, results):
-        if isinstance(result, BaseException):
-            if not isinstance(result, (APIError, ConfigError)):
-                raise result
-            print(literal(f"slipagent: {name}: {result}"), file=sys.stderr)
-        else:
-            models.extend(coding_models(result))
-    if not models:
-        return 1
-
-    style = Style(_use_color(sys.stdout, args.no_color))
-    for model in sorted(models, key=model_order):
-        context = f"  {model.context_length:,} ctx" if model.context_length else ""
-        print(f"{literal(model.selector)}{style.dim(context)}")
-    print(style.dim(f"\n{len(models)} models"), file=sys.stderr)
-    return 0
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -2564,43 +2445,12 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--json-events requires a one-shot prompt and cannot be combined with --list-models.")
 
     try:
-        return asyncio.run(_dispatch(args, prompt))
+        return asyncio.run(Launcher(args).dispatch(prompt))
     except PromptError as exc:
         print(literal(f"slipagent: {exc}"), file=sys.stderr)
         return 2
     except KeyboardInterrupt:
         return 130
-
-
-def _notice_ignored_project_settings(args: argparse.Namespace) -> None:
-    from .config import _dotenv_disabled, dotenv_path, ignored_project_settings
-
-    if _dotenv_disabled(os.environ):
-        return
-    start = Path(getattr(args, "workspace", None) or os.environ.get("SLIPAGENT_WORKSPACE") or ".").expanduser()
-    try:
-        ignored = ignored_project_settings(start)
-    except (OSError, ConfigError, APIConfigError):
-        return
-    if ignored is not None:
-        path, names = ignored
-        print(literal(f"slipagent: ignoring {', '.join(names)} in {path}; project .env files are not read. "
-                      f"Put SlipAgent settings in {dotenv_path()} or export them."), file=sys.stderr)
-
-
-def _notice_project_language_servers(args: argparse.Namespace) -> None:
-    from .environment import PROJECT_SETTINGS_PATH
-    from .lsp import language_servers_path
-
-    start = Path(getattr(args, "workspace", None) or os.environ.get("SLIPAGENT_WORKSPACE") or ".").expanduser()
-    try:
-        data = json.loads((start / PROJECT_SETTINGS_PATH).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return
-    if isinstance(data, dict) and data.get("language_servers"):
-        print(literal(f"slipagent: ignoring language_servers in {start / PROJECT_SETTINGS_PATH}; "
-                      f"projects cannot name commands to start. Move them to {language_servers_path()}."),
-              file=sys.stderr)
 
 
 FIRST_RUN_PROVIDERS = (
@@ -2610,84 +2460,6 @@ FIRST_RUN_PROVIDERS = (
     ("mistral", "Mistral", "https://console.mistral.ai/api-keys"),
     ("kilo", "Kilo", "https://kilo.ai"),
 )
-
-
-def _first_run_key() -> bool:
-    """Ask for a first API key before an interactive launch that has none."""
-    print("SlipAgent needs an API key from one of these providers; each offers free models:", file=sys.stderr)
-    for _, name, url in FIRST_RUN_PROVIDERS:
-        print(f"  {name:<14} {url}", file=sys.stderr)
-    try:
-        key = getpass.getpass("Paste an API key (hidden; Enter exits): ").strip()
-        if not key:
-            return False
-        provider = key_provider(key)
-        while provider is None:
-            answer = input("Which provider is this key for? (" + ", ".join(PROVIDERS) + "; Enter exits) ").strip().lower()
-            if not answer:
-                return False
-            provider = answer if answer in PROVIDERS else None
-        implementation = provider_class(provider)
-        print(f"Using it as the {provider} key for this session.", file=sys.stderr)
-        save = input(f"Save it to {dotenv_path()} for future launches? [Y/n] ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print(file=sys.stderr)
-        return False
-    os.environ[implementation.key_env] = key
-    if save in {"", "y", "yes"}:
-        try:
-            save_dotenv_value(dotenv_path(), implementation.key_env, key)
-            print(f"Saved to {dotenv_path()}.", file=sys.stderr)
-        except (OSError, ConfigError) as exc:
-            print(f"Could not save the key: {exc}", file=sys.stderr)
-    return True
-
-
-async def _dispatch(args: argparse.Namespace, prompt: str | None) -> int:
-    """Run everything inside a single event loop.
-
-    The httpx client must be created and used in the same loop, so setup and
-    execution cannot live in separate `asyncio.run` calls.
-    """
-    asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=4, thread_name_prefix="slipagent"))
-    _notice_ignored_project_settings(args)
-    _notice_project_language_servers(args)
-    if args.list_models:
-        try:
-            return await _list_models(args)
-        except (ConfigError, APIConfigError) as exc:
-            print(literal(f"slipagent: {exc}"), file=sys.stderr)
-            return 2
-
-    events = JsonEventStream(sys.stdout) if getattr(args, "json_events", False) else None
-    interactive = not prompt and sys.stdin.isatty() and sys.stderr.isatty() and os.environ.get("TERM") != "dumb"
-    if interactive and not args.api_key:
-        from .config import load_dotenv
-        load_dotenv()
-    if interactive and not args.api_key and not active_providers():
-        if not await asyncio.to_thread(_first_run_key):
-            return 2
-    try:
-        session = await build_session(args, defer_startup=interactive)
-    except (ConfigError, APIError) as exc:
-        print(literal(f"slipagent: {exc}"), file=sys.stderr)
-        if events is not None:
-            events.write("run_end", status="error", exit_code=2, phase="setup",
-                         error={"type": type(exc).__name__, "message": str(exc)})
-        return 2
-
-    if prompt:
-        if events is not None:
-            previous_handler = session.agent.on_event
-            def handle(event: AgentEvent) -> None:
-                events.event(event)
-                if previous_handler is not None:
-                    previous_handler(event)
-            session.agent.on_event = handle
-            events.write("run_start", model=session.agent.model, provider=session.client.provider,
-                         workspace=str(session.workspace.root), session_id=session.agent.session_id)
-        return await run_one_shot(session, prompt, events)
-    return await run_repl(session)
 
 
 if __name__ == "__main__":

@@ -20,7 +20,7 @@ from test_cli_e2e import metadata_server
 
 
 async def test_model_change_pause_resumes_and_preserves_submitted_input(tmp_path, monkeypatch, metadata_server):
-    session = await cli.build_session(cli.build_parser().parse_args(['--no-mcp', '-w', str(tmp_path)]))
+    session = await cli.Launcher(cli.build_parser().parse_args(['--no-mcp', '-w', str(tmp_path)])).build_session()
     session.renderer.stream = io.StringIO()
     lines = asyncio.Queue()
     first_started, finish_first = asyncio.Event(), asyncio.Event()
@@ -53,10 +53,10 @@ async def test_model_change_pause_resumes_and_preserves_submitted_input(tmp_path
         changing.set()
         await finish_change.wait()
 
-    monkeypatch.setattr(cli, '_read_line', read)
-    monkeypatch.setattr(cli, '_model_command', model)
+    monkeypatch.setattr(cli.Repl, 'read_line', read)
+    monkeypatch.setattr(cli.ModelPicker, 'menu', model)
     monkeypatch.setattr(type(session.agent), 'run', run)
-    task = asyncio.create_task(cli._run_request(session, 'Inspect', session.renderer.style))
+    task = asyncio.create_task(cli.Repl(session).run_request('Inspect', session.renderer.style))
     try:
         await asyncio.wait_for(first_started.wait(), 2)
         await lines.put('/model replacement')
@@ -83,13 +83,13 @@ async def test_model_change_pause_resumes_and_preserves_submitted_input(tmp_path
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 @pytest.mark.parametrize("phase", ["request", "tools"])
 @pytest.mark.parametrize("queued", [False, True])
 async def test_interrupt_preserves_results_and_runs_only_queued_input(tmp_path, monkeypatch, metadata_server, phase, queued):
-    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    session = await cli.Launcher(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)])).build_session()
     session.renderer.stream = io.StringIO()
     entered = asyncio.Event()
     cancelled = asyncio.Event()
@@ -133,16 +133,16 @@ async def test_interrupt_preserves_results_and_runs_only_queued_input(tmp_path, 
     async def read(*arguments):
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(cli, "_read_line", read)
-    step = asyncio.create_task(cli._run_request(session, "Inspect", session.renderer.style))
+    monkeypatch.setattr(cli.Repl, "read_line", read)
+    step = asyncio.create_task(cli.Repl(session).run_request("Inspect", session.renderer.style))
     try:
         await asyncio.wait_for(entered.wait(), 2)
         if queued:
             session.agent.enqueue("Queued follow-up")
-        await cli._handle_command(session, "/danger")
-        cli._request_interrupt(session)
+        await cli.CommandRunner(session).handle("/danger")
+        cli.Repl(session).request_interrupt()
         cleanup = session.extensions["interrupt_task"]
-        cli._request_interrupt(session)
+        cli.Repl(session).request_interrupt()
         assert session.extensions["interrupt_task"] is cleanup
         assert await asyncio.wait_for(step, 3) is False
         assert cancelled.is_set()
@@ -168,11 +168,11 @@ async def test_interrupt_preserves_results_and_runs_only_queued_input(tmp_path, 
     finally:
         step.cancel()
         await asyncio.gather(step, return_exceptions=True)
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 async def test_interrupt_cancels_inflight_interactive_command(tmp_path, monkeypatch, metadata_server):
-    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    session = await cli.Launcher(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)])).build_session()
     session.renderer.stream = io.StringIO()
     entered = asyncio.Event()
     cancelled = asyncio.Event()
@@ -184,21 +184,21 @@ async def test_interrupt_cancels_inflight_interactive_command(tmp_path, monkeypa
         finally:
             cancelled.set()
 
-    monkeypatch.setattr(cli, "_handle_command", command)
-    task = asyncio.create_task(cli._run_interactive_command(session, "/model example"))
+    monkeypatch.setattr(cli.CommandRunner, "handle", command)
+    task = asyncio.create_task(cli.CommandRunner(session).run_interactive("/model example"))
     try:
         await asyncio.wait_for(entered.wait(), 2)
-        cli._request_interrupt(session)
+        cli.Repl(session).request_interrupt()
         assert await asyncio.wait_for(task, 2) is False
         assert cancelled.is_set()
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 async def test_interrupt_stops_background_processes_summaries_and_commands(tmp_path, metadata_server):
-    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    session = await cli.Launcher(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)])).build_session()
     session.renderer.stream = io.StringIO()
     try:
         command = shlex.join([sys.executable, "-u", "-c", "import time; print('ready'); time.sleep(60)"])
@@ -218,18 +218,18 @@ async def test_interrupt_stops_background_processes_summaries_and_commands(tmp_p
         compactor.jobs.add(summary)
         command_task = asyncio.create_task(asyncio.Event().wait())
         session.extensions["command_tasks"] = {command_task}
-        cli._request_interrupt(session)
-        await asyncio.wait_for(cli._wait_for_interrupt(session), 3)
+        cli.Repl(session).request_interrupt()
+        await asyncio.wait_for(cli.Repl(session).wait_for_interrupt(), 3)
         assert job.state == "stopped"
         assert job.log.finished and not jobs.active
         assert summary.cancelled() and command_task.cancelled()
         assert not compactor.jobs
     finally:
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 async def test_interrupt_during_deferred_command_discards_remaining_commands(tmp_path, monkeypatch, metadata_server):
-    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    session = await cli.Launcher(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)])).build_session()
     session.renderer.stream = io.StringIO()
     entered = asyncio.Event()
     ran = []
@@ -239,23 +239,23 @@ async def test_interrupt_during_deferred_command_discards_remaining_commands(tmp
         entered.set()
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(cli, "_handle_command", command)
+    monkeypatch.setattr(cli.CommandRunner, "handle", command)
     session.extensions["deferred_commands"] = ["/model example", "/danger"]
     session.extensions["resume_after_commands"] = True
-    task = asyncio.create_task(cli._apply_deferred_commands(session))
+    task = asyncio.create_task(cli.CommandRunner(session).apply_deferred())
     try:
         await asyncio.wait_for(entered.wait(), 2)
-        cli._request_interrupt(session)
+        cli.Repl(session).request_interrupt()
         assert await asyncio.wait_for(task, 2) == (False, False)
         assert ran == ["/model example"]
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 async def test_interrupt_as_turn_finishes_launches_pending_prompt(tmp_path, monkeypatch, metadata_server):
-    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    session = await cli.Launcher(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)])).build_session()
     session.renderer.stream = io.StringIO()
     runs = []
 
@@ -264,7 +264,7 @@ async def test_interrupt_as_turn_finishes_launches_pending_prompt(tmp_path, monk
         if len(runs) == 1:
             agent.enqueue("Pending correction")
             # Escape arrives after completion, before the controller handles it.
-            asyncio.get_running_loop().call_soon(cli._request_interrupt, session)
+            asyncio.get_running_loop().call_soon(cli.Repl(session).request_interrupt)
         else:
             assert "interrupt_requested" not in session.registry.services
             agent._drain_pending()
@@ -275,10 +275,10 @@ async def test_interrupt_as_turn_finishes_launches_pending_prompt(tmp_path, monk
         await asyncio.Event().wait()
 
     monkeypatch.setattr(type(session.agent), "run", run)
-    monkeypatch.setattr(cli, "_read_line", read)
+    monkeypatch.setattr(cli.Repl, "read_line", read)
     try:
-        assert await asyncio.wait_for(cli._run_request(session, "Inspect", session.renderer.style), 2) is False
+        assert await asyncio.wait_for(cli.Repl(session).run_request("Inspect", session.renderer.style), 2) is False
         assert runs == ["Inspect", ""]
         assert not session.agent.has_queued_input
     finally:
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()

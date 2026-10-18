@@ -1,5 +1,6 @@
 """Durable sessions round-trip originals and recover interruptions without replay."""
 
+import argparse
 from slipagent.types import content_text
 
 from slipagent.types import decode_json_content
@@ -53,13 +54,13 @@ async def test_resume_ignores_legacy_task_snapshot_and_retains_original_prompt(w
 
 async def test_startup_commands_do_not_create_session_before_prompt(tmp_path, metadata_server):
     from slipagent import cli
-    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    session = await cli.Launcher(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)])).build_session()
     journal = session.registry.services["session_journal"]
     try:
         assert journal.path is None
         assert journal.listing() == []
         for command in ("/help", "/sessions", "/overthinking off", "/rename First task"):
-            await cli._handle_command(session, command)
+            await cli.CommandRunner(session).handle(command)
         assert journal.path is None
         assert journal.listing() == []
         session.agent.client = StubClient([completion("Answer")])
@@ -70,7 +71,7 @@ async def test_startup_commands_do_not_create_session_before_prompt(tmp_path, me
         saved = journal.load(journal.session_id)
         assert any(message.role == "user" and message.content == "First prompt" for message in saved["messages"])
     finally:
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 @pytest.mark.parametrize("startup_resume", [False, True])
@@ -84,12 +85,12 @@ async def test_startup_and_resume_create_no_empty_session(tmp_path, metadata_ser
     args = ["--no-mcp", "-w", str(tmp_path)]
     if startup_resume:
         args += ["--resume", parent]
-    session = await cli.build_session(cli.build_parser().parse_args(args))
+    session = await cli.Launcher(cli.build_parser().parse_args(args)).build_session()
     active = session.registry.services["session_journal"]
     try:
         if not startup_resume:
             assert len(active.listing()) == 1
-            await cli._handle_command(session, f"/resume {parent}")
+            await cli.CommandRunner(session).handle(f"/resume {parent}")
         assert len(active.listing()) == 1
         assert active.session_id == parent
         assert journal.load(parent)["messages"][-1].content == "Saved prompt"
@@ -106,12 +107,12 @@ async def test_startup_and_resume_create_no_empty_session(tmp_path, metadata_ser
         active.delete_current()
         assert active.listing() == []
     finally:
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 async def test_fork_preserves_parent_and_continues_in_new_session(tmp_path, metadata_server):
     from slipagent import cli
-    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    session = await cli.Launcher(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)])).build_session()
     journal = session.registry.services["session_journal"]
     session.agent.client = StubClient([completion("First answer"), completion("Fork answer")])
     try:
@@ -126,7 +127,7 @@ async def test_fork_preserves_parent_and_continues_in_new_session(tmp_path, meta
         parent = journal.session_id
         parent_path = journal.path
         original = parent_path.read_bytes()
-        await cli._handle_command(session, "/fork")
+        await cli.CommandRunner(session).handle("/fork")
         assert journal.session_id != parent
         assert journal.title == "Original title | SlipAgent"
         assert len(journal.listing()) == 2
@@ -139,7 +140,7 @@ async def test_fork_preserves_parent_and_continues_in_new_session(tmp_path, meta
         assert any(message.content == "New branch prompt" for message in journal.load(journal.session_id)["messages"])
         assert all(message.content != "New branch prompt" for message in journal.load(parent)["messages"])
     finally:
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 @pytest.mark.parametrize("operation", ["fork", "resume", "delete", "one-shot"])
@@ -158,18 +159,18 @@ async def test_session_transition_finishes_after_compaction_grace(tmp_path, meta
                 await asyncio.Event().wait()
             return await super().chat(**kwargs)
 
-    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    session = await cli.Launcher(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)])).build_session()
     session.agent.client = PausedSummaryClient([completion("Original answer")])
     session.agent._compactor().routing = None
     journal = session.registry.resources.journal
     try:
         if operation == "one-shot":
-            assert await asyncio.wait_for(cli.run_one_shot(session, "Original request"), 3) == 0
+            assert await asyncio.wait_for(cli.Launcher(argparse.Namespace()).run_one_shot(session, "Original request"), 3) == 0
         else:
             await session.agent.run("Original request")
             await asyncio.wait_for(started.wait(), 3)
             command = "/resume latest" if operation == "resume" else f"/{operation}"
-            await asyncio.wait_for(cli._handle_command(session, command), 3)
+            await asyncio.wait_for(cli.CommandRunner(session).handle(command), 3)
         assert started.is_set()
         assert not session.agent._compactor().jobs
         if operation == "delete":
@@ -179,7 +180,7 @@ async def test_session_transition_finishes_after_compaction_grace(tmp_path, meta
             assert any(message.content == "Original request" for message in saved["messages"])
             assert saved["messages"][-1].content == "Original answer"
     finally:
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 @pytest.mark.parametrize("confirmation", [None, "cancel", "delete"])
@@ -188,7 +189,7 @@ async def test_delete_confirmation_removes_only_current_session(tmp_path, metada
     from unittest.mock import AsyncMock, Mock
     from slipagent import cli
     from slipagent.terminal import TerminalUI
-    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    session = await cli.Launcher(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)])).build_session()
     journal = session.registry.services["session_journal"]
     session.agent.client = StubClient([completion("Answer")])
     terminal = Mock(spec=TerminalUI)
@@ -201,7 +202,7 @@ async def test_delete_confirmation_removes_only_current_session(tmp_path, metada
         parent = journal.session_id
         parent_path = journal.path
         original = parent_path.read_bytes()
-        await cli._handle_command(session, "/fork")
+        await cli.CommandRunner(session).handle("/fork")
         journal.rename("Delete this copy")
         current = journal.session_id
         current_path = journal.path
@@ -212,7 +213,7 @@ async def test_delete_confirmation_removes_only_current_session(tmp_path, metada
             directory.mkdir(exist_ok=True)
             (directory / "retained-data").write_text("Private session data")
         session.renderer.terminal = terminal
-        await cli._handle_command(session, "/delete")
+        await cli.CommandRunner(session).handle("/delete")
         terminal.choose.assert_awaited_once()
         assert "Delete this copy" in terminal.choose.call_args.args[0]
         assert parent_path.read_bytes() == original
@@ -224,7 +225,7 @@ async def test_delete_confirmation_removes_only_current_session(tmp_path, metada
             assert not session.agent.pending and not session.agent.history.steps
             terminal.clear_transcript.assert_called_once()
             assert "SlipAgent — coding agent with selectable API providers" in output.getvalue()
-            await cli._handle_command(session, "/sessions")
+            await cli.CommandRunner(session).handle("/sessions")
             assert journal.path is None
         else:
             assert current_path.read_bytes() == current_original
@@ -232,24 +233,24 @@ async def test_delete_confirmation_removes_only_current_session(tmp_path, metada
             assert len(journal.listing()) == 2
             terminal.clear_transcript.assert_not_called()
     finally:
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 async def test_fork_and_delete_require_saved_session_and_delete_requires_terminal(tmp_path, metadata_server):
     from slipagent import cli
-    session = await cli.build_session(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)]))
+    session = await cli.Launcher(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)])).build_session()
     journal = session.registry.services["session_journal"]
     try:
-        await cli._handle_command(session, "/fork")
-        await cli._handle_command(session, "/delete")
+        await cli.CommandRunner(session).handle("/fork")
+        await cli.CommandRunner(session).handle("/delete")
         assert journal.path is None
         session.agent.messages.append(Message.user("Prompt"))
         session.agent._persist()
         original = journal.path.read_bytes()
-        await cli._handle_command(session, "/delete")
+        await cli.CommandRunner(session).handle("/delete")
         assert journal.path.read_bytes() == original
     finally:
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 def test_session_titles_survive_reopen_resume_and_reset(workspace, tmp_path):

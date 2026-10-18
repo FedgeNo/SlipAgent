@@ -235,7 +235,7 @@ def test_startup_notice_names_ignored_settings_without_values(tmp_path: Path, mo
 
     monkeypatch.delenv("SLIPAGENT_NO_DOTENV", raising=False)
     (tmp_path / ".env").write_text("OPENROUTER_API_KEY=secret-project-key\nAPP_PORT=8000\n", encoding="utf-8")
-    cli._notice_ignored_project_settings(argparse.Namespace(workspace=str(tmp_path)))
+    cli.Launcher(argparse.Namespace(workspace=str(tmp_path))).notice_ignored_project_settings()
     error = capsys.readouterr().err
     assert "OPENROUTER_API_KEY" in error and str(tmp_path / ".env") in error
     assert "secret-project-key" not in error and "APP_PORT" not in error
@@ -247,7 +247,7 @@ def test_startup_notice_respects_disabled_dotenv(tmp_path: Path, capsys) -> None
     from slipagent import cli
 
     (tmp_path / ".env").write_text("OPENROUTER_API_KEY=secret-project-key\n", encoding="utf-8")
-    cli._notice_ignored_project_settings(argparse.Namespace(workspace=str(tmp_path)))
+    cli.Launcher(argparse.Namespace(workspace=str(tmp_path))).notice_ignored_project_settings()
     assert capsys.readouterr().err == ""
 
 

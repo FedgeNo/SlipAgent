@@ -18,7 +18,7 @@ from prompt_toolkit.output.vt100 import Vt100_Output
 
 from slipagent.terminal import TerminalUI
 from slipagent.agent import AgentEvent
-from slipagent.cli import BANNER, HELP, Renderer, Style, _status_bar, _danger_suffix
+from slipagent.cli import BANNER, HELP, Renderer, Style, StatusLine
 from slipagent.tools.base import ToolResult
 from slipagent.types import Message, ToolCall, Usage
 
@@ -2387,7 +2387,7 @@ def display():
 @pytest.mark.slow
 @pytest.mark.parametrize("ending", ["ready", "escape", "exit", "eof"])
 async def test_startup_scrolls_welcome_keeps_input_live_and_drains(display, tmp_path, ending):
-    from slipagent.cli import _read_line, _start_repl
+    from slipagent.cli import Repl
     from slipagent.workspace import Workspace
 
     sink, _, output, _, snapshot = display
@@ -2410,7 +2410,7 @@ async def test_startup_scrolls_welcome_keeps_input_live_and_drains(display, tmp_
             registry=SimpleNamespace(names=["read_file"], services={}), workspace=Workspace(tmp_path),
             extensions={"startup": startup}, free_calls=None, client=None)
         app = asyncio.create_task(ui.run())
-        task = asyncio.create_task(_start_repl(session))
+        task = asyncio.create_task(Repl(session).start())
         try:
             await wait_until(lambda: "SlipAgent — coding" in "\n".join(snapshot()))
             assert "Working" in "\n".join(snapshot())
@@ -2424,8 +2424,8 @@ async def test_startup_scrolls_welcome_keeps_input_live_and_drains(display, tmp_
             if ending == "ready":
                 release.set()
                 assert await task
-                assert await _read_line(session, renderer.style) == "first task"
-                assert await _read_line(session, renderer.style) == "second task"
+                assert await Repl(session).read_line(renderer.style) == "first task"
+                assert await Repl(session).read_line(renderer.style) == "second task"
                 assert ui.input.text == "still typing"
                 await wait_until(lambda: "Ready" in "\n".join(snapshot()))
             else:
@@ -2807,8 +2807,8 @@ async def test_danger_status_suffix_is_red_last_and_survives_resize(display, tmp
     sink, size, output, screen, snapshot = display
     session = SimpleNamespace(workspace=Workspace(tmp_path), agent=SimpleNamespace(model="stub/model"), free_calls=42)
     with create_pipe_input() as pipe:
-        ui = TerminalUI(lambda columns: _status_bar(session, Style(True), columns=columns), sink,
-                        input=pipe, output=output, status_suffix=lambda: _danger_suffix(session, Style(True)))
+        ui = TerminalUI(lambda columns: StatusLine(session, Style(True)).text(columns=columns), sink,
+                        input=pipe, output=output, status_suffix=lambda: StatusLine(session, Style(True)).danger_suffix())
         task = asyncio.create_task(ui.run())
         try:
             await wait_until(lambda: "Model: stub/model" in snapshot()[23])
@@ -3671,8 +3671,8 @@ async def test_turn_token_counts_follow_output_without_blank_line(monkeypatch):
         agent=SimpleNamespace(run=run, pending=[], stopped=False, has_queued_input=False,
                               usage=Usage(prompt_tokens=10, completion_tokens=5, cost=0.0)),
     )
-    monkeypatch.setattr(cli, "_read_line", read)
-    assert await cli._run_request(session, "task", renderer.style) is False
+    monkeypatch.setattr(cli.Repl, "read_line", read)
+    assert await cli.Repl(session).run_request("task", renderer.style) is False
     assert "Finished.\n    (in=10 out=5 cost=$0.000000)" in sink.getvalue()
 
 

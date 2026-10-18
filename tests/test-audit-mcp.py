@@ -175,7 +175,8 @@ async def test_malformed_tool_listing_is_reported(result):
 def test_mcp_connected_count_excludes_failed_disconnected_and_unsaved_servers(tmp_path):
     import io
     from types import SimpleNamespace
-    from slipagent.cli import Style, _describe_mcp
+    from slipagent.cli import Style
+    from slipagent.commands import CommandContext, McpCommand
     from slipagent.mcp import ServerState, save_servers
 
     specs = {name: stub_spec(name) for name in ("good", "failed", "stopped")}
@@ -186,6 +187,6 @@ def test_mcp_connected_count_excludes_failed_disconnected_and_unsaved_servers(tm
         spec = stub_spec(name)
         manager.servers[name] = ServerState(spec, MCPClient(spec), status=status)
     out = io.StringIO()
-    _describe_mcp(SimpleNamespace(mcp=manager), Style(False), out)
+    McpCommand().describe(CommandContext(SimpleNamespace(mcp=manager), Style(False), out))
     assert "1/3 configured server(s) connected" in out.getvalue()
     assert "unsaved: connected" in out.getvalue()

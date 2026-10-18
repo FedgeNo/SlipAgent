@@ -58,7 +58,7 @@ async def key_session(tmp_path, monkeypatch):
     try:
         yield session, out, requests, clients
     finally:
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
         for client in clients:
             await client.aclose()
 
@@ -84,9 +84,9 @@ async def test_detected_key_is_saved_to_its_provider(key_session, tmp_path, monk
     path.write_text("# Keep this\nOPENROUTER_API_KEY=old\nUNRELATED=value\n")
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     ask = AsyncMock(return_value="yes")
-    monkeypatch.setattr(cli, "_ask_input", ask)
+    monkeypatch.setattr(cli.Renderer, "ask_input", ask)
 
-    await cli._key_command(session, key, cli.Style(False), out)
+    await cli.KeyEntry(session, cli.Style(False), out).command(key)
 
     assert f"{provider_class(provider).key_env}={key}\n" in path.read_text()
     assert "# Keep this\n" in path.read_text() and "UNRELATED=value\n" in path.read_text()
@@ -113,7 +113,7 @@ async def test_detected_key_is_saved_to_its_provider(key_session, tmp_path, monk
 async def test_unrecognized_key_needs_provider_without_sending_it(key_session, tmp_path):
     session, out, requests, clients = key_session
     original = session.client
-    await cli._key_command(session, "opaque-secret", cli.Style(False), out)
+    await cli.KeyEntry(session, cli.Style(False), out).command("opaque-secret")
     assert "provider" in out.getvalue() and "/key <provider> <key>" in out.getvalue()
     assert "opaque-secret" not in out.getvalue()
     assert not requests and len(clients) == 1
@@ -127,7 +127,7 @@ async def test_unrecognized_key_needs_provider_without_sending_it(key_session, t
 ])
 async def test_unrelated_or_malformed_token_needs_provider(key_session, candidate):
     session, out, requests, clients = key_session
-    await cli._key_command(session, candidate, cli.Style(False), out)
+    await cli.KeyEntry(session, cli.Style(False), out).command(candidate)
     assert "Could not identify" in out.getvalue()
     assert not requests and len(clients) == 1
 
@@ -136,16 +136,16 @@ async def test_unrecognized_key_prompts_for_provider(key_session, monkeypatch):
     session, out, requests, clients = key_session
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     ask = AsyncMock(side_effect=["mistral", "n"])
-    monkeypatch.setattr(cli, "_ask_input", ask)
-    await cli._key_command(session, "opaque-secret", cli.Style(False), out)
+    monkeypatch.setattr(cli.Renderer, "ask_input", ask)
+    await cli.KeyEntry(session, cli.Style(False), out).command("opaque-secret")
     assert session.compression_options()["mistral"]["api_key"] == "opaque-secret"
     assert len(requests) == 1 and requests[0][0] == "mistral"
-    assert "provider" in ask.call_args_list[0].args[1]
+    assert "provider" in ask.call_args_list[0].args[0]
 
 
 async def test_explicit_provider_accepts_opaque_key(key_session):
     session, out, requests, clients = key_session
-    await cli._key_command(session, "kilo opaque-secret", cli.Style(False), out)
+    await cli.KeyEntry(session, cli.Style(False), out).command("kilo opaque-secret")
     assert session.compression_options()["kilo"]["api_key"] == "opaque-secret"
     assert session.client.provider == "openrouter"
     assert "authentication will be checked on inference" in out.getvalue()
@@ -154,7 +154,7 @@ async def test_explicit_provider_accepts_opaque_key(key_session):
 
 async def test_provider_mismatch_leaves_credentials_untouched(key_session):
     session, out, requests, clients = key_session
-    await cli._key_command(session, "google mstrl_new", cli.Style(False), out)
+    await cli.KeyEntry(session, cli.Style(False), out).command("google mstrl_new")
     assert "mistral" in out.getvalue() and "google" in out.getvalue()
     assert not requests and len(clients) == 1
     assert "google" not in session.compression_options()
@@ -164,8 +164,8 @@ async def test_hidden_key_input_uses_detection(key_session, monkeypatch):
     session, out, requests, clients = key_session
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     ask = AsyncMock(side_effect=["nvapi-hidden", "n"])
-    monkeypatch.setattr(cli, "_ask_input", ask)
-    await cli._key_command(session, "", cli.Style(False), out)
+    monkeypatch.setattr(cli.Renderer, "ask_input", ask)
+    await cli.KeyEntry(session, cli.Style(False), out).command("")
     assert ask.call_args_list[0].kwargs["password"] is True
     assert session.compression_options()["nvidia"]["api_key"] == "nvapi-hidden"
     assert session.client.provider == "openrouter"
@@ -192,7 +192,7 @@ async def test_rejected_key_keeps_live_state_and_saved_key(key_session, tmp_path
         return client
 
     monkeypatch.setattr(sessionstate, "create_client", rejected)
-    await cli._key_command(session, key, cli.Style(False), out)
+    await cli.KeyEntry(session, cli.Style(False), out).command(key)
     assert "rejected" in out.getvalue()
     assert session.client is original and not original._client.is_closed
     assert session.free_calls == 37 and session._catalog is original_catalog
@@ -213,7 +213,7 @@ async def test_cancelled_verification_closes_candidate(key_session, monkeypatch)
 
     monkeypatch.setattr(sessionstate, "create_client", cancelled)
     with pytest.raises(asyncio.CancelledError):
-        await cli._key_command(session, "sk-or-v1-new", cli.Style(False), out)
+        await cli.KeyEntry(session, cli.Style(False), out).command("sk-or-v1-new")
     assert session.client is original and not original._client.is_closed
     assert clients[-1]._client.is_closed
 
@@ -221,7 +221,7 @@ async def test_cancelled_verification_closes_candidate(key_session, monkeypatch)
 async def test_installed_key_reaches_catalog_model_selection_and_compression(key_session, monkeypatch):
     session, out, requests, clients = key_session
     monkeypatch.setenv("NVIDIA_BASE_URL", "https://nvidia.example.test/v1")
-    await cli._key_command(session, "nvapi-new", cli.Style(False), out)
+    await cli.KeyEntry(session, cli.Style(False), out).command("nvapi-new")
     model = ModelInfo("test/new", provider="nvidia", score=99.0, pricing={"prompt": "0", "completion": "0"})
     catalog = AsyncMock(return_value=[model])
     monkeypatch.setattr(sessionstate, "fetch_catalog", catalog)
@@ -248,6 +248,6 @@ async def test_installed_key_reaches_catalog_model_selection_and_compression(key
 @pytest.mark.parametrize("key", ["\n", "nvapi-key\nother", "AQ.\u2603", "nvapi-\x00bad"])
 async def test_invalid_key_characters_do_not_reach_transport(key_session, key):
     session, out, requests, clients = key_session
-    await cli._replace_key(session, cli.Style(False), out, candidate=key)
+    await cli.KeyEntry(session, cli.Style(False), out).replace(candidate=key)
     assert not requests and len(clients) == 1
     assert "ASCII" in out.getvalue()

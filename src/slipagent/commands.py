@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import io
+import math
+import shlex
 import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .markdown import THEMES
+from .markdown import THEMES, literal
+from .mcp import MCPError, ServerSpec, config_path, load_servers
 from .sessions import SessionError, session_title
 from .checkpoints import CheckpointError
 from .task import TaskMemory
@@ -131,9 +134,7 @@ class HelpCommand(Command):
     )
 
     async def run(self, context: CommandContext, argument: str) -> bool | None:
-        from . import cli
-        session, style, out = context.session, context.style, context.out
-        print(cli._command_help(argument), file=out, end="")
+        print(command_help(argument), file=context.out, end="")
         return None
 
 
@@ -207,13 +208,13 @@ class SettingsCommand(Command):
             line = f"/theme {theme}" if theme else None
         else:
             try:
-                text = (await cli._ask_input(session, "  temperature (blank keeps it): ")).strip()
+                text = (await session.renderer.ask_input("  temperature (blank keeps it): ")).strip()
             except (EOFError, KeyboardInterrupt):
                 text = ""
             line = f"/temperature {text}" if text else None
         if line is not None:
             # Typed commands and menu choices share queueing while work is active.
-            await cli._execute_command(session, line)
+            await cli.CommandRunner(session).execute(line)
         return None
 
 
@@ -457,8 +458,7 @@ class ModelCommand(ExclusiveCommand):
 
     async def run(self, context: CommandContext, argument: str) -> bool | None:
         from . import cli
-        session, style, out = context.session, context.style, context.out
-        await cli._model_command(session, argument, style, out)
+        await cli.ModelPicker(context.session, context.style, context.out).menu(argument)
         return None
 
 
@@ -471,8 +471,7 @@ class ModelsCommand(ExclusiveCommand):
 
     async def run(self, context: CommandContext, argument: str) -> bool | None:
         from . import cli
-        session, style, out = context.session, context.style, context.out
-        await cli._models_command(session, argument, style, out)
+        await cli.ModelPicker(context.session, context.style, context.out).browse(argument)
         return None
 
 
@@ -493,7 +492,7 @@ class OptimalCommand(ExclusiveCommand):
         action = argument.strip().lower()
         if action in {'on', 'reset', 'next'}:
             from . import cli
-            await cli._routing_action(context.session, action, context.style, context.out)
+            await cli.ModelPicker(context.session, context.style, context.out).routing_action(action)
         elif action == 'off':
             routing.enabled = False
             print("  Optimal off; the current model remains selected.", file=context.out)
@@ -514,8 +513,7 @@ class ProviderCommand(ExclusiveCommand):
 
     async def run(self, context: CommandContext, argument: str) -> bool | None:
         from . import cli
-        session, style, out = context.session, context.style, context.out
-        await cli._provider_default(session, argument.strip().lower(), style, out)
+        await cli.ModelPicker(context.session, context.style, context.out).provider_default(argument.strip().lower())
         return None
 
 
@@ -534,9 +532,35 @@ class TemperatureCommand(Command):
         return not argument
 
     async def run(self, context: CommandContext, argument: str) -> bool | None:
-        from . import cli
+        from .api import APIError
         session, style, out = context.session, context.style, context.out
-        await cli._temperature_command(session, argument, style, out)
+        value = session.agent.temperature
+        if argument:
+            try:
+                value = float(argument)
+            except ValueError:
+                value = float("nan")
+            limit = session.client.max_temperature
+            if not math.isfinite(value) or not 0 <= value <= limit:
+                print(style.red(f"  temperature must be a number from 0 to {limit:g} for {session.client.provider}."), file=out)
+                return None
+        try:
+            capabilities = await session.client.model_capabilities(session.agent.model)
+        except APIError as exc:
+            print(style.red(f"  could not verify temperature support: {exc}"), file=out)
+            return None
+        if capabilities is None or "temperature" not in capabilities.parameters:
+            print(style.red(
+                f"  temperature control is unavailable for {session.agent.model}'s selected endpoints; "
+                "the provider default is used."
+            ), file=out)
+            return None
+        if argument:
+            session.agent.temperature = value
+        if value is None:
+            print("  temperature: provider default", file=out)
+        else:
+            print(f"  temperature: {value:g}", file=out)
         return None
 
 
@@ -559,8 +583,7 @@ class KeyCommand(Command):
 
     async def run(self, context: CommandContext, argument: str) -> bool | None:
         from . import cli
-        session, style, out = context.session, context.style, context.out
-        await cli._key_command(session, argument, style, out)
+        await cli.KeyEntry(context.session, context.style, context.out).command(argument)
         return None
 
 
@@ -789,7 +812,6 @@ class RewindCommand(ExclusiveCommand):
     )
 
     async def run(self, context: CommandContext, argument: str) -> bool | None:
-        from . import cli
         session, style, out = context.session, context.style, context.out
         checkpoints = session.agent._checkpoints()
         terminal = session.renderer.terminal
@@ -814,7 +836,7 @@ class RewindCommand(ExclusiveCommand):
                 except OSError as exc:
                     print(style.red(f"  {exc}"), file=out)
                     return False
-                print(cli._literal_tool_output(preview), file=out)
+                print(literal(preview), file=out)
                 confirm = await terminal.choose("Restore These Files?", [("restore", "Restore Files"), ("cancel", "Cancel")])
                 if confirm == "restore":
                     try:
@@ -919,10 +941,156 @@ class McpCommand(Command):
         return bool(argument)
 
     async def run(self, context: CommandContext, argument: str) -> bool | None:
-        from . import cli
         session, style, out = context.session, context.style, context.out
-        await cli._mcp_command(session, argument, style, out)
+        if session.mcp is None:
+            print(style.dim("  MCP is disabled for this run (--no-mcp)."), file=out)
+            return None
+
+        try:
+            action, spec, removal = self.split(argument)
+        except ValueError as exc:
+            print(style.red(f"  invalid MCP command: {exc}"), file=out)
+            return None
+
+        if not action:
+            self.describe(context)
+            return None
+
+        if action == "remove":
+            if removal is None:
+                print(style.red("  usage: /mcp remove <name>"), file=out)
+                return None
+            live = removal in session.mcp.servers
+            try:
+                saved = session.mcp.remove(removal)
+            except (MCPError, OSError) as exc:
+                print(style.red(f"  could not remove server: {exc}"), file=out)
+                return None
+            await session.mcp.disconnect(removal)
+            session.mcp.servers.pop(removal, None)
+            if not live and not saved:
+                print(style.red(f"  no MCP server named {removal!r}"), file=out)
+            elif saved:
+                print(
+                    style.dim(f"  removed {removal} from {config_path(session.workspace.root)}"),
+                    file=out,
+                )
+            else:
+                print(style.dim(f"  disconnected {removal} for this session"), file=out)
+            return None
+
+        if action not in ("add", "save") or spec is None:
+            print(
+                style.red(f"  usage: /mcp add <name> <command> [args...]  "
+                          f"(or /mcp save ...)"),
+                file=out,
+            )
+            return None
+
+        try:
+            state = await session.mcp.connect(spec.name, spec)
+        except MCPError as exc:
+            print(style.red(f"  {exc}"), file=out)
+            return None
+
+        if action == "save":
+            try:
+                session.mcp.add(spec.name, spec)
+            except (OSError, MCPError) as exc:
+                print(style.red(f"  connected, but could not save config: {exc}"), file=out)
+            else:
+                print(
+                    style.dim(f"  saved to {config_path(session.workspace.root)}"), file=out
+                )
+
+        if state.status == "error":
+            print(style.warning(f"  Warning: {state.line()}"), file=out)
+            return None
+
+        print(f"  {style.green('connected')} {literal(state.spec.name)} — {literal(state.detail)}", file=out)
+        for qualified in state.qualified:
+            print(literal(f"    {qualified}"), file=out)
+        if not state.qualified:
+            print(style.dim("    (no tools)"), file=out)
         return None
+
+    def split(self, argument: str) -> tuple[str, ServerSpec | None, str | None]:
+        """Parse `add|save|remove <name> <command> [args...]`.
+
+        Returns the subcommand, the server spec to connect, and the name to remove.
+        The command and its arguments are split on the first space after the name,
+        so `npx -y @scope/server --flag` stays one command with flags intact.
+        """
+        parts = argument.split(None, 2)
+        if not parts:
+            return "", None, None
+
+        action = parts[0].lower()
+        if action == "remove" and len(parts) >= 2:
+            return action, None, parts[1]
+
+        if action not in ("add", "save") or len(parts) < 3:
+            return action, None, None
+
+        name, rest = parts[1], parts[2].strip()
+        if not name or not rest:
+            return action, None, None
+        command_parts = shlex.split(rest)
+        if not command_parts:
+            return action, None, None
+
+        return action, ServerSpec(name=name, command=command_parts[0], args=command_parts[1:]), None
+
+    def describe(self, context: CommandContext) -> None:
+        """List configured servers, live connections, and contributed tools."""
+        style, out = context.style, context.out
+        manager = context.session.mcp
+        assert manager is not None
+
+        error = manager.config_error()
+        if error:
+            print(style.red(f"  {error}"), file=out)
+            return
+
+        try:
+            configured = load_servers(manager.workspace)
+        except MCPError as exc:
+            print(style.red(f"  {exc}"), file=out)
+            return
+
+        live = {name: state for name, state in manager.servers.items()}
+        if not configured and not live:
+            print(
+                style.dim(
+                    f"  no MCP servers configured ({config_path(manager.workspace)}).\n"
+                    f"  add one with: /mcp add <name> <command> [args...]"
+                ),
+                file=out,
+            )
+            return
+
+        if configured:
+            connected = sum(name in configured and state.status == "connected" for name, state in live.items())
+            print(
+                style.dim(
+                    f"  {connected}/{len(configured)} configured server(s) connected "
+                    f"({config_path(manager.workspace)})"
+                ),
+                file=out,
+            )
+        else:
+            print(style.dim("  no globally saved servers; showing this session only"), file=out)
+
+        for name in sorted(set(configured) | set(live)):
+            state = live.get(name)
+            if state is not None:
+                print(f"  {style.cyan(name)}: {literal(state.status)} — {literal(state.detail)}", file=out)
+                for qualified in state.qualified:
+                    print(literal(f"    {qualified}"), file=out)
+            else:
+                spec = configured[name]
+                marker = "not connected" if name in configured else "session only"
+                print(style.dim(f"  {name}: {marker} — {spec.command_line()}"), file=out)
 
 
 class NewCommand(ExclusiveCommand):
@@ -983,6 +1151,24 @@ class GenerationsCommand(Command):
         return None
 
 
+AGENTS_MD_SCAFFOLD = """# Project Guidance
+
+Repository-specific development notes. Unfilled sections are placeholders, not established facts or runnable commands.
+
+## Purpose and Architecture
+Not documented yet: project purpose, module responsibilities, and key invariants.
+
+## Environment and Dependencies
+Not documented yet: the project interpreter/toolchain and dependency setup.
+
+## Build and Verification
+Not documented yet: exact build, test, lint, and type-check commands.
+
+## Local Conventions
+Not documented yet: repository-specific coding conventions and restrictions.
+"""
+
+
 class InitCommand(ExclusiveCommand):
     name = 'init'
     banner = '/init'
@@ -991,9 +1177,37 @@ class InitCommand(ExclusiveCommand):
     )
 
     async def run(self, context: CommandContext, argument: str) -> bool | None:
-        from . import cli
-        session, style, out = context.session, context.style, context.out
-        await cli._init_command(session, style, out)
+        """Create missing project guidance and apply it without restarting."""
+        from .agent import build_system_prompt
+        from .instructions import ProjectInstructions, load_project_instructions
+        from .types import Message
+        from .workspace import WorkspaceError
+
+        session, out = context.session, context.out
+        agents_md_path = session.workspace.resolve("AGENTS.md")
+        try:
+            # Exclusive creation preserves existing guidance and refuses new symlinks.
+            with agents_md_path.open("x", encoding="utf-8") as handle:
+                handle.write(AGENTS_MD_SCAFFOLD)
+        except FileExistsError:
+            if not agents_md_path.is_file():
+                raise WorkspaceError("AGENTS.md must be a regular file")
+            action = "AGENTS.md already exists"
+        else:
+            action = "created AGENTS.md"
+
+        load_project_instructions(session.workspace)
+        session.agent.registry.services.setdefault("project_instructions", ProjectInstructions(session.workspace))
+        prompt = build_system_prompt(str(session.workspace.root))
+        session.agent.system_prompt = prompt
+        if session.agent.messages and session.agent.messages[0].role == "system":
+            session.agent.messages[0] = Message.system(prompt)
+        else:
+            session.agent.messages.insert(0, Message.system(prompt))
+        # Reloads rebuild the harness prompt around this updated project guidance.
+        if session.reloader is not None:
+            session.reloader._project_instructions = prompt
+        print(f"  {action}; project guidance loaded", file=out)
         return None
 
 

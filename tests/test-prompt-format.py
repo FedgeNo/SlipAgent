@@ -322,7 +322,7 @@ def test_cli_reports_missing_prompt_without_traceback(monkeypatch, capsys):
     async def dispatch(args, prompt):
         raise PromptError("Missing prompt file: /example/prompts/missing.txt. Restore this file in the prompts folder.")
 
-    monkeypatch.setattr(cli, "_dispatch", dispatch)
+    monkeypatch.setattr(cli.Launcher, "dispatch", dispatch)
     assert cli.main([]) == 2
     assert capsys.readouterr().err == "slipagent: Missing prompt file: /example/prompts/missing.txt. Restore this file in the prompts folder.\n"
 

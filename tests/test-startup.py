@@ -29,19 +29,19 @@ async def test_startup_reports_failed_metadata_and_mcp_outcomes(tmp_path, monkey
         "--workspace", str(tmp_path), "--api-key", "dummy", "--no-session", "--no-reload", "--no-mcp",
         "--model", "test/manual",
     ])
-    session = await cli.build_session(args, defer_startup=True)
+    session = await cli.Launcher(args).build_session(defer_startup=True)
     session.renderer.stream = io.StringIO()
     session.mcp = SimpleNamespace(connect_all=AsyncMock(return_value=[SimpleNamespace(status=mcp_status)]),
                                   aclose=AsyncMock())
     try:
-        await cli._initialize_session(session, args, cli.Config.from_env(api_key="dummy", workspace=tmp_path), announce=True)
+        await cli.Launcher(args).initialize(session, cli.Config.from_env(api_key="dummy", workspace=tmp_path), announce=True)
         output = session.renderer.stream.getvalue()
         assert "Model capability check: failed." in output
         assert "Finished fetching the model catalog" not in output
         assert f"MCP: {int(mcp_status == 'connected')} connected; {int(mcp_status == 'error')} failed." in output
         assert "Finished connecting to MCP" not in output
     finally:
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 def test_startup_reports_missing_current_directory(monkeypatch, capsys):
@@ -54,7 +54,7 @@ def test_startup_reports_missing_current_directory(monkeypatch, capsys):
         pytest.fail("Startup must stop before initializing services")
 
     monkeypatch.setattr(Path, "cwd", classmethod(missing_directory))
-    monkeypatch.setattr(cli, "_dispatch", dispatch)
+    monkeypatch.setattr(cli.Launcher, "dispatch", dispatch)
     assert cli.main(["-p", "test", "--no-mcp", "--no-session"]) == 2
     error = capsys.readouterr().err
     assert "current directory is unavailable" in error
@@ -110,7 +110,7 @@ async def test_deferred_startup_overlaps_services_before_context(tmp_path, monke
         "--workspace", str(tmp_path), "--api-key", "dummy", "--no-session", "--no-reload",
         "--model", "test/manual",
     ])
-    session = await cli.build_session(args, defer_startup=True)
+    session = await cli.Launcher(args).build_session(defer_startup=True)
     assert not entered
     task = asyncio.create_task(session.extensions.pop("startup")())
     try:
@@ -133,7 +133,7 @@ async def test_deferred_startup_overlaps_services_before_context(tmp_path, monke
     finally:
         release.set()
         await asyncio.gather(task, return_exceptions=True)
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 async def test_mcp_startup_has_four_connection_limit(tmp_path, monkeypatch):
@@ -222,13 +222,13 @@ async def test_startup_fetches_each_catalog_once(tmp_path, monkeypatch, provider
         "--workspace", str(tmp_path), "--api-key", "dummy", "--provider", provider,
         "--model", ULTRA_MODEL, "--no-session", "--no-reload", "--no-mcp",
     ])
-    session = await cli.build_session(args)
+    session = await cli.Launcher(args).build_session()
     try:
         assert sum(request.url.path.endswith("/models") for request in requests) == 1
         assert sum(request.url.path.endswith("/endpoints") for request in requests) == (provider == "openrouter")
         assert not any(request.method == "POST" for request in requests)
     finally:
-        await cli._shutdown(session)
+        await cli.Repl(session).shutdown()
 
 
 async def test_cli_limits_worker_threads_to_four(monkeypatch):
@@ -265,9 +265,9 @@ async def test_cli_limits_worker_threads_to_four(monkeypatch):
     async def repl(session):
         return 0
 
-    monkeypatch.setattr(cli, "build_session", build)
-    monkeypatch.setattr(cli, "run_repl", repl)
-    assert await cli._dispatch(cli.build_parser().parse_args([]), None) == 0
+    monkeypatch.setattr(cli.Launcher, "build_session", build)
+    monkeypatch.setattr(cli.Repl, "run", repl)
+    assert await cli.Launcher(cli.build_parser().parse_args([])).dispatch(None) == 0
 
 
 async def test_deferred_startup_failure_closes_session(tmp_path, monkeypatch, capsys):
@@ -280,12 +280,12 @@ async def test_deferred_startup_failure_closes_session(tmp_path, monkeypatch, ca
     args = cli.build_parser().parse_args([
         "--workspace", str(tmp_path), "--api-key", "dummy", "--no-session", "--no-reload", "--no-mcp",
     ])
-    session = await cli.build_session(args, defer_startup=True)
+    session = await cli.Launcher(args).build_session(defer_startup=True)
 
     async def fail():
         raise cli.APIConfigError("startup unavailable")
 
     session.extensions["startup"] = fail
-    assert await cli.run_repl(session) == 2
+    assert await cli.Repl(session).run() == 2
     assert closed == [True]
     assert "Startup failed: startup unavailable" in capsys.readouterr().err

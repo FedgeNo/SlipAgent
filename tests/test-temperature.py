@@ -9,7 +9,7 @@ import pytest
 from test_agent import summary_response
 
 from slipagent.agent import Agent
-from slipagent.cli import Renderer, Session, Style, _handle_command, _model_command
+from slipagent.cli import Renderer, Session, Style, CommandRunner, ModelPicker
 from slipagent.openrouter import OpenRouterClient
 from slipagent.tools.base import ToolRegistry
 from slipagent.workspace import Workspace
@@ -64,11 +64,11 @@ async def test_default_and_command_change_actual_requests(tmp_path):
     async with OpenRouterClient("test", transport=transport(requests, summary_requests=summaries)) as client:
         session = session_for(client, tmp_path)
         await session.agent.run("First task")
-        await _handle_command(session, "/temperature")
+        await CommandRunner(session).handle("/temperature")
         assert "temperature: provider default" in session.renderer.stream.getvalue()
-        await _handle_command(session, "/temperature 0")
+        await CommandRunner(session).handle("/temperature 0")
         await session.agent.run("Second task")
-        await _handle_command(session, "/temperature 0.1")
+        await CommandRunner(session).handle("/temperature 0.1")
         await session.agent.run("Third task")
         await session.agent.wait_for_compaction()
     assert "temperature" not in requests[0]
@@ -81,14 +81,14 @@ async def test_model_switch_omits_unsupported_temperature_and_retains_setting(tm
     requests = []
     async with OpenRouterClient("test", transport=transport(requests)) as client:
         session = session_for(client, tmp_path)
-        await _handle_command(session, "/temperature 0.1")
-        await _model_command(session, "fixed", session.renderer.style, io.StringIO())
-        await _handle_command(session, "/temperature 0.5")
+        await CommandRunner(session).handle("/temperature 0.1")
+        await ModelPicker(session, session.renderer.style, io.StringIO()).menu("fixed")
+        await CommandRunner(session).handle("/temperature 0.5")
         assert session.agent.temperature == 0.1
         assert "temperature control is unavailable" in session.renderer.stream.getvalue()
         assert "\x1b[38;2;255;146;155m" in session.renderer.stream.getvalue()
         await session.agent.run("First task")
-        await _model_command(session, "adjustable", session.renderer.style, io.StringIO())
+        await ModelPicker(session, session.renderer.style, io.StringIO()).menu("adjustable")
         await session.agent.run("Second task")
     assert "temperature" not in requests[0]
     assert requests[1]["temperature"] == 0.1
@@ -99,7 +99,7 @@ async def test_default_does_not_add_unsupported_parameter(tmp_path):
     async with OpenRouterClient("test", transport=transport(requests)) as client:
         session = session_for(client, tmp_path, "fixed")
         await session.agent.run("Task")
-        await _handle_command(session, "/temperature")
+        await CommandRunner(session).handle("/temperature")
         assert "provider default is used" in session.renderer.stream.getvalue()
     assert "temperature" not in requests[0]
 
@@ -109,7 +109,7 @@ async def test_invalid_values_leave_setting_unchanged(tmp_path, argument):
     async with OpenRouterClient("test", transport=transport([])) as client:
         session = session_for(client, tmp_path)
         session.agent.temperature = 0.1
-        await _handle_command(session, f"/temperature {argument}")
+        await CommandRunner(session).handle(f"/temperature {argument}")
         assert session.agent.temperature == 0.1
         assert "must be a number from 0 to 2" in session.renderer.stream.getvalue()
 
@@ -118,7 +118,7 @@ async def test_metadata_failure_leaves_setting_unchanged(tmp_path):
     async with OpenRouterClient("test", transport=transport([], broken_metadata=True)) as client:
         session = session_for(client, tmp_path)
         session.agent.temperature = 0.1
-        await _handle_command(session, "/temperature 0.5")
+        await CommandRunner(session).handle("/temperature 0.5")
         assert session.agent.temperature == 0.1
         assert "could not verify temperature support" in session.renderer.stream.getvalue()
 
@@ -127,11 +127,11 @@ async def test_temperature_changes_wait_for_idle_but_readout_stays_available(tmp
     async with OpenRouterClient("test", transport=transport([])) as client:
         session = session_for(client, tmp_path)
         session.agent.running = True
-        await _handle_command(session, "/temperature 0.5")
+        await CommandRunner(session).handle("/temperature 0.5")
         assert session.agent.temperature is None
         assert "Queued /temperature" in session.renderer.stream.getvalue()
         assert session.extensions["deferred_commands"] == ["/temperature 0.5"]
-        await _handle_command(session, "/temperature")
+        await CommandRunner(session).handle("/temperature")
         assert "temperature: provider default" in session.renderer.stream.getvalue()
 
 
@@ -141,6 +141,6 @@ async def test_provider_maximum_is_validated(tmp_path):
     async with NvidiaClient("test", transport=transport([])) as client:
         session = session_for(client, tmp_path)
         session.agent.temperature = 0.5
-        await _handle_command(session, "/temperature 1.5")
+        await CommandRunner(session).handle("/temperature 1.5")
         assert session.agent.temperature == 0.5
         assert "from 0 to 1 for nvidia" in session.renderer.stream.getvalue()

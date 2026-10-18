@@ -1311,9 +1311,10 @@ class TerminalUI:
             fragments.extend([("", "  "), *self._task_link("Commands", "commands", self._choose_command), ("", " ")])
         return fragments
 
-    def set_retry_status(self, text: str) -> None:
+    def set_retry_status(self, text: str, *, spinning: bool = False) -> None:
         """Show transient retry progress without appending a line each second."""
         self.status_line.retry = text
+        self.status_line.retry_spinning = spinning
         self.app.invalidate()
 
     def set_working(self, working: bool, *, stopping: bool = False) -> None:

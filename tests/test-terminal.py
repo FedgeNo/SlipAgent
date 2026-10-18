@@ -4086,6 +4086,16 @@ async def test_output_unit_gaps_render_without_separating_model_text_and_tools(d
             await task
 
 
+def test_only_the_first_output_countdown_keeps_the_pulse():
+    from slipagent.statusline import StatusLine
+    status = StatusLine()
+    status.retry = "Retrying in 10s"
+    options = dict(held=False, working=True, stopping=False, concise=False, frame="🌓")
+    assert status.activity(**options)[1] == "Retrying in 10s"
+    status.retry_spinning = True
+    assert status.activity(**options)[1] == "🌓 Retrying in 10s"
+
+
 async def test_silent_request_shows_deadline_and_ctrl_n_skips(display, monkeypatch):
     import slipagent.cli as cli
 
@@ -4102,6 +4112,8 @@ async def test_silent_request_shows_deadline_and_ctrl_n_skips(display, monkeypat
             ui.set_working(True)
             renderer.first_output_wait(deadline, skippable=True)
             await wait_until(lambda: any("88s until next model" in line for line in snapshot()))
+            from slipagent.statusline import PULSE_FRAMES
+            assert any(f"{frame} No model output yet" in line for line in snapshot() for frame in PULSE_FRAMES)
             assert ui.status_line.notification == cli.SKIP_NOTICE
             await send_keys(ui, pipe, "\x0e")
             assert skipped == [True]

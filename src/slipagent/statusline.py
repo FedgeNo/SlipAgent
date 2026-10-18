@@ -23,6 +23,7 @@ class StatusLine:
         self.notification = ""
         self.changed_at: float | None = None
         self.retry = ""
+        self.retry_spinning = False
         self.command = ""
         self.navigation_until = 0.0
         self.tips_started: float | None = None
@@ -78,7 +79,9 @@ class StatusLine:
         if held:
             return "class:held", "Agent Held", False
         if self.retry and not stopping:
-            return "class:retry", self.retry, False
+            # A model that is still working keeps its pulse beside the countdown.
+            spinning = getattr(self, "retry_spinning", False)
+            return "class:retry", f"{frame} {self.retry}" if spinning else self.retry, False
         if self.command:
             return "class:pulse", self.command, False
         if not working:

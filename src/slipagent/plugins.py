@@ -200,6 +200,8 @@ class Override:
     calls_original: bool = False
     # Plugins whose approved overrides target this member, when more than one does.
     contenders: list[str] = field(default_factory=list)
+    # The plugin whose override runs first and never calls original(), so this one never runs.
+    shadowed_by: str = ""
 
     @property
     def member_key(self) -> str:
@@ -232,6 +234,9 @@ class PluginReport:
             elif override.status == "unstamped":
                 yield (f"{self.name} overrides {override.label} without @overrides; "
                        f"add @overrides(\"{override.fingerprint}\") to be warned when it changes.")
+            if override.shadowed_by:
+                yield (f"{self.name}'s override of {override.label} never runs: {override.shadowed_by} "
+                       "runs before it and does not call original().")
         pending = sum(override.state == "pending" for override in self.overrides)
         if pending:
             yield (f"{self.name} has {pending} override{'' if pending == 1 else 's'} awaiting approval; "
@@ -488,6 +493,10 @@ def overlay(module_of: Callable[[str], types.ModuleType | None], source_of: Call
                 by_plugin = {member.plugin: member for member in members}
                 # The first in run order wraps the rest, so it is applied last.
                 members = [by_plugin[plugin] for plugin in reversed(order or [])]
+            # Running starts at the last applied and goes inward only through original().
+            for outer, member in zip(reversed(members), reversed(members[:-1])):
+                blocker = outer.override.shadowed_by or ("" if outer.override.calls_original else outer.plugin)
+                member.override.shadowed_by = blocker
         applied.extend(members)
 
     touched = snapshots if snapshots is not None else {}

@@ -319,6 +319,19 @@ def allowed_both() -> plugins.Approvals:
     return plugins.Approvals({"a.py": {"Widget.render": True}, "b.py": {"Widget.render": True}})
 
 
+def test_a_stacked_override_behind_one_without_original_is_reported_dead():
+    module = component()
+    reports = apply(module, {**STACKABLE, "c.py": PICK})
+    assert module.Widget().render("x") == "plugin"
+    assert [report.overrides[0].shadowed_by for report in reports] == ["c.py", "c.py", ""]
+    assert "a.py's override of widgets.Widget.render never runs: c.py runs before it and does not call original()." \
+        in list(reports[0].notices())
+    module = component()
+    reports = apply(module, {**STACKABLE, "0.py": PICK})
+    assert module.Widget().render("x") == "b(a(plugin))"
+    assert not any(override.shadowed_by for report in reports for override in report.overrides)
+
+
 def test_an_unresolved_conflict_applies_neither_override_and_is_reported_once():
     module = component()
     reports = apply(module, STACKABLE, approvals=allowed_both())

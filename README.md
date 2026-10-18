@@ -123,6 +123,7 @@ viewers, the editor, queueing, and Danger Mode.
 | [Automation](docs/automation.md) | Headless runs, JSON events, repeated trials |
 | [Model Context](docs/model-context.md) | Context view, response protocol, reasoning, history |
 | [Self-Editing](docs/self-editing.md) | Changing SlipAgent while it runs |
+| [Plugins](docs/plugins.md) | Method overrides that survive updates, approvals, update warnings |
 | [Source Overview](docs/source-overview.md), [Development](docs/development.md) | Module map, tests, contributing |
 | [Semantic Search](docs/semantic-search.md), [Model Scores](docs/model-scores.md) | Search internals and score calibration |
 

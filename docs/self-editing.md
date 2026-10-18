@@ -34,6 +34,9 @@ idle. During work, the current model response and its complete tool batch finish
 before a new version is applied. One-shot runs also check between batches.
 Use `/reload` to force another attempt or `--no-reload` to disable reloading.
 
+`--update` replaces edited checkout files, after listing them and asking. To keep a
+change across updates, put it in a [plugin](plugins.md) instead.
+
 ### Self-Editing From Another Project
 
 Danger Mode adds a **SlipAgent Installation** section to each newly built model

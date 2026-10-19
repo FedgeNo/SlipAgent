@@ -1339,8 +1339,14 @@ to the model along with the active generation number.
   that holds the interpreter lock.
 - **MCP:** modern metadata belongs in `params._meta`; legacy servers use the
   initialize handshake. Send deadlines include pipe writes, not just response
-  waits. Tools receive structural schema checks and registry validation; servers
-  remain responsible for their full JSON Schema semantics. Structured content,
+  waits. The stdout reader routes replies to pending request IDs, discards
+  notifications and unrelated or duplicate replies immediately, and declines
+  unsupported server requests even while idle. Declines have a bounded write
+  deadline. A disconnected reader releases pending requests and rejects further
+  sends; one undelivered read error is retained for the next request. Server
+  stderr retains only its last 20 lines, capped at 2,000 characters per line plus
+  a truncation marker. Tools receive structural schema checks and registry
+  validation; servers remain responsible for their full JSON Schema semantics. Structured content,
   server guidance, and tool errors must survive adaptation into model context.
   Server guidance is included for both loaded tools and deferred tools in the
   current catalog, which already applies the explicit tool allowlist. Guidance

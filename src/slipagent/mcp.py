@@ -283,7 +283,9 @@ class MCPClient:
         self.era: str = ""
 
         self._process: asyncio.subprocess.Process | None = None
-        self._queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
+        self._stdout_error: str | None = None
+        self._stdout_closed = False
         self._stderr_tail: list[str] = []
         self._pump: asyncio.Task[None] | None = None
         self._stderr_pump: asyncio.Task[None] | None = None
@@ -304,7 +306,8 @@ class MCPClient:
             self._disconnect_task = None
         if self.connected:
             return
-        self._queue = asyncio.Queue()
+        self._stdout_error = None
+        self._stdout_closed = False
         self._stderr_tail.clear()
         self.protocol_version = None
         self.era = ""
@@ -359,6 +362,7 @@ class MCPClient:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             self._pump = self._stderr_pump = None
+            self._close_stdout()
 
     async def _terminate(self, process: asyncio.subprocess.Process) -> None:
         """Terminate, then kill if needed; target the process group on POSIX."""
@@ -381,39 +385,61 @@ class MCPClient:
 
     async def _read_stdout(self) -> None:
         process = self._process
-        if process is None or process.stdout is None:
-            return
-        while True:
-            try:
-                line = await process.stdout.readline()
-            except (asyncio.LimitOverrunError, ValueError):
-                self._queue.put_nowait(
-                    {
-                        "__slipagent_error__": (
-                            "server sent a line longer than the "
-                            f"{MAX_LINE_BYTES} byte limit"
-                        )
-                    }
-                )
-                break
-            except (OSError, asyncio.CancelledError):
-                break
-            if not line:
-                break
-            text = line.decode("utf-8", errors="replace").strip()
-            if not text:
-                continue
-            try:
-                message = json.loads(text)
-            except json.JSONDecodeError:
-                self._queue.put_nowait(
-                    {"__slipagent_error__": f"server wrote non-JSON to stdout: {text[:200]}"}
-                )
-                continue
-            if isinstance(message, dict):
-                self._queue.put_nowait(message)
-        # stdout closed: unblock anything still waiting.
-        self._queue.put_nowait({"__slipagent_eof__": True})
+        try:
+            if process is None or process.stdout is None:
+                return
+            while True:
+                try:
+                    line = await process.stdout.readline()
+                except (asyncio.LimitOverrunError, ValueError):
+                    raise MCPError(
+                        f"server sent a line longer than the {MAX_LINE_BYTES} byte limit"
+                    ) from None
+                if not line:
+                    break
+                text = line.decode("utf-8", errors="replace").strip()
+                if not text:
+                    continue
+                try:
+                    message = json.loads(text)
+                except json.JSONDecodeError:
+                    self._read_failure(f"server wrote non-JSON to stdout: {text[:200]}")
+                    continue
+                if not isinstance(message, dict):
+                    continue
+                if "method" in message:
+                    if "id" in message:
+                        await self._decline(message)
+                    # No notification handlers are advertised. Discard this
+                    # traffic here so idle connections retain no backlog.
+                    continue
+                key = message.get("id")
+                future = self._pending.get(key) if type(key) is int else None
+                if future is not None and not future.done():
+                    future.set_result(message)
+        except MCPError as exc:
+            self._read_failure(str(exc))
+        except (OSError, RuntimeError) as exc:
+            self._read_failure(f"lost the connection to '{self.spec.name}': {exc}" + self._stderr_hint())
+        finally:
+            self._close_stdout()
+
+    def _read_failure(self, error: str) -> None:
+        delivered = False
+        for future in self._pending.values():
+            if not future.done():
+                future.set_result({"__slipagent_error__": error})
+                delivered = True
+        # Keep one undelivered error for the next request, including errors
+        # received while idle, without accumulating malformed server output.
+        if not delivered and self._stdout_error is None:
+            self._stdout_error = error
+
+    def _close_stdout(self) -> None:
+        self._stdout_closed = True
+        for future in self._pending.values():
+            if not future.done():
+                future.set_result({"__slipagent_eof__": True})
 
     async def _read_stderr(self) -> None:
         process = self._process
@@ -562,8 +588,8 @@ class MCPClient:
         *,
         timeout: float | None = None,
     ) -> dict[str, Any]:
-        # One reader consumes the response queue. Serialize requests so waiting
-        # for one ID cannot discard another caller's response as unrelated.
+        # Preserve the server's serial tool-execution order while the reader
+        # routes responses and handles server traffic independently.
         async with self._request_lock:
             return await self._send_request(method, params, meta, timeout=timeout)
 
@@ -575,6 +601,11 @@ class MCPClient:
         process = self._process
         if process is None or process.stdin is None:
             raise MCPError(f"'{self.spec.name}' is not running")
+        if self._stdout_error is not None:
+            error, self._stdout_error = self._stdout_error, None
+            raise MCPError(error)
+        if self._stdout_closed:
+            raise self._closed_error(method)
 
         self._next_id += 1
         request_id = self._next_id
@@ -584,6 +615,8 @@ class MCPClient:
         if meta is not None:
             payload["params"]["_meta"] = meta
 
+        future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        self._pending[request_id] = future
         sent = False
         try:
             # The deadline includes backpressure while writing. Otherwise a
@@ -616,6 +649,10 @@ class MCPClient:
                 f"lost the connection to '{self.spec.name}': {exc}"
                 + self._stderr_hint()
             ) from exc
+        finally:
+            self._pending.pop(request_id, None)
+            if not future.done():
+                future.cancel()
 
     async def _abort_connection(self) -> None:
         """Discard a blocked write buffer and reap a connection that cannot drain."""
@@ -627,27 +664,19 @@ class MCPClient:
         await self.disconnect()
 
     async def _await_response(self, request_id: int, method: str) -> dict[str, Any]:
-        while True:
-            message = await self._queue.get()
-            if "__slipagent_error__" in message:
-                raise MCPError(str(message["__slipagent_error__"]))
-            if "__slipagent_eof__" in message:
-                raise MCPError(
-                    f"'{self.spec.name}' exited before answering {method}"
-                    f"{self._stderr_hint()}. MCP servers receive a minimal environment; "
-                    "add variables they need under env in mcp.json"
-                )
+        message = await self._pending[request_id]
+        if "__slipagent_error__" in message:
+            raise MCPError(str(message["__slipagent_error__"]))
+        if "__slipagent_eof__" in message:
+            raise self._closed_error(method)
+        return message
 
-            if "id" not in message:
-                continue  # an unrelated notification
-            if "method" in message:
-                # A server-initiated request. We support no client features, so
-                # decline rather than leaving it waiting.
-                await self._decline(message)
-                continue
-            if message.get("id") != request_id:
-                continue
-            return message
+    def _closed_error(self, method: str) -> MCPError:
+        return MCPError(
+            f"'{self.spec.name}' exited before answering {method}"
+            f"{self._stderr_hint()}. MCP servers receive a minimal environment; "
+            "add variables they need under env in mcp.json"
+        )
 
     async def _decline(self, message: dict[str, Any]) -> None:
         process = self._process
@@ -662,10 +691,12 @@ class MCPClient:
             },
         }
         try:
-            process.stdin.write((json.dumps(reply) + "\n").encode("utf-8"))
-            await process.stdin.drain()
-        except (OSError, RuntimeError):
-            pass
+            async with asyncio.timeout(min(1.0, self.timeout)):
+                process.stdin.write((json.dumps(reply) + "\n").encode("utf-8"))
+                await process.stdin.drain()
+        except asyncio.TimeoutError:
+            raise MCPError(f"'{self.spec.name}' did not read the server-request reply within "
+                           f"{min(1.0, self.timeout):g}s") from None
 
     async def _notify(self, method: str, params: dict[str, Any] | None = None) -> None:
         process = self._process

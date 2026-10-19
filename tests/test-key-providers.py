@@ -341,3 +341,44 @@ async def test_key_menu_confirms_before_deleting(key_session, monkeypatch):
     await entry.command("")
     assert "NVIDIA_API_KEY" not in os.environ and "nvidia key deleted" in out.getvalue()
     assert choose.await_count == 4
+
+
+async def test_expiring_and_expired_keys_warn_once_and_show_in_listing(key_session):
+    import math
+    from datetime import datetime, timedelta, timezone
+    from slipagent.types import KeyInfo
+    session, out, requests, clients = key_session
+    quota = cli.Quota(session)
+    soon = (datetime.now(timezone.utc) + timedelta(days=2, hours=12)).isoformat()
+    quota.cache(KeyInfo(label="k", expires_at=soon))
+    quota.cache(KeyInfo(label="k", expires_at=soon))
+    assert out.getvalue().count("openrouter API key expires in 3 days") == 1
+    assert "rotate it with /key <key>" in out.getvalue()
+    far = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+    quota.cache(KeyInfo(label="k", expires_at=far))
+    assert "expires in 30" not in out.getvalue()
+    past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    quota.cache(KeyInfo(label="k", expires_at=past))
+    assert "openrouter API key expired on" in out.getvalue()
+    assert "/key delete openrouter" in out.getvalue()
+    await cli.KeyEntry(session, cli.Style(False), out).command("list")
+    assert f"expired {(datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()}" in out.getvalue()
+    cli.KeyEntry(session, cli.Style(False), out).describe(KeyInfo(label="k", expires_at=past))
+    assert "(expired)" in out.getvalue()
+
+
+async def test_rejected_key_in_quota_poll_warns_once_with_remedy(key_session, monkeypatch):
+    from slipagent.api import APIAuthError
+    session, out, requests, clients = key_session
+    monkeypatch.setattr(session.client, "key_info",
+                        AsyncMock(side_effect=APIAuthError("API provider rejected the API key (401): expired")))
+    for _ in range(2):
+        session.quota_checked_at = None
+        await cli.Quota(session).refresh()
+    text = out.getvalue()
+    assert text.count("rejected its API key during the quota check") == 1
+    assert "/key delete openrouter" in text and "/key <key>" in text
+    # A failed run names the same remedy.
+    assert cli._failure_text(session, APIAuthError("API provider rejected the API key (401)")).endswith(
+        "Replace it with /key <key> or remove it with /key delete openrouter.")
+    assert cli._failure_text(session, ValueError("other")) == "other"

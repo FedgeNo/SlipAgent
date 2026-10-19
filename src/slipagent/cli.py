@@ -25,6 +25,7 @@ import sys
 import time
 import threading
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from contextlib import AsyncExitStack
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Awaitable, Callable
@@ -40,6 +41,7 @@ from .lifecycle import finish_cleanup
 from .mcp import MCPManager, MCPError
 from .api import (
     DEFAULT_TEMPERATURE,
+    APIAuthError,
     APIResponseError,
     APIClient,
     APIConfigError,
@@ -142,6 +144,32 @@ class Style:
 
     def warning(self, text: str) -> str:
         return self._wrap(foreground_code(WARNING_COLOR), text)
+
+
+KEY_EXPIRY_WARNING_DAYS = 7
+
+
+def _key_remedy(provider: str) -> str:
+    return f"Replace it with /key <key> or remove it with /key delete {provider}."
+
+
+def _failure_text(session: Session, exc: BaseException) -> str:
+    """A run failure as shown to the user; a rejected key names its remedy."""
+    text = str(exc)
+    if isinstance(exc, APIAuthError):
+        text += " " + _key_remedy(getattr(session.client, "provider", "<provider>"))
+    return text
+
+
+def _key_expiry(value: str | None) -> datetime | None:
+    """Parse a provider's key expiry; None when absent or unreadable."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
 def _use_color(stream: TextIO, force_off: bool) -> bool:
@@ -945,7 +973,7 @@ class Launcher:
             answer = await session.agent.run(prompt)
             await session.agent.wait_for_compaction()
         except (APIError, ConfigError, WorkspaceError) as exc:
-            print(literal(f"slipagent: {exc}"), file=sys.stderr)
+            print(literal(f"slipagent: {_failure_text(session, exc)}"), file=sys.stderr)
             failure = exc
         finally:
             await Repl(session).shutdown()
@@ -1225,9 +1253,9 @@ class Repl:
                     continue
                 except Exception as exc:
                     if session.reloader is not None:
-                        session.reloader.report_error(str(exc))
+                        session.reloader.report_error(_failure_text(session, exc))
                     else:
-                        renderer.emit(style.red(f"  ✗ {exc}"))
+                        renderer.emit(style.red(f"  ✗ {_failure_text(session, exc)}"))
                     continue
         finally:
             if reload_task is not None:
@@ -1697,6 +1725,13 @@ class Quota:
         client = session.client
         try:
             info = await client.key_info()
+        except APIAuthError as exc:
+            # An expired or revoked key shows up here before the next prompt fails.
+            if session.client is client and session.extensions.get("key_rejected_warned") != client.api_key:
+                session.extensions["key_rejected_warned"] = client.api_key
+                self.warn(f"{client.provider} rejected its API key during the quota check: {exc} "
+                          + _key_remedy(client.provider))
+            return
         except (APIError, ConfigError):
             return
         # A response for the previous key must not overwrite the new key's quota.
@@ -1717,10 +1752,40 @@ class Quota:
                 session.renderer.terminal.app.invalidate()
 
     def cache(self, info: KeyInfo) -> None:
-        """Remember the key's remaining free calls for the status bar."""
+        """Remember the key's remaining free calls for the status bar, and its expiry."""
         session = self.session
         session.free_calls = info.free_quota.remaining if info.free_quota is not None else None
         session.quota_checked_at = time.monotonic()
+        provider = getattr(session.client, "provider", "")
+        session.extensions.setdefault("key_expiry", {})[provider] = info.expires_at
+        self.warn_expiry(provider, info.expires_at)
+
+    def warn_expiry(self, provider: str, expires_at: str | None) -> None:
+        """Warn once per key when it has expired or expires within a week."""
+        import math
+        expiry = _key_expiry(expires_at)
+        if expiry is None:
+            return
+        remaining = expiry - datetime.now(timezone.utc)
+        if remaining.days >= KEY_EXPIRY_WARNING_DAYS:
+            return
+        session = self.session
+        marker = (provider, expires_at)
+        if session.extensions.get("key_expiry_warned") == marker:
+            return
+        session.extensions["key_expiry_warned"] = marker
+        when = expiry.date().isoformat()
+        if remaining.total_seconds() <= 0:
+            self.warn(f"the {provider} API key expired on {when}. " + _key_remedy(provider))
+        else:
+            days = max(1, math.ceil(remaining.total_seconds() / 86400))
+            self.warn(f"the {provider} API key expires in {days} day{'' if days == 1 else 's'} ({when}); "
+                      f"rotate it with /key <key> before then.")
+
+    def warn(self, text: str) -> None:
+        renderer = getattr(self.session, "renderer", None)
+        if renderer is not None:
+            renderer.emit(renderer.style.warning(f"  Warning: {text}"))
 
 
 class CommandRunner:
@@ -2077,6 +2142,11 @@ class KeyEntry:
             if name in saved:
                 sources.append(f"saved in {dotenv_path()}")
             key = key or os.environ.get(name, "") or saved.get(name, "")
+            expires_at = session.extensions.get("key_expiry", {}).get(provider)
+            expiry = _key_expiry(expires_at)
+            if expiry is not None:
+                when = expiry.date().isoformat()
+                sources.append(f"expired {when}" if expiry <= datetime.now(timezone.utc) else f"expires {when}")
             if key.strip():
                 result.append((provider, key, sources))
         return result
@@ -2155,6 +2225,10 @@ class KeyEntry:
                 detail += f", ${remaining:.2f} remaining"
             print(f"    spend      {detail}", file=out)
         print(f"    usage      ${info.usage:.2f} to date", file=out)
+        if info.expires_at:
+            expiry = _key_expiry(info.expires_at)
+            expired = expiry is not None and expiry <= datetime.now(timezone.utc)
+            print(f"    expires    {info.expires_at}" + (" (expired)" if expired else ""), file=out)
         if info.free_quota is not None:
             quota = info.free_quota
             print(

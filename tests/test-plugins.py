@@ -119,6 +119,162 @@ def test_original_filters_and_stacks_in_file_name_order():
     assert module.Widget().render("x") == "outer(inner(<X>))"
 
 
+PROPERTY_TARGET = '''
+class Widget:
+    def __init__(self):
+        self._value = 10
+        self.events = []
+
+    @property
+    def value(self):
+        self.events.append("base get")
+        return self._value
+
+    @value.setter
+    def value(self, value):
+        self.events.append("base set")
+        self._value = value
+
+    @value.deleter
+    def value(self):
+        self.events.append("base delete")
+        del self._value
+'''
+
+PROPERTY_PLUGIN = '''
+from slipagent.plugins import replaces, original
+
+@replaces("widgets.Widget")
+class Widget:
+    @property
+    def value(self):
+        self.events.append("plugin get")
+        previous = lambda: original(self)
+        return previous() + 1
+
+    @value.setter
+    def value(self, value):
+        self.events.append("plugin set")
+        original(self, value=value + 1)
+
+    @value.deleter
+    def value(self):
+        self.events.append("plugin delete")
+        original(self)
+'''
+
+
+@pytest.mark.parametrize("operation", ["get", "set", "delete"])
+def test_original_calls_the_matching_property_accessor(operation):
+    module = component(PROPERTY_TARGET)
+    report = apply(module, {"property.py": PROPERTY_PLUGIN}, source=PROPERTY_TARGET)[0]
+    assert report.enabled and not report.error
+    widget = module.Widget()
+    if operation == "get":
+        assert widget.value == 11
+    elif operation == "set":
+        widget.value = 20
+        assert widget._value == 21
+    else:
+        del widget.value
+        assert not hasattr(widget, "_value")
+    assert widget.events == [f"plugin {operation}", f"base {operation}"]
+
+
+def test_original_returns_a_callable_property_value_without_calling_it():
+    module = component(PROPERTY_TARGET)
+    apply(module, {"property.py": '''
+        from slipagent.plugins import replaces, original
+
+        @replaces("widgets.Widget")
+        class Widget:
+            @property
+            def value(self):
+                return original(self)
+    '''}, source=PROPERTY_TARGET)
+    widget = module.Widget()
+    called = []
+    callback = lambda: called.append("called")
+    widget._value = callback
+    assert widget.value is callback
+    assert not called and widget.events == ["base get"]
+
+
+@pytest.mark.parametrize("operation", ["get", "set", "delete"])
+def test_original_chains_each_property_accessor_through_stacked_plugins(operation):
+    module = component(PROPERTY_TARGET)
+    outer = PROPERTY_PLUGIN.replace('"plugin ', '"outer ').replace("+ 1", "+ 2")
+    reports = apply(module, {"a-inner.py": PROPERTY_PLUGIN, "b-outer.py": outer}, source=PROPERTY_TARGET)
+    assert all(report.enabled and not report.error for report in reports)
+    widget = module.Widget()
+    if operation == "get":
+        assert widget.value == 13
+    elif operation == "set":
+        widget.value = 20
+        assert widget._value == 23
+    else:
+        del widget.value
+        assert not hasattr(widget, "_value")
+    assert widget.events == [f"outer {operation}", f"plugin {operation}", f"base {operation}"]
+
+
+@pytest.mark.parametrize("accessor, operation, label", [
+    ("fget", "get", "getter"), ("fset", "set", "setter"), ("fdel", "delete", "deleter"),
+])
+def test_original_reports_when_the_replaced_property_lacks_that_accessor(accessor, operation, label):
+    module = component(PROPERTY_TARGET)
+    previous = module.Widget.value
+    module.Widget.value = property(**{name: getattr(previous, name) for name in ("fget", "fset", "fdel")
+                                     if name != accessor})
+    apply(module, {"property.py": PROPERTY_PLUGIN}, source=PROPERTY_TARGET)
+    widget = module.Widget()
+    with pytest.raises(AttributeError, match=f"original property has no {label}"):
+        if operation == "get":
+            _ = widget.value
+        elif operation == "set":
+            widget.value = 20
+        else:
+            del widget.value
+    assert widget.events == [f"plugin {operation}"]
+
+
+def test_original_preserves_instance_static_and_class_method_binding():
+    source = '''
+class Widget:
+    def instance(self, value):
+        return self, value
+
+    @staticmethod
+    def static(value):
+        return value * 2
+
+    @classmethod
+    def class_method(cls, value):
+        return cls, value
+'''
+    module = component(source)
+    apply(module, {"methods.py": '''
+        from slipagent.plugins import replaces, original
+
+        @replaces("widgets.Widget")
+        class Widget:
+            def instance(self, value):
+                return original(self, value=value + 1)
+
+            @staticmethod
+            def static(value):
+                return original(__class__, value=value) + 1
+
+            @classmethod
+            def class_method(cls, value):
+                return original(cls, value=value + 2)
+    '''}, source=source)
+    widget = module.Widget()
+    assert widget.instance(3) == (widget, 4)
+    assert module.Widget.static(3) == widget.static(3) == 7
+    assert module.Widget.class_method(3) == widget.class_method(3) == (module.Widget, 5)
+
+
 def test_copied_code_resolves_names_from_the_target_module():
     module = component()
     apply(module, {"copy.py": '''

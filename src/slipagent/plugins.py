@@ -35,6 +35,7 @@ PLUGIN_KEY = ":plugins"
 APPROVALS_NAME = ".approvals.json"
 NO_PLUGINS_ENV = "SLIPAGENT_NO_PLUGINS"
 FINGERPRINT_LENGTH = 12
+_PROPERTY_ACCESSORS = {"fget": "getter", "fset": "setter", "fdel": "deleter"}
 # Class attributes Python creates for every class body; never treated as overrides.
 _CLASS_BOOKKEEPING = frozenset({
     "__module__", "__qualname__", "__doc__", "__dict__", "__weakref__", "__firstlineno__",
@@ -50,8 +51,8 @@ all_plugins = False
 applied_to_live = False
 # The latest status of every plugin file, from startup or the accepted reload.
 reports: list[PluginReport] = []
-# Override code object -> the implementation it replaced, for `original`.
-_previous: weakref.WeakKeyDictionary[types.CodeType, Any] = weakref.WeakKeyDictionary()
+# Override code object -> replaced member and property accessor, for `original`.
+_previous: weakref.WeakKeyDictionary[types.CodeType, tuple[Any, str | None]] = weakref.WeakKeyDictionary()
 # Original dictionaries of live classes changed by `apply_to_live`.
 _live: dict[type, dict[str, Any]] = {}
 
@@ -139,8 +140,16 @@ def original(receiver: Any, *args: Any, **kwargs: Any) -> Any:
     """Call the implementation the calling override replaced."""
     frame = sys._getframe(1)
     while frame is not None:
-        previous = _previous.get(frame.f_code)
-        if previous is not None:
+        registration = _previous.get(frame.f_code)
+        if registration is not None:
+            previous, accessor = registration
+            if accessor is not None:
+                function = getattr(previous, accessor)
+                if function is None:
+                    raise AttributeError(f"original property has no {_PROPERTY_ACCESSORS[accessor]}")
+                # Binding a property evaluates its getter; call the recorded
+                # accessor directly so setters and deleters retain their role.
+                return function(receiver, *args, **kwargs)
             owner = receiver if isinstance(receiver, type) else type(receiver)
             bound = previous.__get__(None if isinstance(receiver, type) else receiver, owner)
             return bound(*args, **kwargs)
@@ -546,11 +555,14 @@ def overlay(module_of: Callable[[str], types.ModuleType | None], source_of: Call
         for member in applied:
             target, symbol = member.target, member.override.member
             touched.setdefault(target, dict(target.__dict__))
-            function = _function(member.value)
             previous = target.__dict__.get(symbol)
-            if previous is not None and function is not None:
-                _previous[function.__code__] = previous
-                registered.append(function.__code__)
+            functions: list[tuple[str | None, Any]] = [(None, _function(member.value))]
+            if isinstance(member.value, property) and isinstance(previous, property):
+                functions = [(accessor, getattr(member.value, accessor)) for accessor in _PROPERTY_ACCESSORS]
+            for accessor, function in functions:
+                if previous is not None and isinstance(function, types.FunctionType):
+                    _previous[function.__code__] = previous, accessor
+                    registered.append(function.__code__)
             setattr(target, symbol, _retarget(member.value, member.stand_in, target))
     except Exception as exc:
         _restore(touched)

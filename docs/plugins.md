@@ -70,6 +70,13 @@ class Renderer:
   module's imports and helpers without new imports.
 - Zero-argument `super()` works and reaches the target class's parent.
 
+Property overrides chain each accessor separately: `original(self)` inside a
+getter calls the previous getter, `original(self, value)` inside a setter calls
+the previous setter, and `original(self)` inside a deleter calls the previous
+deleter. Getter results are returned as values, including callable values.
+Calling `original()` for an accessor the replaced property lacks raises an
+`AttributeError` identifying the missing getter, setter, or deleter.
+
 ## Rules
 
 - **Targets:** classes of reloadable modules. The stable frame (`runtime`, `config`,

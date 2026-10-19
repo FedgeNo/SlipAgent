@@ -27,7 +27,7 @@ MAX_GREP_RESULTS = 100_000
 MAX_GREP_FILE_BYTES = 32_000_000
 MAX_GLOB_RESULTS = 100_000
 GREP_TIMEOUT = 120.0
-# One worker request carries up to this many files or bytes.
+# Stop each scan batch after these candidate or buffered-byte thresholds.
 GREP_BATCH_FILES = 256
 GREP_BATCH_BYTES = 4_000_000
 
@@ -132,10 +132,12 @@ class GrepTool(Tool):
         # Direct run() calls use the same result ceiling as validated calls.
         max_results = min(max_results, MAX_GREP_RESULTS)
         candidates = self.workspace.iter_files(base)
+        cancelled = threading.Event()
         done = False
         while not done and not truncated:
             # Traversal and reads share one thread hop per bounded batch.
-            scanned, batch, done = await asyncio.to_thread(self._read_batch, candidates, base, include)
+            scanned, batch, done = await run_blocking(
+                self._read_batch, candidates, base, include, cancelled, on_cancel=cancelled.set)
             files_scanned += scanned
             if not batch:
                 continue
@@ -168,13 +170,18 @@ class GrepTool(Tool):
         return ToolResult.ok(header + "\n" + "\n".join(matches))
 
     def _read_batch(self, candidates: Iterator[Path], base: Path,
-                    include: str | None) -> tuple[int, list[tuple[Path, bytes]], bool]:
+                    include: str | None, cancelled: threading.Event) -> tuple[int, list[tuple[Path, bytes]], bool]:
         scanned, size = 0, 0
         batch: list[tuple[Path, bytes]] = []
-        while len(batch) < GREP_BATCH_FILES and size < GREP_BATCH_BYTES:
+        for _ in range(GREP_BATCH_FILES):
+            if cancelled.is_set() or size >= GREP_BATCH_BYTES:
+                break
             candidate = next(candidates, None)
             if candidate is None:
                 return scanned, batch, True
+            # Traversal may have blocked while cancellation was requested.
+            if cancelled.is_set():
+                break
             if include and not _matches_include(candidate, base, include):
                 continue
             scanned += 1

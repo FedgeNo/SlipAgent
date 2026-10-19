@@ -1336,7 +1336,12 @@ to the model along with the active generation number.
   search prunes generated/dependency directories; explicit paths can target them.
   Regex matching lives in a killable child, while file traversal remains in the
   workspace-aware parent. A thread alone cannot interrupt pathological regex code
-  that holds the interpreter lock.
+  that holds the interpreter lock. Grep filesystem batches use owned workers and
+  a per-search cancellation event, checked before and after advancing the file
+  iterator. All candidate files count toward the batch limit, including files
+  skipped by the include filter or rejected during reading. Cancellation and
+  timeout drain an active filesystem operation before returning; a blocked
+  filesystem operation must return before its thread can stop.
 - **MCP:** modern metadata belongs in `params._meta`; legacy servers use the
   initialize handshake. Send deadlines include pipe writes, not just response
   waits. The stdout reader routes replies to pending request IDs, discards

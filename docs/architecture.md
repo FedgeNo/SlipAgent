@@ -1239,6 +1239,10 @@ of every plugin onto the candidate classes before the component API, layout,
 registry, and terminal checks; the normal merge then carries them to the live classes, and
 a rejected generation leaves them as they were. A plugin that fails to load or
 apply is rolled back on its own and reported once; the generation continues.
+The `original()` registry distinguishes wrapper code by object identity, so
+identical wrappers from separate plugin files or reload generations retain their
+own predecessors. Weak-reference cleanup removes only that wrapper's registration;
+failed overlays remove only the registrations they created.
 Each property override registers its getter, setter, and deleter code separately
 against the matching accessor of the replaced property. `original()` invokes that
 accessor directly; an absent predecessor accessor raises `AttributeError`.

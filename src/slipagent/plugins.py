@@ -51,8 +51,9 @@ all_plugins = False
 applied_to_live = False
 # The latest status of every plugin file, from startup or the accepted reload.
 reports: list[PluginReport] = []
-# Override code object -> replaced member and property accessor, for `original`.
-_previous: weakref.WeakKeyDictionary[types.CodeType, tuple[Any, str | None]] = weakref.WeakKeyDictionary()
+# Code identity -> weak code reference, replaced member, and property accessor.
+# Equal code from separate plugins or reload generations must keep separate chains.
+_previous: dict[int, tuple[weakref.ReferenceType[types.CodeType], Any, str | None]] = {}
 # Original dictionaries of live classes changed by `apply_to_live`.
 _live: dict[type, dict[str, Any]] = {}
 
@@ -136,13 +137,24 @@ def overrides(fingerprint: str) -> Callable[[Any], Any]:
     return mark
 
 
+def _register_original(code: types.CodeType, previous: Any, accessor: str | None) -> None:
+    key = id(code)
+
+    def discard(reference: weakref.ReferenceType[types.CodeType]) -> None:
+        registration = _previous.get(key)
+        if registration is not None and registration[0] is reference:
+            del _previous[key]
+
+    _previous[key] = weakref.ref(code, discard), previous, accessor
+
+
 def original(receiver: Any, *args: Any, **kwargs: Any) -> Any:
     """Call the implementation the calling override replaced."""
     frame = sys._getframe(1)
     while frame is not None:
-        registration = _previous.get(frame.f_code)
-        if registration is not None:
-            previous, accessor = registration
+        registration = _previous.get(id(frame.f_code))
+        if registration is not None and registration[0]() is frame.f_code:
+            _, previous, accessor = registration
             if accessor is not None:
                 function = getattr(previous, accessor)
                 if function is None:
@@ -561,14 +573,14 @@ def overlay(module_of: Callable[[str], types.ModuleType | None], source_of: Call
                 functions = [(accessor, getattr(member.value, accessor)) for accessor in _PROPERTY_ACCESSORS]
             for accessor, function in functions:
                 if previous is not None and isinstance(function, types.FunctionType):
-                    _previous[function.__code__] = previous, accessor
+                    _register_original(function.__code__, previous, accessor)
                     registered.append(function.__code__)
             setattr(target, symbol, _retarget(member.value, member.stand_in, target))
     except Exception as exc:
         _restore(touched)
         touched.clear()
         for code in registered:
-            _previous.pop(code, None)
+            _previous.pop(id(code), None)
         for report in reports:
             if report.enabled:
                 report.enabled = False

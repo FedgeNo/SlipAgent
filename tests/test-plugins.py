@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import gc
 import os
 import shutil
 import subprocess
 import sys
 import textwrap
 import types
+import weakref
 from importlib import import_module
 from pathlib import Path
 
@@ -119,6 +121,55 @@ def test_original_filters_and_stacks_in_file_name_order():
     assert module.Widget().render("x") == "outer(inner(<X>))"
 
 
+IDENTICAL_PLUGIN = '''
+from slipagent.plugins import replaces, original
+
+@replaces("widgets.Widget")
+class Widget:
+    def size(self):
+        return original(self) + 1
+'''
+
+
+def test_original_chains_identical_wrappers_from_separate_files():
+    module = component()
+    reports = apply(module, {"a.py": IDENTICAL_PLUGIN, "b.py": IDENTICAL_PLUGIN})
+    assert all(report.enabled and not report.error for report in reports)
+    assert module.Widget().size() == 3
+
+
+def test_identical_wrappers_keep_their_own_predecessors_and_cleanup():
+    first = component()
+    first_base = weakref.ref(first.Widget.size)
+    apply(first, {"wrapper.py": IDENTICAL_PLUGIN})
+    first_wrapper = weakref.ref(first.Widget.size)
+    source = TARGET.replace("return 1", "return 10")
+    second = component(source)
+    apply(second, {"wrapper.py": IDENTICAL_PLUGIN}, source=source)
+
+    assert first.Widget().size() == 2
+    assert second.Widget().size() == 11
+    del first.Widget.size
+    gc.collect()
+    assert first_wrapper() is None and first_base() is None
+    assert second.Widget().size() == 11
+
+
+def test_failed_overlay_preserves_an_identical_live_wrapper(monkeypatch):
+    live = component()
+    apply(live, {"wrapper.py": IDENTICAL_PLUGIN})
+    candidate = component()
+
+    def fail_retarget(*args):
+        raise ValueError("cannot apply candidate")
+
+    monkeypatch.setattr(plugins, "_retarget", fail_retarget)
+    report = apply(candidate, {"wrapper.py": IDENTICAL_PLUGIN})[0]
+    assert not report.enabled and "cannot apply candidate" in report.error
+    assert candidate.Widget().size() == 1
+    assert live.Widget().size() == 2
+
+
 PROPERTY_TARGET = '''
 class Widget:
     def __init__(self):
@@ -216,6 +267,23 @@ def test_original_chains_each_property_accessor_through_stacked_plugins(operatio
         del widget.value
         assert not hasattr(widget, "_value")
     assert widget.events == [f"outer {operation}", f"plugin {operation}", f"base {operation}"]
+
+
+@pytest.mark.parametrize("operation", ["get", "set", "delete"])
+def test_original_chains_identical_property_accessors(operation):
+    module = component(PROPERTY_TARGET)
+    reports = apply(module, {"a.py": PROPERTY_PLUGIN, "b.py": PROPERTY_PLUGIN}, source=PROPERTY_TARGET)
+    assert all(report.enabled and not report.error for report in reports)
+    widget = module.Widget()
+    if operation == "get":
+        assert widget.value == 12
+    elif operation == "set":
+        widget.value = 20
+        assert widget._value == 22
+    else:
+        del widget.value
+        assert not hasattr(widget, "_value")
+    assert widget.events == [f"plugin {operation}", f"plugin {operation}", f"base {operation}"]
 
 
 @pytest.mark.parametrize("accessor, operation, label", [
@@ -778,6 +846,42 @@ def test_saving_a_plugin_reloads_and_applies_it_to_live_classes(run_copy):
         assert frame.generation == 2, sink.getvalue()
         renderer.emit('removed')
         assert 'PLUGIN removed' not in sink.getvalue()
+    ''')
+
+
+def test_identical_plugins_keep_chaining_across_accepted_and_rejected_reloads(run_copy):
+    run_copy(f'''
+        decisions = plugins.load_approvals()
+        names = ['a.py', 'b.py']
+        for name in names:
+            path = plugins_dir / name
+            path.write_text({RENDERER_PLUGIN!r})
+            decisions.decide_code(name, plugins.source_digest(path.read_bytes()), True)
+            decisions.decide(name, 'Renderer.emit', True)
+        decisions.choose('cli.Renderer.emit', names, names)
+        plugins.save_approvals(decisions)
+        await frame.checkpoint()
+        assert frame.generation == 1, sink.getvalue()
+        retained = renderer.emit
+        renderer.emit('first')
+        assert 'PLUGIN PLUGIN first' in sink.getvalue(), sink.getvalue()
+
+        edit('statusline.py', 'NOTICE_SECONDS = 30', 'NOTICE_SECONDS = 31')
+        await frame.checkpoint()
+        assert frame.generation == 2, sink.getvalue()
+        renderer.emit('second')
+        retained('retained')
+        assert 'PLUGIN PLUGIN second' in sink.getvalue(), sink.getvalue()
+        assert 'PLUGIN PLUGIN retained' in sink.getvalue(), sink.getvalue()
+
+        edit('agent.py', 'async def _step(', 'async def _renamed_step(')
+        await frame.checkpoint()
+        assert frame.generation == 2, sink.getvalue()
+        assert 'Missing component API in agent.Agent' in sink.getvalue(), sink.getvalue()
+        renderer.emit('after rejection')
+        retained('retained after rejection')
+        assert 'PLUGIN PLUGIN after rejection' in sink.getvalue(), sink.getvalue()
+        assert 'PLUGIN PLUGIN retained after rejection' in sink.getvalue(), sink.getvalue()
     ''')
 
 

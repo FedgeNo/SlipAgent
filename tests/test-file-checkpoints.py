@@ -1,7 +1,9 @@
 """Rewind preserves user changes, exact original bytes, and session ownership."""
 
 import io
+import hashlib
 import os
+import tracemalloc
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -26,6 +28,44 @@ def write_batch(store, step, writes):
     finally:
         current_checkpoint.reset(token)
         store.finish()
+
+
+@pytest.mark.parametrize("operation", ["backup", "preview", "rewind", "abort"])
+async def test_large_checkpoint_operations_keep_memory_bounded(workspace, operation):
+    path = workspace.root / "large.txt"
+    block = b"a" * 65536
+    digest = hashlib.sha256()
+    with path.open("wb") as output:
+        for _ in range(256):
+            output.write(block)
+            digest.update(block)
+    store = FileCheckpoints(workspace)
+    try:
+        if operation == "abort":
+            store.begin(1)
+            entry = store.prepare(path, b"small replacement\n")
+        elif operation != "backup":
+            write_batch(store, 1, [(path, "small replacement\n")])
+        tracemalloc.start()
+        try:
+            if operation == "backup":
+                write_batch(store, 1, [(path, "small replacement\n")])
+            elif operation == "preview":
+                assert "diff omitted for large contents" in store.preview(store.listing()[0]["id"])
+            elif operation == "rewind":
+                assert store.rewind(store.listing()[0]["id"]) == ["large.txt"]
+            else:
+                store.abort(entry)
+                assert entry["status"] == "failed"
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        assert peak < 2 * 1024 * 1024, f"{operation} retained {peak:,} bytes for a 16 MiB file"
+        restored = path if operation in {"rewind", "abort"} else store.directory / "blobs" / digest.hexdigest()
+        with restored.open("rb") as source:
+            assert hashlib.file_digest(source, "sha256").hexdigest() == digest.hexdigest()
+    finally:
+        await store.aclose()
 
 
 async def test_rewind_restores_exact_bytes_modes_and_removes_created_files(workspace):
@@ -196,6 +236,122 @@ async def test_checkpoint_storage_failure_prevents_the_edit(workspace, monkeypat
             write_batch(store, 1, [(path, "changed")])
         assert path.read_text() == "original"
         assert not store.listing()
+    finally:
+        await store.aclose()
+
+
+@pytest.mark.parametrize("operation", ["backup", "rewind"])
+async def test_streaming_checkpoint_sync_failure_keeps_destination_and_cleans_temporary(workspace, monkeypatch, operation):
+    path = workspace.root / "file.txt"
+    path.write_bytes(b"original\r\n")
+    store = FileCheckpoints(workspace)
+    try:
+        expected = b"original\r\n"
+        if operation == "rewind":
+            write_batch(store, 1, [(path, "edited")])
+            expected = b"edited"
+
+        def fail_sync(descriptor):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(os, "fsync", fail_sync)
+        with pytest.raises(OSError, match="disk full"):
+            if operation == "backup":
+                write_batch(store, 1, [(path, "edited")])
+            else:
+                store.rewind(store.listing()[0]["id"])
+        assert path.read_bytes() == expected
+        assert bool(store.listing()) == (operation == "rewind")
+        assert not list(store.directory.rglob(".checkpoint-*"))
+        assert not list(workspace.root.glob(".slipagent-write-*"))
+    finally:
+        await store.aclose()
+
+
+async def test_rewind_rechecks_backup_bytes_after_planning(workspace, monkeypatch):
+    path = workspace.root / "file.txt"
+    path.write_text("original")
+    store = FileCheckpoints(workspace)
+    try:
+        write_batch(store, 1, [(path, "edited")])
+        batch = store.listing()[0]
+        blob = store.directory / "blobs" / batch["files"][0]["before"]
+        plan = store._plan
+
+        def changed_backup(checkpoint):
+            result = plan(checkpoint)
+            blob.write_bytes(b"damaged after validation")
+            return result
+
+        monkeypatch.setattr(store, "_plan", changed_backup)
+        with pytest.raises(CheckpointError, match="backup is damaged"):
+            store.rewind(batch["id"])
+        assert path.read_text() == "edited" and store.listing()
+        assert not list(workspace.root.glob(".slipagent-write-*"))
+    finally:
+        await store.aclose()
+
+
+async def test_rewind_keeps_external_edits_made_while_restore_is_being_written(workspace, monkeypatch):
+    path = workspace.root / "file.txt"
+    path.write_text("original")
+    store = FileCheckpoints(workspace)
+    try:
+        write_batch(store, 1, [(path, "edited")])
+        sync = os.fsync
+
+        def edit_during_sync(descriptor):
+            sync(descriptor)
+            path.write_text("external edit")
+
+        monkeypatch.setattr(os, "fsync", edit_during_sync)
+        with pytest.raises(CheckpointError, match="File changed during rewind"):
+            store.rewind(store.listing()[0]["id"])
+        assert path.read_text() == "external edit" and store.listing()
+        assert not list(workspace.root.glob(".slipagent-write-*"))
+    finally:
+        await store.aclose()
+
+
+async def test_identical_binary_backups_restore_each_files_own_mode(workspace):
+    paths = [workspace.root / "first.bin", workspace.root / "second.bin"]
+    original = b"binary\0\xff\r\n"
+    modes = [0o640, 0o700]
+    store = FileCheckpoints(workspace)
+    try:
+        for path, mode in zip(paths, modes):
+            path.write_bytes(original)
+            path.chmod(mode)
+        write_batch(store, 1, [(path, "edited") for path in paths])
+        batch = store.listing()[0]
+        assert batch["files"][0]["before"] == batch["files"][1]["before"]
+        assert len(list((store.directory / "blobs").iterdir())) == 1
+        assert "binary contents restored" in store.preview(batch["id"])
+        assert set(store.rewind(batch["id"])) == {path.name for path in paths}
+        for path, mode in zip(paths, modes):
+            assert path.read_bytes() == original
+            if os.name == "posix":
+                assert path.stat().st_mode & 0o777 == mode
+    finally:
+        await store.aclose()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="symbolic links need privileges on Windows")
+async def test_checkpoint_storage_through_a_symbolic_link_preserves_rewind(workspace):
+    directory = workspace.root / "storage"
+    directory.mkdir()
+    alias = workspace.root / "linked-storage"
+    alias.symlink_to(directory, target_is_directory=True)
+    path = workspace.root / "file.txt"
+    path.write_text("original")
+    store = FileCheckpoints(workspace)
+    try:
+        store.use_directory(alias)
+        write_batch(store, 1, [(path, "edited")])
+        checkpoint = store.listing()[0]["id"]
+        assert "+original" in store.preview(checkpoint)
+        assert store.rewind(checkpoint) == [path.name]
+        assert path.read_text() == "original"
     finally:
         await store.aclose()
 

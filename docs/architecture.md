@@ -1027,10 +1027,16 @@ hashes before publication, then record successful completion. Failed and interru
 writes remain distinguishable; a pending write can be restored only when its actual
 contents match its recorded original or intended result. Backups are SHA-256 blobs
 with private permissions; checkpoint indexes use atomic, flushed writes.
+Backup copying, integrity checks, and restore writes stream 64 KiB blocks. Rewind
+plans retain hashes and permission modes instead of file contents. Diff previews
+read small files within a 200,000-byte combined limit and describe larger restores
+without loading their contents into memory.
 
 `/rewind` restores the selected batch and all subsequent active checkpoints. It
 validates every affected file and backup before the first mutation, and checks
-again before individual writes. Conflicts preserve the workspace. I/O failure
+each destination again immediately before publication. Each restored backup is
+also hashed while copying into the temporary file, before atomic replacement.
+Conflicts preserve the workspace. I/O failure
 during restoration reports any files already restored. Original bytes and modes
 are restored; files originally absent are removed. The conversation is retained,
 and a factual context notice identifies restored files. Resume restores checkpoint

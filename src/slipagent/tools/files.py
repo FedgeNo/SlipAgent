@@ -12,8 +12,9 @@ import os
 import stat
 import tempfile
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import BinaryIO, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..artifacts import ArtifactStore
@@ -51,7 +52,15 @@ def _atomic_write(workspace: Workspace, target: Path, content: str) -> None:
 
 
 def _atomic_write_bytes(workspace: Workspace, target: Path, encoded: bytes) -> None:
-    """Publish complete bytes without truncating files or following hard links.
+    def write(output: BinaryIO) -> None:
+        output.write(encoded)
+
+    _atomic_write_stream(workspace, target, write)
+
+
+def _atomic_write_stream(workspace: Workspace, target: Path, write: Callable[[BinaryIO], None], *,
+                         before_replace: Callable[[], None] | None = None) -> None:
+    """Publish complete contents without truncating files or following hard links.
 
     On POSIX, directory descriptors keep a swapped parent symlink from redirecting
     the write outside the workspace. Existing internal symlinks have already been
@@ -70,7 +79,7 @@ def _atomic_write_bytes(workspace: Workspace, target: Path, encoded: bytes) -> N
         fd, temporary = tempfile.mkstemp(dir=target.parent)
         try:
             with os.fdopen(fd, "wb") as output:
-                output.write(encoded)
+                write(output)
                 output.flush()
                 os.fsync(output.fileno())
             if target.exists():
@@ -78,6 +87,8 @@ def _atomic_write_bytes(workspace: Workspace, target: Path, encoded: bytes) -> N
                     raise OSError("Destination is not a regular file.")
                 os.chmod(temporary, stat.S_IMODE(target.stat().st_mode))
             workspace.resolve(target)
+            if before_replace is not None:
+                before_replace()
             os.replace(temporary, target)
         finally:
             if os.path.exists(temporary):
@@ -105,11 +116,13 @@ def _atomic_write_bytes(workspace: Workspace, target: Path, encoded: bytes) -> N
         temporary_name = ".slipagent-write-" + uuid.uuid4().hex
         fd = os.open(temporary_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666, dir_fd=directory)
         with os.fdopen(fd, "wb") as output:
-            output.write(encoded)
+            write(output)
             output.flush()
             if original is not None:
                 os.fchmod(output.fileno(), stat.S_IMODE(original.st_mode))
             os.fsync(output.fileno())
+        if before_replace is not None:
+            before_replace()
         os.replace(temporary_name, target.name, src_dir_fd=directory, dst_dir_fd=directory)
         temporary_name = None
     finally:

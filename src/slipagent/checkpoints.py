@@ -13,13 +13,15 @@ import uuid
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from .workspace import Workspace, WorkspaceError
-from .fileio import read_regular
+from .fileio import open_regular, read_regular
 
 current_checkpoint: ContextVar[FileCheckpoints | None] = ContextVar("slipagent_checkpoint", default=None)
-FileState = tuple[bytes | None, int | None]
+FileState = tuple[str | None, int | None]
+CHUNK_BYTES = 65536
+PREVIEW_BYTES = 200000
 
 
 class CheckpointError(OSError):
@@ -30,6 +32,33 @@ def _hash(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _hash_stream(source: BinaryIO, output: BinaryIO | None = None) -> str:
+    digest = hashlib.sha256()
+    while block := source.read(CHUNK_BYTES):
+        digest.update(block)
+        if output is not None:
+            output.write(block)
+    return digest.hexdigest()
+
+
+def _file_state(path: Path) -> FileState:
+    if not path.exists():
+        return None, None
+    with open_regular(path) as source:
+        mode = stat.S_IMODE(os.fstat(source.fileno()).st_mode)
+        return _hash_stream(source), mode
+
+
+def _publish(temporary: str, path: Path) -> None:
+    os.replace(temporary, path)
+    if os.name == "posix":
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+
+
 def _save(path: Path, data: bytes) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix=".checkpoint-", dir=path.parent)
@@ -38,13 +67,7 @@ def _save(path: Path, data: bytes) -> None:
             target.write(data)
             target.flush()
             os.fsync(target.fileno())
-        os.replace(name, path)
-        if os.name == "posix":
-            directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
+        _publish(name, path)
     finally:
         Path(name).unlink(missing_ok=True)
 
@@ -112,20 +135,28 @@ class FileCheckpoints:
     def finish(self) -> None:
         self.active = None
 
+    def _backup(self, target: Path) -> FileState:
+        directory = self.directory / "blobs"
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(prefix=".checkpoint-", dir=directory)
+        try:
+            with os.fdopen(fd, "wb") as output, open_regular(target) as source:
+                mode = stat.S_IMODE(os.fstat(source.fileno()).st_mode)
+                before = _hash_stream(source, output)
+                output.flush()
+                os.fsync(output.fileno())
+            _publish(name, directory / before)
+            return before, mode
+        finally:
+            Path(name).unlink(missing_ok=True)
+
     def prepare(self, target: Path, after: bytes) -> dict[str, Any] | None:
         if self.active is None:
             return None
         before: str | None = None
         mode: int | None = None
         if target.exists():
-            metadata = target.stat()
-            if not stat.S_ISREG(metadata.st_mode):
-                raise CheckpointError("File checkpoint requires a regular file.")
-            original = read_regular(target)
-            before, mode = _hash(original), stat.S_IMODE(metadata.st_mode)
-            blob = self.directory / "blobs" / before
-            if not blob.exists():
-                _save(blob, original)
+            before, mode = self._backup(target)
         entry = {"path": str(target), "before": before, "after": _hash(after),
                  "mode": mode, "status": "pending"}
         self.active["files"].append(entry)
@@ -151,7 +182,7 @@ class FileCheckpoints:
         if entry is not None:
             target = Path(entry["path"])
             try:
-                actual = _hash(read_regular(target)) if target.exists() else None
+                actual, _ = _file_state(target)
                 entry["status"] = "failed" if actual == entry["before"] else "pending"
             except OSError:
                 entry["status"] = "pending"
@@ -168,6 +199,11 @@ class FileCheckpoints:
                 return remaining[index:]
         raise CheckpointError("Unknown or already restored file checkpoint.")
 
+    def _backup_path(self, digest: str) -> Path:
+        if not isinstance(digest, str) or not _valid_hash(digest):
+            raise CheckpointError("Invalid checkpoint backup hash. No files restored.")
+        return (self.directory / "blobs" / digest).resolve(strict=True)
+
     def preview(self, checkpoint_id: str) -> str:
         from .tools.editing import split_lines
 
@@ -176,20 +212,32 @@ class FileCheckpoints:
         diffs: list[str] = []
         remaining = 12000
         for path, (before, _) in planned.items():
+            if planned[path] == originals[path]:
+                continue
             after = originals[path][0]
             name = self.workspace.relative(path)
-            if b"\0" in (before or b"") or b"\0" in (after or b""):
-                diff = f"{name}: binary contents restored\n"
-            elif len(before or b"") + len(after or b"") > 200000:
+            before_path = self._backup_path(before) if before is not None else None
+            after_path = path if after is not None else None
+            size = sum(source.stat().st_size for source in (before_path, after_path) if source is not None)
+            if size > PREVIEW_BYTES:
                 diff = f"{name}: diff omitted for large contents; original bytes are retained\n"
             else:
-                diff = "".join(difflib.unified_diff(
-                    [line + "\n" for line in split_lines((after or b"").decode("utf-8", errors="replace"))],
-                    [line + "\n" for line in split_lines((before or b"").decode("utf-8", errors="replace"))],
-                    fromfile=name + " (current)", tofile=name + " (restored)",
-                ))
-                if not diff and before != after:
-                    diff = f"{name}: byte-level changes in line endings or encoding\n"
+                before_data = read_regular(before_path, PREVIEW_BYTES) if before_path is not None else b""
+                after_data = read_regular(after_path, PREVIEW_BYTES) if after_path is not None else b""
+                if before is not None and _hash(before_data) != before:
+                    raise CheckpointError("Checkpoint backup is damaged. No files restored.")
+                if after is not None and _hash(after_data) != after:
+                    raise CheckpointError(f"File changed during rewind preview: {path}. No files restored.")
+                if b"\0" in before_data or b"\0" in after_data:
+                    diff = f"{name}: binary contents restored\n"
+                else:
+                    diff = "".join(difflib.unified_diff(
+                        [line + "\n" for line in split_lines(after_data.decode("utf-8", errors="replace"))],
+                        [line + "\n" for line in split_lines(before_data.decode("utf-8", errors="replace"))],
+                        fromfile=name + " (current)", tofile=name + " (restored)",
+                    ))
+                    if not diff and before_data != after_data:
+                        diff = f"{name}: byte-level changes in line endings or encoding\n"
             if len(diff) > remaining:
                 diffs.append(diff[:remaining] + "\n… diff preview abbreviated\n")
                 break
@@ -216,16 +264,9 @@ class FileCheckpoints:
                 if resolved != target or target.is_symlink():
                     raise CheckpointError(f"Path changed since the edit: {target}. No files restored.")
                 if target not in originals:
-                    if target.exists():
-                        metadata = target.stat()
-                        if not stat.S_ISREG(metadata.st_mode):
-                            raise CheckpointError(f"Not a regular file: {target}. No files restored.")
-                        originals[target] = read_regular(target), stat.S_IMODE(metadata.st_mode)
-                    else:
-                        originals[target] = None, None
+                    originals[target] = _file_state(target)
                     planned[target] = originals[target]
-                data, mode = planned[target]
-                actual = _hash(data) if data is not None else None
+                actual, mode = planned[target]
                 if entry["status"] == "pending" and actual == entry["before"]:
                     continue  # A journaled write did not publish before interruption.
                 expected_mode = entry.get("after_mode", entry["mode"])
@@ -233,35 +274,41 @@ class FileCheckpoints:
                     raise CheckpointError(f"File changed since the edit: {target}. No files restored.")
                 before = entry["before"]
                 if before is not None:
-                    if not isinstance(before, str) or len(before) != 64 or any(c not in "0123456789abcdef" for c in before):
-                        raise CheckpointError("Invalid checkpoint backup hash. No files restored.")
-                    restored = read_regular((self.directory / "blobs" / before).resolve(strict=True))
-                    if _hash(restored) != before:
+                    if _file_state(self._backup_path(before))[0] != before:
                         raise CheckpointError("Checkpoint backup is damaged. No files restored.")
-                    planned[target] = restored, entry["mode"]
+                    planned[target] = before, entry["mode"]
                 else:
                     planned[target] = None, None
         return selected, originals, planned
 
     def rewind(self, checkpoint_id: str) -> list[str]:
-        from .tools.files import _atomic_write_bytes
+        from .tools.files import _atomic_write_stream
 
         selected, originals, planned = self._plan(checkpoint_id)
         restored_names: list[str] = []
         try:
-            for target, (data, mode) in planned.items():
+            for target, (digest, mode) in planned.items():
                 if planned[target] == originals[target]:
                     continue
-                # Recheck each target immediately before changing it.
-                current = read_regular(target) if target.exists() else None
-                current_mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else None
-                if (current != originals[target][0] or current_mode != originals[target][1]
-                        or self.workspace.resolve(target) != target):
-                    raise CheckpointError(f"File changed during rewind: {target}")
-                if data is None:
+
+                def check_current() -> None:
+                    if _file_state(target) != originals[target] or self.workspace.resolve(target) != target:
+                        raise CheckpointError(f"File changed during rewind: {target}")
+
+                check_current()
+                if digest is None:
                     target.unlink(missing_ok=True)
                 else:
-                    _atomic_write_bytes(self.workspace, target, data)
+                    blob = self._backup_path(digest)
+
+                    def copy(output: BinaryIO) -> None:
+                        with open_regular(blob) as source:
+                            if _hash_stream(source, output) != digest:
+                                raise CheckpointError("Checkpoint backup is damaged")
+
+                    # Verify the bytes copied into the temporary file, then
+                    # recheck the destination immediately before publishing it.
+                    _atomic_write_stream(self.workspace, target, copy, before_replace=check_current)
                     if mode is not None:
                         target.chmod(mode)
                 restored_names.append(self.workspace.relative(target))

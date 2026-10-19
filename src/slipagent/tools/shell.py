@@ -16,7 +16,8 @@ import os
 import signal
 import json
 from collections import deque
-from typing import TYPE_CHECKING
+from collections.abc import Sequence
+from typing import Any, TYPE_CHECKING
 
 from ..workspace import Workspace, WorkspaceError
 from ..activity import OutputProgress, command_output
@@ -29,6 +30,7 @@ if TYPE_CHECKING:
 
 DEFAULT_TIMEOUT = 120.0
 MAX_TIMEOUT = 600.0
+CLEANUP_TIMEOUT = 2.0
 
 
 class RunCommandTool(Tool):
@@ -113,7 +115,7 @@ class RunCommandTool(Tool):
             result.content += "\n" + log.notice()
         if timed_out:
             return ToolResult.error(
-                f"Command timed out after {limit:g}s and was killed. Effects may be partial; "
+                f"Command timed out after {limit:g}s. Effects may be partial; "
                 "inspect before retrying. Captured output follows.\n" + result.content
             )
         return result
@@ -127,33 +129,56 @@ class ProcessCapture:
                               progress: OutputProgress | None = None) -> tuple[str, str, bool]:
         """Drain bounded output and retain it through timeout cleanup.
 
-        Shield readers while the deadline runs, kill the process group, then drain
-        EOF so timeout output remains available. The optional log belongs to the
-        caller's archive and is finalized on success, timeout, or cancellation.
+        Keep readers running through the deadline, then kill and drain within the
+        cleanup deadline. The caller's log is finalized on every exit path.
         """
         stdout = asyncio.create_task(self._capture(process.stdout, log=log, channel="stdout", progress=progress))
         stderr = asyncio.create_task(self._capture(process.stderr, log=log, channel="stderr", progress=progress))
-        completed = asyncio.gather(stdout, stderr, process.wait())
+        exited = asyncio.create_task(process.wait())
+        completed = asyncio.gather(stdout, stderr, exited)
+        tasks = (stdout, stderr, exited, completed)
         timed_out = False
+        notice = ""
         try:
             try:
-                await asyncio.wait_for(asyncio.shield(completed), timeout)
-            except asyncio.TimeoutError:
-                timed_out = True
-                await self._kill(process)
-                await completed
-            return stdout.result(), stderr.result(), timed_out
-        except BaseException:
-            async def cleanup() -> None:
-                await self._kill(process)
-                # Drain the readers after killing descendants so retained logs also
-                # include output written just before cancellation.
-                await asyncio.gather(completed, return_exceptions=True)
-            await finish_cleanup(asyncio.create_task(cleanup()))
-            raise
+                done, _ = await asyncio.wait((completed,), timeout=timeout)
+                timed_out = not done
+                if done:
+                    await completed
+            except BaseException:
+                await finish_cleanup(asyncio.create_task(self._stop_and_drain(process, tasks, log=log)))
+                raise
+            if timed_out:
+                notice = await finish_cleanup(asyncio.create_task(self._stop_and_drain(process, tasks, log=log)))
+            return stdout.result(), stderr.result() + ("\n" + notice if notice else ""), timed_out
         finally:
             if log is not None:
                 log.finish(process.returncode, timed_out)
+
+    async def _stop_and_drain(self, process: asyncio.subprocess.Process,
+                             readers: Sequence[asyncio.Future[Any]], *, log: CommandLog | None = None) -> str:
+        killed = asyncio.create_task(self._kill(process))
+        tasks = (*readers, killed)
+        _, pending = await asyncio.wait(tasks, timeout=CLEANUP_TIMEOUT)
+        try:
+            # Process has no public pipe-close API. Closing its transport releases
+            # inherited pipes even when a detached child keeps its write ends open.
+            transport: asyncio.SubprocessTransport = getattr(process, "_transport")
+            transport.close()
+        finally:
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+        notice = ""
+        if pending:
+            notice = (f"Command cleanup exceeded {CLEANUP_TIMEOUT:g}s; output may be incomplete and "
+                      "detached processes may still be running. Uncaptured byte count is unknown.")
+            if log is not None:
+                for stream in log.streams.values():
+                    stream.error = f"{stream.error} {notice}".strip()
+        if not killed.cancelled():
+            killed.result()
+        return notice
 
     async def _capture(self, stream: asyncio.StreamReader | None, *, log: CommandLog | None = None,
                        channel: str = "stdout", progress: OutputProgress | None = None) -> str:
@@ -167,7 +192,12 @@ class ProcessCapture:
         head_limit = MAX_OUTPUT_CHARS // 2
         tail_limit = MAX_OUTPUT_CHARS + 1 - head_limit
         while True:
-            raw = await stream.read(65536)
+            try:
+                raw = await stream.read(65536)
+            except asyncio.CancelledError:
+                # A forced cleanup cutoff still returns captured text and flushes
+                # any partial UTF-8 character through the ordinary decoder path.
+                raw = b""
             text = decoder.decode(raw, final=not raw)
             if log is not None:
                 log.write(channel, text)
@@ -207,16 +237,13 @@ class ProcessCapture:
     async def kill_and_drain(self, process: asyncio.subprocess.Process, *, log: CommandLog | None = None) -> None:
         """Reap a process whose normal pipe readers have not started or have stopped.
 
-        Process.wait can wait for pipe EOF after the child exits. Keep bounded readers
-        running while killing it so a full asyncio pipe buffer cannot deadlock close.
+        Process.wait can wait for pipe EOF after the child exits. Keep readers
+        running while killing it, with the same cleanup deadline as normal capture.
         Callers must first settle any previous readers to avoid competing reads.
         """
         readers = [asyncio.create_task(self._capture(process.stdout, log=log, channel="stdout")),
                    asyncio.create_task(self._capture(process.stderr, log=log, channel="stderr"))]
-        try:
-            await self._kill(process)
-        finally:
-            await asyncio.gather(*readers)
+        await finish_cleanup(asyncio.create_task(self._stop_and_drain(process, readers, log=log)))
 
     def _subprocess_env(self) -> dict[str, str]:
         from ..config import command_environment

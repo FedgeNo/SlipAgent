@@ -772,10 +772,14 @@ Failure and cancellation preserve partial files, and retries cannot overwrite th
 Shell and Git capture drain stdout/stderr concurrently. Their bounded observations
 include up to 32,000,000 characters per stream, keeping the beginning and end
 when that limit is exceeded; the archive receives all decoded text while
-quota permits. Process timeout cleanup kills the process group and drains its
-pipes before reporting partial output. Cancellation also closes the log and reaps
-the process. POSIX process groups cover ordinary descendants; shell execution is
-not an operating-system security sandbox.
+quota permits. Timeout and cancellation kill the process group, with a shared
+two-second deadline for process exit and pipe draining. If detached descendants
+keep pipes open, cleanup closes the subprocess transport and settles the readers,
+preserving captured previews and decoded logs. Timeout results and retained log
+metadata report incomplete output and potentially surviving detached processes;
+the number of uncaptured bytes is unknown. Spawn-cancellation cleanup and
+background-job shutdown use the same bounded path. POSIX process groups cover
+ordinary descendants; shell execution is not an operating-system security sandbox.
 
 Each subprocess has a random log ID, with `(step_id, call_id)` copied from a
 context-local invocation marker set by the agent. One tool can spawn multiple
@@ -848,7 +852,7 @@ step/call provenance, then hands its execution coroutine to `CommandJobs`.
 The manager owns the process through completion, timeout, cancellation, reset,
 and shutdown; rebuilt shell tools borrow it. Process creation is shielded so
 cancellation cannot lose a child between spawn and handle assignment. Capture
-reuses the foreground implementation and drains pipes after killing descendants.
+reuses foreground capture and its bounded cleanup of processes and pipes.
 
 `command_jobs` provides list/status/wait/stop. Its bounded wait never cancels the
 owned task; output is retrieved incrementally through `read_command_output`.

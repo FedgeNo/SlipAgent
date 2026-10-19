@@ -193,7 +193,7 @@ class GitTool(Tool):
         output = GitOutput(["git", *args], process.returncode or 0, stdout, stderr, log)
         if timed_out:
             raise WorkspaceError(
-                f"Git timed out after {limit:g}s and was killed. Effects may be partial. "
+                f"Git timed out after {limit:g}s. Effects may be partial. "
                 "Check git_status before retrying.\n" + output.result().content
             )
         return output

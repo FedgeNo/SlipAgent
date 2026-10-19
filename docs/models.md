@@ -103,8 +103,10 @@ their more conservative limits. A model's advertised maximum does not guarantee
 that every free endpoint offers the same window.
 Automatic routing refreshes provider catalogs after five minutes. Removed models
 keep their stored scores but are excluded from coding and compression until
-they return. A failed catalog connection retains that provider's last known
-inventory; a successful empty catalog removes its models from selection.
+they return. Temporary catalog failures, including connection errors, rate limits,
+and retryable server errors, retain that provider's last known inventory. A
+successful empty catalog removes its models from selection; definitive
+authentication failures do not retain availability.
 
 Model listings hide a curated blacklist of dedicated non-coding models, maintained
 with reasons in `src/slipagent/model_catalog.py`. New model IDs remain visible by

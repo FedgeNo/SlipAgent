@@ -29,11 +29,14 @@ example `~/.local/share/slipagent/plugins/` on Linux. The folder follows
 2. **Trim.** Delete the methods you don't want to change. Fewer copied methods means
    more of SlipAgent's own code, and its fixes, stays in effect.
 3. **Edit** the methods that remain.
-4. **Save.** Saving a plugin applies it through a live reload, exactly like saving
-   SlipAgent source. With `--no-reload`, plugins apply at startup.
+4. **Save and approve.** Saving a plugin marks its new contents for approval.
+   `/plugins` approves that version and applies it through a live reload. With
+   `--no-reload`, approval reapplies plugins directly.
 
-`/plugin copy` approves what it writes, since you asked for it. A plugin file that
-appears any other way needs approval first (see below).
+`/plugin copy` approves the methods it writes. A wholly generated new file also
+receives code approval; appending to an existing file requires approval of the
+resulting file through `/plugins`. This prevents copying one method from granting
+trust to unrelated Python already in the file.
 
 ## How a Plugin Looks
 
@@ -85,17 +88,31 @@ class Renderer:
 
 ## Approval
 
-Nothing from a plugin applies until you approve it. When a plugin, or a method newly
-added to one, has no decision yet, SlipAgent asks once the terminal is up:
+Approval has two parts. First, **Approve This Version** permits execution of the
+entire Python file, including imports, decorators, class bodies, and top-level
+statements. Until then, SlipAgent lists the file without importing it. Review the
+displayed file path before approving. **Keep This Version Disabled** records a
+rejection without executing the file; Esc leaves the decision pending.
+
+Code approval records the SHA-256 digest of the exact file contents. Every edit
+requires approval again, including changes outside methods. Older approvals that
+only name methods keep those choices but require an initial code approval.
+`--all-plugins` explicitly bypasses both approval stages for that run.
+
+After code approval, SlipAgent loads the file to discover its overrides and asks
+about methods without a decision:
 
 - **Allow all** enables every new override in the plugin;
 - **Choose** asks about each one, labelled `<file> → <Class>.<method>`;
-- **None** keeps the plugin installed with nothing enabled.
+- **None** rejects the listed overrides. If no overrides remain approved, it also
+  disables execution of this file version.
 
 Esc leaves the remaining overrides undecided; they stay off and SlipAgent asks again
-next time. Editing an approved override never asks again. If a plugin appears while
-SlipAgent is running, a notice points to `/plugins`. One-shot runs (`-p`) never ask:
-only saved decisions apply, and undecided overrides stay off with a notice.
+next time. Method choices survive edits, while code approval must match the new
+contents. If a plugin appears or changes while SlipAgent is running, a notice points
+to `/plugins`. One-shot runs (`-p`) never ask: only previously approved file contents
+can execute, and undecided overrides stay off with a notice. Disabling a version
+prevents later imports; effects of code already executed cannot be undone.
 
 ## Conflicts
 
@@ -115,9 +132,13 @@ overrides apply. SlipAgent asks again only if the set of competing plugins chang
 Approvals and conflict choices are saved in `plugins/.approvals.json`. Changing it
 applies immediately, like saving a plugin.
 
-`/plugins` lists every plugin file, the module it targets, and each override with its
-state: approved, awaiting approval, rejected, conflict unresolved, or another plugin
-chosen, plus "changed upstream" or "unstamped" where that applies. It then reopens the
+Invalid approval data disables saved decisions and reports the error while keeping
+SlipAgent startable. New decisions made through `/plugins` replace the invalid data.
+
+`/plugins` lists every plugin file and its code approval state. Approved files also
+show their target module and each override's state: approved, awaiting approval,
+rejected, conflict unresolved, or another plugin chosen, plus "changed upstream" or
+"unstamped" where that applies. It then reopens the
 menus so you can change any decision. Esc in the plugin list moves on to the conflict
 menus.
 
@@ -146,7 +167,8 @@ After a warning:
    it checks every plugin.
 2. Bring your override up to date if it needs it.
 3. `/plugin restamp <file> [method]` records the current fingerprint and source.
-   Restamping also adds `@overrides` to unstamped overrides.
+   Restamping also adds `@overrides` to unstamped overrides. Approve the resulting
+   file version through `/plugins`.
 
 The absence of a warning is not a guarantee. A method can break without its own code
 changing, for example when a method it calls takes different arguments or an
@@ -169,7 +191,7 @@ attribute it reads is renamed.
 | Option | Effect |
 | --- | --- |
 | `--no-plugins` | Skip every plugin for this run. `SLIPAGENT_NO_PLUGINS=1` does the same. Use it if a plugin prevents startup. |
-| `--all-plugins` | Apply every override for this run without asking, stacking overrides of one method in file-name order. Saved decisions stay unchanged. |
+| `--all-plugins` | Execute every plugin file and apply every override without approval, stacking overrides of one method in file-name order. Saved decisions stay unchanged. |
 
 ## Commands
 

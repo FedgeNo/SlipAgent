@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from .agent import Agent
-from .api import APIClient, APIError, APIConfigError, APIConnectionError
+from .api import APIClient, APIError, APIConfigError
 from .config import Config, ConfigError
 from .lifecycle import finish_cleanup
 from .mcp import MCPManager
@@ -131,6 +131,7 @@ class Session:
 
     async def catalog(self, refresh: bool = False) -> list[ModelInfo]:
         """Current provider inventory, cached for at most five minutes."""
+        from .modelrouting import transient_error
         keys = self._provider_keys()
         names = active_providers(keys=keys)
         # Existing sessions acquire a cache timestamp on their first call after
@@ -155,8 +156,8 @@ class Session:
                     if not isinstance(result, (APIError, ConfigError)):
                         raise result
                     errors.append(f"{name}: {result}")
-                    if isinstance(result, APIConnectionError):
-                        # A broken connection supplies no evidence of removal.
+                    if transient_error(result):
+                        # Temporary metadata failures supply no evidence of removal.
                         catalog.extend(model for model in self._catalog or [] if model.provider == name)
                 else:
                     catalog.extend(result)

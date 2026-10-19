@@ -6,6 +6,7 @@ the other configured providers, at most one job per provider at a time.
 
 from __future__ import annotations
 
+import asyncio
 from collections import Counter
 
 from .api import APIClient
@@ -37,29 +38,33 @@ class CompressionProviders:
 
     async def select(self, excluded: set[str], *, failed_provider: str | None = None,
                      revision: int | None = None, busy: Counter[str] | None = None) -> tuple[APIClient, ModelInfo]:
-        """Choose the next background route; `busy` counts providers serving other jobs."""
-        ranked = await self.background()
-        if revision is not None and revision != self.models.revision:
-            excluded.clear()
-            failed_provider = None
-        session = self.models.session
-        if not ranked:
-            if self.models.credentials.keys() <= {session.client.provider}:
-                if not self.single_provider_notified:
-                    self.models.notice("One provider is available, and it serves coding requests only. "
-                                       "Add another provider's API key to enable history summaries.")
-                    self.single_provider_notified = True
-                raise CompressionUnavailableError("no provider other than the selected coding provider is available")
-            raise CompressionUnavailableError("no eligible ranked free compression models; check provider keys or update SlipAgent")
-        failures = self.models.failed["compression"] | excluded
-        healthy = [model for model in ranked if model.selector not in failures]
-        available = healthy or ranked
-        alternatives = [model for model in available if model.provider != failed_provider]
-        if alternatives:
-            available = alternatives
-        idle = [model for model in available if busy is None or busy[model.provider] <= 0]
-        if idle:
-            available = idle
+        """Reserve an idle route, waiting when another job owns every eligible provider."""
+        while True:
+            ranked = await self.background()
+            if revision is not None and revision != self.models.revision:
+                excluded.clear()
+                failed_provider = None
+            session = self.models.session
+            if not ranked:
+                if self.models.credentials.keys() <= {session.client.provider}:
+                    if not self.single_provider_notified:
+                        self.models.notice("One provider is available, and it serves coding requests only. "
+                                           "Add another provider's API key to enable history summaries.")
+                        self.single_provider_notified = True
+                    raise CompressionUnavailableError("no provider other than the selected coding provider is available")
+                raise CompressionUnavailableError("no eligible ranked free compression models; check provider keys or update SlipAgent")
+            failures = self.models.failed["compression"] | excluded
+            healthy = [model for model in ranked if model.selector not in failures]
+            available = healthy or ranked
+            alternatives = [model for model in available if model.provider != failed_provider]
+            if alternatives:
+                available = alternatives
+            available = [model for model in available if busy is None or busy[model.provider] <= 0]
+            if available:
+                break
+            released = self._availability()
+            released.clear()
+            await released.wait()
         # Advance before any network await so concurrent turn/group jobs share
         # the same order. Each provider contributes its best remaining model.
         providers = list(PROVIDERS)
@@ -78,8 +83,16 @@ class CompressionProviders:
             busy[provider] += 1
         return client, model
 
+    def _availability(self) -> asyncio.Event:
+        # Existing routing owners acquire this synchronization state after reload.
+        released: asyncio.Event = self.__dict__.setdefault("_provider_released", asyncio.Event())
+        return released
+
+    def release(self, provider: str, busy: Counter[str]) -> None:
+        busy[provider] -= 1
+        self._availability().set()
+
     async def aclose(self) -> None:
-        import asyncio
         clients = list(self.clients.values())
         self.clients.clear()
         await asyncio.gather(*(client.aclose() for client in clients))

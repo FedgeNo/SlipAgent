@@ -2325,7 +2325,7 @@ class ModelPicker:
 
 
 class PluginMenu:
-    """Approve plugin overrides and choose between plugins overriding the same method.
+    """Approve plugin code and overrides, and resolve competing replacements.
 
     Decisions are saved in plugins/.approvals.json and apply through a reload,
     or directly to the live classes when reload is off.
@@ -2337,14 +2337,15 @@ class PluginMenu:
         self.out = out
 
     async def offer(self) -> None:
-        """Ask only about overrides without a decision and conflicts without a saved choice."""
+        """Ask about file versions, overrides, and conflicts without saved decisions."""
         if not plugins.all_plugins and plugins.pending(plugins.reports):
             await self.menu(only_new=True)
 
     async def menu(self, *, only_new: bool = False) -> None:
         style, out = self.style, self.out
         terminal = self.session.renderer.terminal
-        reports = [report for report in plugins.reports if report.overrides]
+        reports = [report for report in plugins.reports if not report.error
+                   and (report.overrides or report.code_state != "on")]
         if not only_new:
             self.listing()
         if not reports:
@@ -2356,22 +2357,50 @@ class PluginMenu:
         changed = False
         if only_new:
             for report in reports:
+                if report.code_state == "rejected":
+                    continue
+                current = await self.approve_code(terminal, approvals, report)
+                if current is None:
+                    continue
+                report = current
                 new = [override for override in report.overrides
                        if approvals.decision(report.name, override.member_key) is None]
                 if new:
                     changed |= await self.approve(terminal, approvals, report, new)
         else:
-            by_name = {report.name: report for report in reports}
             while True:
+                reports = [report for report in plugins.reports if not report.error
+                           and (report.overrides or report.code_state != "on")]
                 options = [(report.name, f"{report.name}: {self.summary(report, approvals)}") for report in reports]
                 name = await terminal.choose(f"Plugins in {plugins.plugin_directory()}", options)
                 if name is None:
                     break
-                changed |= await self.approve(terminal, approvals, by_name[name], by_name[name].overrides)
-        changed |= await self.resolve(terminal, approvals, reports, only_new=only_new)
+                report = next(report for report in reports if report.name == name)
+                current = await self.approve_code(terminal, approvals, report)
+                if current is not None:
+                    changed |= await self.approve(terminal, approvals, current, current.overrides)
+        changed |= await self.resolve(terminal, approvals, plugins.reports, only_new=only_new)
         if changed:
             await run_blocking(plugins.save_approvals, approvals)
             await self.apply()
+
+    async def approve_code(self, terminal: TerminalUI, approvals: plugins.Approvals,
+                           report: plugins.PluginReport) -> plugins.PluginReport | None:
+        """Approve the exact file snapshot before importing it to discover overrides."""
+        if report.code_state == "on":
+            return report
+        print(f"  Review {report.path}. Approving this version allows all its Python code to execute, "
+              "including imports and top-level statements.", file=self.out)
+        answer = await terminal.choose(f"Python Code: {report.name}", [
+            ("approve", "Approve This Version"), ("reject", "Keep This Version Disabled"),
+        ])
+        if answer is None:
+            return None
+        approvals.decide_code(report.name, report.digest, answer == "approve")
+        await run_blocking(plugins.save_approvals, approvals)
+        await self.apply()
+        return next((current for current in plugins.reports if current.name == report.name
+                     and current.code_state == "on" and not current.error), None)
 
     async def apply(self) -> None:
         """Apply changed plugin files or decisions now: through a reload, or directly without one."""
@@ -2400,6 +2429,10 @@ class PluginMenu:
             if report.error:
                 print(style.red(f"  {report.name}: disabled: {report.error}"), file=out)
                 continue
+            if report.code_state != "on":
+                state = "Python code awaiting approval" if report.code_state == "pending" else "Python code rejected"
+                print(style.dim(f"  {report.name}: {state}"), file=out)
+                continue
             print(f"  {report.name} → {report.target}", file=out)
             for override in report.overrides:
                 notes = [self.STATES[override.state]]
@@ -2426,8 +2459,11 @@ class PluginMenu:
                 approvals = await run_blocking(plugins.load_approvals)
                 for member in members:
                     approvals.decide(path.name, member, True)
+                if tools.copied_digest is not None:
+                    approvals.decide_code(path.name, tools.copied_digest, True)
                 await run_blocking(plugins.save_approvals, approvals)
-                print(f"  Wrote {', '.join(members)} to {path}; approved. Edit and save it to change behavior.",
+                print(f"  Wrote {', '.join(members)} to {path}; overrides approved. "
+                      "Use /plugins to approve later code changes.",
                       file=out)
                 await self.apply()
             elif action == "diff" and len(words) <= 1:
@@ -2465,6 +2501,8 @@ class PluginMenu:
         return f"{target}.{method}" if method else target
 
     def summary(self, report: plugins.PluginReport, approvals: plugins.Approvals) -> str:
+        if report.code_state != "on":
+            return "Python code awaiting approval" if report.code_state == "pending" else "Python code rejected"
         decisions = [approvals.decision(report.name, override.member_key) for override in report.overrides]
         parts = [f"{decisions.count(True)} of {len(decisions)} allowed"]
         if None in decisions:
@@ -2482,6 +2520,9 @@ class PluginMenu:
         if action != "choose":
             for override in overrides:
                 approvals.decide(report.name, override.member_key, action == "all")
+            if action == "none" and not any(approvals.decision(report.name, override.member_key)
+                                             for override in report.overrides):
+                approvals.decide_code(report.name, report.digest, False)
             return True
         changed = False
         for override in overrides:

@@ -65,6 +65,13 @@ def stamp(method: str) -> str:
     return value
 
 
+def trust(approvals: plugins.Approvals, files: dict[str, str]) -> plugins.Approvals:
+    """Approve fixture code independently of the override choices under test."""
+    for name, source in files.items():
+        approvals.decide_code(name, plugins.source_digest(textwrap.dedent(source).encode()), True)
+    return approvals
+
+
 def test_one_method_is_replaced_and_the_rest_stay_the_applications():
     module = component()
     reports = apply(module, {"quiet.py": f'''
@@ -266,7 +273,7 @@ PICK = '''
 
 def test_saved_approvals_decide_each_override_and_undecided_ones_stay_off():
     module = component()
-    approvals = plugins.Approvals({"pick.py": {"Widget.size": True}})
+    approvals = trust(plugins.Approvals({"pick.py": {"Widget.size": True}}), {"pick.py": PICK})
     report = apply(module, {"pick.py": PICK}, approvals=approvals)[0]
     assert module.Widget().render("x") == "<x>" and module.Widget().size() == 9
     assert [(override.member, override.state) for override in report.overrides] == [
@@ -283,7 +290,7 @@ def test_saved_approvals_decide_each_override_and_undecided_ones_stay_off():
 
 
 def test_approvals_survive_a_round_trip_and_ignore_malformed_content():
-    approvals = plugins.Approvals()
+    approvals = trust(plugins.Approvals(), {"a.py": PICK})
     approvals.decide("a.py", "Widget.render", True)
     approvals.choose("widgets.Widget.render", ["b.py", "a.py"], ["b.py", "a.py"])
     parsed = plugins.Approvals.parse(approvals.encode())
@@ -292,6 +299,58 @@ def test_approvals_survive_a_round_trip_and_ignore_malformed_content():
     assert parsed.order("widgets.Widget.render", ["a.py", "b.py", "c.py"]) is None
     for content in (b"{not json", b"[]", b'{"approved": {"a.py": {"Widget.render": "yes"}}}'):
         assert plugins.Approvals.parse(content).decision("a.py", "Widget.render") is None
+
+
+@pytest.mark.parametrize("old_decision", [None, True, False])
+def test_unapproved_plugin_code_is_not_executed(tmp_path, old_decision):
+    marker = tmp_path / "executed"
+    source = f'from pathlib import Path\nPath({str(marker)!r}).write_text("ran")\n' + textwrap.dedent(PICK)
+    module = component()
+    decisions = plugins.Approvals()
+    if old_decision is not None:
+        decisions.decide("pending.py", "Widget.size", old_decision)
+    report = apply(module, {"pending.py": source}, approvals=decisions)[0]
+    assert not marker.exists()
+    assert module.Widget().size() == 1
+    assert plugins.pending([report])
+
+
+def test_code_approval_covers_the_exact_source_and_rejection_stays_inert(tmp_path):
+    marker = tmp_path / "executed"
+    source = f'from pathlib import Path\nPath({str(marker)!r}).write_text("ran")\n' + textwrap.dedent(PICK)
+    decisions = trust(plugins.Approvals({"code.py": {"Widget.size": True}}), {"code.py": source})
+    module = component()
+    assert apply(module, {"code.py": source}, approvals=decisions)[0].enabled
+    assert marker.read_text() == "ran" and module.Widget().size() == 9
+    marker.unlink()
+    changed = source + "\n# changed source\n"
+    report = apply(component(), {"code.py": changed}, approvals=decisions)[0]
+    assert report.code_state == "pending" and not marker.exists()
+    decisions.decide_code("code.py", report.digest, False)
+    report = apply(component(), {"code.py": changed}, approvals=decisions)[0]
+    assert report.code_state == "rejected" and not marker.exists()
+    assert not plugins.pending([report])
+
+
+@pytest.mark.parametrize("content", [
+    b'{"approved":[1]}', b'{"conflicts":"invalid"}',
+    b'{"conflicts":{"widgets.Widget.render":{"plugins":[1,"a.py"],"order":["a.py"]}}}',
+    b'{"code":[]}', b'{"code":{"a.py":{"sha256":"invalid","approved":true}}}',
+    b'{"approved":{"a.py":{"Widget.size":true}},"conflicts":null}',
+])
+def test_malformed_approval_fields_disable_decisions_and_report_the_problem(content):
+    decisions = plugins.Approvals.parse(content)
+    assert decisions.approved == {} and decisions.conflicts == {}
+    assert decisions.error
+
+
+def test_invalid_approval_file_reports_a_notice_without_loading_plugins(tmp_path):
+    marker = tmp_path / "executed"
+    source = f'from pathlib import Path\nPath({str(marker)!r}).write_text("ran")\n'
+    decisions = plugins.Approvals.parse(b'{"approved":[1]}')
+    reports = apply(component(), {"code.py": source}, approvals=decisions)
+    assert not marker.exists()
+    assert any("Invalid .approvals.json" in notice for report in reports for notice in report.notices())
 
 
 STACKABLE = {
@@ -316,7 +375,7 @@ STACKABLE = {
 
 
 def allowed_both() -> plugins.Approvals:
-    return plugins.Approvals({"a.py": {"Widget.render": True}, "b.py": {"Widget.render": True}})
+    return trust(plugins.Approvals({"a.py": {"Widget.render": True}, "b.py": {"Widget.render": True}}), STACKABLE)
 
 
 def test_a_stacked_override_behind_one_without_original_is_reported_dead():
@@ -386,8 +445,54 @@ def menu_for(answers: list[str | None], monkeypatch) -> tuple[object, ScriptedCh
     return cli.PluginMenu(session, cli.Style(False), out), chooser, applied
 
 
+@pytest.mark.parametrize("answer", [None, "reject", "approve"])
+async def test_menu_gets_code_approval_before_execution_and_then_asks_about_methods(tmp_path, monkeypatch, answer):
+    marker = tmp_path / "executed"
+    source = f'from pathlib import Path\nPath({str(marker)!r}).write_text("ran")\n' + textwrap.dedent(PICK)
+    files = {"code.py": source}
+    monkeypatch.setattr(plugins, "reports", apply(component(), files, approvals=plugins.Approvals()))
+    menu, chooser, _ = menu_for([answer, "all"] if answer == "approve" else [answer], monkeypatch)
+    module = component()
+
+    def apply_saved(core):
+        plugins.reports = apply(module, files, approvals=plugins.load_approvals())
+        return plugins.reports
+
+    monkeypatch.setattr(plugins, "apply_to_live", apply_saved)
+    assert not marker.exists()
+    await menu.offer()
+    assert chooser.asked[0] == ("Python Code: code.py", ["approve", "reject"])
+    assert marker.exists() == (answer == "approve")
+    assert module.Widget().size() == (9 if answer == "approve" else 1)
+    assert len(chooser.asked) == (2 if answer == "approve" else 1)
+    assert plugins.pending(plugins.reports) == (answer is None)
+
+
+async def test_code_changed_while_approval_menu_is_open_stays_unloaded(tmp_path, monkeypatch):
+    marker = tmp_path / "executed"
+    files = {"code.py": textwrap.dedent(PICK)}
+    monkeypatch.setattr(plugins, "reports", apply(component(), files, approvals=plugins.Approvals()))
+    menu, chooser, _ = menu_for(["approve"], monkeypatch)
+    choose = chooser.choose
+
+    async def changed_source(*args, **kwargs):
+        files["code.py"] += f'\nfrom pathlib import Path\nPath({str(marker)!r}).write_text("ran")\n'
+        return await choose(*args, **kwargs)
+
+    def apply_saved(core):
+        plugins.reports = apply(component(), files, approvals=plugins.load_approvals())
+        return plugins.reports
+
+    monkeypatch.setattr(chooser, "choose", changed_source)
+    monkeypatch.setattr(plugins, "apply_to_live", apply_saved)
+    await menu.offer()
+    assert not marker.exists() and plugins.pending(plugins.reports)
+
+
 async def test_the_menu_approves_new_plugins_then_asks_about_their_conflict(monkeypatch):
-    monkeypatch.setattr(plugins, "reports", apply(component(), STACKABLE, approvals=plugins.Approvals()))
+    decisions = trust(plugins.Approvals(), STACKABLE)
+    plugins.save_approvals(decisions)
+    monkeypatch.setattr(plugins, "reports", apply(component(), STACKABLE, approvals=decisions))
     menu, chooser, applied = menu_for(["all", "all", "b.py/a.py"], monkeypatch)
     await menu.offer()
     assert chooser.asked == [
@@ -408,8 +513,9 @@ async def test_the_menu_approves_new_plugins_then_asks_about_their_conflict(monk
 
 async def test_choosing_overrides_one_by_one_and_stacking_only_through_original(monkeypatch):
     files = {**STACKABLE, "c.py": PICK}
-    plugins.save_approvals(allowed_both())
-    monkeypatch.setattr(plugins, "reports", apply(component(), files, approvals=allowed_both()))
+    decisions = trust(allowed_both(), {"c.py": PICK})
+    plugins.save_approvals(decisions)
+    monkeypatch.setattr(plugins, "reports", apply(component(), files, approvals=decisions))
     menu, chooser, applied = menu_for(["choose", "allow", "reject", None], monkeypatch)
     await menu.offer()
     assert chooser.asked[0] == ("Plugin c.py → Widget.render, Widget.size", ["all", "choose", "none"])
@@ -423,6 +529,18 @@ async def test_choosing_overrides_one_by_one_and_stacking_only_through_original(
     assert saved.approved["c.py"] == {"Widget.render": True, "Widget.size": False}
     assert saved.order("widgets.Widget.render", ["a.py", "b.py", "c.py"]) is None
     assert len(applied) == 1
+
+
+async def test_rejecting_new_overrides_keeps_existing_approved_methods(monkeypatch):
+    decisions = trust(plugins.Approvals({"pick.py": {"Widget.size": True}}), {"pick.py": PICK})
+    report = apply(component(), {"pick.py": PICK}, approvals=decisions)[0]
+    menu, chooser, _ = menu_for(["none"], monkeypatch)
+    await menu.approve(chooser, decisions, report, [report.overrides[0]])
+    assert decisions.decision("pick.py", "Widget.render") is False
+    assert decisions.code_decision("pick.py", report.digest) is True
+    module = component()
+    apply(module, {"pick.py": PICK}, approvals=decisions)
+    assert module.Widget().size() == 9
 
 
 def test_original_outside_an_override_explains_itself():
@@ -468,7 +586,8 @@ def run_copy(tmp_path: Path, reload_source):
         for name, text in (plugin_files or {}).items():
             (directory / name).write_text(textwrap.dedent(text))
         script = SETUP.replace("__BODY__", textwrap.indent(
-            "plugins_dir = Path(os.environ['SLIPAGENT_STATE_DIR']) / 'plugins'\n" + textwrap.dedent(body).strip(), "        "))
+            "from slipagent import plugins\nplugins_dir = Path(os.environ['SLIPAGENT_STATE_DIR']) / 'plugins'\n"
+            + textwrap.dedent(body).strip(), "        "))
         env = {**os.environ, "PYTHONPATH": os.pathsep.join([GUARD_DIRECTORY, str(package_root)])}
         result = subprocess.run([sys.executable, "-c", script], cwd=project, env=env,
                                 capture_output=True, text=True, timeout=30)
@@ -486,6 +605,7 @@ class Renderer:
     def emit(self, text):
         return original(self, "PLUGIN " + str(text))
 '''
+trust(APPROVED, {"loud.py": RENDERER_PLUGIN})
 
 
 def test_saving_a_plugin_reloads_and_applies_it_to_live_classes(run_copy):
@@ -508,6 +628,9 @@ def test_saving_a_plugin_reloads_and_applies_it_to_live_classes(run_copy):
 def test_a_broken_plugin_is_reported_once_and_the_reload_still_applies(run_copy):
     run_copy('''
         (plugins_dir / 'broken.py').write_text('raise ValueError("bad plugin")\\n')
+        decisions = plugins.load_approvals()
+        decisions.decide_code('broken.py', plugins.source_digest((plugins_dir / 'broken.py').read_bytes()), True)
+        plugins.save_approvals(decisions)
         edit('statusline.py', 'NOTICE_SECONDS = 30', 'NOTICE_SECONDS = 31')
         await frame.checkpoint()
         assert frame.generation == 1, sink.getvalue()
@@ -526,6 +649,9 @@ def test_a_plugin_that_breaks_a_component_contract_is_rejected_like_an_edit(run_
             '@replaces("cli.Renderer")\\n'
             'class Renderer:\\n'
             '    emit = None\\n')
+        decisions = plugins.load_approvals()
+        decisions.decide_code('contract.py', plugins.source_digest((plugins_dir / 'contract.py').read_bytes()), True)
+        plugins.save_approvals(decisions)
         await frame.checkpoint()
         assert frame.generation == 0
         assert 'Missing component API in cli.Renderer' in sink.getvalue(), sink.getvalue()
@@ -578,6 +704,8 @@ def test_reapplying_to_live_classes_follows_changed_approvals(tmp_path, reload_s
             return sink.getvalue().strip()
 
         approvals = plugins.Approvals()
+        approvals.decide_code("loud.py", plugins.source_digest((plugins.plugin_directory() / "loud.py").read_bytes()), True)
+        plugins.save_approvals(approvals)
         for decision in (None, True, False, True):
             if decision is not None:
                 approvals.decide("loud.py", "Renderer.emit", decision)
@@ -691,10 +819,12 @@ async def test_plugin_copy_approves_what_it_wrote_and_the_listing_shows_each_sta
     await menu.command("copy")
     assert [title for title, _ in chooser.asked] == ["Copy into a plugin", "Copy from widgets.Widget"]
     assert plugins.load_approvals().approved == {"widgets-widget.py": {"Widget.size": True}}
+    path = workshop.resolve_file("widgets-widget")
+    assert plugins.load_approvals().code_decision(path.name, plugins.source_digest(path.read_bytes())) is True
     assert len(applied) == 1 and "Wrote Widget.size" in menu.out.getvalue()
 
     files = {**STACKABLE, "c.py": PICK}
-    approvals = allowed_both()
+    approvals = trust(allowed_both(), {"c.py": PICK})
     approvals.decide("c.py", "Widget.size", False)
     monkeypatch.setattr(plugins, "reports", apply(component(), files, approvals=approvals))
     menu, _, _ = menu_for([], monkeypatch)
@@ -704,3 +834,16 @@ async def test_plugin_copy_approves_what_it_wrote_and_the_listing_shows_each_sta
         "  b.py → widgets", "    Widget.render: conflict unresolved, unstamped",
         "  c.py → widgets", "    Widget.render: awaiting approval, unstamped", "    Widget.size: rejected, unstamped",
     ]
+
+
+async def test_plugin_copy_does_not_approve_preexisting_code(workshop, tmp_path, monkeypatch):
+    marker = tmp_path / "executed"
+    path = workshop.resolve_file("existing")
+    path.parent.mkdir(parents=True)
+    path.write_text(f'from pathlib import Path\nPath({str(marker)!r}).write_text("ran")\n')
+    menu, _, _ = menu_for([], monkeypatch)
+    await menu.command("copy widgets.Widget.size existing")
+    decisions = plugins.load_approvals()
+    report = load(path, component(), decisions)
+    assert decisions.decision(path.name, "Widget.size") is True
+    assert report.code_state == "pending" and not marker.exists()

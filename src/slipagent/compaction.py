@@ -247,9 +247,9 @@ class StepCompactor:
         excluded: set[str] = set()
         failed_provider: str | None = None
         revision = self.routing.models.revision if self.routing is not None else 0
-        # Each job holds at most one background provider; other jobs prefer idle ones.
+        # Each job reserves one provider; retries wait for an eligible free slot.
         busy: Counter[str] = self.__dict__.setdefault("_busy", Counter())
-        held: list[str] = []
+        held: list[tuple[CompressionProviders, str]] = []
         try:
             while generation == self.generation:
                 routing = self.routing
@@ -260,14 +260,14 @@ class StepCompactor:
                             excluded.clear()
                             failed_provider = None
                             repairs = 0
-                        # Release this job's provider before choosing again so it
-                        # counts as idle only for this job's own retry.
-                        for provider in held:
-                            busy[provider] -= 1
+                        # Release the failed reservation before waiting for
+                        # another provider.
+                        for owner, provider in held:
+                            owner.release(provider, busy)
                         held.clear()
                         client, selected = await routing.select(excluded, failed_provider=failed_provider,
                                                                 revision=revision, busy=busy)
-                        held.append(selected.provider)
+                        held.append((routing, selected.provider))
                         if revision != routing.models.revision:
                             repairs = 0
                         revision = routing.models.revision
@@ -306,8 +306,8 @@ class StepCompactor:
                     attempt += 1
             return None
         finally:
-            for provider in held:
-                busy[provider] -= 1
+            for owner, provider in held:
+                owner.release(provider, busy)
 
     async def wait_request_retry(self, client: APIClient, attempt: int, error: Exception) -> bool:
         """Share transport and malformed-reply recovery across both compactors."""

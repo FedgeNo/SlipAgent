@@ -374,6 +374,83 @@ async def test_concurrent_jobs_rotate_and_retry_on_another_provider(routing, mon
         await owner.aclose()
 
 
+@pytest.mark.parametrize("cancel_holder", [False, True])
+async def test_retry_waits_until_the_other_provider_is_free(routing, monkeypatch, cancel_holder):
+    from slipagent.api import APIClient, APIResponseError
+    router, _, _, _, _ = routing
+    owner = StepCompactor(lambda usage: None, lambda error: pytest.fail(error))
+    owner.routing = router
+    monkeypatch.setattr(APIClient, "wait_retry", AsyncMock(return_value=True))
+    second_started, release_second, selecting_retry = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    attempts = []
+    select = router.select
+
+    async def selecting(excluded, **kwargs):
+        if kwargs.get("failed_provider"):
+            selecting_retry.set()
+        return await select(excluded, **kwargs)
+
+    async def first(client, model, profile, reserve):
+        attempts.append(("first", client.provider))
+        if len(attempts) == 1:
+            await second_started.wait()
+            raise APIResponseError("overloaded", 503)
+        return "ready"
+
+    async def second(client, model, profile, reserve):
+        attempts.append(("second", client.provider))
+        second_started.set()
+        await release_second.wait()
+        return "ready"
+
+    monkeypatch.setattr(router, "select", selecting)
+    tasks = [asyncio.create_task(owner.request(operation, StubClient([]), "working", None, 50, 0))
+             for operation in (first, second)]
+    try:
+        await asyncio.wait_for(selecting_retry.wait(), 2)
+        await asyncio.sleep(0)
+        assert attempts == [("first", "nvidia"), ("second", "kilo")]
+        if cancel_holder:
+            tasks[1].cancel()
+        else:
+            release_second.set()
+        results = await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), 2)
+        assert results[0] == "ready"
+        assert isinstance(results[1], asyncio.CancelledError) if cancel_holder else results[1] == "ready"
+        assert attempts[-1] == ("first", "kilo")
+    finally:
+        release_second.set()
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await owner.aclose()
+
+
+async def test_cancelling_a_slot_waiter_does_not_take_or_leak_a_provider(routing):
+    from collections import Counter
+    router, _, _, _, _ = routing
+    busy = Counter()
+    _, first = await router.select(set(), busy=busy)
+    _, second = await router.select(set(), busy=busy)
+    waiting = asyncio.create_task(router.select(set(), busy=busy))
+    try:
+        await asyncio.sleep(0)
+        assert not waiting.done()
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+        router.release(first.provider, busy)
+        _, replacement = await asyncio.wait_for(router.select(set(), busy=busy), 2)
+        assert replacement.provider == first.provider
+        router.release(replacement.provider, busy)
+        router.release(second.provider, busy)
+        assert not any(busy.values())
+    finally:
+        waiting.cancel()
+        await asyncio.gather(waiting, return_exceptions=True)
+        await router.aclose()
+
+
 async def test_reset_during_lookup_clears_inflight_job_exclusions(routing, monkeypatch):
     from slipagent.api import APIResponseError
     router, _, _, _, _ = routing

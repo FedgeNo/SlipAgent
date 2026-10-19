@@ -121,24 +121,40 @@ async def test_explicit_catalog_refresh_accepts_an_empty_provider_catalog(tmp_pa
         assert await routing.candidates("working") == [best]
 
 
-async def test_catalog_connection_failure_preserves_known_available_models(tmp_path, monkeypatch):
+@pytest.mark.parametrize("status", [None, 429, 503])
+async def test_catalog_transient_failure_preserves_known_available_models(tmp_path, monkeypatch, status):
     from slipagent import sessionstate
     from slipagent.api import APIConnectionError
     monkeypatch.setenv("KILO_API_KEY", "dummy-kilo")
     best = entry("openrouter", "first", 1)
     other = entry("kilo", "second", 2)
     monkeypatch.setattr(sessionstate, "fetch_catalog", AsyncMock(return_value=[other]))
+    failure = APIConnectionError("Temporary catalog failure") if status is None else APIResponseError("Temporary catalog failure", status)
     async with create_client("openrouter", api_key="dummy") as client:
         monkeypatch.setattr(client, "list_models", AsyncMock(side_effect=[
-            [best], APIConnectionError("Local connection failed"), []]))
+            [best], failure, []]))
         session = session_for(client, tmp_path)
         routing = session.model_routing()
         assert await routing.candidates("working") == [best, other]
         await session.catalog(refresh=True)
         assert await routing.candidates("working") == [best, other]
-        assert session.extensions["catalog_errors"] == ["openrouter: Local connection failed"]
+        assert session.extensions["catalog_errors"] == ["openrouter: Temporary catalog failure"]
         await session.catalog(refresh=True)
         assert await routing.candidates("working") == [other]
+
+
+async def test_catalog_authentication_failure_does_not_preserve_provider_availability(tmp_path, monkeypatch):
+    from slipagent import sessionstate
+    from slipagent.api import APIAuthError
+    monkeypatch.setenv("KILO_API_KEY", "dummy-kilo")
+    best, other = entry("openrouter", "first", 1), entry("kilo", "second", 2)
+    monkeypatch.setattr(sessionstate, "fetch_catalog", AsyncMock(return_value=[other]))
+    async with create_client("openrouter", api_key="dummy") as client:
+        monkeypatch.setattr(client, "list_models", AsyncMock(side_effect=[[best], APIAuthError("Rejected key", 401)]))
+        session = session_for(client, tmp_path)
+        assert await session.catalog() == [best, other]
+        assert await session.catalog(refresh=True) == [other]
+        assert session.extensions["catalog_errors"] == ["openrouter: Rejected key"]
 
 
 async def test_cached_catalog_scores_follow_table_updates_without_network(tmp_path, monkeypatch):

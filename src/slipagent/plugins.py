@@ -220,10 +220,16 @@ class PluginReport:
     enabled: bool = False
     error: str = ""
     overrides: list[Override] = field(default_factory=list)
+    digest: str = ""
+    code_state: str = "on"
 
     def notices(self) -> Iterator[str]:
         if self.error:
             yield f"Plugin {self.name} disabled: {self.error}"
+            return
+        if self.code_state != "on":
+            if self.code_state == "pending":
+                yield f"{self.name} has unapproved Python code; review and approve this version with /plugins."
             return
         for override in self.overrides:
             if override.state != "on":
@@ -257,30 +263,52 @@ class Approvals:
 
     approved: dict[str, dict[str, bool]] = field(default_factory=dict)
     conflicts: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+    code: dict[str, tuple[str, bool]] = field(default_factory=dict)
+    error: str = ""
 
     @classmethod
     def parse(cls, content: bytes | None) -> Approvals:
         try:
             data = json.loads(content) if content else {}
-        except ValueError:
-            return cls()
-        if not isinstance(data, dict):
-            return cls()
-        approved = {
-            plugin: {member: value for member, value in members.items() if isinstance(value, bool)}
-            for plugin, members in (data.get("approved") or {}).items() if isinstance(members, dict)
-        }
-        conflicts = {
-            label: {"plugins": list(choice["plugins"]), "order": list(choice["order"])}
-            for label, choice in (data.get("conflicts") or {}).items()
-            if isinstance(choice, dict) and isinstance(choice.get("plugins"), list)
-            and isinstance(choice.get("order"), list)
-        }
-        return cls(approved, conflicts)
+            if not isinstance(data, dict):
+                raise ValueError("expected an object")
+            approved, conflicts, code = (data.get(name, {}) for name in ("approved", "conflicts", "code"))
+            if not all(isinstance(value, dict) for value in (approved, conflicts, code)):
+                raise ValueError("approved, conflicts, and code must be objects")
+            for members in approved.values():
+                if not isinstance(members, dict) or any(type(value) is not bool for value in members.values()):
+                    raise ValueError("each approved entry must map member names to booleans")
+            for choice in conflicts.values():
+                if not isinstance(choice, dict) or any(
+                        not isinstance(choice.get(name), list)
+                        or any(not isinstance(value, str) for value in choice[name])
+                        for name in ("plugins", "order")):
+                    raise ValueError("each conflict needs plugins and order arrays of names")
+                if (len(set(choice["plugins"])) != len(choice["plugins"])
+                        or len(set(choice["order"])) != len(choice["order"])
+                        or not set(choice["order"]) <= set(choice["plugins"])):
+                    raise ValueError("conflict order must contain unique contenders")
+            for choice in code.values():
+                if (not isinstance(choice, dict) or type(choice.get("approved")) is not bool
+                        or not isinstance(choice.get("sha256"), str) or len(choice["sha256"]) != 64
+                        or any(character not in "0123456789abcdef" for character in choice["sha256"])):
+                    raise ValueError("each code decision needs a SHA-256 digest and an approved boolean")
+            return cls(approved, conflicts, {name: (choice["sha256"], choice["approved"]) for name, choice in code.items()})
+        except (ValueError, UnicodeError) as exc:
+            return cls(error=f"Invalid {APPROVALS_NAME}: {exc}. Saved plugin decisions are disabled.")
 
     def encode(self) -> bytes:
-        return (json.dumps({"approved": self.approved, "conflicts": self.conflicts},
+        return (json.dumps({"approved": self.approved, "conflicts": self.conflicts,
+                            "code": {name: {"sha256": digest, "approved": approved}
+                                     for name, (digest, approved) in self.code.items()}},
                            indent=2, sort_keys=True) + "\n").encode()
+
+    def code_decision(self, plugin: str, digest: str) -> bool | None:
+        saved = self.code.get(plugin)
+        return saved[1] if saved is not None and saved[0] == digest else None
+
+    def decide_code(self, plugin: str, digest: str, approved: bool) -> None:
+        self.code[plugin] = (digest, approved)
 
     def decision(self, plugin: str, member: str) -> bool | None:
         return self.approved.get(plugin, {}).get(member)
@@ -305,8 +333,10 @@ def approvals_path() -> Path:
 def load_approvals() -> Approvals:
     try:
         return Approvals.parse(approvals_path().read_bytes())
-    except OSError:
+    except FileNotFoundError:
         return Approvals()
+    except OSError as exc:
+        return Approvals(error=f"Cannot read {approvals_path()}: {exc}. Saved plugin decisions are disabled.")
 
 
 def save_approvals(approvals: Approvals) -> None:
@@ -315,6 +345,11 @@ def save_approvals(approvals: Approvals) -> None:
     temporary = path.with_name(path.name + ".tmp")
     temporary.write_bytes(approvals.encode())
     os.replace(temporary, path)
+
+
+def source_digest(source: bytes) -> str:
+    """Approval covers every byte that Python will compile and execute."""
+    return hashlib.sha256(source).hexdigest()
 
 
 def _load(name: str, path: str, source: bytes) -> tuple[types.ModuleType, _Names]:
@@ -453,14 +488,20 @@ def overlay(module_of: Callable[[str], types.ModuleType | None], source_of: Call
     original dictionary of every class changed.
     """
     reports = []
+    if approvals is not None and approvals.error:
+        reports.append(PluginReport(APPROVALS_NAME, str(approvals_path()), error=approvals.error))
     loaded: list[_Member] = []
     for key, source in sorted(plugins.items()):
         name = key.rpartition("/")[2]
         if not name.endswith(".py") or name.startswith(("_", ".")):
             continue
         path = str(plugin_directory() / name)
-        report = PluginReport(name, path)
+        report = PluginReport(name, path, digest=source_digest(source))
         reports.append(report)
+        decision = True if approvals is None else approvals.code_decision(name, report.digest)
+        if decision is not True:
+            report.code_state = "pending" if decision is None else "rejected"
+            continue
         try:
             members = _inspect(name, path, source, module_of, source_of, core, report)
         except Exception as exc:
@@ -525,8 +566,9 @@ def overlay(module_of: Callable[[str], types.ModuleType | None], source_of: Call
 
 
 def pending(reports: list[PluginReport]) -> bool:
-    """Whether any override awaits approval or any conflict awaits a choice."""
-    return any(override.state in {"pending", "conflict"} for report in reports for override in report.overrides)
+    """Whether file code, overrides, or conflicts await a decision."""
+    return any(report.code_state == "pending" or any(override.state in {"pending", "conflict"}
+               for override in report.overrides) for report in reports)
 
 
 def component_file(component: str) -> str:

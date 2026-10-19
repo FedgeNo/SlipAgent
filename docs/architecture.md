@@ -312,9 +312,11 @@ The offline maintenance script uses saved benchmark calibration; runtime code
 loads only final scores and exact aliases. See [model scoring](model-scores.md).
 Catalog inventory expires after five minutes; working and compression selection
 share the routing lock and refreshed inventory. Successful catalogs replace each
-provider's available IDs, including empty catalogs. Connection failures preserve
-that provider's cached entries. The curated score table retains removed IDs so a
-returning model can be selected without another ranking update.
+provider's available IDs, including empty catalogs. Transient catalog failures
+(connections, rate limits, and retryable HTTP errors) preserve that provider's
+cached entries; definitive authentication failures do not. The curated score table
+retains removed IDs so a returning model can be selected without another ranking
+update.
 
 `Session.model_routing` owns optimal mode, purpose-specific route failures,
 provider authentication failures, credential identities, and catalog locking.
@@ -578,8 +580,10 @@ and up to 25 earlier steps. CLI sessions attach `CompressionProviders` and the
 session-owned `ModelRouting` service. Both compactors use one selection/retry
 loop, rotating through each configured provider's best ranked free model.
 The selected coding provider is always excluded. `CompressionProviders.slots`
-counts the remaining providers; selection prefers providers not busy with another
-job. With none left, a notice asks for another provider's key and summaries are
+counts the remaining providers; selection reserves an idle provider and waits for
+a release notification when every eligible alternative is busy. Completion and
+cancellation release the reservation and wake waiting requests. With no eligible
+background provider, a notice asks for another provider's key and summaries are
 marked unavailable. Each attempt uses its destination's own
 profile; every failure advances rotation, including failures during capability
 lookup, context checking, and response validation. Concurrent jobs also avoid
@@ -1230,14 +1234,21 @@ registry, and terminal checks; the normal merge then carries them to the live cl
 a rejected generation leaves them as they were. A plugin that fails to load or
 apply is rolled back on its own and reported once; the generation continues.
 Startup applies the same overlay to the live classes once per process before the
-session is built. Approvals and conflict choices live in `plugins/.approvals.json`,
+session is built. Before compiling or executing a plugin, the loader checks a
+file-level approval against the SHA-256 digest of the exact source snapshot.
+Unapproved or changed files are listed without executing Python. Once file code
+is approved, member decisions separately govern which overrides apply.
+Approvals and conflict choices live in `plugins/.approvals.json`,
 which is watched with the plugin files: an override without a decision stays off,
 and a method that several approved overrides target applies none of them until a
-run order is chosen. The REPL asks about undecided overrides and conflicts once the
+run order is chosen. Malformed approval fields invalidate all saved decisions and
+produce a diagnostic without aborting startup. The REPL asks about unapproved
+file versions, undecided overrides, and conflicts once the
 terminal is up, and `/plugins` reopens every decision; without a reload frame the
 menu reapplies plugins to the live classes after restoring their original members.
-`--all-plugins` applies everything in file-name order without consulting the saved
-choices. `plugintools.py`, a reloadable module, reads plugin files statically
+`--all-plugins` explicitly permits execution and applies everything in file-name
+order without consulting the saved choices. `plugintools.py`, a reloadable module,
+reads plugin files statically
 for `/plugin copy`, `/plugin diff`, and `/plugin restamp`; baselines of copied
 application source live in `plugins/.baseline/<file>.json`. `--no-plugins` or `SLIPAGENT_NO_PLUGINS=1` skips them. Editing a
 pinned module requires a restart; most agent, tool, UI, API, task, and context

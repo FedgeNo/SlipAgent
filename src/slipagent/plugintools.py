@@ -78,6 +78,8 @@ def _first_line(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) -> 
 class PluginTools:
     """File operations behind `/plugin`; each returns text lines for the terminal."""
 
+    copied_digest: str | None = None
+
     def directory(self) -> Path:
         return plugins.plugin_directory()
 
@@ -225,6 +227,7 @@ class PluginTools:
 
     def copy(self, target: str, file_name: str = "") -> tuple[Path, list[str]]:
         """Write a class's methods, or one method, into a plugin file; returns the file and member keys."""
+        self.copied_digest = None
         component, class_name, method = self.split_target(target)
         source, node = self.class_node(component, class_name)
         methods = [method] if method is not None else self.methods(f"{component}.{class_name}")
@@ -232,14 +235,20 @@ class PluginTools:
             raise PluginToolError(f"{component}.{class_name} defines no methods")
         path = self.resolve_file(file_name or f"{component.replace('.', '-')}-{class_name}".lower())
         blocks = [self.stamped_source(source, node, name) for name in methods]
-        if path.exists():
+        existing = path.exists()
+        if existing:
             text = self.append(path, component, class_name, methods, blocks)
         else:
             body = textwrap.indent("\n\n".join(blocks), "    ")
             text = f'{PLUGIN_IMPORT}\n\n\n@replaces("{component}.{class_name}")\nclass {class_name}:\n{body}\n'
         path.parent.mkdir(parents=True, exist_ok=True)
         self.save_baseline(path, {f"{class_name}.{name}": self.method_source(source, node, name) for name in methods})
-        path.write_text(text)
+        content = text.encode("utf-8")
+        path.write_bytes(content)
+        if not existing:
+            # Only a wholly generated file is approved automatically. Appending
+            # copied methods cannot grant trust to pre-existing Python code.
+            self.copied_digest = plugins.source_digest(content)
         return path, [f"{class_name}.{name}" for name in methods]
 
     def append(self, path: Path, component: str, class_name: str, methods: list[str], blocks: list[str]) -> str:

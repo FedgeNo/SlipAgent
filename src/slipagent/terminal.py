@@ -163,6 +163,25 @@ def _append_record(flow: WrappedTranscript, record: tuple[Any, ...]) -> None:
         flow.append(text, first=first, continuation_indents=indents, extra_style=extra_style)
 
 
+def _failure_location(exc: BaseException) -> str:
+    """Where an exception came from, naming the plugin file when one is involved."""
+    import traceback
+    from .plugins import plugin_directory
+
+    frames = traceback.extract_tb(exc.__traceback__)
+    if not frames:
+        return "before running"
+    try:
+        plugin_root = str(plugin_directory())
+    except Exception:
+        plugin_root = ""
+    for frame in reversed(frames):
+        if plugin_root and frame.filename.startswith(plugin_root):
+            return f"in plugin {Path(frame.filename).name} line {frame.lineno}"
+    frame = frames[-1]
+    return f"at {Path(frame.filename).name} line {frame.lineno}"
+
+
 class TerminalUI:
     """Persistent buffers/application with replaceable presentation methods.
 
@@ -733,9 +752,34 @@ class TerminalUI:
 
     def _bottom_row(self, *, menu: bool) -> VSplit:
         return VSplit([
-            Window(ActionControl(lambda: self._menu_hint() if menu else self._options_hint() if self._options_field_active else self._status_fragments()),
-                   height=1, style="class:status"),
+            Window(ActionControl(lambda: self._readout(menu=menu)), height=1, style="class:status"),
         ], height=1)
+
+    def _readout(self, *, menu: bool) -> StyleAndTextTuples:
+        """Bottom row content; a failing readout callback must not stop the terminal.
+
+        prompt_toolkit redraws this row constantly. An exception here, typically
+        from a plugin override of the status line, would otherwise surface as an
+        unhandled event-loop exception on every redraw and leave the session stuck.
+        """
+        try:
+            if menu:
+                return self._menu_hint()
+            if self._options_field_active:
+                return self._options_hint()
+            return self._status_fragments()
+        except Exception as exc:
+            return self._failed_readout(exc)
+
+    def _failed_readout(self, exc: BaseException) -> StyleAndTextTuples:
+        text = f"Status line failed {_failure_location(exc)}: {type(exc).__name__}: {exc}"
+        if text != self.__dict__.get("_readout_failure"):
+            self.__dict__["_readout_failure"] = text
+            self.write(text + "\nFix the file or disable the plugin with /plugin; the readout returns once it renders again.")
+        width = self._readout_width()
+        if display_width(text) > width:
+            text = text[:max(0, width - 1)] + "…"
+        return [("fg:ansired", text)]
 
     def _options_hint(self) -> StyleAndTextTuples:
         return [*self._action_link("Save", "option-save", lambda: self._options_panel.accept(self._options_panel.field.buffer)),

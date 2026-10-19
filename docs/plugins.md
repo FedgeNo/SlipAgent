@@ -57,7 +57,10 @@ class Renderer:
 ```
 
 - `@replaces("<module>.<Class>")` names the class to change. The class name in your
-  file does not matter, but `/plugin copy` keeps the original name.
+  file does not matter, but `/plugin copy` keeps the original name. Once the file is
+  loaded, that name refers to the target class itself, so copied code that constructs
+  or compares against its own class, such as `StatusLine(session, style)`, reaches the
+  real class rather than your stand-in.
 - Every method and attribute your class defines replaces, or is added to, the target
   class. The rest of the target class is untouched.
 - `original(self, ...)` calls the implementation your method replaced. Calling it
@@ -192,6 +195,11 @@ attribute it reads is renamed.
   `original`, is reported. This can happen with `--all-plugins`.
 - Exceptions inside plugin methods are ordinary exceptions; tracebacks show your
   plugin file.
+- The bottom readout is redrawn constantly, so an override there that raises (for
+  example `cli.StatusLine.text`) cannot be allowed to stop the terminal. The readout
+  shows the error in red with the plugin file and line, the transcript records it
+  once, and the rest of the session keeps working. Fix the file or disable the
+  plugin with `/plugin`.
 
 ## Command-Line Switches
 

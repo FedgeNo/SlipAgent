@@ -53,6 +53,47 @@ async def test_opening_menu_takes_keyboard_focus(display, origin):
             await running
 
 
+def test_failing_status_callback_renders_an_error_instead_of_raising(display):
+    sink, _, output, _, _ = display
+
+    def status(width):
+        raise TypeError("StatusLine() takes no arguments")
+
+    ui = TerminalUI(status, sink, output=output)
+    try:
+        for _ in range(3):
+            fragments = ui._readout(menu=False)
+        text = "".join(part for _, part, *_ in fragments)
+        assert text.startswith("Status line failed at ")
+        assert "TypeError: StatusLine() takes no arguments" in text
+        assert fragments[0][0] == "fg:ansired"
+        reported = [line for line in ui._raw_output if "Status line failed" in line]
+        assert len(reported) == 1
+        assert "/plugin" in reported[0]
+        assert "".join(part for _, part, *_ in ui._readout(menu=True)).startswith("Status line failed") is False
+    finally:
+        ui.close()
+
+
+def test_failing_status_callback_names_the_plugin_file(display, tmp_path, monkeypatch):
+    from slipagent import plugins
+
+    sink, _, output, _, _ = display
+    plugin_dir = tmp_path / "plugins"
+    plugin_dir.mkdir()
+    monkeypatch.setattr(plugins, "plugin_directory", lambda: plugin_dir)
+    source = plugin_dir / "status-clock.py"
+    source.write_text("def text(columns):\n    raise TypeError('StatusLine() takes no arguments')\n")
+    namespace: dict = {}
+    exec(compile(source.read_text(), str(source), "exec"), namespace)
+    ui = TerminalUI(namespace["text"], sink, output=output)
+    try:
+        text = "".join(part for _, part, *_ in ui._readout(menu=False))
+        assert text.startswith("Status line failed in plugin status-clock.py line 2: TypeError")
+    finally:
+        ui.close()
+
+
 async def test_free_model_background_matches_right_aligned_legend(display):
     sink, _, output, screen, snapshot = display
     with create_pipe_input() as pipe:

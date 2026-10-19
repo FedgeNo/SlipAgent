@@ -359,6 +359,21 @@ def test_copied_code_resolves_names_from_the_target_module():
     assert module.Widget().render("ab") == ("plugin-local", "target-style", "target-helper", "", 2, ["target-style"])
 
 
+def test_the_stand_ins_name_reaches_the_target_class():
+    """Copied code constructs and compares against its own class by name."""
+    module = component()
+    apply(module, {"self-reference.py": '''
+        from slipagent.plugins import replaces
+
+        @replaces("widgets.Widget")
+        class Widget:
+            def render(self, text):
+                other = Widget()
+                return other.size(), type(other) is type(self), isinstance(self, Widget), Widget.__module__
+    '''})
+    assert module.Widget().render("ab") == (1, True, True, "fake.widgets")
+
+
 def test_zero_argument_super_reaches_the_targets_parent():
     module = component()
     apply(module, {"super.py": '''

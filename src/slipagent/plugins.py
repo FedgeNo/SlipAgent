@@ -469,6 +469,11 @@ def _inspect(name: str, path: str, source: bytes, module_of: Callable[[str], typ
             raise ValueError(f"class {component}.{class_name} does not exist")
         label = f"{component}.{class_name}"
         _check_layout(stand_in, target, label)
+        # Copied code names its own class, as in `StatusLine(session, style)`.
+        # The stand-in has none of the target's members, so that name must
+        # reach the target class once the file is loaded.
+        for symbol in [symbol for symbol, value in module.__dict__.items() if value is stand_in]:
+            module.__dict__[symbol] = target
         for symbol, value in _members(stand_in):
             function = _function(value)
             stamp = getattr(function, "__slipagent_fingerprint__", None)

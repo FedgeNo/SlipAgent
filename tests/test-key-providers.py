@@ -251,3 +251,93 @@ async def test_invalid_key_characters_do_not_reach_transport(key_session, key):
     await cli.KeyEntry(session, cli.Style(False), out).replace(candidate=key)
     assert not requests and len(clients) == 1
     assert "ASCII" in out.getvalue()
+
+
+async def test_key_listing_masks_keys_and_names_their_sources(key_session, monkeypatch):
+    import os
+    from slipagent import config
+    session, out, requests, clients = key_session
+    path = data_directory() / ".env"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("NVIDIA_API_KEY=nvapi-saved-secret-value-1234\n")
+    monkeypatch.setenv("MISTRAL_API_KEY", "mstrl_shellsecretvalue5678")
+    monkeypatch.setattr(config, "_DOTENV_NAMES", set())
+    monkeypatch.setattr(config, "_SESSION_NAMES", set())
+    session.extensions["provider_options"] = {"kilo": {"api_key": "kilo-session-secret-abcd"}}
+    await cli.KeyEntry(session, cli.Style(False), out).command("list")
+    text = out.getvalue()
+    assert "openrouter  sk-or-v1-…inal  active" in text
+    assert "nvapi-…1234" in text and str(path) in text
+    assert "mstrl_…5678" in text and "exported by the shell" in text
+    assert "kilo…abcd" in text and "this session" in text
+    for secret in ("nvapi-saved-secret-value-1234", "mstrl_shellsecretvalue5678",
+                   "kilo-session-secret-abcd", "sk-or-v1-original"):
+        assert secret not in text
+    assert not requests
+
+
+async def test_key_delete_removes_saved_process_and_session_copies(key_session, monkeypatch):
+    import os
+    from slipagent import config
+    session, out, requests, clients = key_session
+    path = data_directory() / ".env"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# Keep this\nexport NVIDIA_API_KEY=nvapi-saved\nUNRELATED=value\n")
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-saved")
+    monkeypatch.setattr(config, "_DOTENV_NAMES", {"NVIDIA_API_KEY"})
+    monkeypatch.setattr(config, "_SESSION_NAMES", set())
+    session.extensions["provider_options"] = {"nvidia": {"api_key": "nvapi-saved"}}
+    routing = session.model_routing()
+    routing.failed_providers.update({"nvidia", "untouched"})
+    session._catalog = []
+    entry = cli.KeyEntry(session, cli.Style(False), out)
+
+    await entry.command("delete nvidia")
+    assert path.read_text() == "# Keep this\nUNRELATED=value\n"
+    assert "NVIDIA_API_KEY" not in os.environ
+    assert "nvidia" not in session.extensions["provider_options"]
+    assert "nvidia" not in routing.failed_providers and "untouched" in routing.failed_providers
+    assert session._catalog is None
+    assert "nvidia key deleted" in out.getvalue() and str(path) in out.getvalue()
+
+    # The provider serving the current model keeps its key.
+    await entry.command("delete openrouter")
+    assert "in use by the current model" in out.getvalue()
+    assert session.client.api_key == "sk-or-v1-original"
+
+    # A shell export is cleared for this process only, with a warning.
+    monkeypatch.setenv("MISTRAL_API_KEY", "mstrl_shell")
+    await entry.command("delete mistral")
+    assert "MISTRAL_API_KEY" not in os.environ
+    assert "your shell exports it" in out.getvalue()
+
+    await entry.command("delete nvidia")
+    assert "no nvidia key is configured" in out.getvalue()
+    await entry.command("delete bogus")
+    assert "usage: /key delete <provider>" in out.getvalue()
+    assert not requests
+
+
+async def test_key_menu_confirms_before_deleting(key_session, monkeypatch):
+    import os
+    from types import SimpleNamespace
+    from slipagent import config
+    session, out, requests, clients = key_session
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-saved-value-9999")
+    monkeypatch.setattr(config, "_DOTENV_NAMES", set())
+    monkeypatch.setattr(config, "_SESSION_NAMES", set())
+    choose = AsyncMock(side_effect=["nvidia", "cancel", "nvidia", "delete"])
+    session.renderer.terminal = SimpleNamespace(choose=choose)
+    entry = cli.KeyEntry(session, cli.Style(False), out)
+
+    await entry.command("")
+    assert "NVIDIA_API_KEY" in os.environ and "kept" in out.getvalue()
+    title, options = choose.await_args_list[0].args
+    assert title == "API Keys" and options[0] == ("new", "Enter a new key")
+    assert any(key == "nvidia" and "nvapi-…9999" in label and "nvapi-saved-value-9999" not in label for key, label in options)
+    question = choose.await_args_list[1].args[0]
+    assert question.startswith("Are you sure you want to delete this key?") and "nvapi-…9999" in question
+
+    await entry.command("")
+    assert "NVIDIA_API_KEY" not in os.environ and "nvidia key deleted" in out.getvalue()
+    assert choose.await_count == 4

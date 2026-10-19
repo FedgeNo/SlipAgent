@@ -48,7 +48,9 @@ In the REPL:
 | `/temperature` | Show the explicit temperature or provider default, and whether the selected model supports changing it |
 | `/temperature <value>` | Set the working-model temperature from 0 to 2; unsupported changes report an error |
 | `/key show`, `/key status` | Show the masked current key, spend limit, and reported free quota |
-| `/key` | Enter a key with hidden input and detect its provider |
+| `/key` | Choose a configured key to delete (after "Are you sure?"), or enter a new one; keys show only their start and end |
+| `/key list` | List configured keys, masked, with where each is stored: active, this session, shell, or the saved `.env` |
+| `/key delete <provider>` | Delete that provider's key from the saved `.env`, this process, and this session; the provider in use is refused |
 | `/key <key>` | Detect the provider, install its key for this session, and offer to save it |
 | `/key <provider> <key>` | Install a key with an explicit provider when its format is ambiguous |
 | `/cost` | Session token usage and spend |

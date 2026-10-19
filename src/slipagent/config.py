@@ -60,6 +60,27 @@ def save_dotenv_value(path: Path, name: str, value: str) -> None:
     save_private_text(path, "\n".join(updated) + "\n")
 
 
+def dotenv_values(path: Path) -> dict[str, str]:
+    """The KEY=VALUE pairs a `.env` file would supply, without touching the environment."""
+    values: dict[str, str] = {}
+    if path.is_file():
+        _apply_dotenv(path, values)
+    return values
+
+
+def remove_dotenv_value(path: Path, name: str) -> bool:
+    """Drop `name` from a `.env` file, preserving comments and order; True when it was present."""
+    if not path.is_file():
+        return False
+    lines = path.read_text(encoding="utf-8").splitlines()
+    kept = [line for line in lines
+            if line.strip().removeprefix("export ").partition("=")[0].strip() != name]
+    if len(kept) == len(lines):
+        return False
+    save_private_text(path, "\n".join(kept) + ("\n" if kept else ""))
+    return True
+
+
 def dotenv_path() -> Path:
     """The `.env` SlipAgent would load for this run, found without reading it."""
     found = find_dotenv()
@@ -171,6 +192,26 @@ _SESSION_NAMES: set[str] = set()
 def hide_from_commands(name: str) -> None:
     """Keep a variable the harness set in `os.environ` out of child processes."""
     _SESSION_NAMES.add(name)
+
+
+def environment_source(name: str) -> str | None:
+    """Where this process's value of `name` came from: shell, dotenv, session, or None when unset."""
+    if name not in os.environ:
+        return None
+    if name in _DOTENV_NAMES:
+        return "dotenv"
+    if name in _SESSION_NAMES:
+        return "session"
+    return "shell"
+
+
+def forget_environment(name: str) -> str | None:
+    """Remove `name` from this process's environment; returns where it had come from."""
+    source = environment_source(name)
+    os.environ.pop(name, None)
+    _DOTENV_NAMES.discard(name)
+    _SESSION_NAMES.discard(name)
+    return source
 
 
 def command_environment() -> dict[str, str]:

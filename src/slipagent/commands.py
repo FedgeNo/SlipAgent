@@ -567,9 +567,11 @@ class TemperatureCommand(Command):
 
 class KeyCommand(Command):
     name = 'key'
-    banner = '/key [show|status|[provider] key]'
+    banner = '/key [list|show|delete <provider>|[provider] key]'
     help = (
-        CommandHelp('/key', 'enter an API key with hidden input and detect its provider', '/key'),
+        CommandHelp('/key', 'choose a configured key to delete, after confirmation, or enter a new one', '/key'),
+        CommandHelp('/key list', 'list configured keys, masked to their start and end, with where each is stored', '/key list'),
+        CommandHelp('/key delete <provider>', "delete that provider's saved key and forget it for this session", '/key delete '),
         CommandHelp('/key show', 'show the current key, masked', '/key show'),
         CommandHelp('/key status', 'same as /key show', '/key status'),
         CommandHelp('/key <key>', 'detect the provider, install its key, and offer to save it', '/key '),
@@ -577,10 +579,10 @@ class KeyCommand(Command):
     )
 
     def changes_session(self, argument: str) -> bool:
-        return argument.lower() not in {"show", "status"}
+        return argument.lower() not in {"show", "status", "list"}
 
     def background(self, argument: str) -> bool:
-        return argument.lower() in {"show", "status"}
+        return argument.lower() in {"show", "status", "list"}
 
     async def run(self, context: CommandContext, argument: str) -> bool | None:
         from . import cli

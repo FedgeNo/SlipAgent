@@ -33,7 +33,8 @@ from typing import Any, TextIO, cast
 
 from .agent import Agent, AgentEvent, STEP_LIMIT_NOTICE, STOP_NOTICE, build_system_prompt
 from .automation import JsonEventStream
-from .config import Config, ConfigError, configured_provider, dotenv_path, hide_from_commands, save_dotenv_value, save_model_choice
+from .config import (Config, ConfigError, configured_provider, dotenv_path, dotenv_values, environment_source,
+                     forget_environment, hide_from_commands, remove_dotenv_value, save_dotenv_value, save_model_choice)
 from .instructions import load_project_instructions
 from .lifecycle import finish_cleanup
 from .mcp import MCPManager, MCPError
@@ -1929,9 +1930,23 @@ class KeyEntry:
 
     async def command(self, argument: str) -> None:
         session, style, out = self.session, self.style, self.out
+        words = argument.split(maxsplit=1)
+        if words and words[0].lower() == "list":
+            self.listing()
+            return
+        if words and words[0].lower() in {"delete", "remove"}:
+            name = words[1].strip().lower() if len(words) == 2 else ""
+            if name not in PROVIDERS:
+                print(style.red("  usage: /key delete <provider>; providers: " + ", ".join(PROVIDERS)), file=out)
+                return
+            await self.delete(name)
+            return
         if argument.lower() in ("show", "status", ""):
+            if argument == "" and getattr(getattr(session, "renderer", None), "terminal", None) is not None:
+                # Bare /key on a terminal lists the configured keys to delete, or takes a new one.
+                await self.menu()
+                return
             if argument == "" and sys.stdin.isatty():
-                # Bare /key on a terminal starts the interactive replacement flow.
                 await self.replace()
                 return
             print(f"  key: {style.cyan(self.mask(session.api_key))}", file=out)
@@ -2036,6 +2051,97 @@ class KeyEntry:
             print(style.dim(f"  saved to {path}"), file=out)
         except (OSError, ConfigError) as exc:
             print(style.red(f"  could not save to {path}: {exc}"), file=out)
+
+    def configured(self) -> list[tuple[str, str, list[str]]]:
+        """Every provider with a key: its name, the key, and where that key lives."""
+        session = self.session
+        saved = dotenv_values(dotenv_path())
+        options = session.extensions.get("provider_options", {})
+        active = getattr(session.client, "provider", None)
+        result = []
+        for provider in PROVIDERS:
+            name = provider_class(provider).key_env
+            key = ""
+            sources: list[str] = []
+            if provider == active:
+                key, sources = session.client.api_key, ["active"]
+            elif isinstance(options.get(provider), dict) and options[provider].get("api_key"):
+                key, sources = options[provider]["api_key"], ["this session"]
+            source = environment_source(name)
+            if source == "shell":
+                sources.append("exported by the shell")
+            elif source == "session":
+                sources.append("entered at startup")
+            elif source == "dotenv" and name not in saved:
+                sources.append("loaded from .env")
+            if name in saved:
+                sources.append(f"saved in {dotenv_path()}")
+            key = key or os.environ.get(name, "") or saved.get(name, "")
+            if key.strip():
+                result.append((provider, key, sources))
+        return result
+
+    def listing(self) -> None:
+        style, out = self.style, self.out
+        entries = self.configured()
+        if not entries:
+            print(style.dim("  no API keys are configured; /key <key> adds one."), file=out)
+            return
+        for provider, key, sources in entries:
+            print(f"  {provider:<11} {style.cyan(self.mask(key))}  {style.dim(', '.join(sources))}", file=out)
+
+    async def menu(self) -> None:
+        """Pick a configured key to delete, after confirmation, or enter a new one."""
+        session, style, out = self.session, self.style, self.out
+        terminal = session.renderer.terminal
+        if terminal is None:
+            self.listing()
+            return
+        entries = self.configured()
+        options = [("new", "Enter a new key")]
+        options += [(provider, f"{provider}  {self.mask(key)}  — {', '.join(sources)}") for provider, key, sources in entries]
+        choice = await terminal.choose("API Keys", options)
+        if choice is None:
+            return
+        if choice == "new":
+            await self.replace()
+            return
+        provider, key, _ = next(entry for entry in entries if entry[0] == choice)
+        confirmation = await terminal.choose(f"Are you sure you want to delete this key? {provider} {self.mask(key)}",
+                                             [("delete", "Delete this key"), ("cancel", "Cancel")])
+        if confirmation == "delete":
+            await self.delete(provider)
+        else:
+            print(style.dim("  kept"), file=out)
+
+    async def delete(self, provider: str) -> None:
+        """Remove a provider's key from the saved .env, this process, and this session."""
+        session, style, out = self.session, self.style, self.out
+        implementation = provider_class(provider)
+        if provider == getattr(session.client, "provider", None):
+            print(style.red(f"  the {provider} key is in use by the current model; switch with /model before deleting it."), file=out)
+            return
+        removed = []
+        path = dotenv_path()
+        try:
+            if remove_dotenv_value(path, implementation.key_env):
+                removed.append(f"removed from {path}")
+        except (OSError, ConfigError) as exc:
+            print(style.red(f"  could not update {path}: {exc}"), file=out)
+            return
+        source = forget_environment(implementation.key_env)
+        if source == "shell":
+            removed.append("cleared for this process; your shell exports it, so it returns at the next launch unless you unset it there")
+        elif source is not None:
+            removed.append("cleared for this process")
+        if session.extensions.get("provider_options", {}).pop(provider, None) is not None:
+            removed.append("forgotten for this session")
+        if not removed:
+            print(style.dim(f"  no {provider} key is configured."), file=out)
+            return
+        session._catalog = None
+        session.model_routing().reset(provider)
+        print(f"  {provider} key deleted: " + "; ".join(removed) + ".", file=out)
 
     def describe(self, info: KeyInfo) -> None:
         """Print a key's limits so the user knows what it can actually reach."""

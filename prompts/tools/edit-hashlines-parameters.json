@@ -1,0 +1,9 @@
+{
+    "properties/path": "Path of the file read with read_hashlines, subject to the current Workspace Access mode.",
+    "properties/revision": "The complete-file SHA-256 revision copied from the read_hashlines result these anchors came from.",
+    "properties/edits": "1-100 edits, all against that same original revision, applied together in one write.",
+    "properties/edits/items/properties/op": "replace the start line or range, or insert_before/insert_after the start line.",
+    "properties/edits/items/properties/start": "Anchor copied exactly from read_hashlines, such as 12:3f9a0c1b2d.",
+    "properties/edits/items/properties/end": "Optional inclusive end anchor for replace; omit for insertions.",
+    "properties/edits/items/properties/lines": "Replacement source lines without anchor labels or CR/LF; empty with replace deletes the range."
+}

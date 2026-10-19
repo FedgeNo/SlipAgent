@@ -9,7 +9,7 @@ from slipagent.environment import load_project_options
 from slipagent.instructions import load_project_instructions
 from slipagent.lsp import _document
 from slipagent.repomap import RepositoryMap
-from slipagent.workspace import Workspace, WorkspaceError
+from slipagent.workspace import Workspace
 
 
 @pytest.mark.skipif(os.name != "posix", reason="Descriptor-based no-follow traversal")
@@ -39,8 +39,9 @@ def test_swapped_instruction_settings_and_outline_files(tmp_path, monkeypatch, r
 
     monkeypatch.setattr(Workspace, "resolve", swapped)
     if reader == "instructions":
-        with pytest.raises(WorkspaceError):
-            load_project_instructions(workspace)
+        # The swapped file is reported as unreadable; its content never reaches the model.
+        loaded = load_project_instructions(workspace)
+        assert "Not loaded" in loaded and content not in loaded
     elif reader == "settings":
         with pytest.raises(ConfigError):
             load_project_options(workspace)

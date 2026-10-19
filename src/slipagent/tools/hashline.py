@@ -30,10 +30,13 @@ def anchor(number: int, line: str) -> str:
 def anchored_view(data: bytes, offset: int = 1, limit: int = 200) -> dict[str, Any]:
     lines = source_lines(data.decode("utf-8"))
     end = min(len(lines), offset - 1 + limit)
-    return {"revision": revision(data), "total_lines": len(lines),
+    view: dict[str, Any] = {"revision": revision(data), "total_lines": len(lines),
             "lines": [{"anchor": anchor(index + 1, lines[index]), "text": lines[index].rstrip("\r\n")}
                       for index in range(offset - 1, end)],
             "next_offset": end + 1 if end < len(lines) else None}
+    if lines and offset > len(lines):
+        view["notice"] = f"offset {offset} is past the end of the file ({len(lines)} lines)."
+    return view
 
 
 def apply_hashline_edits(text: str, edits: list[dict[str, Any]]) -> tuple[str, int]:
@@ -97,7 +100,7 @@ class ReadHashlinesTool(ReadFileTool):
     name = "read_hashlines"
     description = ""
     description_prompt = "tools/read-hashlines.md"
-    parameter_prompts = ""
+    parameter_prompts = "tools/read-hashlines-parameters.json"
     parameters = {"type": "object", "properties": {
         "path": {"type": "string"}, "offset": {"type": "integer", "minimum": 1},
         "limit": {"type": "integer", "minimum": 1, "maximum": 2000}}, "required": ["path"]}
@@ -115,6 +118,7 @@ class EditHashlinesTool(Tool):
     name = "edit_hashlines"
     description = ""
     description_prompt = "tools/edit-hashlines.md"
+    parameter_prompts = "tools/edit-hashlines-parameters.json"
     instruction_path = "path"
     mutates_workspace = True
     parameters = {"type": "object", "properties": {

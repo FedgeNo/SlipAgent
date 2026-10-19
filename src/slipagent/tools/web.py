@@ -328,6 +328,7 @@ class FetchPageTool(PublicHttpTool):
                 f"url must start with http:// or https://, got {url!r}"
             )
 
+        from .. import __version__
         raw_body = bytearray()
         bytes_cut = False
         try:
@@ -335,7 +336,7 @@ class FetchPageTool(PublicHttpTool):
             for hop in range(11):
                 async with self._stream(
                     "GET", current, follow_redirects=False,
-                    headers={"User-Agent": "SlipAgent/0.1", "Accept-Encoding": "identity"},
+                    headers={"User-Agent": f"SlipAgent/{__version__}", "Accept-Encoding": "identity"},
                 ) as response:
                     if response.has_redirect_location:
                         if hop == 10:

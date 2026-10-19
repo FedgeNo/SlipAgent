@@ -447,13 +447,16 @@ def test_project_instructions_are_present_before_first_model_request(project_dir
         assert content in prompt
 
 
-def test_unreadable_project_instructions_stop_before_model_actions(project_dir: Path) -> None:
+def test_unreadable_project_instructions_are_reported_to_the_model(project_dir: Path) -> None:
+    """A broken instruction file is a labelled notice in the request, not a fatal startup error."""
     (project_dir / "AGENTS.md").write_bytes(b"\xff")
-    with StubOpenRouter([text_step("should never run")]) as stub:
+    with StubOpenRouter([text_step("Still works.")]) as stub:
         proc = run_cli("-p", "go", "--base-url", stub.base_url, cwd=project_dir)
-    assert proc.returncode == 2
-    assert "cannot read project instructions AGENTS.md" in proc.stderr
-    assert not stub.requests
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "Still works."
+    assert len(stub.requests) == 1
+    sent = str(stub.requests[0])
+    assert "Instruction File: AGENTS.md" in sent and "Not loaded" in sent
 
 
 def test_one_shot_prints_the_answer_exactly_once(project_dir: Path) -> None:
@@ -1196,7 +1199,7 @@ def test_followup_during_final_response_is_answered(project_dir: Path) -> None:
     assert len(stub.requests) == 2
 
 
-@pytest.mark.parametrize("command", ["/reset", "/resume", "/fork", "/delete", "/danger", "/danger off", "/overthinking on", "/overthinking off", "/key secret", "/mcp remove stub", "/model new/model"])
+@pytest.mark.parametrize("command", ["/reset", "/resume", "/fork", "/delete", "/danger on", "/danger off", "/overthinking on", "/overthinking off", "/key secret", "/mcp remove stub", "/model new/model"])
 async def test_mutating_commands_wait_until_turn_finishes(tmp_path, monkeypatch, command, metadata_server) -> None:
     import io
     from slipagent.cli import build_parser, Launcher, Repl, CommandRunner
@@ -1315,8 +1318,10 @@ async def test_danger_commands_preserve_mode_through_reset_and_resume(tmp_path, 
     try:
         assert not session.workspace.access.danger
         await cli.CommandRunner(session).handle("/danger")
+        assert not session.workspace.access.danger  # A bare /danger only reports the mode.
+        await cli.CommandRunner(session).handle("/danger on")
         assert session.workspace.access.danger
-        await cli.CommandRunner(session).handle("/danger")
+        await cli.CommandRunner(session).handle("/danger on")
         assert session.workspace.access.danger  # Repeating the command keeps it enabled.
         await cli.CommandRunner(session).handle("/reset")
         await cli.CommandRunner(session).handle("/resume latest")
@@ -1600,7 +1605,7 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             assert screen.title == f"{project_dir} | SlipAgent"
             assert "Ready" in screen.display[17]
             assert "Startup complete" in "\n".join(screen.display[:17])
-            os.write(master, b"/danger\r")
+            os.write(master, b"/danger on\r")
             wait_for(lambda: " | Danger Mode" in screen.display[23])
             start = screen.display[23].index("Danger Mode")
             assert all(screen.buffer[23][column].fg == "ff929b" for column in range(start, start + len("Danger Mode")))

@@ -466,6 +466,29 @@ async def test_command_logs_survive_exit_reset_and_resume(workspace, tmp_path):
         await registry.aclose()
 
 
+async def test_repeated_resume_does_not_append_unchanged_log_records(workspace, tmp_path):
+    from json import loads
+
+    registry = build_default_registry(workspace)
+    agent = Agent(StubClient([]), registry, "test")
+    journal = attach(agent, workspace, tmp_path)
+    command = shlex.join([sys.executable, "-c", "print('once')"])
+    assert not (await registry.invoke("run_command", {"command": command})).is_error
+    saved, path = journal.session_id, journal.path
+
+    def log_records() -> int:
+        return sum(loads(line)["type"] == "log" for line in path.read_text(encoding="utf-8").splitlines())
+
+    before = log_records()
+    try:
+        for _ in range(3):
+            journal.restore(agent, journal.load(saved))
+            assert len(registry.services["command_archive"].logs) == 1
+        assert log_records() == before
+    finally:
+        await registry.aclose()
+
+
 def test_project_keys_preserve_symlink_spelling_and_private_paths(workspace, tmp_path):
     alias = tmp_path / "alias"
     alias.symlink_to(workspace.root, target_is_directory=True)

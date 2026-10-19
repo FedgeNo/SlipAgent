@@ -149,6 +149,29 @@ async def test_literal_paths_deletions_and_add_all(repository: Workspace) -> Non
     assert "abc.txt" in git(root, "diff", "--cached", "--name-only")
 
 
+async def test_add_sends_attribute_paths_on_stdin(repository: Workspace, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Filter checks list every staged file; a large tree must not hit the argument-length limit."""
+    root = repository.root
+    names = [f"file-{index}.txt" for index in range(60)]
+    for name in names:
+        (root / name).write_text(name)
+    tool = GitAddTool(repository)
+    calls: list[tuple[list[str], bytes | None]] = []
+    original = tool._execute
+
+    async def record(repo, args, timeout, **keywords):
+        calls.append((args, keywords.get("stdin")))
+        return await original(repo, args, timeout, **keywords)
+
+    monkeypatch.setattr(tool, "_execute", record)
+    assert not (await tool.invoke({"paths": ["."]})).is_error
+    attributes = next((args, stdin) for args, stdin in calls if args[0] == "check-attr")
+    assert attributes[0] == ["check-attr", "-z", "--stdin", "filter"]
+    assert attributes[1] is not None and all(name.encode() + b"\0" in attributes[1] for name in names)
+    staged = git(root, "diff", "--cached", "--name-only", "-z").split("\0")
+    assert all(name in staged for name in names)
+
+
 async def test_nested_repository_and_workspace_relative_paths(repository: Workspace) -> None:
     nested = repository.root / "nested"
     nested.mkdir()

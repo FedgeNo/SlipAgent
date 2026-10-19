@@ -14,7 +14,7 @@ from slipagent.instructions import ProjectInstructions
 from slipagent.fileio import read_regular
 from slipagent.tools.files import ReadFileTool, WriteFileTool
 from slipagent.tools import ToolRegistry
-from slipagent.workspace import Workspace, WorkspaceError
+from slipagent.workspace import Workspace
 
 
 def test_harness_operating_guidance_does_not_depend_on_project_notes(workspace):
@@ -95,8 +95,9 @@ def test_instruction_symlinks_cannot_escape_workspace(tmp_path, kind):
         link = workspace.root / ".cursor" / "rules"
         link.parent.mkdir()
     link.symlink_to(outside, target_is_directory=kind == "directory")
-    with pytest.raises(WorkspaceError, match="outside the workspace"):
-        load_project_instructions(workspace)
+    loaded = load_project_instructions(workspace)
+    assert "outside rules" not in loaded
+    assert "Not loaded" in loaded and "outside the workspace" in loaded
 
 
 def test_duplicate_symlinked_instruction_content_is_loaded_once(workspace):
@@ -120,8 +121,27 @@ def test_unreadable_instruction_file_reports_its_path(workspace, monkeypatch, fa
                 raise PermissionError("permission denied")
             return read_regular(target, *args, **kwargs)
         monkeypatch.setattr("slipagent.instructions.read_regular", denied_read)
-    with pytest.raises(WorkspaceError, match="cannot read project instructions AGENTS.md"):
-        load_project_instructions(workspace)
+    loaded = load_project_instructions(workspace)
+    assert "Instruction File: AGENTS.md" in loaded and "Not loaded" in loaded
+    assert "a rule" not in loaded
+
+
+@pytest.mark.parametrize("failure", ["dangling", "oversized", "rules-file"])
+def test_broken_instruction_paths_do_not_block_other_guidance(workspace, failure):
+    (workspace.root / "CLAUDE.md").write_text("keep this rule", encoding="utf-8")
+    if failure == "dangling":
+        (workspace.root / "AGENTS.md").symlink_to(workspace.root / "missing.md")
+    elif failure == "oversized":
+        (workspace.root / "AGENTS.md").write_text("x" * (256 * 1024 + 1), encoding="utf-8")
+    else:
+        (workspace.root / ".cursor").mkdir()
+        (workspace.root / ".cursor" / "rules").write_text("not a directory", encoding="utf-8")
+    loaded = load_project_instructions(workspace)
+    assert "keep this rule" in loaded
+    assert "Not loaded" in loaded
+    assert "xxxx" not in loaded
+    # The tracker and a startup check share this path and must stay usable.
+    assert "keep this rule" in ProjectInstructions(workspace).snapshot()["."]
 
 
 async def test_new_nested_rules_reach_model_before_any_governed_edit(workspace):

@@ -148,7 +148,8 @@ class CommandJobsTool(Tool):
         job = self.jobs.jobs.get(job_id or "")
         if job is None:
             return ToolResult.error("Unknown job_id; use command_jobs action=list. Jobs from an earlier process cannot be controlled; retained output remains accessible by log_id.")
-        assert job.task is not None
+        if job.task is None:
+            return ToolResult.error("Background job has not started yet; retry command_jobs shortly.")
         task = job.task
         if action == "wait":
             # Waiting cancellation must not cancel the independent command.

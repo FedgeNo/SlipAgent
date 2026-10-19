@@ -1,5 +1,7 @@
 """Explicit filesystem operations track real changes and preserve boundaries."""
 
+import pathlib
+
 import pytest
 
 from slipagent.instructions import ProjectInstructions
@@ -69,17 +71,26 @@ async def test_reject_roots_and_escape(workspace, tool, args):
     assert result.is_error and result.content["changes"] == []
 
 
-async def test_tree_symlinks_rejected_before_changes(workspace):
+async def test_tree_symlinks_are_entries_for_move_and_delete_but_not_copy(workspace):
     root = workspace.root
     (root / "tree").mkdir()
     (root / "tree/file").write_text("keep")
     (root / "tree/link").symlink_to(root / "tree/file")
-    for tool, args in [(CopyPathTool, {"source": "tree", "destination": "copy"}),
-                       (MovePathTool, {"source": "tree", "destination": "move"}),
-                       (DeletePathTool, {"path": "tree", "recursive": True})]:
-        result = await tool(workspace).run(**args)
-        assert result.is_error and result.content["changes"] == []
-    assert (root / "tree/file").read_text() == "keep"
+    # A dangling link to a path outside every allowed directory is never followed.
+    (root / "tree/external").symlink_to("/nonexistent/outside/target")
+    result = await CopyPathTool(workspace).run(source="tree", destination="copy")
+    assert result.is_error and result.content["changes"] == []
+    assert "symbolic links" in result.content["error"] and not (root / "copy").exists()
+    moved = await MovePathTool(workspace).run(source="tree", destination="moved")
+    assert not moved.is_error, moved.content
+    assert (root / "moved/link").is_symlink() and (root / "moved/external").is_symlink()
+    assert (root / "moved/file").read_text() == "keep"
+    assert {change["kind"] for change in moved.content["changes"]} == {"directory", "file", "symlink"}
+    deleted = await DeletePathTool(workspace).run(path="moved", recursive=True)
+    assert not deleted.is_error, deleted.content
+    assert not (root / "moved").exists() and not (root / "moved").is_symlink()
+    assert sum(change["kind"] == "symlink" for change in deleted.content["changes"]) == 2
+    assert not pathlib.Path("/nonexistent/outside/target").exists()
 
 
 def test_instructions_cover_nested_source_and_destination(workspace):

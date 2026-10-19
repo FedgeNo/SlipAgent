@@ -111,8 +111,10 @@ class ToolBatch:
 
         check_report = await check_edit_batch(self.registry, self.results, self.step)
         if check_report:
+            # Attach to the last edit that succeeded; a failed edit's result stays its own error.
             position = next(index for index in range(len(self.results) - 1, -1, -1)
-                            if isinstance(self.registry.get(self.results[index][0].name), EDIT_TOOLS))
+                            if isinstance(self.registry.get(self.results[index][0].name), EDIT_TOOLS)
+                            and not self.results[index][1].is_error)
             call, result = self.results[position]
             message_index = len(self.messages) - len(self.results) + position
             content = (result.content + "\n\nHarness Checks After This Complete Tool Batch:\n" + check_report

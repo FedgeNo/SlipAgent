@@ -6,14 +6,16 @@ import os
 import pytest
 
 from slipagent import cli
-from slipagent.config import dotenv_path
+from slipagent.config import command_environment, dotenv_path
 
 
 @pytest.fixture
 def no_keys(monkeypatch):
+    from slipagent import config
     for name in tuple(os.environ):
         if name.endswith("_API_KEY"):
             monkeypatch.delenv(name)
+    monkeypatch.setattr(config, "_SESSION_NAMES", set())
 
 
 def answers(monkeypatch, secret, *replies):
@@ -27,6 +29,8 @@ def test_detected_key_is_installed_and_optionally_saved(no_keys, monkeypatch, sa
     answers(monkeypatch, "nvapi-test-key", save)
     assert cli.Launcher(argparse.Namespace()).first_run_key()
     assert os.environ["NVIDIA_API_KEY"] == "nvapi-test-key"
+    # A pasted key is not part of the user's shell environment.
+    assert "NVIDIA_API_KEY" not in command_environment()
     saved = dotenv_path().read_text() if dotenv_path().exists() else ""
     assert ("NVIDIA_API_KEY=nvapi-test-key" in saved) is (save == "")
 

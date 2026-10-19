@@ -71,7 +71,7 @@ The `z-ai/glm-5.3` and `z-ai/glm-5.3-flash` profiles use the GLM XML channel and
 | `tool-definitions.md`, `tool-definitions-glm-xml.md`, `harness-state.md` | Headed runtime data blocks |
 | `call-label.md` | Description of the optional `call_label` argument added to every tool |
 | `project-instructions-*.md` | Project instruction scope and delivery |
-| `instruction-scope.md`, `instruction-file.md` | Dynamic scope and source labels |
+| `instruction-scope.md`, `instruction-file.md`, `instruction-file-unreadable.md` | Dynamic scope, source labels, and unreadable-file notices |
 | `mcp-guidance.md` | Guidance for connected MCP tools |
 | `repair-*.md`, `rejected-output.md`, `repeated-tools.md` | Response and repeated-tool recovery |
 | `repository-map*.md` | Repository orientation |

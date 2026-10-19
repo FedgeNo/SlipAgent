@@ -32,6 +32,7 @@ class PathTool(Tool):
         return target
 
     def entries(self, target: Path) -> list[Path]:
+        """Every path beneath `target`; symbolic links inside the tree are entries and are never followed."""
         if not target.exists():
             raise FileNotFoundError(f"Path not found: {target}")
         entries = [target]
@@ -39,10 +40,16 @@ class PathTool(Tool):
             for root, directories, files in os.walk(target, onerror=self.walk_error):
                 entries.extend(Path(root) / name for name in directories + files)
         for entry in entries:
+            if entry.is_symlink():
+                continue  # Inside the validated tree; unlink and rename act on the link itself.
             self.target(str(entry))
             if not entry.is_dir() and not entry.is_file():
                 raise ValueError(f"Not a regular file or directory: {entry}")
         return entries
+
+    @staticmethod
+    def kind(path: Path) -> str:
+        return "symlink" if path.is_symlink() else "directory" if path.is_dir() else "file"
 
     @staticmethod
     def walk_error(error: OSError) -> None:
@@ -75,8 +82,7 @@ class PathTool(Tool):
         raise NotImplementedError
 
     def changed(self, changes: list[dict[str, str]], path: Path, action: str) -> None:
-        changes.append({"path": self.workspace.relative(path), "action": action,
-                        "kind": "directory" if path.is_dir() else "file"})
+        changes.append({"path": self.workspace.relative(path), "action": action, "kind": self.kind(path)})
 
 
 class CopyPathTool(PathTool):
@@ -94,6 +100,10 @@ class CopyPathTool(PathTool):
     def execute(self, changes: list[dict[str, str]], **arguments: Any) -> None:
         source, destination = self.target(arguments["source"]), self.target(arguments["destination"])
         entries = self.entries(source)
+        links = [entry for entry in entries if entry.is_symlink()]
+        if links:
+            raise ValueError(f"copy_path does not copy symbolic links ({self.workspace.relative(links[0])}); "
+                             "copy the link target explicitly or remove the link first.")
         if destination.exists():
             raise FileExistsError("Destination already exists; no replacement or directory merging is performed.")
         if destination.is_relative_to(source):
@@ -129,7 +139,7 @@ class MovePathTool(CopyPathTool):
         source.rename(destination)
         for entry in entries:
             target = destination / entry.relative_to(source)
-            kind = "directory" if target.is_dir() else "file"
+            kind = self.kind(target)
             changes.extend([{"path": self.workspace.relative(entry), "action": "moved_from", "kind": kind},
                             {"path": self.workspace.relative(target), "action": "moved_to", "kind": kind}])
 
@@ -151,8 +161,9 @@ class DeletePathTool(PathTool):
         if len(entries) > 1 and not arguments.get("recursive", False):
             raise ValueError("Nonempty directory; recursive=true is required.")
         for entry in reversed(entries):
-            self.target(str(entry))
-            kind = "directory" if entry.is_dir() else "file"
+            if not entry.is_symlink():
+                self.target(str(entry))
+            kind = self.kind(entry)
             entry.rmdir() if kind == "directory" else entry.unlink()
             changes.append({"path": self.workspace.relative(entry), "action": "deleted", "kind": kind})
 

@@ -28,9 +28,9 @@ In the REPL:
 | `/copy [text\|markdown\|code [number]]` | Copy the latest reply or a code block |
 | `/menu` | Browse all commands and their arguments; selecting one inserts it into the input |
 | `/view [record] [line]` | Choose a saved output/diff record or open its numeric ID at an optional line |
-| `/danger` or `/danger on` | Disable workspace path confinement; queues while working |
+| `/danger on` | Disable workspace path confinement; queues while working |
 | `/danger off` | Restore workspace path confinement; queues while working |
-| `/danger status` | Show the current access mode |
+| `/danger` or `/danger status` | Show the current access mode |
 | `/overthinking [on\|off]` | Enable recent archived thoughts, up to 25 steps, with `/overthinking` or `/overthinking on`; disable with `/overthinking off`. Enabled by default; queues while working. |
 | `/planning [on\|off]` | Enable planning with `/planning` or `/planning on`; disable with `/planning off`. Enabled by default; queues while working. Disabling preserves the saved plan. |
 | `/hashline [on\|off]` | Show or change optional anchored editing for this session; enabled by default, queues while working. Start disabled with `--no-hashline`. |
@@ -444,9 +444,9 @@ change to enable the threaded reload frame.
 
 ### Danger Mode
 
-`/danger` enables access outside the workspace for built-in file, search,
-navigation, and Git tools. `/danger off` restores confinement; `/danger status`
-reports the mode. During work, changes queue until the current response and
+`/danger on` enables access outside the workspace for built-in file, search,
+navigation, and Git tools. `/danger off` restores confinement; a bare `/danger`
+or `/danger status` reports the mode. During work, changes queue until the current response and
 complete tool batch finish, keeping that batch on one access policy.
 While active, the bottom readout ends with
 `| Danger Mode` in red. The current mode is supplied to the model on every request.

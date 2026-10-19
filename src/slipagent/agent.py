@@ -30,7 +30,7 @@ from .compaction import StepCompactor
 from .progress import LoopGuard
 from .budget import ContextBudget
 from .checkpoints import FileCheckpoints
-from .prompts import load_prompt, model_prompt_profile
+from .prompts import PromptError, load_prompt, model_prompt_profile
 from .capabilities import RequestProfile
 from .tools.base import ToolRegistry, ToolResult
 from .types import Message, ToolCall, ToolSpec, Usage
@@ -39,9 +39,12 @@ from .inputqueue import input_queue
 
 def build_system_prompt(workspace: str, *, project_instructions: str = "") -> str:
     """Render the default system prompt for a given workspace root."""
-    prompt = load_prompt("system-prompt.md").format(
-        workspace=workspace, interpreter=sys.executable
-    )
+    try:
+        prompt = load_prompt("system-prompt.md").format(
+            workspace=workspace, interpreter=sys.executable
+        )
+    except (KeyError, IndexError, ValueError) as exc:
+        raise PromptError(f"Invalid prompt template system-prompt.md: {exc}") from None
     if project_instructions:
         prompt += (
             load_prompt('project-instructions-initial.md', project_instructions=project_instructions)

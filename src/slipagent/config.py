@@ -163,11 +163,20 @@ def load_dotenv(environ: dict[str, str] | None = None) -> Path | None:
 # Variables this process added to its environment from SlipAgent's `.env`.
 # They were never in the user's shell, so child processes do not receive them.
 _DOTENV_NAMES: set[str] = set()
+# Variables the harness itself placed in the environment during this run, such
+# as a key pasted at the first-run prompt. Child processes do not receive them.
+_SESSION_NAMES: set[str] = set()
+
+
+def hide_from_commands(name: str) -> None:
+    """Keep a variable the harness set in `os.environ` out of child processes."""
+    _SESSION_NAMES.add(name)
 
 
 def command_environment() -> dict[str, str]:
-    """The process environment as the user's shell had it, without `.env` values."""
-    return {key: value for key, value in os.environ.items() if key not in _DOTENV_NAMES}
+    """The process environment as the user's shell had it, without `.env` or harness-set values."""
+    return {key: value for key, value in os.environ.items()
+            if key not in _DOTENV_NAMES and key not in _SESSION_NAMES}
 
 
 def _dotenv_disabled(env: Mapping[str, str]) -> bool:

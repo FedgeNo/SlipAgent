@@ -40,3 +40,16 @@ def test_corrupt_cache_is_ignored():
     assert startupcache.cached_catalog({"openrouter": "key"}) is None
     startupcache.save_catalogs([ModelInfo("a")], {"openrouter": "key"})
     assert startupcache.cached_catalog({"openrouter": "key"})[0].id == "a"
+
+
+def test_profiles_from_another_build_are_ignored(monkeypatch):
+    from slipagent import startupcache
+    from slipagent.capabilities import RequestProfile
+    from slipagent.types import ModelInfo
+    model = ModelInfo("vendor/model", provider="openrouter")
+    startupcache.save_profile(model, "identity", RequestProfile(parameters={"tools"}, context_length=1000))
+    assert startupcache.cached_profile(model, "identity") is not None
+    monkeypatch.setattr(startupcache, "__version__", "0.0.0", raising=False)
+    import slipagent
+    monkeypatch.setattr(slipagent, "__version__", "0.0.0")
+    assert startupcache.cached_profile(model, "identity") is None

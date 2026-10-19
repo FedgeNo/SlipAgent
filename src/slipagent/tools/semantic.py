@@ -39,4 +39,7 @@ class SemanticSearchTool(Tool):
             result = await run_blocking(service.lookup, query, limit, on_cancel=service.interrupt)
             return ToolResult.ok(result)
         except Exception as error:
-            return ToolResult.error(f"Semantic search unavailable: {error}. Use grep, glob, and read_file to continue.")
+            detail = str(error)
+            if "database is locked" in detail:
+                detail = "another SlipAgent session is indexing this project; retry shortly"
+            return ToolResult.error(f"Semantic search unavailable: {detail}. Use grep, glob, and read_file to continue.")

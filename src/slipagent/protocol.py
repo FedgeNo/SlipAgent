@@ -244,7 +244,12 @@ class ResponseParser:
         if candidate.startswith("[") and self._json_call_start(candidate) and (fence or not text.startswith(("    ", "\t"))):
             return AgentResponse("", self.normalize_calls(self._decode(candidate)))
         # Decode envelopes before inspecting tags, so code strings stay inert.
-        if (candidate.startswith("{") and (fence or not text.startswith(("    ", "\t")))) or re.match(r"```(?:json)?[ \t]*\r?\n\s*\{", candidate, re.IGNORECASE):
+        # A reply that opens with a code block and continues with prose carries an
+        # envelope only if that block is one; otherwise the block is an example.
+        leading_block = fence is None and re.match(r"```(?:json)?[ \t]*\r?\n\s*\{", candidate, re.IGNORECASE) is not None
+        if leading_block and not self._leading_block_is_envelope(candidate):
+            leading_block = False
+        if (candidate.startswith("{") and (fence or not text.startswith(("    ", "\t")))) or leading_block:
             value, tagged = self._response_object(candidate, tools=tools, xml_tool_calls=xml_tool_calls)
             if self._call_value(value):
                 return AgentResponse("", self.combine_calls(self.normalize_calls(value), tagged))
@@ -340,6 +345,13 @@ class ResponseParser:
                             literal_until = len(text) - len(tail) + end
                 offset += len(line)
         return AgentResponse(text, [])
+
+    def _leading_block_is_envelope(self, text: str) -> bool:
+        """Whether the code block opening a longer reply is a response record or a call."""
+        block = re.match(r"```(?:json)?[ \t]*\r?\n(.*?)\r?\n[ \t]*```", text, re.DOTALL | re.IGNORECASE)
+        if block is None:
+            return True  # An unterminated block keeps the strict envelope path and its diagnostic.
+        return self._json_call_start(block[1].strip())
 
     def _trailing_fence_calls(self, text: str, tools: list[ToolSpec], *, xml_tool_calls: bool) -> AgentResponse | None:
         """Calls in a JSON code block that ends the reply, naming at least one registered tool.

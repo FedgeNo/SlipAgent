@@ -103,9 +103,12 @@ def save_profile(model: ModelInfo, identity: str, profile: RequestProfile) -> No
     kind = type(profile).__name__
     if _PROFILE_CLASSES.get(kind) is not type(profile):
         return
+    from . import __version__
     data = _load()
     profiles = data.setdefault("profiles", {})
+    # Profiles are rebuilt attribute by attribute, so a build change invalidates them.
     profiles[model.selector] = {"identity": identity, "saved_at": time.time(), "class": kind,
+                                "build": __version__,
                                 "state": {key: _encode(value) for key, value in vars(profile).items()}}
     for selector in sorted(profiles, key=lambda name: profiles[name].get("saved_at", 0))[:-MAX_PROFILES]:
         del profiles[selector]
@@ -113,8 +116,9 @@ def save_profile(model: ModelInfo, identity: str, profile: RequestProfile) -> No
 
 
 def cached_profile(model: ModelInfo, identity: str) -> RequestProfile | None:
+    from . import __version__
     entry = _load().get("profiles", {}).get(model.selector)
-    if not _fresh(entry, identity) or not isinstance(entry.get("state"), dict):
+    if not _fresh(entry, identity) or not isinstance(entry.get("state"), dict) or entry.get("build") != __version__:
         return None
     kind = _PROFILE_CLASSES.get(entry.get("class"))
     if kind is None:

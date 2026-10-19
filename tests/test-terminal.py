@@ -2770,7 +2770,11 @@ async def test_tool_directory_links_wrap_hover_click_and_preserve_selection(disp
         ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
         renderer = Renderer(Style(False), sink, False)
         renderer.terminal = ui
-        renderer.handle(AgentEvent(kind="tool_start", tool_call=ToolCall(id="directory", name="list_dir", arguments={"path": directory.name})))
+        call = ToolCall(id="directory", name="list_dir", arguments={"path": directory.name})
+        renderer.handle(AgentEvent(kind="tool_start", tool_call=call))
+        # Links follow results, so a refused path is never offered as a link.
+        assert not ui.__dict__.get("_directory_links")
+        renderer.handle(AgentEvent(kind="tool_end", tool_call=call, result=ToolResult.ok("listed")))
         for width in (30, 100):
             content = ui._transcript_content(width)
             links = [(y, sum(len(t) for _, t, *_ in content.get_line(y)[:i]))

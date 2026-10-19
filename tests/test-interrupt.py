@@ -139,7 +139,7 @@ async def test_interrupt_preserves_results_and_runs_only_queued_input(tmp_path, 
         await asyncio.wait_for(entered.wait(), 2)
         if queued:
             session.agent.enqueue("Queued follow-up")
-        await cli.CommandRunner(session).handle("/danger")
+        await cli.CommandRunner(session).handle("/danger on")
         cli.Repl(session).request_interrupt()
         cleanup = session.extensions["interrupt_task"]
         cli.Repl(session).request_interrupt()
@@ -240,7 +240,7 @@ async def test_interrupt_during_deferred_command_discards_remaining_commands(tmp
         await asyncio.Event().wait()
 
     monkeypatch.setattr(cli.CommandRunner, "handle", command)
-    session.extensions["deferred_commands"] = ["/model example", "/danger"]
+    session.extensions["deferred_commands"] = ["/model example", "/danger on"]
     session.extensions["resume_after_commands"] = True
     task = asyncio.create_task(cli.CommandRunner(session).apply_deferred())
     try:

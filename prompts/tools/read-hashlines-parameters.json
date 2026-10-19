@@ -1,0 +1,5 @@
+{
+    "properties/path": "Workspace-relative or absolute path to a regular UTF-8 file, subject to the current Workspace Access mode.",
+    "properties/offset": "1-based line number to start from. Defaults to 1.",
+    "properties/limit": "Maximum number of anchored lines to return. Defaults to 200; at most 2000."
+}

@@ -26,13 +26,17 @@ INSTRUCTION_DIRECTORIES = (
 )
 
 
-def _present(workspace: Workspace, relative: str) -> bool:
+MAX_INSTRUCTION_BYTES = 256 * 1024
+
+
+def _present(workspace: Workspace, relative: str) -> bool | str:
+    """True when present, False when absent, or the error text when it cannot be inspected."""
     try:
         (workspace.root / relative).lstat()
     except FileNotFoundError:
         return False
     except OSError as exc:
-        raise WorkspaceError(f"cannot inspect project instructions {relative}: {exc}") from exc
+        return str(exc)
     return True
 
 
@@ -40,10 +44,17 @@ def load_project_instructions(workspace: Workspace, scope: str = ".") -> str:
     """Read guidance within a scope, preserving path-labelled text.
 
     Also used by the session instruction tracker before each working request.
+    An instruction path that cannot be read (a dangling symlink, a directory, a
+    link outside the workspace, bad encoding, an oversized file) contributes a
+    labelled notice instead of its content, so one broken file never blocks the
+    model requests or the startup of a project.
     """
     sources: list[str] = []
     seen: set[Path] = set()
     base = Path(workspace.relative(workspace.resolve(scope)))
+
+    def unreadable(relative: str, error: object) -> None:
+        sources.append(load_prompt('instruction-file-unreadable.md', path=relative, error=error))
 
     def read(relative: str) -> None:
         try:
@@ -54,32 +65,43 @@ def load_project_instructions(workspace: Workspace, scope: str = ".") -> str:
                 raise WorkspaceError("instruction path must be a regular file")
             if path in seen:
                 return
-            content = read_regular(path).decode("utf-8")
+            content = read_regular(path, MAX_INSTRUCTION_BYTES).decode("utf-8")
         except (OSError, UnicodeError, RuntimeError, WorkspaceError) as exc:
-            raise WorkspaceError(f"cannot read project instructions {relative}: {exc}") from exc
+            unreadable(relative, exc)
+            return
         seen.add(path)
         sources.append(load_prompt('instruction-file.md', path=relative, content=content))
 
     for filename in INSTRUCTION_FILES:
         relative = (base / filename).as_posix()
-        if _present(workspace, relative):
+        present = _present(workspace, relative)
+        if present is True:
             read(relative)
+        elif present:
+            unreadable(relative, present)
 
     for directory, pattern in INSTRUCTION_DIRECTORIES:
         relative = (base / directory).as_posix()
-        if not _present(workspace, relative):
+        present = _present(workspace, relative)
+        if not present:
+            continue
+        if present is not True:
+            unreadable(relative, present)
             continue
         try:
             folder = workspace.resolve(relative)
         except (OSError, RuntimeError, WorkspaceError) as exc:
-            raise WorkspaceError(f"cannot inspect project instructions {relative}: {exc}") from exc
+            unreadable(relative, exc)
+            continue
         if not folder.is_dir():
-            if directory == ".clinerules":
-                continue
-            raise WorkspaceError(f"project instruction directory is not a directory: {relative}")
+            if directory != ".clinerules":
+                unreadable(relative, "instruction directory is not a directory")
+            continue
+
+        problems: list[str] = []
 
         def walk_error(exc: OSError) -> None:
-            raise WorkspaceError(f"cannot discover project instructions in {relative}: {exc}") from exc
+            problems.append(str(exc))
 
         paths = []
         for current, _, filenames in os.walk(folder, onerror=walk_error, followlinks=False):
@@ -87,6 +109,8 @@ def load_project_instructions(workspace: Workspace, scope: str = ".") -> str:
                 if fnmatch.fnmatchcase(filename, pattern):
                     suffix = (Path(current) / filename).relative_to(folder)
                     paths.append((Path(relative) / suffix).as_posix())
+        for problem in problems:
+            unreadable(relative, problem)
         for name in sorted(paths):
             read(name)
     return "\n\n".join(sources)

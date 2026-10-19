@@ -52,7 +52,8 @@ class Store:
     @property
     def conn(self) -> sqlite3.Connection:
         if self._conn is None:
-            connection = sqlite3.connect(self.db_path)
+            # Another session of the same project may hold a long indexing transaction.
+            connection = sqlite3.connect(self.db_path, timeout=30)
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys = ON")
             connection.execute("PRAGMA journal_mode = WAL")

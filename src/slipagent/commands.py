@@ -336,21 +336,22 @@ class DangerCommand(Command):
     name = 'danger'
     banner = '/danger [on|off|status]'
     help = (
-        CommandHelp('/danger [on]', 'disable workspace path confinement (queues while working)', '/danger '),
+        CommandHelp('/danger on', 'disable workspace path confinement (queues while working)', '/danger on'),
         CommandHelp('/danger off', 'restore workspace path confinement (queues while working)', '/danger off'),
-        CommandHelp('/danger status', 'show whether danger mode is active', '/danger status'),
+        CommandHelp('/danger', 'show whether danger mode is active (also /danger status)', '/danger'),
     )
 
     def changes_session(self, argument: str) -> bool:
-        return argument.lower() in {"", "on", "off"}
+        return argument.lower() in {"on", "off"}
 
     async def run(self, context: CommandContext, argument: str) -> bool | None:
         session, style, out = context.session, context.style, context.out
         if argument.lower() not in {"", "on", "off", "status"}:
             print(style.red("  usage: /danger [on|off|status]"), file=out)
         else:
-            if argument.lower() != "status":
-                session.workspace.access.danger = argument.lower() != "off"
+            # Lifting confinement takes the explicit word; a bare /danger only reports.
+            if argument.lower() in {"on", "off"}:
+                session.workspace.access.danger = argument.lower() == "on"
             if session.workspace.access.danger:
                 print(style.red("  Danger mode ON: workspace path confinement is disabled."), file=out)
             else:

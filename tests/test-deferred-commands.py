@@ -14,11 +14,11 @@ from test_cli_e2e import metadata_server
 
 
 @pytest.mark.parametrize("commands, stop, max_steps, expected_danger, expected_calls", [
-    (["/danger"], False, 2, True, 2),
-    (["/danger", "/danger off"], False, 2, False, 2),
-    (["/danger"], True, 2, True, 1),
-    (["/danger"], False, 1, True, 1),
-    (["/reset", "/danger"], False, 2, True, 1),
+    (["/danger on"], False, 2, True, 2),
+    (["/danger on", "/danger off"], False, 2, False, 2),
+    (["/danger on"], True, 2, True, 1),
+    (["/danger on"], False, 1, True, 1),
+    (["/reset", "/danger on"], False, 2, True, 1),
 ])
 async def test_commands_wait_for_tools_and_preserve_stop_and_request_budget(
     tmp_path, monkeypatch, metadata_server, commands, stop, max_steps, expected_danger, expected_calls,
@@ -102,7 +102,7 @@ async def test_deferred_settings_after_final_failure_or_exit(tmp_path, monkeypat
     step = asyncio.create_task(cli.Repl(session).run_request("Inspect the project", session.renderer.style))
     try:
         await asyncio.wait_for(entered.wait(), 2)
-        await cli.CommandRunner(session).handle("/danger")
+        await cli.CommandRunner(session).handle("/danger on")
         assert not session.workspace.access.danger
         if outcome == "quit":
             assert await cli.CommandRunner(session).handle("/quit")

@@ -111,6 +111,16 @@ async def test_model_prompt_sections_reload_and_follow_model_selection(editable_
     await registry.aclose()
 
 
+def test_prompt_placeholder_errors_name_the_file(editable_prompts):
+    from slipagent import prompts
+    (editable_prompts / "instruction-scope.md").write_text("Scope ${scope} ${missing}")
+    with pytest.raises(prompts.PromptError, match="instruction-scope.md"):
+        prompts.load_prompt("instruction-scope.md", scope="x", content="y")
+    (editable_prompts / "system-prompt.md").write_text("Root {workspace} with a literal {brace}")
+    with pytest.raises(prompts.PromptError, match="system-prompt.md"):
+        build_system_prompt("/project")
+
+
 @pytest.mark.parametrize("native", [False, True])
 async def test_model_structured_output_switch_reload_and_model_selection(editable_prompts, native):
     requests = []

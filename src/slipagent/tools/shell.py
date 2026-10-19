@@ -73,6 +73,7 @@ class RunCommandTool(Tool):
         if background:
             if self.jobs is None or self.archive is None:
                 return ToolResult.error("Background command service is unavailable")
+            # start() checks again; this early refusal keeps a refused job from leaving a log behind.
             self.jobs.check_capacity()
         log = self.archive.start(command) if self.archive is not None else None
         if background:

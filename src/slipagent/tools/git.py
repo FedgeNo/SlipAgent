@@ -114,7 +114,10 @@ class GitTool(Tool):
                     dirs.clear()
                     continue
                 visited.add(resolved)
-                for name in dirs + files:
+                # Git never overwrites an existing loose object, so a symlinked object
+                # file cannot redirect a write; only directories are checked there.
+                loose_objects = resolved.parent.name == "objects" and len(resolved.name) == 2
+                for name in dirs + ([] if loose_objects else files):
                     entry = Path(current) / name
                     if entry.is_symlink():
                         self.workspace.resolve(entry)
@@ -146,7 +149,7 @@ class GitTool(Tool):
         return result
 
     async def _execute(
-        self, repository: GitRepository, args: list[str], timeout: float,
+        self, repository: GitRepository, args: list[str], timeout: float, *, stdin: bytes | None = None,
     ) -> GitOutput:
         from ..config import command_environment
         env = {key: value for key, value in command_environment().items() if not key.startswith("GIT_")}
@@ -177,6 +180,7 @@ class GitTool(Tool):
         try:
             process = await asyncio.create_subprocess_exec(
                 *command, cwd=repository.root, env=env,
+                stdin=asyncio.subprocess.PIPE if stdin is not None else None,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 start_new_session=os.name == "posix",
             )
@@ -189,7 +193,29 @@ class GitTool(Tool):
                 log.finish(None, False)
             raise WorkspaceError(f"Could not start Git: {exc}") from exc
         limit = min(timeout, MAX_TIMEOUT)
-        stdout, stderr, timed_out = await capture_process(process, limit, log=log)
+        feeder: asyncio.Task[None] | None = None
+        if stdin is not None:
+            writer = process.stdin
+            assert writer is not None
+
+            async def feed(data: bytes = stdin) -> None:
+                # Feed alongside the output readers: Git may fill its output pipe
+                # before it has consumed all of its input.
+                try:
+                    writer.write(data)
+                    await writer.drain()
+                except (OSError, RuntimeError):
+                    pass
+                finally:
+                    writer.close()
+
+            feeder = asyncio.create_task(feed())
+        try:
+            stdout, stderr, timed_out = await capture_process(process, limit, log=log)
+        finally:
+            if feeder is not None:
+                feeder.cancel()
+                await asyncio.gather(feeder, return_exceptions=True)
         output = GitOutput(["git", *args], process.returncode or 0, stdout, stderr, log)
         if timed_out:
             raise WorkspaceError(
@@ -304,8 +330,10 @@ class GitAddTool(GitTool):
             if candidate.is_dir() and (candidate / ".git").exists():
                 await run_blocking(self._repository, str(candidate))
         if files:
+            # Paths travel on stdin: a large tree would exceed the argument-length limit.
             attributes = await self._execute(
-                repository, ["check-attr", "-z", "filter", "--", *files], timeout,
+                repository, ["check-attr", "-z", "--stdin", "filter"], timeout,
+                stdin=b"".join(path.encode("utf-8") + b"\0" for path in files),
             )
             fields = self._complete(attributes).rstrip("\0").split("\0")
             for driver in set(fields[2::3]):

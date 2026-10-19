@@ -33,7 +33,7 @@ from typing import Any, TextIO, cast
 
 from .agent import Agent, AgentEvent, STEP_LIMIT_NOTICE, STOP_NOTICE, build_system_prompt
 from .automation import JsonEventStream
-from .config import Config, ConfigError, configured_provider, dotenv_path, save_dotenv_value, save_model_choice
+from .config import Config, ConfigError, configured_provider, dotenv_path, hide_from_commands, save_dotenv_value, save_model_choice
 from .instructions import load_project_instructions
 from .lifecycle import finish_cleanup
 from .mcp import MCPManager, MCPError
@@ -380,12 +380,8 @@ class Renderer:
                         self.emit(self.style.red(f"  ✗ {body}"), block=self._model_block, tool=True)
                     else:
                         self.emit(self.style.dim(body), block=self._model_block, tool=True)
-                if restored_call is not None and restored_call.name == "edit_file":
-                    self._edit_file_reference(restored_call, result)
-                elif saved_diff and self.terminal is not None and restored_call is not None:
-                    path = restored_call.arguments.get("path")
-                    if isinstance(path, str):
-                        self.terminal.write_file_reference(path)
+                if restored_call is not None:
+                    self._result_references(restored_call, result)
                 if isinstance(saved, dict):
                     for reference in saved.get("artifacts", []):
                         self.handle(AgentEvent(kind="artifact", result=ToolResult.ok(reference)))
@@ -494,14 +490,25 @@ class Renderer:
                       block=self._model_block, tool=True)
         else:
             self.emit(self.style.magenta(f"  ⚙ {raw_call(call)}"), block=self._model_block, tool=True)
-        if self.terminal is not None and call.name != "edit_file":
-            path = call.arguments.get("path")
-            if path is None and call.name == "list_dir":
-                path = "."
-            if isinstance(path, str):
-                self.terminal.write_directory_reference(path)
-                offset = call.arguments.get("offset", 1)
-                self.terminal.write_file_reference(path, line=offset if isinstance(offset, int) and offset > 0 else 1)
+
+    def _result_references(self, call: ToolCall, result: ToolResult) -> None:
+        """Link the paths a successful call touched; refused paths never become links."""
+        if self.terminal is None or result.is_error:
+            return
+        if call.name == "edit_file":
+            self._edit_file_reference(call, result)
+            return
+        path = call.arguments.get("path")
+        if path is None and call.name == "list_dir":
+            path = "."
+        if isinstance(path, str):
+            self.terminal.write_directory_reference(path)
+            offset = call.arguments.get("offset", 1)
+            self.terminal.write_file_reference(path, line=offset if isinstance(offset, int) and offset > 0 else 1)
+        if call.name in {"copy_path", "move_path"}:
+            destination = call.arguments.get("destination")
+            if isinstance(destination, str):
+                self.terminal.write_file_reference(destination)
 
     def _edit_file_reference(self, call: ToolCall, result: ToolResult) -> None:
         if self.terminal is None or result.is_error:
@@ -637,13 +644,7 @@ class Renderer:
                 for line in body.splitlines():
                     self.emit(self.style.dim(f"    {line}"), block=self._model_block, tool=True)
             if self.terminal is not None and event.tool_call is not None and not result.is_error:
-                if event.tool_call.name == "edit_file":
-                    self._edit_file_reference(event.tool_call, result)
-                elif event.tool_call.name in {"write_file", "edit_hashlines", "copy_path", "move_path"}:
-                    for key in ("path", "destination"):
-                        target = event.tool_call.arguments.get(key)
-                        if isinstance(target, str):
-                            self.terminal.write_file_reference(target)
+                self._result_references(event.tool_call, result)
                 if event.tool_call.name == "grep":
                     for match in re.finditer(r"^(.+?):(\d+):", result.text(), re.MULTILINE):
                         self.terminal.write_file_reference(match[1], line=int(match[2]))
@@ -942,7 +943,7 @@ class Launcher:
         try:
             answer = await session.agent.run(prompt)
             await session.agent.wait_for_compaction()
-        except (APIError, WorkspaceError) as exc:
+        except (APIError, ConfigError, WorkspaceError) as exc:
             print(literal(f"slipagent: {exc}"), file=sys.stderr)
             failure = exc
         finally:
@@ -1065,6 +1066,8 @@ class Launcher:
             print(file=sys.stderr)
             return False
         os.environ[implementation.key_env] = key
+        # The key came from the prompt, not the user's shell; commands must not inherit it.
+        hide_from_commands(implementation.key_env)
         if save in {"", "y", "yes"}:
             try:
                 save_dotenv_value(dotenv_path(), implementation.key_env, key)
@@ -2063,9 +2066,12 @@ class KeyEntry:
             )
 
     def mask(self, key: str) -> str:
+        """Show the vendor prefix, or four characters, plus the last four."""
         if len(key) <= 12:
             return "*" * len(key)
-        return f"{key[:10]}…{key[-4:]}"
+        from .providers import KEY_PREFIXES
+        prefix = next((value for values in KEY_PREFIXES.values() for value in values if key.startswith(value)), key[:4])
+        return f"{prefix}…{key[-4:]}"
 
 
 def _price_cell(pricing: dict[str, Any]) -> str:

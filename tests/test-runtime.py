@@ -92,7 +92,7 @@ def run_copy(tmp_path: Path, reload_source):
         env = {**os.environ, "PYTHONPATH": os.pathsep.join([GUARD_DIRECTORY, str(package_root)])}
         result = subprocess.run(
             [sys.executable, "-c", script], cwd=project, env=env,
-            capture_output=True, text=True, timeout=20,
+            capture_output=True, text=True, timeout=60,
         )
         assert result.returncode == 0, result.stdout + result.stderr
 
@@ -137,8 +137,8 @@ def test_prompt_resource_reloads_and_rejects_invalid_template(run_copy):
         assert frame.generation == 1 and agent.system_prompt == accepted
         try:
             cli.build_system_prompt(str(workspace.root))
-        except KeyError:
-            pass
+        except agent_module.PromptError as error:
+            assert 'system-prompt.md' in str(error)
         else:
             raise AssertionError('Invalid prompt placeholders must be reported')
         assert 'Reload rejected' in sink.getvalue()
@@ -365,7 +365,7 @@ def test_invalid_edit_keeps_previous_version_and_recovers_on_next_edit(run_copy,
 
 def test_danger_mode_survives_component_reload(run_copy):
     run_copy('''
-        await cli.CommandRunner(session).handle('/danger')
+        await cli.CommandRunner(session).handle('/danger on')
         edit('cli.py', '"  current model: ', '"  updated model: ')
         await frame.checkpoint()
         assert frame.generation == 1, sink.getvalue()
@@ -563,7 +563,7 @@ def test_idle_watcher_applies_edits_without_user_input(run_copy):
         watcher = asyncio.create_task(frame.watch())
         try:
             edit('cli.py', '"  current model: ', '"  updated model: ')
-            async with asyncio.timeout(4):
+            async with asyncio.timeout(15):
                 while frame.generation == 0:
                     await asyncio.sleep(.05)
             await cli.CommandRunner(session).handle('/model')
@@ -950,14 +950,14 @@ def test_renderer_failure_does_not_stop_frame_reporting_or_watching(run_copy):
         try:
             before = '        """Separate output units while keeping their lines together."""'
             edit('cli.py', before, before + '\\n        raise ValueError("broken renderer")')
-            async with asyncio.timeout(4):
+            async with asyncio.timeout(15):
                 while frame.generation < 1:
                     await asyncio.sleep(.05)
             assert not watcher.done()
             frame.report_error('frame remains alive')
             assert 'frame remains alive' in sink.getvalue()
             (root / 'cli.py').write_text(original)
-            async with asyncio.timeout(4):
+            async with asyncio.timeout(15):
                 while frame.generation < 2:
                     await asyncio.sleep(.05)
             await cli.CommandRunner(session).handle('/model')

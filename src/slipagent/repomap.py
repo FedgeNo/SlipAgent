@@ -21,6 +21,8 @@ from .fileio import open_regular
 SOURCE_SUFFIXES = frozenset({".py", ".pyi", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".c", ".h", ".cpp", ".hpp", ".java", ".php", ".rb", ".cs", ".swift", ".kt", ".sh", ".sql", ".html", ".css", ".md", ".toml"})
 MAX_FILES = 100_000
 MAX_SOURCE_BYTES = 32_000_000
+# One file above this size is not outlined: parsing it alone could exceed the snapshot deadline.
+MAX_OUTLINE_BYTES = 4_000_000
 
 
 class RepositoryMap:
@@ -58,8 +60,8 @@ class RepositoryMap:
     def _outline(self, path: Path) -> tuple[str, set[str]]:
         try:
             with open_regular(self.workspace.resolve(path)) as source:
-                raw = source.read(MAX_SOURCE_BYTES + 1)
-            if len(raw) > MAX_SOURCE_BYTES:
+                raw = source.read(MAX_OUTLINE_BYTES + 1)
+            if len(raw) > MAX_OUTLINE_BYTES:
                 return "[outline omitted: large file]", set()
             if path.suffix.lower() not in {".py", ".pyi"}:
                 return outline(raw, path.suffix.lower())
@@ -136,7 +138,7 @@ class RepositoryMap:
                         retained[name] = (stamp, "[outline deferred]", set())
                         continue
                     outline, references = self._outline(path)
-                    parsed_bytes += min(stat.st_size, MAX_SOURCE_BYTES)
+                    parsed_bytes += min(stat.st_size, MAX_OUTLINE_BYTES)
                     cached = stamp, outline, references
                 retained[name] = cached
             except (OSError, WorkspaceError):

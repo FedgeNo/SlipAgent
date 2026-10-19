@@ -16,10 +16,13 @@ from .types import ModelInfo
 PROVIDERS = {"openrouter": "OpenRouterClient", "nvidia": "NvidiaClient", "kilo": "KiloClient", "mistral": "MistralClient", "google": "GoogleClient"}
 
 
+KEY_PREFIXES = {"openrouter": ("sk-or-v1-",), "nvidia": ("nvapi-",),
+                "mistral": ("mstrl_",), "google": ("AIza", "AQ.")}
+
+
 def key_provider(key: str) -> str | None:
     """Identify provider-specific key formats locally; authentication is separate."""
-    prefixes = {"openrouter": ("sk-or-v1-",), "nvidia": ("nvapi-",),
-                "mistral": ("mstrl_",), "google": ("AIza", "AQ.")}
+    prefixes = KEY_PREFIXES
     for provider, values in prefixes.items():
         if any(key.startswith(prefix) and len(key) > len(prefix) for prefix in values):
             return provider

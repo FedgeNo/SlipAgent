@@ -49,7 +49,10 @@ def _read_prompt(filename: str) -> tuple[tuple[int, int, int], str]:
 def load_prompt(filename: str, **values: object) -> str:
     """Read and render a prompt with one newline on each side."""
     text = _read_prompt(filename)[1]
-    rendered = Template(text).substitute({name: str(value) for name, value in values.items()}) if values else text
+    try:
+        rendered = Template(text).substitute({name: str(value) for name, value in values.items()}) if values else text
+    except (KeyError, ValueError) as exc:
+        raise PromptError(f"Invalid prompt template {filename}: {exc}") from None
     return "\n" + rendered.strip() + "\n"
 
 

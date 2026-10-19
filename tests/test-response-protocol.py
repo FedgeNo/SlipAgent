@@ -195,3 +195,22 @@ def test_retry_diagnostic_has_json_position_and_bounded_rejected_excerpt():
     assert "tool_calls[0].arguments" in str(error.value)
     assert "line 1, column" in str(error.value)
     assert "BAD" in error.value.excerpt and len(error.value.excerpt) < 1000
+
+
+def test_leading_code_block_followed_by_prose_is_an_example(tools=None):
+    """A reply opening with a fenced JSON value and continuing with prose is text, not an envelope."""
+    from slipagent.protocol import parse_agent_response, ResponseFormatError
+    from slipagent.types import ToolSpec
+    import pytest
+    read = ToolSpec("read_file", "", {"type": "object", "properties": {"path": {"type": "string"}}})
+    reply = '```json\n{"a": 1}\n```\nThis is the config file.'
+    record = parse_agent_response(reply, [], tools=[read])
+    assert record.text == reply and record.calls == []
+    # A leading block that is an envelope or a call keeps the strict path.
+    with pytest.raises(ResponseFormatError):
+        parse_agent_response('```json\n{"response": "hi"}\n```\nTrailing prose.', [], tools=[read])
+    with pytest.raises(ResponseFormatError):
+        parse_agent_response('```json\n{"name": "read_file", "arguments": {"path": "x"}}\n```\nAnd more.', [], tools=[read])
+    # Unterminated blocks keep their JSON diagnostic.
+    with pytest.raises(ResponseFormatError):
+        parse_agent_response('```json\n{"response": "hi"', [], tools=[read])

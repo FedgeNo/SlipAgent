@@ -139,8 +139,11 @@ def test_mask_key_hides_the_middle() -> None:
     masked = KeyEntry(None, Style(False), io.StringIO()).mask(GOOD_KEY)
 
     assert GOOD_KEY not in masked
-    assert masked.startswith("sk-or-v1-a")
+    assert masked.startswith("sk-or-v1-…")
     assert masked.endswith(GOOD_KEY[-4:])
+    assert "aaaaa" not in masked
+    assert KeyEntry(None, Style(False), io.StringIO()).mask("AIza" + "b" * 35) == "AIza…bbbb"
+    assert KeyEntry(None, Style(False), io.StringIO()).mask("x" * 40) == "xxxx…xxxx"
 
 
 def test_mask_key_fully_hides_short_values() -> None:

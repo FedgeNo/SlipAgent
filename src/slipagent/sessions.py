@@ -635,7 +635,10 @@ class SessionJournal:
                     log.streams[name] = target
                 archive.logs[log.id] = log
                 log.consolidate()
-                self.log(log)
+                # A fork's new journal needs every record; a resume appends one
+                # only when restoration or consolidation changed the metadata.
+                if fork or {**log.metadata(), "command": log.command} != metadata:
+                    self.log(log)
                 log.remove_legacy_output()
         agent.registry.context_notes["resume"] = (
             load_prompt('session-resume.md', session_id=data['id'], torn_notice=load_prompt('session-torn-entry.md') if data['torn'] else '')

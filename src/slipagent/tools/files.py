@@ -402,11 +402,6 @@ class EditFileTool(Tool):
         )
 
 
-def _line_of(text: str, needle: str) -> int | None:
-    index = text.find(needle)
-    return None if index < 0 else text.count("\n", 0, index) + 1
-
-
 def _save_diff(store: ArtifactStore | None, command: str, diff: str) -> str:
     if store is not None and diff:
         try:

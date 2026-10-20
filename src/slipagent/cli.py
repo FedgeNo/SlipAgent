@@ -931,38 +931,45 @@ class Launcher:
                 if not task.done():
                     task.cancel()
             await finish_cleanup(asyncio.create_task(_gather_quietly(*tasks)))
-        if model_error is None:
-            notice("Preparing model context…")
-            try:
-                # Selection preflights context after MCP, environment, and restored history settle.
-                preview = asyncio.ensure_future(routing.enable(cached=cached_start) if routing.enabled else
-                                                agent._context_view(registry.specs(), 0, preview=True))
+        # Optimal's selection and skip notices print after the startup sequence
+        # rather than inside it; the selection itself still happens here, since
+        # it preflights the model context.
+        routing.defer_notices()
+        try:
+            if model_error is None:
+                notice("Preparing model context…")
                 try:
-                    await asyncio.shield(preview)
-                except asyncio.CancelledError:
-                    await finish_cleanup(preview)
-                    raise
-            except APIError as exc:
-                model_error = exc
-                renderer.emit(literal(f"  model check failed: {exc} Select another model with /models or /model <slug>."))
-        if cached_start:
-            Repl(session).start_background_task(Repl(session).refresh_model_metadata())
-        if not getattr(args, "no_reload", False):
-            frame = await run_blocking(RuntimeFrame, session, sys.modules[__name__])
-            session.reloader = frame
-            edits = registry.services.get("user_edits")
-            agent.on_boundary = edits.checkpoint if edits is not None else lambda: frame.checkpoint(boundary=True)
-            frame.report_plugins(plugins.reports)
-        else:
-            for report in plugins.reports:
-                for text in report.notices():
-                    renderer.emit(literal(f"  {text}"))
-        if args.model and model_error is None and not getattr(args, "json_events", False):
-            try:
-                await run_blocking(save_model_choice, config.model, config.provider)
-            except (OSError, ConfigError) as exc:
-                renderer.emit(literal(f"  could not remember model choice: {exc}"))
-        notice("Startup complete." if model_error is None else "Startup finished; model capability check failed.")
+                    # Selection preflights context after MCP, environment, and restored history settle.
+                    preview = asyncio.ensure_future(routing.enable(cached=cached_start) if routing.enabled else
+                                                    agent._context_view(registry.specs(), 0, preview=True))
+                    try:
+                        await asyncio.shield(preview)
+                    except asyncio.CancelledError:
+                        await finish_cleanup(preview)
+                        raise
+                except APIError as exc:
+                    model_error = exc
+                    renderer.emit(literal(f"  model check failed: {exc} Select another model with /models or /model <slug>."))
+            if cached_start:
+                Repl(session).start_background_task(Repl(session).refresh_model_metadata())
+            if not getattr(args, "no_reload", False):
+                frame = await run_blocking(RuntimeFrame, session, sys.modules[__name__])
+                session.reloader = frame
+                edits = registry.services.get("user_edits")
+                agent.on_boundary = edits.checkpoint if edits is not None else lambda: frame.checkpoint(boundary=True)
+                frame.report_plugins(plugins.reports)
+            else:
+                for report in plugins.reports:
+                    for text in report.notices():
+                        renderer.emit(literal(f"  {text}"))
+            if args.model and model_error is None and not getattr(args, "json_events", False):
+                try:
+                    await run_blocking(save_model_choice, config.model, config.provider)
+                except (OSError, ConfigError) as exc:
+                    renderer.emit(literal(f"  could not remember model choice: {exc}"))
+            notice("Startup complete." if model_error is None else "Startup finished; model capability check failed.")
+        finally:
+            routing.flush_notices()
 
     async def run_one_shot(self, session: Session, prompt: str, events: JsonEventStream | None = None) -> int:
         """Run a single task. Progress goes to stderr so stdout stays pipeable."""

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from prompt_toolkit import Application
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.formatted_text.utils import fragment_list_to_text
+from prompt_toolkit.layout.layout import walk
 from prompt_toolkit.layout.mouse_handlers import MouseHandlers
 from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 
@@ -14,6 +15,20 @@ from .pixelmouse import PixelMouse
 
 if TYPE_CHECKING:
     from .terminal import TerminalUI
+
+
+def _click_takes_no_input(ui: TerminalUI, app: Application[None]) -> bool:
+    """Whether the just-focused window has nothing for the keyboard to do after a click.
+
+    The feed keeps focus: its arrow, Home, and End scrolling need it.
+    """
+    from .links import ActionControl
+
+    current = app.layout.current_window
+    control = current.content if current is not None else None
+    # focus.click records a hit link as the control's keyboard key; without one
+    # the click landed on plain bar text.
+    return isinstance(control, ActionControl) and "_keyboard_key" not in control.__dict__
 
 
 def route_mouse(ui: TerminalUI, app: Application[None]) -> None:
@@ -43,6 +58,10 @@ def route_mouse(ui: TerminalUI, app: Application[None]) -> None:
             ui._selection_dragging = False
             if event.button == MouseButton.LEFT:
                 ui._focus.click(event.position)
+                if ui._menu_future is None and not ui._options_field_active and _click_takes_no_input(ui, app):
+                    # A click on a status bar away from any link means "back to
+                    # typing". Bar links still run on the release.
+                    ui._focus.restore_prompt()
         if event.event_type in (MouseEventType.SCROLL_UP, MouseEventType.SCROLL_DOWN):
             size = ui.output.get_size()
             if ui._menu_future is not None:
@@ -88,7 +107,9 @@ def route_mouse(ui: TerminalUI, app: Application[None]) -> None:
                                                          - app.renderer.rows_above_layout)
                 position = screen.visible_windows_to_write_positions.get(ui.transcript)
                 info = ui.transcript.render_info
-                if position is not None and info is not None and ui.transcript in app.layout.walk_through_modal_area() and (
+                # The feed must be live on screen, whichever window has focus; the
+                # layout has no modal containers, so this is the whole visible tree.
+                if position is not None and info is not None and ui.transcript in walk(app.layout.container, skip_hidden=True) and (
                     position.xpos <= event.position.x < position.xpos + position.width
                     and position.ypos <= event.position.y < position.ypos + position.height
                 ):

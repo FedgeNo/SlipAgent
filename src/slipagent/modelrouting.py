@@ -71,8 +71,20 @@ class ModelRouting:
         return cooling
 
     def notice(self, message: str) -> None:
+        deferred = self.__dict__.get("_deferred_notices")
+        if deferred is not None:
+            deferred.append(message)
+            return
         from .markdown import literal
         self.session.renderer.emit(literal(message))
+
+    def defer_notices(self) -> None:
+        """Hold notices until flush_notices(), so startup prints them after its own sequence."""
+        self.__dict__.setdefault("_deferred_notices", [])
+
+    def flush_notices(self) -> None:
+        for message in self.__dict__.pop("_deferred_notices", None) or ():
+            self.notice(message)
 
     def catalog_notice(self, models: list[ModelInfo]) -> None:
         unknown = {model.selector for model in models if free_label(model.pricing) is not None

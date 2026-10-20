@@ -189,6 +189,50 @@ async def test_click_on_closed_menu_before_redraw_is_ignored(display, row):
             await task
 
 
+async def test_clicking_bar_text_returns_focus_to_the_prompt(display):
+    from prompt_toolkit.data_structures import Point
+    from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
+
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        task = asyncio.create_task(ui.run())
+        try:
+            ui.write("feed line one\nfeed line two")
+            await wait_until(lambda: "feed line two" in "\n".join(snapshot()))
+            ui._focus.focus(ui.transcript)
+            ui.transcript.content.__dict__["_keyboard_key"] = "stale"
+            assert ui.app.layout.current_window is ui.transcript
+            def click(x, y):
+                with set_app(ui.app):
+                    for kind in (MouseEventType.MOUSE_DOWN, MouseEventType.MOUSE_UP):
+                        ui.app.renderer.mouse_handlers.mouse_handlers[y][x](
+                            MouseEvent(Point(x, y), kind, MouseButton.LEFT, frozenset()))
+
+            # The feed keeps focus on a click so its arrow-key scrolling works.
+            ui._focus.focus(ui.input)
+            click(3, 1)
+            assert ui.app.layout.current_window is ui.transcript
+            assert "_keyboard_key" not in ui.transcript.content.__dict__
+            # Plain text on either bar returns to the prompt; a bar link keeps its own focus.
+            rows = ui.output.get_size().rows
+            bottom, activity = rows - 1, rows - ui._footer_rows()
+            for row in (bottom, activity):
+                ui._focus.focus(ui.transcript)
+                click(60, row)
+                assert ui.app.layout.current_control is ui.input.control, row
+            inspect = snapshot()[activity].rfind("Inspect")
+            assert inspect > 0
+            ui._focus.focus(ui.transcript)
+            with set_app(ui.app):
+                ui.app.renderer.mouse_handlers.mouse_handlers[activity][inspect](
+                    MouseEvent(Point(inspect, activity), MouseEventType.MOUSE_DOWN, MouseButton.LEFT, frozenset()))
+            assert ui.app.layout.current_control is not ui.input.control
+        finally:
+            ui.close()
+            await task
+
+
 def test_status_owner_migrates_retained_state_and_survives_refresh(display, monkeypatch):
     sink, _, output, _, _ = display
     clock = [100.0]

@@ -57,6 +57,29 @@ async def test_optimal_selects_ranked_nvidia_catalog_models_through_preflight(tm
             await session.agent._compactor().aclose()
 
 
+async def test_deferred_notices_print_after_startup_in_order(tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY")
+
+    def handle(request):
+        return httpx.Response(200, json={"data": [{"id": "deepseek-ai/deepseek-v4.1-flash"}]})
+
+    async with create_client("nvidia", api_key="dummy", transport=httpx.MockTransport(handle)) as client:
+        session = session_for(client, tmp_path)
+        routing = session.model_routing()
+        try:
+            routing.defer_notices()
+            await routing.enable()
+            assert "Optimal selected" not in session.renderer.stream.getvalue()
+            session.renderer.emit("  Startup complete.")
+            routing.flush_notices()
+            output = session.renderer.stream.getvalue()
+            assert output.index("Startup complete.") < output.index("Optimal selected nvidia::deepseek-ai/deepseek-v4.1-flash")
+            routing.notice("later notice")
+            assert "later notice" in session.renderer.stream.getvalue()[len(output):]
+        finally:
+            await session.agent._compactor().aclose()
+
+
 async def test_optimal_reset_retries_best_and_manual_selection_disables(tmp_path, monkeypatch):
     client = create_client("openrouter", api_key="dummy")
     session = session_for(client, tmp_path)

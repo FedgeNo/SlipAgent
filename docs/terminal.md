@@ -189,8 +189,10 @@ to the next control. Terminals narrower than 60 columns
 temporarily hide the panel and skip its lists during traversal.
 Hidden panels cannot retain keyboard focus. Viewer and context navigation keys
 apply when that region owns focus; prompt editing keeps its normal shortcuts.
-Clicking a focusable area focuses it. Prompt clicks place the cursor on the first
-click; clicking a list title focuses that list for arrow-key navigation.
+Clicking a focusable area focuses it. Clicking plain text of the activity or
+status bar returns focus to the prompt so typing continues; bar links still
+work. Prompt clicks place the cursor on the first click; clicking a list title
+focuses that list for arrow-key navigation.
 The feed retains at most two wrapped layouts and prepares the alternate Inspect
 width in the background, so opening and closing the panel reuses formatted text.
 Closing a menu restores its invoking region if it remains visible. A completed

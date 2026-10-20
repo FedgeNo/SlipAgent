@@ -11,6 +11,7 @@ from __future__ import annotations
 SCORES: dict[str, float | None] = {
     "deepseek/deepseek-v4.1-flash": 95.3,
     "google/gemini-3.8-flash": 95.2,
+    "minimax/minimax-m3.1-flash": 95.2,
     "z-ai/glm-5.3": 93.7,
     "stepfun/step-5-preview": 93.6,
     "z-ai/glm-5.3-flash": 92.1,
@@ -87,6 +88,7 @@ MODEL_ALIASES = {
     "meta-llama/llama-2-70b-chat": "meta/llama2-70b",
     "meta-llama/llama-3.2-11b-vision-instruct": "meta/llama-3.2-11b-vision-instruct",
     "meta-llama/llama-3.2-90b-vision-instruct": "meta/llama-3.2-90b-vision-instruct",
+    "minimaxai/minimax-m3.1-flash": "minimax/minimax-m3.1-flash",
     "mistral/labs-leanstral-1-5": "mistral/labs-leanstral-1-5-1",
     "nvidia/nemotron-3.5-lightning-30b-a3b": "nvidia/nemotron-3.5-lightning",
     "nvidia/nemotron-3.5-super-vl-120b-a12b": "nvidia/nemotron-3.5-super-vl",

@@ -144,13 +144,14 @@ class TranscriptScrollbar(UIControl):
             return NotImplemented
         travel = self.height - thumb
         # The anchor keeps a cell-rounded thumb from reaching the end of the
-        # track, so the track's end cells themselves mean the ends of the content.
-        if row >= self.height - 1:
+        # track, so the track's end cells themselves mean the ends of the
+        # content, as does a thumb painted in them: holding it there keeps the
+        # feed following each new row rather than the row it reached first.
+        position = min(travel, max(0, row - self.drag_offset))
+        if row >= self.height - 1 or round(position) >= travel:
             position = travel
-        elif row < 1:
+        elif row < 1 or round(position) <= 0:
             position = 0
-        else:
-            position = min(travel, max(0, row - self.drag_offset))
         line = round(maximum * position / travel) if travel else 0
         window.vertical_scroll, window.vertical_scroll_2 = bottom if line >= maximum else (line, 0)
         window._pending_scroll = 0

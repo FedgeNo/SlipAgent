@@ -97,6 +97,13 @@ def route_mouse(ui: TerminalUI, app: Application[None]) -> None:
             screen = app.renderer._last_screen
             if screen is not None:
                 precise = ui.__dict__.get("_pixel_position")
+                if ui._scrollbar.drag_offset is not None and event.event_type == MouseEventType.MOUSE_MOVE:
+                    # A grabbed thumb follows the pointer's height wherever it
+                    # drifts: off the one-column track, or past either end.
+                    for hit_window, position in screen.visible_windows_to_write_positions.items():
+                        if hit_window.content is ui._scrollbar:
+                            row = precise[1] - app.renderer.rows_above_layout if precise is not None else event.position.y
+                            return ui._scrollbar.pointer(event, row - position.ypos)
                 if precise is not None:
                     for hit_window, position in screen.visible_windows_to_write_positions.items():
                         if hit_window.content is ui._scrollbar and (

@@ -720,6 +720,62 @@ async def test_scrollbar_last_cell_reaches_the_end_of_the_feed(display):
             await task
 
 
+async def test_held_thumb_at_the_end_keeps_following_new_output(display):
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        ui.write("\n".join(f"row {n:03}" for n in range(300)))
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: "row 299" in "\n".join(snapshot()))
+            pipe.send_text("\x1b[?1016;2$y\x1b[6;20;10t")
+            await wait_until(lambda: "\x1b[?1016h" in sink.getvalue())
+            await send_keys(ui, pipe, "\x1b[?1016;1$y\x1b[<0;991;1M\x1b[<0;991;1m")
+            assert snapshot()[0].startswith("row 000")
+            # Dragged to 15.6 of 16 cells of travel, the thumb paints in the
+            # track's last cell: that is the bottom position, held down.
+            await send_keys(ui, pipe, "\x1b[<0;991;1M\x1b[<32;991;313M")
+            assert snapshot()[16][99] == "┃"
+            assert ui.transcript._following
+            for n in range(3):
+                ui.write(f"new {n}")
+                await send_keys(ui, pipe, "\x1b[<32;991;313M")
+                assert snapshot()[15].startswith(f"new {n}")
+                assert ui.transcript._following
+            pipe.send_text("\x1b[<0;991;313m")
+            await wait_until(lambda: ui._scrollbar.drag_offset is None)
+        finally:
+            ui.close()
+            await task
+
+
+async def test_thumb_drag_drifting_off_the_track_still_reaches_the_end(display):
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        ui.write("\n".join(f"row {n:03}" for n in range(300)))
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: "row 299" in "\n".join(snapshot()))
+            ui.transcript.seek(140)
+            ui.app.invalidate()
+            await wait_until(lambda: snapshot()[0].startswith("row 140"))
+            assert snapshot()[8][99] == "┃"
+            # The pointer slides into the feed column on its way down, then below the track.
+            pipe.send_text("\x1b[<0;100;9M\x1b[<32;99;12M\x1b[<32;99;19M")
+            await wait_until(lambda: ui.transcript._following)
+            assert ui._scrollbar.drag_offset is not None
+            assert ui._selection_start is None
+            ui.write("new tail")
+            await wait_until(lambda: "new tail" in "\n".join(snapshot()))
+            assert ui.transcript._following
+            pipe.send_text("\x1b[<0;99;19m")
+            await wait_until(lambda: ui._scrollbar.drag_offset is None)
+        finally:
+            ui.close()
+            await task
+
+
 async def test_scrollbar_last_cell_reaches_a_wrapped_tail(display):
     sink, _, output, _, snapshot = display
     with create_pipe_input() as pipe:

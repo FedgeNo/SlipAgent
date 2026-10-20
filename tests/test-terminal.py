@@ -666,12 +666,12 @@ async def test_scrollbar_uses_pixel_movements_within_one_terminal_cell(display, 
             assert snapshot()[0].startswith("row 000")
             await send_keys(ui, pipe, f"\x1b[<0;{column};1M")
             positions = []
-            for pixel in (4, 8, 12, 16):
+            for pixel in (24, 28, 32, 36):
                 await send_keys(ui, pipe, f"\x1b[<32;{column};{pixel}M")
                 positions.append(int(snapshot()[0].split()[1]))
             assert positions == sorted(set(positions))
-            assert 0 < positions[0] < positions[-1] < 17
-            await send_keys(ui, pipe, f"\x1b[<0;{column};16m")
+            assert 17 < positions[0] < positions[-1] < 35
+            await send_keys(ui, pipe, f"\x1b[<0;{column};36m")
             await render_after(ui, ui.app.invalidate)
             assert int(snapshot()[0].split()[1]) == positions[-1]
             thumb_row = next(row for row, line in enumerate(snapshot()[:17]) if line[column // 10] == "┃")
@@ -695,6 +695,57 @@ async def test_scrollbar_uses_pixel_movements_within_one_terminal_cell(display, 
             ui.close()
             await task
         assert sink.getvalue().rfind("\x1b[?1016l") > sink.getvalue().rfind("\x1b[?1016h")
+
+
+async def test_scrollbar_last_cell_reaches_the_end_of_the_feed(display):
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        ui.write("\n".join(f"row {n:03}" for n in range(300)))
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: "row 299" in "\n".join(snapshot()))
+            # Line 140 paints the thumb below its exact position, so a grab anchors above the cell.
+            ui.transcript.seek(140)
+            ui.app.invalidate()
+            await wait_until(lambda: snapshot()[0].startswith("row 140"))
+            assert snapshot()[8][99] == "┃"
+            pipe.send_text("\x1b[<0;100;9M\x1b[<32;100;17M\x1b[<0;100;17m")
+            await wait_until(lambda: ui.transcript._following)
+            await wait_until(lambda: "row 299" in "\n".join(snapshot()))
+            pipe.send_text("\x1b[<0;100;17M\x1b[<32;100;1M\x1b[<0;100;1m")
+            await wait_until(lambda: snapshot()[0].startswith("row 000"))
+        finally:
+            ui.close()
+            await task
+
+
+async def test_scrollbar_last_cell_reaches_a_wrapped_tail(display):
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        ui.open_viewer("Viewer", "\n".join(f"line {n:03}" for n in range(100)) + "\n" + "tail " * 100 + "end")
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: snapshot()[1].startswith("line 000"))
+            screen = ui.app.renderer._last_screen
+            track = next(position for window, position in screen.visible_windows_to_write_positions.items()
+                         if window.content is ui._scrollbar)
+            x, y = track.xpos + 1, track.ypos + track.height
+            # Sixteen unwrapped lines from line 085 fill the viewport, but the
+            # wrapped tail still extends five rows below it.
+            ui._viewer_window.seek(85)
+            ui.app.invalidate()
+            await wait_until(lambda: snapshot()[1].startswith("line 085"))
+            assert snapshot()[y - 2][x - 1] == "┃"
+            assert snapshot()[y - 1][x - 1] != "┃"
+            pipe.send_text(f"\x1b[<0;{x};{y - 1}M\x1b[<32;{x};{y}M\x1b[<0;{x};{y}m")
+            await wait_until(lambda: ui._viewer_window._following)
+            await wait_until(lambda: any(line.startswith("tail end") for line in snapshot()))
+            assert snapshot()[y - 1][x - 1] == "┃"
+        finally:
+            ui.close()
+            await task
 
 
 async def test_footer_background_separates_controls_from_feed(display):

@@ -31,6 +31,20 @@ class TranscriptWindow(Window):
         self._following = False
         self._pending_scroll = 0
 
+    def bottom_origin(self, ui_content: UIContent, width: int, height: int) -> tuple[int, int]:
+        """The line and row offset that fill the viewport with the end of the content."""
+        # The tail can start inside a wrapped line, including lines taller
+        # than the entire transcript viewport.
+        remaining = height
+        for line in range(ui_content.line_count - 1, -1, -1):
+            size = ui_content.get_height_for_line(line, width, self.get_line_prefix)
+            if size > remaining:
+                return line, size - remaining
+            remaining -= size
+            if remaining == 0:
+                return line, 0
+        return 0, 0
+
     def _scroll(self, ui_content: UIContent, width: int, height: int) -> None:
         if width <= 0 or height <= 0:
             return
@@ -38,20 +52,7 @@ class TranscriptWindow(Window):
         def line_height(line: int) -> int:
             return ui_content.get_height_for_line(line, width, self.get_line_prefix)
 
-        # The tail can start inside a wrapped line, including lines taller
-        # than the entire transcript viewport.
-        remaining = height
-        bottom = (0, 0)
-        for line in range(ui_content.line_count - 1, -1, -1):
-            size = line_height(line)
-            if size > remaining:
-                bottom = (line, size - remaining)
-                break
-            remaining -= size
-            if remaining == 0:
-                bottom = (line, 0)
-                break
-
+        bottom = self.bottom_origin(ui_content, width, height)
         line, offset = min(
             bottom if self._following else (self.vertical_scroll, self.vertical_scroll_2), bottom,
         )
@@ -96,22 +97,26 @@ class TranscriptScrollbar(UIControl):
         self.height = 0
         self.drag_offset: float | None = None
 
-    def geometry(self) -> tuple[int, int, int]:
+    def geometry(self) -> tuple[int, int, tuple[int, int]]:
+        """The thumb's top row and height, and the viewport origin at the end of the content."""
         window = self.target()
         info = window.render_info if window is not None else None
-        if info is None or self.height <= 0:
-            return 0, self.height, 0
+        if window is None or info is None or self.height <= 0:
+            return 0, self.height, (0, 0)
+        # The track ends where wheel scrolling stops: at the origin that shows
+        # the last row, which a wrapped tail puts past the last line index that
+        # fits a viewport of unwrapped lines.
+        bottom = window.bottom_origin(info.ui_content, info.window_width, info.window_height)
         visible = max(1, len(info.displayed_lines))
-        maximum = max(0, info.content_height - visible)
         thumb = max(1, min(self.height, self.height * visible // max(1, info.content_height)))
-        top = round((self.height - thumb) * min(info.vertical_scroll, maximum) / maximum) if maximum else 0
-        return top, thumb, maximum
+        top = round((self.height - thumb) * min(info.vertical_scroll, bottom[0]) / bottom[0]) if bottom[0] else 0
+        return top, thumb, bottom
 
     def create_content(self, width: int, height: int) -> UIContent:
         self.height = height
-        top, thumb, maximum = self.geometry()
+        top, thumb, bottom = self.geometry()
         return UIContent(
-            get_line=lambda row: [("class:scroll-track", "┃" if maximum and top <= row < top + thumb else " ")],
+            get_line=lambda row: [("class:scroll-track", "┃" if bottom[0] and top <= row < top + thumb else " ")],
             line_count=height, show_cursor=False,
         )
 
@@ -122,7 +127,8 @@ class TranscriptScrollbar(UIControl):
         window = self.target()
         if window is None:
             return None
-        top, thumb, maximum = self.geometry()
+        top, thumb, bottom = self.geometry()
+        maximum = bottom[0]
         if mouse_event.event_type == MouseEventType.MOUSE_UP:
             self.drag_offset = None
             return None
@@ -137,10 +143,18 @@ class TranscriptScrollbar(UIControl):
         elif mouse_event.event_type != MouseEventType.MOUSE_MOVE or self.drag_offset is None:
             return NotImplemented
         travel = self.height - thumb
-        position = min(travel, max(0, row - self.drag_offset))
-        window.vertical_scroll = round(maximum * position / travel) if travel else 0
-        window.vertical_scroll_2 = window._pending_scroll = 0
-        window._following = position == travel
+        # The anchor keeps a cell-rounded thumb from reaching the end of the
+        # track, so the track's end cells themselves mean the ends of the content.
+        if row >= self.height - 1:
+            position = travel
+        elif row < 1:
+            position = 0
+        else:
+            position = min(travel, max(0, row - self.drag_offset))
+        line = round(maximum * position / travel) if travel else 0
+        window.vertical_scroll, window.vertical_scroll_2 = bottom if line >= maximum else (line, 0)
+        window._pending_scroll = 0
+        window._following = line >= maximum
         get_app().invalidate()
         return None
 

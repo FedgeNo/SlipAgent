@@ -48,7 +48,7 @@ and running from a development checkout.
 ## Choosing Models
 
 Startup selects the highest-ranked free model and, if a model fails or stays
-silent, falls back to the next one. After 10 seconds without output the status
+silent, falls back to the next one. After 20 seconds without output the status
 line counts down; press **Ctrl+N** to skip to the next model right away, or **Esc**
 to keep waiting on the current one (Esc again cancels the turn).
 

@@ -53,7 +53,7 @@ Connection failures retain the current model after its ordinary retries are
 exhausted. A broken network connection does not exclude a model or provider;
 retry when connectivity recovers. HTTP errors such as 429 and 503 still count
 as provider failures after retry exhaustion.
-After 10 seconds without model output, the status line counts down to the
+After 20 seconds without model output, the status line counts down to the
 deadline; in optimal mode, **Ctrl+N** skips to the next model immediately.
 While the countdown shows, **Esc** removes the deadline for that request so the
 current model keeps its turn; other request failures still fall back as usual,

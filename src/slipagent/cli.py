@@ -86,7 +86,7 @@ Use /help for command details. Ctrl+\\ toggles the context view.
 
 QUOTA_REFRESH_INTERVAL = 15 * 60
 # Seconds without model output before the status line shows the deadline.
-FIRST_OUTPUT_NOTICE_SECONDS = 10
+FIRST_OUTPUT_NOTICE_SECONDS = 20
 HOLD_NOTICE = "Staying on this model; press Esc again to cancel the turn"
 SKIP_NOTICE = "Ctrl+N: next model; Esc: stay on this model"
 WAIT_NOTICE = "Esc: keep waiting without a timeout"

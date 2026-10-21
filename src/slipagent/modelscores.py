@@ -27,6 +27,7 @@ SCORES: dict[str, float | None] = {
     "nvidia/nemotron-3.5-super-vl": 74.9,
     "xingchen-agi/xing4.0-29b-a4b": 74.4,
     "nvidia/nemotron-3-ultra-550b-a55b": 74.1,
+    "recursive/flint-v1.0": 72.9,
     "meta/muse-glimmer-30b": 72.6,
     "google/gemini-3.5-flash-lite": 70.9,
     "poolside/laguna-xs-2.1": 67.4,

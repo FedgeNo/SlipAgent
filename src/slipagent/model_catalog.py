@@ -45,6 +45,8 @@ MODEL_BLACKLIST = {
     "nvidia/llama-nemotron-embed-vl-1b-v2": "Retrieval embeddings",
     "nvidia/llama3-chatqa-1.5-70b": "Conversational retrieval and question answering",
     "nvidia/nemotron-3-embed-1b": "Retrieval embeddings",
+    "nvidia/nemotron-3.5-embed-1b": "Retrieval embeddings",
+    "nvidia/nemotron-3.5-embed-8b": "Retrieval embeddings",
     "nvidia/nemotron-3.5-content-safety": "Content moderation",
     "nvidia/nemotron-3.5-content-safety:free": "Content moderation",
     "nvidia/nemotron-4-340b-reward": "Response scoring",

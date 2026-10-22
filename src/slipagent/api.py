@@ -259,6 +259,7 @@ class APIClient:
         transport_options: dict[str, Any] = {"timeout": None} if disable_timeout else {}
         observed = False
         attempt = 0
+        carried: float | None = None
         while True:
             state: _StreamCompletion | None = None
             # An HTTP error whose retry was already declined is not reconsidered.
@@ -270,7 +271,9 @@ class APIClient:
             def capture_event(event: str) -> None:
                 if on_response is not None and event != "[DONE]":
                     events.append(event)
-            first_output = asyncio.timeout(first_output_timeout)
+            # A retry after an error keeps the running deadline, so repeated
+            # 429s cannot extend the wait; only a 200 response restarts it.
+            first_output = asyncio.timeout(first_output_timeout) if carried is None else asyncio.timeout_at(carried)
             deadline = None if first_output_timeout is None else FirstOutputDeadline(first_output)
             content = body if deadline is None else _PacingExcluded(body, deadline)
             if deadline is not None and on_first_output is not None:
@@ -289,6 +292,8 @@ class APIClient:
                             continue
                         declined = error
                         raise error
+                    if deadline is not None and first_output.when() is not None and not (deadline.held or deadline.skipped):
+                        first_output.reschedule(asyncio.get_running_loop().time() + first_output_timeout)
                     # Gateways and test servers may return a regular completion.
                     if "application/json" in response.headers.get("content-type", ""):
                         await response.aread()
@@ -377,6 +382,7 @@ class APIClient:
                     continue
                 raise
             finally:
+                carried = first_output.when() if deadline is not None else None
                 if deadline is not None and on_first_output is not None:
                     on_first_output(None)
                 if on_response is not None:

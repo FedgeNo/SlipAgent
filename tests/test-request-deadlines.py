@@ -155,3 +155,19 @@ async def test_background_call_without_startup_deadline_can_wait_longer(advance)
         result = await client.chat(model='test', messages=[Message.user('summarize')],
                                    on_delta=lambda *args: None, disable_timeout=True)
     assert result.text == 'Summary.'
+
+
+async def test_rate_limit_retries_do_not_extend_startup_deadline(advance):
+    calls = 0
+
+    async def handle(request):
+        nonlocal calls
+        calls += 1
+        await advance(50)
+        return httpx.Response(429, headers={'retry-after': '0'}, json={'error': {'message': 'Resource exhausted'}})
+
+    async with OpenRouterClient('dummy', transport=httpx.MockTransport(handle)) as client:
+        with pytest.raises(APIResponseError, match='No model output within 120 seconds'):
+            await client.chat(model='test', messages=[Message.user('work')],
+                              on_delta=lambda *args: None, first_output_timeout=120)
+    assert calls == 3

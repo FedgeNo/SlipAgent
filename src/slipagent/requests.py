@@ -172,6 +172,7 @@ class RequestDriver:
                 "single_attempt": True,
                 "first_output_timeout": FIRST_OUTPUT_TIMEOUT,
                 "on_first_output": self.registry.services.get("first_output_wait"),
+                "on_phase": self.registry.services.get("request_phase"),
             } if isinstance(self.client, APIClient) else {}
             try:
                 if not options:

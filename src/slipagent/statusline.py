@@ -24,6 +24,8 @@ class StatusLine:
         self.changed_at: float | None = None
         self.retry = ""
         self.retry_spinning = False
+        self.phase = ""
+        self.phase_since = 0.0
         self.command = ""
         self.navigation_until = 0.0
         self.tips_started: float | None = None
@@ -44,6 +46,12 @@ class StatusLine:
     def notify(self, text: str) -> None:
         self.notification = " ".join(text.split())
         self.changed_at = time.monotonic() if self.notification else None
+
+    def set_phase(self, text: str) -> None:
+        """Name what the current request is doing; the elapsed time restarts only when the phase changes."""
+        if text != self.phase:
+            self.phase_since = time.monotonic()
+        self.phase = text
 
     def current_notification(self) -> str:
         if self.notification:
@@ -74,7 +82,7 @@ class StatusLine:
         return style
 
     def activity(self, *, held: bool, working: bool, stopping: bool,
-                 concise: bool, frame: str) -> tuple[str, str, bool]:
+                 concise: bool, frame: str, pausing: bool = False) -> tuple[str, str, bool]:
         """Return style, text, and whether the idle Commands action is available."""
         if held:
             return "class:held", "Agent Held", False
@@ -86,7 +94,13 @@ class StatusLine:
             return "class:pulse", self.command, False
         if not working:
             return "class:idle", "Ready", True
-        label = "Stopping After This Step" if stopping else "Working" if concise else "Working (esc to interrupt)"
+        # A queued command pauses the run only to apply it; the work then continues.
+        label = ("Stopping After This Step" if stopping else "Applying Command After This Step" if pausing
+                 else "Working" if concise else "Working (esc to interrupt)")
+        if self.phase and not stopping and not pausing:
+            elapsed = int(time.monotonic() - self.phase_since)
+            label = (f"{self.phase} ({elapsed}s)" if concise
+                     else f"Working: {self.phase} ({elapsed}s, esc to interrupt)")
         return "class:pulse", f"{frame} {label}", False
 
     def marquee(self, fragments: StyleAndTextTuples, columns: int, key: str) -> StyleAndTextTuples:

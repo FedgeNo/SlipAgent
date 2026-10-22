@@ -173,6 +173,7 @@ class APIClient:
         disable_timeout: bool = False,
         first_output_timeout: float | None = None,
         on_first_output: Callable[[FirstOutputDeadline | None], None] | None = None,
+        on_phase: Callable[[str], None] | None = None,
     ) -> Completion:
         """Request a completion; an isolated job may supply its frozen profile.
 
@@ -181,7 +182,8 @@ class APIClient:
         routing, temperature support, or reasoning for an already archived step.
         first_output_timeout bounds streaming startup; background calls omit it.
         on_first_output receives each attempt's deadline while it waits for
-        output, then None.
+        output, then None. on_phase receives a short description of what the
+        streaming request is doing, and an empty string when it ends.
         """
         if not messages:
             raise APIError("chat() requires at least one message")
@@ -234,6 +236,8 @@ class APIClient:
             payload["stream_options"] = {"include_usage": True}
         self.prepare_payload(payload, capabilities)
         body = self.request_body(payload)
+        if on_phase is not None and hasattr(body, "on_wait"):
+            body.on_wait = on_phase
         if on_request is not None:
             # Capture the final request body before transport, without headers.
             on_request(body.read())
@@ -243,9 +247,13 @@ class APIClient:
             if observed is not None:
                 await observed
         if on_delta is not None:
-            return await self._stream_request(payload, on_delta, single_attempt=single_attempt, disable_timeout=disable_timeout, on_response=on_response, request_body=body,
-                                              first_output_timeout=first_output_timeout, on_raw_response=on_raw_response,
-                                              on_first_output=on_first_output)
+            try:
+                return await self._stream_request(payload, on_delta, single_attempt=single_attempt, disable_timeout=disable_timeout, on_response=on_response, request_body=body,
+                                                  first_output_timeout=first_output_timeout, on_raw_response=on_raw_response,
+                                                  on_first_output=on_first_output, on_phase=on_phase)
+            finally:
+                if on_phase is not None:
+                    on_phase("")
         transport_options: dict[str, Any] = {"timeout": None} if disable_timeout else {}
         raw = await self._request("POST", "/chat/completions", single_attempt=single_attempt, content=body, headers={"Content-Length": str(body.size)}, on_response=on_response, on_raw_response=on_raw_response, **transport_options)
         return _parse_completion(raw)
@@ -254,13 +262,30 @@ class APIClient:
                               on_response: Callable[[dict[str, Any]], None] | None = None, request_body: Any = None,
                               first_output_timeout: float | None = None,
                               on_raw_response: Callable[[httpx.Response], None] | None = None,
-                              on_first_output: Callable[[FirstOutputDeadline | None], None] | None = None) -> Completion:
+                              on_first_output: Callable[[FirstOutputDeadline | None], None] | None = None,
+                              on_phase: Callable[[str], None] | None = None) -> Completion:
         body = request_body if request_body is not None else self.request_body(payload)
         transport_options: dict[str, Any] = {"timeout": None} if disable_timeout else {}
         observed = False
         attempt = 0
         carried: float | None = None
+        phase = on_phase or (lambda text: None)
+        announced: set[str] = set()
+        deliver = on_delta
+
+        def on_delta(kind: str, chunk: str) -> None:
+            # The first reasoning or reply text of an attempt names the phase once,
+            # which also shows where a stuck request stopped.
+            if kind not in announced:
+                announced.add(kind)
+                if kind == "reasoning":
+                    phase("Thinking")
+                elif kind == "content":
+                    phase("Receiving reply")
+            deliver(kind, chunk)
+
         while True:
+            announced.clear()
             state: _StreamCompletion | None = None
             # An HTTP error whose retry was already declined is not reconsidered.
             declined: APIResponseError | None = None
@@ -271,6 +296,7 @@ class APIClient:
             def capture_event(event: str) -> None:
                 if on_response is not None and event != "[DONE]":
                     events.append(event)
+            phase(f"Sending request to {self.provider}")
             # A retry after an error keeps the running deadline, so repeated
             # 429s cannot extend the wait; only a 200 response restarts it.
             first_output = asyncio.timeout(first_output_timeout) if carried is None else asyncio.timeout_at(carried)
@@ -292,6 +318,7 @@ class APIClient:
                             continue
                         declined = error
                         raise error
+                    phase("Waiting for first output")
                     if deadline is not None and first_output.when() is not None and not (deadline.held or deadline.skipped):
                         first_output.reschedule(asyncio.get_running_loop().time() + first_output_timeout)
                     # Gateways and test servers may return a regular completion.
@@ -338,6 +365,9 @@ class APIClient:
                                            for index, call in state.calls.items())
                                     or state.function_call or state.tool_blocks):
                                 first_output.reschedule(None)
+                                if not announced:
+                                    # Output that is neither reasoning nor reply text, such as a tool call.
+                                    phase("")
                                 if on_first_output is not None:
                                     on_first_output(None)
                     if data:

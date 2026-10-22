@@ -6,6 +6,8 @@ from pathlib import Path
 import httpx
 import pytest
 
+from slipagent import model_catalog
+from slipagent.config import ConfigError, save_model_choice
 from slipagent.model_catalog import coding_models
 from slipagent.modelscores import MODEL_ROUTERS, SCORES, model_score, reviewed_model
 from slipagent.modelrouting import eligible_free
@@ -132,3 +134,27 @@ async def test_nvidia_gemma_preserves_instructions_in_supported_roles(model):
         result = await client.chat(model=model, messages=[Message.system("Instructions"),
             Message.user("First request"), Message.assistant("Reply"), Message.user("Next request")])
         assert result.message.content == "Done"
+
+
+def test_blacklist_selector_excludes_only_its_provider(monkeypatch):
+    monkeypatch.setitem(model_catalog.MODEL_BLACKLIST, "nvidia::shared/model", "Unresponsive")
+    models = [ModelInfo("shared/model", provider=p) for p in ("nvidia", "openrouter")]
+    assert [m.selector for m in coding_models(models)] == ["openrouter::shared/model"]
+    assert not coding_models([ModelInfo("deepseek-ai/deepseek-v4.1-flash", provider="nvidia")])
+    assert coding_models([ModelInfo("deepseek-ai/deepseek-v4.1-flash", provider="FakeProvider")])
+
+
+def test_user_blacklist_in_preferences_hides_models(tmp_path, monkeypatch):
+    monkeypatch.setenv("SLIPAGENT_STATE_DIR", str(tmp_path))
+    (tmp_path / "preferences.json").write_text(json.dumps({"blacklist": ["a/bare", "nvidia::b/scoped"]}))
+    models = [ModelInfo(mid, provider=p) for mid in ("a/bare", "b/scoped") for p in ("nvidia", "openrouter")]
+    assert [m.selector for m in coding_models(models)] == ["openrouter::b/scoped"]
+    save_model_choice("c/model", "nvidia")
+    assert json.loads((tmp_path / "preferences.json").read_text())["blacklist"] == ["a/bare", "nvidia::b/scoped"]
+
+
+def test_malformed_user_blacklist_is_reported(tmp_path, monkeypatch):
+    monkeypatch.setenv("SLIPAGENT_STATE_DIR", str(tmp_path))
+    (tmp_path / "preferences.json").write_text(json.dumps({"blacklist": "a/bare"}))
+    with pytest.raises(ConfigError, match="blacklist"):
+        coding_models([ModelInfo("a/bare")])

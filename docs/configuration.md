@@ -6,6 +6,8 @@
 
 Successful `--model` and `/model` selections remember the provider and its model separately in `preferences.json` under `SLIPAGENT_STATE_DIR` (default platform data directory; Linux: `$XDG_DATA_HOME/slipagent` or `~/.local/share/slipagent`). Initial provider selection uses `--provider`, then `SLIPAGENT_PROVIDER`, the saved provider if its key is present, and finally the first provider with a key (OpenRouter takes precedence). Initial model selection uses CLI flags first, then the selected provider's exported model variable, its remembered model, `.env`, and its built-in default. Without explicit `--model` or `--provider` flags, optimal mode replaces this initial choice with the highest-scoring eligible free model during startup.
 
+Add a `"blacklist"` list to `preferences.json` to hide models from model listings and optimal selection on this machine only. A bare ID such as `"google/deplot"` hides the model on every provider; a selector such as `"nvidia::deepseek-ai/deepseek-v4.1-flash"` hides it on that provider alone. These entries add to the built-in list, and a malformed `"blacklist"` is reported at startup. Remembered model choices keep the list intact.
+
 The selected provider requires its own API key. In addition to `.env`,
 you can supply it through the process environment:
 
@@ -22,6 +24,9 @@ export OPENROUTER_API_KEY="sk-or-..."
 | `KILO_API_KEY` | — | Required for Kilo inference and catalog activation. |
 | `KILO_MODEL` | `kilo-auto/free` | Kilo model ID. |
 | `KILO_BASE_URL` | `https://api.kilo.ai/api/gateway` | Kilo endpoint override. |
+| `GROQ_API_KEY` | — | Required for Groq inference and model discovery. |
+| `GROQ_MODEL` | `openai/gpt-oss-120b` | Groq model ID. |
+| `GROQ_BASE_URL` | `https://api.groq.com/openai/v1` | Groq endpoint override. |
 | `MISTRAL_API_KEY` | — | Required for Mistral inference and model discovery. |
 | `MISTRAL_MODEL` | `mistral-small-latest` | Mistral model ID. |
 | `MISTRAL_BASE_URL` | `https://api.mistral.ai/v1` | Mistral endpoint override. |

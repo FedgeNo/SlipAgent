@@ -13,11 +13,11 @@ from typing import Any
 from .api import APIClient, APIConfigError
 from .types import ModelInfo
 
-PROVIDERS = {"openrouter": "OpenRouterClient", "nvidia": "NvidiaClient", "kilo": "KiloClient", "mistral": "MistralClient", "google": "GoogleClient"}
+PROVIDERS = {"openrouter": "OpenRouterClient", "nvidia": "NvidiaClient", "kilo": "KiloClient", "mistral": "MistralClient", "google": "GoogleClient", "groq": "GroqClient"}
 
 
 KEY_PREFIXES = {"openrouter": ("sk-or-v1-",), "nvidia": ("nvapi-",),
-                "mistral": ("mstrl_",), "google": ("AIza", "AQ.")}
+                "mistral": ("mstrl_",), "google": ("AIza", "AQ."), "groq": ("gsk_",)}
 
 
 def key_provider(key: str) -> str | None:

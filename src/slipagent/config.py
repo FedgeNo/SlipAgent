@@ -126,7 +126,15 @@ def _read_preferences() -> dict[str, object]:
     if not isinstance(value, dict) or ("model" in value and
             (not isinstance(value["model"], str) or not value["model"].strip())):
         raise ConfigError(f"invalid model preferences at {path}")
+    hidden = value.get("blacklist", [])
+    if not isinstance(hidden, list) or any(not isinstance(entry, str) or not entry.strip() for entry in hidden):
+        raise ConfigError(f'invalid "blacklist" in {path}: expected a list of model IDs or provider::model selectors')
     return value
+
+
+def user_blacklist() -> frozenset[str]:
+    """Models the user hid in preferences: a bare ID on every provider, or provider::id on one."""
+    return frozenset(str(entry).strip() for entry in _read_preferences().get("blacklist", []))
 
 
 def save_model_choice(model: str, provider: str = "openrouter") -> None:

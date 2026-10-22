@@ -163,6 +163,13 @@ level; otherwise reasoning is enabled when advertised. Catalog entries and free
 availability can change. Missing models are rejected without substituting a paid
 model. Kilo does not supply account quotas through this integration.
 
+For Groq, add `GROQ_API_KEY=your-key` to your local `.env`, then run
+`slipagent --provider groq`. The default is `openai/gpt-oss-120b`;
+`/models groq` lists active text chat models and `/model groq::<model-id>` selects one. Groq's
+authenticated catalog supplies context limits, per-token prices, and tool and JSON-mode
+support; speech, transcription, and guard models are hidden. Groq omits the price of a
+free model, so a model without one is labelled free and, once scored, joins optimal mode.
+
 For Mistral, add `MISTRAL_API_KEY=your-key` to your local `.env`, then run
 `slipagent --provider mistral`. The default is `mistral-small-latest`;
 `/models mistral` lists available chat models and

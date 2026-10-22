@@ -1,9 +1,12 @@
 """Curated exclusions from coding model listings; unknown models remain visible."""
 
+from .config import user_blacklist
 from .types import ModelInfo
 
 
 # Exact IDs avoid excluding future models based on names or incomplete metadata.
+# A bare ID excludes the model on every provider; a "provider::id" selector excludes
+# it only there, since providers that serve the same model fail independently.
 MODEL_BLACKLIST = {
     "adept/fuyu-8b": "Visual question answering and document understanding",
     "aion-labs/aion-2.0": "Roleplay and storytelling",
@@ -23,6 +26,7 @@ MODEL_BLACKLIST = {
     "google/gemini-3.1-flash-lite-image": "Image generation and editing",
     "google/lyria-3-pro-preview": "Music generation",
     "google/lyria-3-clip-preview": "Music generation",
+    "groq::allam-2-7b": "Arabic and English chat with a 4,096-token context and no tool support",
     "gryphe/mythomax-l2-13b": "Roleplay",
     "inclusionai/ling-3.0-flash-fin": "Financial analysis",
     "inclusionai/ling-3.0-flash-sante": "Medical analysis",
@@ -58,6 +62,7 @@ MODEL_BLACKLIST = {
     "nvidia/riva-translate-4b-instruct": "Translation",
     "nvidia/riva-translate-4b-instruct-v2": "Translation",
     "nvidia/vila": "Visual question answering",
+    "nvidia::deepseek-ai/deepseek-v4.1-flash": "Chat completions time out on NVIDIA",
     "openai/gpt-audio": "Audio generation",
     "openai/gpt-audio-mini": "Audio generation",
     "openai/gpt-oss-safeguard-20b": "Content moderation",
@@ -89,5 +94,6 @@ MODEL_BLACKLIST = {
 
 
 def coding_models(models: list[ModelInfo]) -> list[ModelInfo]:
-    """Hide only explicitly curated IDs, across providers."""
-    return [model for model in models if model.id not in MODEL_BLACKLIST]
+    """Hide only explicitly curated or user-listed IDs, on every provider or on one."""
+    hidden = MODEL_BLACKLIST.keys() | user_blacklist()
+    return [model for model in models if model.id not in hidden and model.selector not in hidden]

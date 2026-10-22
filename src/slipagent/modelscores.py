@@ -17,6 +17,7 @@ SCORES: dict[str, float | None] = {
     "z-ai/glm-5.3-flash": 92.1,
     "google/gemini-3.6-flash": 87.6,
     "reflection/beam": 83.6,
+    "qwen/qwen3.8-27b": 83.1,
     "poolside/laguna-s-2.1": 82.8,
     "dots-studio/dots-3-note-preview": 82.7,
     "moonshotai/kimi-k2.6": 81.9,
@@ -34,6 +35,7 @@ SCORES: dict[str, float | None] = {
     "cohere/north-mini-code": 65.0,
     "google/gemma-4-31b-it": 64.1,
     "mistralai/mistral-large-2-instruct": 63.8,
+    "openai/gpt-oss-120b": 62.4,
     "nvidia/nemotron-3-super-120b-a12b": 61.2,
     "openai/gpt-oss-20b": 60.7,
     "google/gemini-2.5-pro": 58.0,
@@ -80,6 +82,7 @@ SCORES: dict[str, float | None] = {
     "google/gemma-2b": 4.1,
     "google/recurrentgemma-2b": 4.0,
     "aisingapore/sea-lion-7b-instruct": None,
+    "openai/gpt-oss-safeguard-20b": None,
 }
 
 # Exact aliases preserve identity without guessing about new variants or routers.

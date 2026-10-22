@@ -32,7 +32,7 @@ def test_score_metadata_is_shared_across_hosts_and_unknowns_stay_unscored():
     assert ModelInfo("gemini-3.8-flash", provider="google").score == ModelInfo("google/gemini-3.8-flash").score
 
 
-@pytest.mark.parametrize("model", ["stepfun-ai/step-5-preview", "deepseek-ai/deepseek-v4.1-flash"])
+@pytest.mark.parametrize("model", ["stepfun-ai/step-5-preview", "z-ai/glm-5.3-flash"])
 async def test_optimal_selects_ranked_nvidia_catalog_models_through_preflight(tmp_path, monkeypatch, model):
     monkeypatch.delenv("OPENROUTER_API_KEY")
     calls = []
@@ -61,7 +61,7 @@ async def test_deferred_notices_print_after_startup_in_order(tmp_path, monkeypat
     monkeypatch.delenv("OPENROUTER_API_KEY")
 
     def handle(request):
-        return httpx.Response(200, json={"data": [{"id": "deepseek-ai/deepseek-v4.1-flash"}]})
+        return httpx.Response(200, json={"data": [{"id": "stepfun-ai/step-5-preview"}]})
 
     async with create_client("nvidia", api_key="dummy", transport=httpx.MockTransport(handle)) as client:
         session = session_for(client, tmp_path)
@@ -73,7 +73,7 @@ async def test_deferred_notices_print_after_startup_in_order(tmp_path, monkeypat
             session.renderer.emit("  Startup complete.")
             routing.flush_notices()
             output = session.renderer.stream.getvalue()
-            assert output.index("Startup complete.") < output.index("Optimal selected nvidia::deepseek-ai/deepseek-v4.1-flash")
+            assert output.index("Startup complete.") < output.index("Optimal selected nvidia::stepfun-ai/step-5-preview")
             routing.notice("later notice")
             assert "later notice" in session.renderer.stream.getvalue()[len(output):]
         finally:

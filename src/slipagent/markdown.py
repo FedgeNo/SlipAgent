@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import re
 import tempfile
+from bisect import bisect_right
+from itertools import accumulate
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TextIO
 
@@ -48,9 +51,17 @@ THEMES: dict[str, dict[str, str]] = {
 }
 
 
+CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+WHITESPACE_RUNS = re.compile(r"(\s+)")
+PLAIN_TEXT = re.compile(r"[\n -~]*")
+CODE_LINES = re.compile(r"(\n)")
+
+
 def literal(text: str) -> str:
     """Untrusted text cannot inject terminal controls through Markdown."""
-    return re.sub(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]", lambda m: f"\\x{ord(m[0]):02x}", text)
+    if CONTROL_CHARACTERS.search(text) is None:
+        return text
+    return CONTROL_CHARACTERS.sub(lambda m: f"\\x{ord(m[0]):02x}", text)
 
 
 @dataclass
@@ -132,12 +143,32 @@ class MarkdownRenderer:
              code: bool = False, padding: bool = True) -> list[DisplayRow]:
         """Wrap graphemes; copy maps exclude prefixes, continuation marks and padding."""
         columns = max(1, columns)
+        room = max(1, columns - display_width(prefix))
+        wrap = not code
         result: list[DisplayRow] = []
         line: StyleAndTextTuples = []
+        # Consecutive clusters in one style are kept as a run; a tuple per
+        # character would dominate the cost of long output.
+        run: list[str] = []
+        run_style = ""
         original = ""
         positions: list[int] = []
+        # Characters copied one-for-one map to consecutive offsets, so they
+        # are held as one open range and written out once per row.
+        range_start = range_stop = 0
         cells = 0
         continued = False
+
+        def settle_run() -> None:
+            if run:
+                line.append((run_style, "".join(run)))
+                run.clear()
+
+        def close_range() -> None:
+            nonlocal range_start, range_stop
+            if range_stop > range_start:
+                positions.extend(range(range_start, range_stop))
+            range_start = range_stop = 0
 
         def begin() -> None:
             nonlocal cells
@@ -151,6 +182,8 @@ class MarkdownRenderer:
 
         def flush(separator: str = "") -> None:
             nonlocal line, original, positions, cells, continued
+            settle_run()
+            close_range()
             if code and padding and cells < columns:
                 pad_text = " " * (columns - cells)
                 line.append((self.style("syntax"), pad_text))
@@ -162,35 +195,102 @@ class MarkdownRenderer:
             begin()
 
         begin()
-        for style, value, *_ in fragments:
+        for item in fragments:
+            style, value = item[0], item[1]
+            if style != run_style:
+                settle_run()
+                run_style = style
             # Word boundaries keep short prose words together; code preserves columns.
-            words = [value] if code else re.split(r"(\s+)", value)
-            for word in words:
-                size = display_width(word) if "\n" not in word else 0
-                room = max(1, columns - display_width(prefix))
-                if not code and word.strip() and size <= room and cells and cells + size > columns:
+            # With a capturing split, even entries are words and odd ones whitespace.
+            # Code splits at newlines only, which never divides a grapheme unless a CR is present.
+            words = (CODE_LINES.split(value) if "\r" not in value else [value]) if code else WHITESPACE_RUNS.split(value)
+            # Printable ASCII (newlines allowed) is one cell per character and needs
+            # no escaping or grapheme segmentation; everything else takes the general path.
+            plain = value.isascii() and (value.isprintable() or PLAIN_TEXT.fullmatch(value) is not None)
+            single_line = plain and "\n" not in value
+            count = len(words)
+            offsets: list[int] | None = None
+            resume = 0
+            for index, word in enumerate(words):
+                if index < resume or not word:
+                    continue
+                is_word = not index & 1
+                if single_line:
+                    word_plain = fast = True
+                    size = len(word)
+                else:
+                    word_plain = plain or (word.isascii() and (word.isprintable() or PLAIN_TEXT.fullmatch(word) is not None))
+                    if word_plain:
+                        fast = "\n" not in word
+                        size = len(word) if fast else 0
+                    else:
+                        fast = False
+                        size = 0 if "\n" in word else display_width(word)
+                if wrap and is_word and size <= room and cells and cells + size > columns:
                     flush()
-                for cluster in iter_graphemes(word):
+                if fast:
+                    if cells + size <= columns and not (wrap and not is_word and continued and not original and result):
+                        # The word fits on this row, and so do any following words that
+                        # still fit; a run of them is placed as one slice of the text.
+                        text = word
+                        if single_line and index + 1 < count:
+                            if offsets is None:
+                                offsets = list(accumulate(map(len, words), initial=0))
+                            end = bisect_right(offsets, offsets[index] + columns - cells, index + 1) - 1
+                            if end > index + 1:
+                                text = value[offsets[index]:offsets[end]]
+                                size = len(text)
+                                resume = end
+                        start = len(original)
+                        if range_stop == start:
+                            range_stop += size
+                        else:
+                            close_range()
+                            range_start, range_stop = start, start + size
+                        original += text
+                        run.append(text)
+                        cells += size
+                        continue
+                    clusters: Iterable[str] = word
+                elif word_plain:
+                    clusters = word
+                else:
+                    clusters = iter_graphemes(word)
+                for cluster in clusters:
                     if cluster == "\n":
                         flush("\n")
                         continued = False
                         line, positions, cells = [], [], 0
                         begin()
                         continue
-                    shown = " " * min(8 - cells % 8, max(1, columns - cells)) if cluster == "\t" else literal(cluster)
-                    width = max(0, display_width(shown))
+                    if word_plain:
+                        shown, width = cluster, 1
+                    else:
+                        shown = " " * min(8 - cells % 8, max(1, columns - cells)) if cluster == "\t" else literal(cluster)
+                        width = max(0, display_width(shown))
                     if cells + width > columns and original:
                         flush()
-                    if not code and cluster.isspace() and continued and not original and result:
+                    if wrap and cluster.isspace() and continued and not original and result:
                         # Keep the separator in copied prose, off the display row.
                         result[-1].copy_text += cluster
                         continue
-                    positions.extend([len(original)] * len(shown))
+                    start = len(original)
+                    if len(shown) == 1:
+                        if range_stop == start:
+                            range_stop += 1
+                        else:
+                            close_range()
+                            range_start, range_stop = start, start + 1
+                    else:
+                        close_range()
+                        positions.extend([start] * len(shown))
                     original += cluster
-                    line.append((style, shown))
+                    run.append(shown)
                     cells += width
         if original or not result:
             flush()
+        else:
+            settle_run()
         return result
 
     def code(self, text: str, language: str) -> StyleAndTextTuples:

@@ -70,6 +70,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py", "test-*.py", "*_test.py"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+tmp_path_retention_policy = "none"
 
 [tool.mypy]
 python_version = "3.11"

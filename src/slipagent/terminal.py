@@ -43,7 +43,7 @@ from .clipboard import clipboard_sequence, copy_to_clipboard
 from .explorer import folder_opener, open_folder
 from .viewerpanels import ViewerDeck, TextViewerPanel, DiffViewerPanel, FileViewerPanel, file_signature
 from .inspection import IndexedText, field_snapshot, artifact_snapshot, build_snapshot
-from .transcriptlayouts import TranscriptLayouts, WrappedLayout
+from .transcriptlayouts import TranscriptLayouts
 from .types import ToolCall
 from .diffcomments import attach_reference, diff_reference
 from .statusline import NOTICE_SECONDS, PULSE_FRAMES, TIP_SECONDS, StatusLine
@@ -154,6 +154,11 @@ class InputWindow(TranscriptWindow):
             Window._scroll(self, ui_content, width, height)
 
 
+# Records per block laid out together while a restored feed fills upward. Small
+# enough that the newest output shows within one chunk's layout time.
+RESTORE_CHUNK_RECORDS = 16
+
+
 def _append_record(flow: WrappedTranscript, record: tuple[Any, ...]) -> None:
     if record[0]:
         _, text, first, final, reasoning = record
@@ -216,6 +221,7 @@ class TerminalUI:
         self._eof = False
         self.working = False
         self.stopping = False
+        self.pausing = False
         self._password = False
         self._input_label = "> "
         self.input = TextArea(
@@ -1349,7 +1355,7 @@ class TerminalUI:
     def _activity_status(self, *, compact: bool = False) -> StyleAndTextTuples:
         frame = self.__dict__.get("_activity_frame", PULSE_FRAMES[int(time.monotonic() * 4) % len(PULSE_FRAMES)])
         style, text, ready = self.status_line.activity(held=self._editor_active, working=self.working,
-            stopping=self.stopping, concise=self._viewer_active or compact, frame=frame)
+            stopping=self.stopping, pausing=self.pausing, concise=self._viewer_active or compact, frame=frame)
         fragments: StyleAndTextTuples = [(style, text)]
         if ready and self._input_label == "> " and not self._viewer_active and not compact:
             fragments.extend([("", "  "), *self._task_link("Commands", "commands", self._choose_command), ("", " ")])
@@ -1361,9 +1367,15 @@ class TerminalUI:
         self.status_line.retry_spinning = spinning
         self.app.invalidate()
 
-    def set_working(self, working: bool, *, stopping: bool = False) -> None:
+    def set_phase(self, text: str) -> None:
+        """Show what the running request is doing, such as pacing an upload or waiting for output."""
+        self.status_line.set_phase(text)
+        self.app.invalidate()
+
+    def set_working(self, working: bool, *, stopping: bool = False, pausing: bool = False) -> None:
         self.working = working
         self.stopping = stopping
+        self.pausing = pausing
         if not working:
             self.status_line.retry = ""
         self._update_title()
@@ -1503,18 +1515,57 @@ class TerminalUI:
         self._ensure_transcript()
         return len(self._raw_output)
 
-    def show_tail_first(self, start: int) -> None:
-        """Lay out records from `start` first; earlier ones join when the full layout is ready."""
+    def hold_layout(self, notice: str) -> None:
+        """Lay out nothing until `show_tail_first` names the records to show first.
+
+        The notice stays on the status line until the full layout is shown.
+        """
         self._end_tail_layout()
-        if 0 < start < len(self._raw_output):
-            self.__dict__["_tail_from"] = start
+        self.__dict__["_tail_pending"] = True
+        self.__dict__["_loading_notice"] = notice
+        # Writes and placements arrive faster than a redraw costs; coalesce them while loading.
+        self.__dict__.setdefault("_redraw_interval_before", self.app.min_redraw_interval)
+        self.app.min_redraw_interval = 0.1
+        self.notify(notice)
+
+    def show_tail_first(self) -> None:
+        """Lay out the newest records first; earlier blocks fill in above them, newest first."""
+        self._end_tail_layout()
+        layouts = self.__dict__.get("_transcript_layouts")
+        if layouts is not None:
+            # Held layouts contain nothing; the feed restarts from its end.
+            layouts.close()
+        if self._raw_output:
+            self.__dict__["_tail_from"] = len(self._raw_output)
+            self.__dict__["_tail_boundaries"] = sorted(self._block_starts)
+        else:
+            self._finish_loading()
+        self.app.invalidate()
+
+    def _finish_loading(self) -> None:
+        notice = self.__dict__.pop("_loading_notice", None)
+        if notice is not None and self.status_line.notification == notice:
+            self.notify("")
+        if "_redraw_interval_before" in self.__dict__:
+            self.app.min_redraw_interval = self.__dict__.pop("_redraw_interval_before")
+
+    def _rows_placed_above(self, added: int) -> None:
+        """Keep the reader's view and selection where they were when rows join above."""
+        if not self.transcript._following:
+            self.transcript.vertical_scroll += added
+        for name in ("_selection_start", "_selection_end"):
+            point = getattr(self, name)
+            if point is not None:
+                setattr(self, name, Point(x=point.x, y=point.y + added))
         self.app.invalidate()
 
     def _end_tail_layout(self) -> None:
         self.__dict__.pop("_tail_from", None)
-        tail = self.__dict__.pop("_tail_layout", None)
-        if tail is not None:
-            tail[1].flow.close()
+        self.__dict__.pop("_tail_pending", None)
+        self.__dict__.pop("_tail_boundaries", None)
+        layouts = self.__dict__.get("_transcript_layouts")
+        if layouts is not None:
+            layouts.drop_incomplete()
 
     def last_markdown(self) -> str:
         self._ensure_transcript()
@@ -1808,44 +1859,37 @@ class TerminalUI:
                           reset=self._wrapped_columns == 0 and self._flow is not None)
         def create(columns: int) -> WrappedTranscript:
             return WrappedTranscript(columns, theme=self._markdown_theme, color=color, source=self._markdown_source)
-        state = layouts.state(columns, create)
         total = len(self._raw_output)
         tail_from = self.__dict__.get("_tail_from")
-        shown = state
-        if tail_from is not None and (state.count < total or columns in layouts.tasks):
-            # A restored transcript shows its end at once; the full layout builds in the background.
-            tail = self.__dict__.get("_tail_layout")
-            if tail is None or tail[0] != (columns, layouts.key):
-                if tail is not None:
-                    tail[1].flow.close()
-                tail = ((columns, layouts.key), WrappedLayout(create(columns), count=tail_from))
-                self.__dict__["_tail_layout"] = tail
-            shown = tail[1]
-            layouts.build_in_thread(columns, total, create, self._transcript_record, _append_record,
-                                    self.app.create_background_task, done=self.app.invalidate)
+        pending = self.__dict__.get("_tail_pending", False)
+        state = layouts.state(columns, create, start=total if pending or tail_from is not None else 0)
+        if pending:
+            # A restore in progress lays out nothing; redraws must not build the feed top-down.
+            state.start = state.count = total
+        elif tail_from is not None and state.start > 0:
+            # A restored feed never lays out on the event loop: blocks join from the newest down.
+            layouts.fill_upward(columns, self.__dict__.get("_tail_boundaries", []), RESTORE_CHUNK_RECORDS, create,
+                                self._transcript_record, _append_record, self.app.create_background_task,
+                                placed=self._rows_placed_above, done=self.app.invalidate)
         elif tail_from is not None:
             self._end_tail_layout()
-        if self._flow is not shown.flow:
+            self._finish_loading()
+        if self._flow is not state.flow:
             self._selection_start = self._selection_end = None
             self._selection_dragging = False
-        previous_rows = self._line_count
-        switched = tail_from is not None and shown is state
-        self._flow = flow = shown.flow
+        self._flow = flow = state.flow
         self._wrapped_columns = columns
-        layouts.update(shown, total, self._append_transcript_record)
+        layouts.update(state, total, self._append_transcript_record)
         self._wrapped_count = total
         terminal_columns = self.output.get_size().columns
         full = max(1, terminal_columns - 1)
         narrow = MainArea.split_width(terminal_columns)
-        if shown is state and terminal_columns >= 60 and columns in (full, narrow):
+        if state.start == 0 and terminal_columns >= 60 and columns in (full, narrow):
             layouts.warm(narrow if columns == full else full, total, create,
                          self._append_transcript_record, self.app.create_background_task)
         preview = flow.content_rows()
         complete = len(flow.rows)
         self._line_count = complete + len(preview)
-        if switched and not self.transcript._following:
-            # Rows added above the shown tail must not move what the reader is looking at.
-            self.transcript.vertical_scroll += max(0, self._line_count - previous_rows)
 
         def is_current() -> bool:
             return (self._flow is flow and self._wrapped_columns == columns

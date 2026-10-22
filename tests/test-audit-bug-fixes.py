@@ -115,9 +115,11 @@ async def test_viewer_and_context_keys_leave_focused_prompt_alone(ui):
         await terminal.input.buffer._load_history_task
     press(terminal, Keys.Up)
     assert terminal.input.text == "previous prompt"
+    # An open viewer owns Esc from the prompt; only the next Esc interrupts.
     press(terminal, Keys.Escape)
-    assert interrupted and terminal._viewer_active
-    terminal.close_viewer()
+    assert not interrupted and not terminal._viewer_active
+    press(terminal, Keys.Escape)
+    assert interrupted
     terminal.context_visible = True
     terminal._focus.focus(terminal.input)
     terminal.input.text = "abc"

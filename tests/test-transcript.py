@@ -96,6 +96,48 @@ def test_streamed_ansi_escapes_and_styles_survive_chunk_boundaries():
     assert all(style == "bold" for style, _ in result[14:])
 
 
+def test_prepend_places_earlier_blocks_as_a_sequential_layout_would():
+    """A block wraps the same wherever it sits; only its row offset changes."""
+    blocks = [
+        ("\x1b[38;2;0;255;0m> first task with words that wrap\x1b[0m\n", ""),
+        ("**Bold** answer with enough words to wrap around the narrow column several times over.", "markdown"),
+        ("    app.py:12\n", " class:file-3"),
+        ("\x1b[38;2;0;255;0m> second task\x1b[0m\n", ""),
+        ("plain output line one\nline two that also wraps past the column width\n", ""),
+        ("unfinished final words", ""),
+    ]
+
+    def lay_out(flow, items):
+        for text, style in items:
+            if style == "markdown":
+                flow.append_markdown(text, first=True, final=True)
+            else:
+                flow.append(text, first=True, extra_style=style)
+
+    def summary(flow):
+        count = len(flow.rows) + len(flow.content_rows())
+        return (lines(flow), [flow.copy_row(i).copy_text for i in range(count)],
+                flow.prompt_rows, flow.linked_rows(), flow.prompt_at(count - 1))
+
+    sequential, filled = WrappedTranscript(24), WrappedTranscript(24)
+    try:
+        lay_out(sequential, blocks)
+        for chunk in (blocks[4:], blocks[2:4], blocks[:2]):
+            piece = WrappedTranscript(24)
+            lay_out(piece, chunk)
+            assert filled.prepend(piece) == len(piece.rows)
+            piece.close()
+        assert summary(filled) == summary(sequential)
+        # Later output continues below the filled rows exactly as it would below sequential ones.
+        for flow in (sequential, filled):
+            flow.append("later streamed text that wraps too\n", first=True)
+            flow.append_markdown("- item one\n- item two", first=True, final=True)
+        assert summary(filled) == summary(sequential)
+    finally:
+        sequential.close()
+        filled.close()
+
+
 @pytest.mark.parametrize("chunk_size", [1, 7, 4096])
 def test_prompt_lookup_tracks_green_lines_through_streaming_and_wrapping(chunk_size):
     flow = WrappedTranscript(20)

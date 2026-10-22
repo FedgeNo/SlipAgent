@@ -7,7 +7,7 @@ memory. A width change rebuilds display rows from the original chunks.
 
 from __future__ import annotations
 
-import json
+import pickle
 import re
 import tempfile
 from array import array
@@ -23,6 +23,9 @@ from .palette import USER_BACKGROUND_COLOR, USER_TEXT_COLOR
 from .markdown import DisplayRow, MarkdownRenderer, MarkdownStream, ReasoningMarkdownRenderer
 from .rowindex import RowIndex
 
+# Rows live only in this process's spool, so the fastest protocol is safe.
+PICKLE_PROTOCOL = pickle.HIGHEST_PROTOCOL
+
 FEED_LINK_PREFIXES = ("class:artifact-", "class:file-", "class:directory-", "class:suggestion-")
 
 
@@ -32,14 +35,21 @@ class TranscriptFile(Sequence[str]):
     def __init__(self) -> None:
         self._file = tempfile.TemporaryFile(mode="w+b", dir=spool_directory())
         self._offsets = array("Q", [0])
+        # Seeking flushes buffered writes, so consecutive appends skip it.
+        self._at_end = True
 
     def append(self, text: str) -> None:
         self.append_chunks(iter([text]))
 
     def append_chunks(self, chunks: Iterable[str]) -> None:
-        self._file.seek(self._offsets[-1])
-        for text in chunks:
-            self._file.write(text.encode("utf-8", errors="surrogatepass"))
+        self.append_bytes(text.encode("utf-8", errors="surrogatepass") for text in chunks)
+
+    def append_bytes(self, chunks: Iterable[bytes]) -> None:
+        if not self._at_end:
+            self._file.seek(self._offsets[-1])
+            self._at_end = True
+        for data in chunks:
+            self._file.write(data)
         self._offsets.append(self._file.tell())
         if hasattr(self, "_ends"):
             self._ends.append(self._file.tell())
@@ -80,14 +90,40 @@ class TranscriptFile(Sequence[str]):
             index += len(self)
         if not 0 <= index < len(self):
             raise IndexError(index)
+        return self.read_bytes(index).decode("utf-8", errors="surrogatepass")
+
+    def read_bytes(self, index: int) -> bytes:
         self._file.seek(self._offsets[index])
+        self._at_end = False
         end = self._ends[index] if hasattr(self, "_ends") else self._offsets[index + 1]
-        return self._file.read(end - self._offsets[index]).decode(
-            "utf-8", errors="surrogatepass",
-        )
+        return self._file.read(end - self._offsets[index])
+
+    def prepend_from(self, other: TranscriptFile) -> None:
+        """Place another file's records before this file's own.
+
+        Bytes are appended; only the index changes, so existing records keep
+        their storage and later appends continue at the file's end.
+        """
+        ends = self._editable_index()
+        starts, stops = array("Q"), array("Q")
+        self._file.seek(self._offsets[-1])
+        for index in range(len(other)):
+            starts.append(self._file.tell())
+            self._file.write(other.read_bytes(index))
+            stops.append(self._file.tell())
+        self._offsets = starts + self._offsets[:-1] + array("Q", [self._file.tell()])
+        self._ends = stops + ends
+        self._at_end = True
 
     def close(self) -> None:
         self._file.close()
+
+
+# Escape, 8-bit CSI, and the zero-width markers: the only characters that move
+# prompt-toolkit's ANSI parser out of plain text mode.
+ANSI_STATE_CHARACTERS = re.compile("[\x1b\x9b\x01\x02]")
+# A run of ordinary characters, or one newline, tab or space.
+LAYOUT_RUNS = re.compile(r"[^\n\t ]+|[\n\t ]")
 
 
 class AnsiStream(ANSI):
@@ -105,14 +141,26 @@ class AnsiStream(ANSI):
         next(self._parser)
 
     def feed(self, text: str) -> Iterator[tuple[str, str]]:
-        for char in text:
+        position = 0
+        while position < len(text):
+            char = text[position]
+            position += 1
             self._parser.send(char)
-            for style, value, *_ in self._formatted_text:
+            produced = [(style, value) for style, value, *_ in self._formatted_text]
+            self._formatted_text.clear()
+            if len(produced) == 1 and produced[0][1] == char and char not in "\x1b\x9b\x01\x02":
+                # The parser echoed the character, so it is in text mode: the
+                # stretch up to the next state character takes this style whole.
+                boundary = ANSI_STATE_CHARACTERS.search(text, position)
+                end = boundary.start() if boundary else len(text)
+                yield produced[0][0], text[position - 1:end]
+                position = end
+                continue
+            for style, value in produced:
                 # Transcript output is text, not a route for raw terminal
                 # control sequences to escape into the interactive footer.
                 if "[ZeroWidthEscape]" not in style:
                     yield style, value
-            self._formatted_text.clear()
 
 
 def compact_fragments(characters: StyleAndTextTuples) -> StyleAndTextTuples:
@@ -203,7 +251,7 @@ class WrappedTranscript:
             rendered, committed = stream.update(self.columns, final=final)
         for row in rendered:
             self._copy_records()[len(self.rows)] = len(self._copy_rows)
-            self._copy_rows.append(json.dumps([row.copy_text, row.positions], ensure_ascii=False))
+            self._copy_rows.append_bytes([pickle.dumps((row.copy_text, row.positions), PICKLE_PROTOCOL)])
             self._save(compact_fragments(row.fragments))
         self._markdown_tail = start + committed
         stream.dirty = False
@@ -214,6 +262,37 @@ class WrappedTranscript:
             self._markdown.close()
             self._markdown = None
 
+    def complete(self) -> None:
+        """Commit every row, exactly as the next block's first append would."""
+        self.finish_markdown()
+        if self.started:
+            self._settle(final=True)
+        self.started = False
+        self._preview = None
+
+    def prepend(self, other: WrappedTranscript) -> int:
+        """Place a completed flow's rows above this flow's; returns the rows added.
+
+        A post wraps the same wherever it sits, so earlier posts laid out on
+        their own join by shifting every row-indexed structure, never by
+        re-rendering. The unfinished tail of this flow is untouched.
+        """
+        other.complete()
+        count = len(other.rows)
+        if not count:
+            return 0
+        copies = len(other._copy_rows)
+        self.rows.prepend_from(other.rows)
+        self._copy_rows.prepend_from(other._copy_rows)
+        self._copy_records().prepend(other._copy_records(), count, copies)
+        self._cache = OrderedDict((index + count, row) for index, row in self._cache.items())
+        self.prompt_rows = other.prompt_rows + [(start + count, end + count) for start, end in self.prompt_rows]
+        # The earliest row carrying a link token wins, as it does when appending.
+        self._link_rows = {**{token: row + count for token, row in self._link_rows.items()}, **other._link_rows}
+        self._markdown_start += count
+        self._markdown_tail += count
+        return count
+
     def copy_row(self, index: int) -> DisplayRow:
         if index >= len(self.rows):
             self.content_rows()
@@ -222,7 +301,7 @@ class WrappedTranscript:
         fragments = self.get_row(index)
         record = self._copy_records().get(index)
         if record is not None:
-            text, positions = json.loads(self._copy_rows[record])
+            text, positions = pickle.loads(self._copy_rows.read_bytes(record))
             return DisplayRow(fragments, text, positions)
         return DisplayRow(fragments, "".join(item[1] for item in fragments) + "\n")
 
@@ -231,7 +310,7 @@ class WrappedTranscript:
             for token in style.split():
                 if token.startswith(FEED_LINK_PREFIXES):
                     self._link_rows.setdefault(token, len(self.rows))
-        self.rows.append(json.dumps(row, ensure_ascii=False))
+        self.rows.append_bytes([pickle.dumps(row, PICKLE_PROTOCOL)])
 
     def linked_rows(self) -> list[int]:
         """Locate feed actions without reading every row during traversal."""
@@ -328,7 +407,7 @@ class WrappedTranscript:
         for index, row in enumerate(rows[:count]):
             copied = self._raw_copy_row(rows, starts, index, newline=newline and index == count - 1)
             self._copy_records()[len(self.rows)] = len(self._copy_rows)
-            self._copy_rows.append(json.dumps([copied.copy_text, copied.positions], ensure_ascii=False))
+            self._copy_rows.append_bytes([pickle.dumps((copied.copy_text, copied.positions), PICKLE_PROTOCOL)])
             self._save(row)
         if count and self._prompt_line:
             self.prompt_rows[-1] = (self.prompt_rows[-1][0], len(self.rows))
@@ -376,26 +455,42 @@ class WrappedTranscript:
         received = 0
         for style, value in self._ansi.feed(text):
             style += extra_style
-            for char in value:
-                if char == "\n":
-                    if not self._pending and "bg:" + USER_BACKGROUND_COLOR in style.split():
-                        self._pending.append((style, ""))
-                    self._settle(final=True, newline=True)
-                    line_number += 1
-                    self._override_indent(indents.get(line_number))
-                elif char == "\t":
-                    column = self._consumed_width + display_width("".join(item[1] for item in self._pending))
-                    for _ in range(8 - column % 8):
-                        self._space(style)
-                elif char == " ":
-                    self._space(style)
-                else:
+            # Runs of ordinary characters are queued together; newlines, tabs
+            # and spaces still take their own path one at a time.
+            for piece in LAYOUT_RUNS.findall(value):
+                if piece[0] not in "\n\t ":
                     self._space_run = 0
-                    self._pending.append((style, char))
-                received += 1
-                if received >= interval:
-                    self._settle()
-                    received = 0
+                    if received + len(piece) < interval:
+                        self._pending.extend([(style, char) for char in piece])
+                        received += len(piece)
+                        continue
+                    position = 0
+                    while position < len(piece):
+                        take = min(len(piece) - position, interval - received)
+                        self._pending.extend([(style, char) for char in piece[position:position + take]])
+                        position += take
+                        received += take
+                        if received >= interval:
+                            self._settle()
+                            received = 0
+                    continue
+                for char in piece:
+                    if char == "\n":
+                        if not self._pending and "bg:" + USER_BACKGROUND_COLOR in style.split():
+                            self._pending.append((style, ""))
+                        self._settle(final=True, newline=True)
+                        line_number += 1
+                        self._override_indent(indents.get(line_number))
+                    elif char == "\t":
+                        column = self._consumed_width + display_width("".join(item[1] for item in self._pending))
+                        for _ in range(8 - column % 8):
+                            self._space(style)
+                    else:
+                        self._space(style)
+                    received += 1
+                    if received >= interval:
+                        self._settle()
+                        received = 0
 
     def _space(self, style: str) -> None:
         self._space_run += 1
@@ -418,8 +513,7 @@ class WrappedTranscript:
 
     def get_row(self, index: int) -> StyleAndTextTuples:
         if index not in self._cache:
-            row = json.loads(self.rows[index])
-            self._cache[index] = [(style, text) for style, text in row]
+            self._cache[index] = [(style, text) for style, text in pickle.loads(self.rows.read_bytes(index))]
             if len(self._cache) > self.CACHE_ROWS:
                 self._cache.popitem(last=False)
         self._cache.move_to_end(index)

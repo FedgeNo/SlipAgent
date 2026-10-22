@@ -67,6 +67,9 @@ class ExclusiveCommand(Command):
 
 
 class PresentationCommand(Command):
+    def background(self, argument: str) -> bool:
+        return True
+
     async def run(self, context: CommandContext, argument: str) -> bool | None:
         terminal = context.session.renderer.terminal
         if terminal is None:
@@ -133,8 +136,17 @@ class HelpCommand(Command):
         CommandHelp('/help [command]', 'show all help, or help for one command (with or without /)', '/help '),
     )
 
+    def background(self, argument: str) -> bool:
+        return True
+
     async def run(self, context: CommandContext, argument: str) -> bool | None:
-        print(command_help(argument), file=context.out, end="")
+        text = command_help(argument)
+        terminal = context.session.renderer.terminal
+        if terminal is None:
+            print(text, file=context.out, end="")
+        else:
+            # The viewer keeps help readable while streamed output continues.
+            terminal.open_viewer("Help", text)
         return None
 
 

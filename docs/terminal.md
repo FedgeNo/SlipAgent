@@ -430,6 +430,11 @@ arrives; reset, resume, and `/task new` replace the task instead of restarting
 the previous work. Slash commands are never sent to the model as user messages.
 
 The working indicator shows a moon-phase spinner beside `Working (esc to interrupt)`.
+While a model request runs, it names the current step and the seconds spent in it:
+`Sending request to <provider>`, `Pacing upload to the provider's token limit, about Ns left`
+or `Waiting for another upload to finish` for rate-limited providers, `Waiting for first output`,
+`Thinking` once reasoning text arrives, and `Receiving reply` once answer text arrives. A retry
+countdown or the silent-model countdown replaces the step while it shows.
 The spinner uses eight emoji frames of two terminal columns each and also appears
 in the terminal title. Press Escape outside a chooser to interrupt the active step immediately. It
 cancels model requests, active tools, background commands, and pending summaries;

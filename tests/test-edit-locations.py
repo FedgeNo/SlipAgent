@@ -1,5 +1,6 @@
 """Edit references identify changed lines in live and restored transcripts."""
 
+import asyncio
 import io
 
 import pytest
@@ -14,6 +15,15 @@ from slipagent.terminal import TerminalUI
 from slipagent.tools.base import ToolResult, current_invocation
 from slipagent.tools.files import EditFileTool
 from slipagent.types import Message, ToolCall
+
+
+async def laid_out(ui, width):
+    """The feed content once a restored feed has finished filling in."""
+    content = ui._transcript_content(width)
+    while ui.__dict__.get("_tail_from") is not None:
+        await asyncio.sleep(0.01)
+        content = ui._transcript_content(width)
+    return content
 
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
@@ -83,7 +93,7 @@ async def test_edit_links_use_completed_location(workspace, restored, artifacts,
                 renderer.handle(AgentEvent("tool_end", tool_call=call, step=1, result=result))
                 for reference in references:
                     renderer.handle(AgentEvent("artifact", result=ToolResult.ok(reference)))
-            content = ui._transcript_content(160)
+            content = await laid_out(ui, 160)
             rows = ["".join(text for _, text, *_ in content.get_line(y)) for y in range(content.line_count)]
             label = f"    source.txt:{line}" if numbered else "    source.txt"
             expected = label + (f"  View Diff — Record {references[0]['record_id']}" if artifacts else "")
@@ -143,7 +153,7 @@ async def test_edit_without_a_known_location_never_labels_line_one(workspace, re
             else:
                 renderer.handle(AgentEvent("tool_start", tool_call=call, step=1))
                 renderer.handle(AgentEvent("tool_end", tool_call=call, step=1, result=result))
-            content = ui._transcript_content(100)
+            content = await laid_out(ui, 100)
             rows = ["".join(text for _, text, *_ in content.get_line(y)) for y in range(content.line_count)]
             assert not any("source.txt:1" in row for row in rows)
             assert ("    source.txt" in rows) == (not failed)

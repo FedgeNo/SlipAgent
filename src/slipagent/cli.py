@@ -359,18 +359,28 @@ class Renderer:
         self._finish_stream()
         if self.terminal is not None:
             self.terminal.clear_transcript()
+            self.terminal.hold_layout("Loading conversation, this can take some time…")
         self._active_block = None
         self._model_block = object()
         self._last_output_blank = True
         self._tool_group = False
+        try:
+            await self._restore_records(messages, queued_messages or {})
+            for text in pending:
+                self.user_prompt(text, queued=True)
+        finally:
+            if self.terminal is not None:
+                # Show the newest output now; earlier blocks fill in above it, newest first.
+                self.terminal.show_tail_first()
+                self.terminal.scroll_to_end()
+
+    async def _restore_records(self, messages: list[Message], queued_messages: dict[int, str]) -> None:
         restored_step = 0
         restored_calls: dict[str, ToolCall] = {}
-        prompt_records: list[int] = []
+        yielded_at = time.monotonic()
         for index, message in enumerate(messages):
             if message.role == "user":
-                if self.terminal is not None:
-                    prompt_records.append(self.terminal.record_count())
-                self.user_prompt(message.content or "", queued=index in (queued_messages or {}))
+                self.user_prompt(message.content or "", queued=index in queued_messages)
             elif message.role == "assistant":
                 restored_step += 1
                 if message.reasoning:
@@ -414,15 +424,10 @@ class Renderer:
                 if isinstance(saved, dict):
                     for reference in saved.get("artifacts", []):
                         self.handle(AgentEvent(kind="artifact", result=ToolResult.ok(reference)))
-            if index % 100 == 99:
+            if time.monotonic() - yielded_at >= 0.02:
+                # Keep keys and redraws responsive while a long history is written.
                 await asyncio.sleep(0)
-        for text in pending:
-            self.user_prompt(text, queued=True)
-        if self.terminal is not None:
-            if len(prompt_records) > 2:
-                # Show the last two exchanges now; earlier ones lay out in the background.
-                self.terminal.show_tail_first(prompt_records[-2])
-            self.terminal.scroll_to_end()
+                yielded_at = time.monotonic()
 
     def _erase(self) -> None:
         if self.terminal is not None:
@@ -458,6 +463,11 @@ class Renderer:
         """True while a prompt drawn by this renderer is still the last thing on
         screen, meaning output must be written around it rather than over it."""
         return self._prompt is not None
+
+    def request_phase(self, text: str) -> None:
+        """Show what the running request is doing in the status line; empty text clears it."""
+        if self.terminal is not None:
+            self.terminal.set_phase(text)
 
     def first_output_wait(self, deadline: Any, *, skippable: bool) -> None:
         """Count down a silent request's deadline; Ctrl+N skips to the next model and Esc stays."""
@@ -803,6 +813,7 @@ class Launcher:
             resources.push_async_callback(close_selected_client)
             registry.services["first_output_wait"] = lambda deadline: renderer.first_output_wait(
                 deadline, skippable=session.model_routing().enabled)
+            registry.services["request_phase"] = renderer.request_phase
             session.configure_compaction()
             if defer_startup:
                 session.extensions["startup"] = lambda: self.initialize(session, config, announce=True)
@@ -1455,6 +1466,12 @@ class Repl:
                                 renderer.emit(style.dim("  exiting."))
                                 exiting = True
                                 reader = None
+                        elif (is_command and not session.work.deferred_commands
+                              and CommandRunner(session).runs_in_background(text)):
+                            # Commands that leave the run untouched apply at once.
+                            if renderer.terminal is not None:
+                                renderer.terminal.consume_submission(line)
+                            CommandRunner(session).start_background(text)
                         elif text and (is_command or session.work.deferred_commands):
                             CommandRunner(session).queue(text, text.split(None, 1)[0].lstrip("/") if is_command else "input")
                         elif text:
@@ -1872,7 +1889,9 @@ class CommandRunner:
         if pause and not session.agent.has_queued_input:
             session.agent.request_stop()
         if session.renderer.terminal is not None:
-            session.renderer.terminal.set_working(True, stopping=session.agent.stop_requested)
+            # A pause that resumes on its own to apply a command is not a stop.
+            pausing = session.renderer._queued_settings_pause
+            session.renderer.terminal.set_working(True, stopping=session.agent.stop_requested and not pausing, pausing=pausing)
         if session.renderer.terminal is None:
             session.renderer.emit(session.renderer.style.dim(
                 f"  Queued /{command}; it will run after earlier input and the current tool batch."
@@ -2913,6 +2932,7 @@ FIRST_RUN_PROVIDERS = (
     ("nvidia", "NVIDIA", "https://build.nvidia.com"),
     ("google", "Google Gemini", "https://aistudio.google.com/apikey"),
     ("mistral", "Mistral", "https://console.mistral.ai/api-keys"),
+    ("groq", "Groq", "https://console.groq.com/keys"),
     ("kilo", "Kilo", "https://kilo.ai"),
 )
 

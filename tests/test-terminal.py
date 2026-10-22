@@ -127,6 +127,15 @@ async def wait_until(predicate) -> None:
             await asyncio.sleep(.02)
 
 
+async def laid_out(ui, width):
+    """The feed content once a restored feed has finished filling in."""
+    content = ui._transcript_content(width)
+    while ui.__dict__.get("_tail_from") is not None:
+        await asyncio.sleep(.01)
+        content = ui._transcript_content(width)
+    return content
+
+
 async def render_after(ui, action, *, pipe=None):
     """Wait for a real draw after the action, including queued terminal input."""
     rendered = asyncio.Event()
@@ -1804,7 +1813,7 @@ async def test_tool_groups_keep_file_references_tight_after_restore(display, tmp
                     renderer.handle(AgentEvent("artifact", result=ToolResult.ok(reference)))
             if restored:
                 await renderer.restore_transcript(messages, [])
-            content = ui._transcript_content(100)
+            content = await laid_out(ui, 100)
             lines = ["".join(text for _, text, *_ in content.get_line(y)) for y in range(content.line_count)]
             first = next(index for index, line in enumerate(lines) if "⚙" in line)
             last = lines.index("    View Output — Record 2")
@@ -1915,7 +1924,7 @@ async def test_edit_diff_stays_in_viewer_and_follows_file_link(display, tmp_path
                 renderer.handle(AgentEvent("tool_start", tool_call=call, step=1))
                 renderer.handle(AgentEvent("tool_end", tool_call=call, step=1, result=ToolResult.ok(result)))
                 renderer.handle(AgentEvent("artifact", result=ToolResult.ok(reference)))
-            content = ui._transcript_content(100)
+            content = await laid_out(ui, 100)
             lines = ["".join(text for _, text, *_ in content.get_line(y)) for y in range(content.line_count)]
             expected = f"    written.txt:1  View Diff — Record {reference['record_id']}"
             assert expected in lines
@@ -2500,11 +2509,11 @@ def test_scrollback_reads_only_requested_rows_and_preserves_originals(display, m
         try:
             content = ui.transcript.content.create_content(100, 17)
             reads = []
-            original = TranscriptFile.__getitem__
+            original = TranscriptFile.read_bytes
             def measure(archive, index):
                 reads.append(index)
                 return original(archive, index)
-            monkeypatch.setattr(TranscriptFile, "__getitem__", measure)
+            monkeypatch.setattr(TranscriptFile, "read_bytes", measure)
             for index in [0, 500, 998, 0]:
                 assert content.get_line(index) == [("", f"row {index}")]
             assert len(reads) == 3
@@ -3457,6 +3466,8 @@ async def test_restored_transcript_replaces_output_and_scrolls_to_end(display):
             assert "\x1b[38;2;196;167;239m" in recorded
             assert "\x1b[38;2;255;146;155m" in recorded
             assert [message.to_api() for message in messages] == original
+            # Earlier exchanges are reachable once the background layout has joined the tail.
+            await wait_until(lambda: ui.__dict__.get("_tail_from") is None)
             ui._scroll_output(-1000)
             await wait_until(lambda: "Saved first answer" in "\n".join(snapshot()[:17]))
             assert snapshot()[0][:ui.main_area.width].rstrip() == "> Saved first task"
@@ -3483,6 +3494,10 @@ async def test_working_indicator_pulses_and_becomes_idle(display) -> None:
             await wait_until(lambda: snapshot()[17] != first)
             ui.set_working(True, stopping=True)
             await wait_until(lambda: "Stopping After This Step" in snapshot()[17])
+            # A queued command pauses the run to apply it, then work continues: that is not a stop.
+            ui.set_working(True, pausing=True)
+            await wait_until(lambda: "Applying Command After This Step" in snapshot()[17])
+            assert "Stopping" not in snapshot()[17]
             ui.set_working(False)
             await wait_until(lambda: "Ready" in snapshot()[17])
             ui.set_command_status("Applying /model (Esc to interrupt)")
@@ -4356,11 +4371,21 @@ async def test_esc_during_the_countdown_stays_on_the_model_and_the_next_esc_canc
             await task
 
 
-async def test_restored_transcript_shows_its_end_first_and_completes_in_background(display):
+async def test_restored_transcript_shows_its_end_first_and_completes_in_background(display, monkeypatch):
+    import re
+    import time
+    from slipagent.transcript import WrappedTranscript
     from slipagent.types import Message
-    sink, _, output, _, _ = display
+    sink, _, output, _, snapshot = display
+    complete = WrappedTranscript.complete
+
+    def slow_complete(flow):
+        # Each chunk takes long enough for the partially filled feed to be observed.
+        time.sleep(.1)
+        complete(flow)
+    monkeypatch.setattr(WrappedTranscript, "complete", slow_complete)
     messages = []
-    for turn in range(6):
+    for turn in range(40):
         messages += [Message.user(f"question {turn}"), Message(role="assistant", content=f"**Answer {turn}.**\n\n" + "word " * 400)]
 
     def rows(content):
@@ -4370,23 +4395,42 @@ async def test_restored_transcript_shows_its_end_first_and_completes_in_backgrou
         ui = TerminalUI(lambda columns: "status", sink, input=pipe, output=output)
         renderer = Renderer(Style(False), sink, verbose=False)
         renderer.terminal = ui
+        # The app runs during the restore, as it does on /resume, so redraws
+        # happen while records are still being written.
+        task = asyncio.create_task(ui.run())
         try:
+            ui.write("old\n")
+            await wait_until(lambda: ui._wrapped_columns > 0)
+            width = ui._wrapped_columns
             await renderer.restore_transcript(messages, [])
-            first = rows(ui._transcript_content(80))
+            layouts = ui._transcript_layouts
+            assert all(state.count == 0 for state in layouts.states.values())  # Nothing was laid out top-down.
             assert ui.__dict__.get("_tail_from") is not None
-            assert any("question 4" in row for row in first) and not any("question 0" in row for row in first)
-            for _ in range(1000):
-                if ui.__dict__.get("_tail_from") is None:
-                    break
-                await asyncio.sleep(0.01)
-                ui._transcript_content(80)
-            complete = rows(ui._transcript_content(80))
-            assert ui.__dict__.get("_tail_from") is None
-            assert any("question 0" in row for row in complete)
+            assert ui.status_line.notification == "Loading conversation, this can take some time…"
+            await wait_until(lambda: "word" in "\n".join(snapshot()))
+            ui._scroll_output(-1000)
+            # Only the newest chunks exist yet: the top of the feed is a recent post.
+            await wait_until(lambda: re.search(r"(> question|Answer) 3\d", snapshot()[0]) is not None)
+            assert not re.search(r"(> question|Answer) 0\b", "\n".join(snapshot()))
+            first = rows(ui._transcript_content(width))
+            async with asyncio.timeout(30):
+                while ui.__dict__.get("_tail_from") is not None:
+                    await asyncio.sleep(.02)
+            complete = rows(ui._transcript_content(width))
             assert complete[-len(first):] == first
-            ui.show_tail_first(0)
-            ui._end_tail_layout()
-            ui._wrapped_columns = 0
-            assert rows(ui._transcript_content(80)) == complete
+            assert ui.status_line.notification == ""
+            # Filling upward in chunks places every row where a top-down layout would.
+            sequential = WrappedTranscript(width, theme=ui._markdown_theme, source=ui._markdown_source)
+            try:
+                for index in range(ui.record_count()):
+                    ui._append_transcript_record(sequential, index)
+                filled = ui._transcript_layouts.states[width].flow
+                assert len(filled.rows) == len(sequential.rows) and not filled.content_rows()
+                assert [filled.get_row(i) for i in range(len(filled.rows))] == [sequential.get_row(i) for i in range(len(sequential.rows))]
+            finally:
+                sequential.close()
+            ui._scroll_output(-1000)
+            await wait_until(lambda: "> question 0" in "\n".join(snapshot()))
         finally:
             ui.close()
+            await task

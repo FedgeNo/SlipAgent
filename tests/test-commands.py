@@ -26,6 +26,11 @@ from slipagent.commands import command_help
     ("planning", "off", True, False),
     ("model", "", True, False),
     ("exit", "", False, False),
+    ("help", "", False, True),
+    ("help", "theme", False, True),
+    ("theme", "light", False, True),
+    ("markdown", "source", False, True),
+    ("copy", "", False, True),
 ])
 def test_command_routing_keeps_reads_available_and_changes_exclusive(command, argument, exclusive, background):
     assert CommandRunner(None).changes_session(command, argument) is exclusive

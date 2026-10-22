@@ -49,6 +49,25 @@ async def test_stopped_one_shot_returns_failure(monkeypatch):
     assert await cli.Launcher(argparse.Namespace()).run_one_shot(SimpleNamespace(agent=agent, renderer=renderer), "task") == 1
 
 
+async def test_queued_command_pause_is_labelled_a_pause_not_a_stop(tmp_path):
+    from types import SimpleNamespace
+    session, started, release = session_with_paused_request(tmp_path)
+    labels = []
+    task = asyncio.create_task(cli.Repl(session).run_request("go", session.renderer.style))
+    try:
+        await started.wait()
+        session.renderer.terminal = SimpleNamespace(set_working=lambda working, **flags: labels.append(flags))
+        # A queued setting halts the run only to apply it, then work continues.
+        cli.CommandRunner(session).queue("/model other", "model")
+        assert session.agent.stop_requested and labels[-1] == {"stopping": False, "pausing": True}
+    finally:
+        session.renderer.terminal = None
+        release.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await cli.Repl(session).shutdown()
+
+
 def session_with_paused_request(tmp_path):
     started, release = asyncio.Event(), asyncio.Event()
     class Client(StubClient):
@@ -66,7 +85,7 @@ def session_with_paused_request(tmp_path):
     return session, started, release
 
 
-async def test_slow_key_status_waits_for_batch_and_can_be_interrupted(tmp_path, monkeypatch):
+async def test_slow_key_status_runs_during_batch_and_run_can_be_interrupted(tmp_path, monkeypatch):
     session, started, release = session_with_paused_request(tmp_path)
     queue = asyncio.Queue()
     catalog_started = asyncio.Event()
@@ -81,17 +100,17 @@ async def test_slow_key_status_waits_for_batch_and_can_be_interrupted(tmp_path, 
     try:
         await started.wait()
         queue.put_nowait("/key status")
-        async with asyncio.timeout(.5):
-            while not session.agent.stop_requested:
-                await asyncio.sleep(.005)
-        assert not catalog_started.is_set()
-        release.set()
+        # A read-only command starts at once and leaves the paused request running.
         await asyncio.wait_for(catalog_started.wait(), 1)
+        assert not session.agent.stop_requested
+        command_task, = session.work.command_tasks
+        # Interrupting the paused run also cancels the slow command.
         cli.Repl(session).request_interrupt()
         await asyncio.wait_for(task, 1)
         await cli.Repl(session).wait_for_interrupt()
-        assert len(session.client.calls) == 1
+        assert session.client.calls == []
         assert session.agent.stopped
+        assert command_task.cancelled()
     finally:
         release.set()
         task.cancel()

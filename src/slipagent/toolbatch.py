@@ -37,6 +37,8 @@ class ToolBatch:
         journal = self.registry.resources.journal
         if journal is not None:
             journal.tool_started(self.step, tool_call.id)
+            # The marker and the messages before it must be durable before effects begin.
+            await journal.flush()
         self.emit(AgentEvent(kind="tool_start", step=self.step, tool_call=tool_call))
         invocation_token = current_invocation.set((self.step, tool_call.id))
         output_token = command_output.set(

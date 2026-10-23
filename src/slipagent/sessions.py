@@ -1,7 +1,9 @@
 """Private append-only session journals; resume never replays tools.
 
-Message deltas and tool-start markers are flushed before execution. A missing
-result means uncertainty, not permission to retry. Only a torn final line can
+Records reach the operating system when written. Message deltas and tool-start
+markers are also synced to disk before execution, off the event loop so a slow
+disk delays the agent rather than the interface. A missing result means
+uncertainty, not permission to retry. Only a torn final line can
 be ignored during recovery; malformed complete records reject the journal.
 """
 
@@ -27,6 +29,7 @@ from .context import ConversationHistory, CompletedStep
 from .config import data_directory
 from .api import APIError
 from .task import TaskMemory
+from .tools.blocking import run_blocking
 from .tools.output import CommandLog, OutputStream
 from .types import Message, Usage
 
@@ -84,6 +87,8 @@ class SessionJournal:
         self.state: dict[str, Any] | None = None
         self.step_count = 0
         self.failed = False
+        # Records written since the last sync to disk.
+        self._unsynced = False
         try:
             _private_directory(self.directory)
             metadata = self.directory / "project.json"
@@ -113,10 +118,34 @@ class SessionJournal:
                     while chunk := record.read(65536):
                         target.write(chunk)
                     target.flush()
-                    os.fsync(target.fileno())
+            self._unsynced = True
         except OSError as exc:
             self.failed = True
             raise SessionError(f"Could not save session {self.session_id}: {exc}. Inspect its journal before resuming.") from exc
+
+    def _sync(self) -> None:
+        # Syncing any descriptor of the file covers every earlier write to it.
+        try:
+            descriptor = os.open(self.path, os.O_RDONLY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        except OSError as exc:
+            self.failed = True
+            raise SessionError(f"Could not save session {self.session_id}: {exc}. Inspect its journal before resuming.") from exc
+
+    async def flush(self) -> None:
+        """Wait until every record written so far is on disk, without blocking the event loop."""
+        if self.path is None or self.failed:
+            raise SessionError("Session journal is unavailable; no further actions can be recorded.")
+        if self._unsynced:
+            self._unsynced = False
+            try:
+                await run_blocking(self._sync)
+            except BaseException:
+                self._unsynced = True
+                raise
 
     @property
     def title(self) -> str:

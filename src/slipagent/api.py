@@ -382,7 +382,7 @@ class APIClient:
                 if deadline is None or not first_output.expired():
                     raise
                 error = (APIOutputSkipped("Skipped by the user before any model output.") if deadline.skipped else
-                         APIResponseError(f"No model output within {first_output_timeout:g} seconds from request start."))
+                         APIResponseError(f"No output within {first_output_timeout:g}s of request"))
                 if state is not None:
                     state.attach_diagnostics(error)
                 raise error from exc

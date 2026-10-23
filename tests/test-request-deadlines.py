@@ -107,7 +107,7 @@ async def test_silent_request_deadline_cancels_and_falls_back(tmp_path, monkeypa
                 assert calls == ['first', 'second']
                 assert 'Optimal fallback' in session.renderer.stream.getvalue()
             else:
-                with pytest.raises(APIResponseError, match='120 seconds'):
+                with pytest.raises(APIResponseError, match='120s of request'):
                     await asyncio.wait_for(task, 1)
                 assert calls == ['first']
                 assert session.agent.model == 'first'
@@ -115,8 +115,8 @@ async def test_silent_request_deadline_cancels_and_falls_back(tmp_path, monkeypa
             assert closed.is_set()
             first = diagnostics.listing()[0]
             assert first['outcome'] == 'request_error'
-            assert '120 seconds' in first['detail']
-            assert '120 seconds' in session.agent.history.steps[0].request_failure['error']
+            assert '120s of request' in first['detail']
+            assert '120s of request' in session.agent.history.steps[0].request_failure['error']
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
@@ -167,7 +167,7 @@ async def test_rate_limit_retries_do_not_extend_startup_deadline(advance):
         return httpx.Response(429, headers={'retry-after': '0'}, json={'error': {'message': 'Resource exhausted'}})
 
     async with OpenRouterClient('dummy', transport=httpx.MockTransport(handle)) as client:
-        with pytest.raises(APIResponseError, match='No model output within 120 seconds'):
+        with pytest.raises(APIResponseError, match='No output within 120s of request'):
             await client.chat(model='test', messages=[Message.user('work')],
                               on_delta=lambda *args: None, first_output_timeout=120)
     assert calls == 3

@@ -22,12 +22,14 @@ MODEL_LIMITS: dict[str, tuple[int, int | None]] = {
     "google/diffusiongemma-26b-a4b-it": (250_000, 32_768),
     "poolside/laguna-xs-2.1": (262_144, 16_384),
     "openai/gpt-oss-20b": (128_000, 4_096),
+    # NVIDIA documents only MiniMax M3; the Flash limits are OpenRouter's listing.
+    "minimaxai/minimax-m3.1-flash": (1_048_576, 524_288),
 }
 
 NATIVE_TOOLS = {
     "stepfun-ai/step-5-preview", "moonshotai/kimi-k2.6", "meta/muse-glimmer-30b",
     "nvidia/nemotron-3.5-super-vl-120b-a12b", "nvidia/nemotron-3-ultra-550b-a55b",
-    "openai/gpt-oss-20b",
+    "openai/gpt-oss-20b", "minimaxai/minimax-m3.1-flash",
 }
 
 # These hosted schemas accept user/assistant messages with embedded tool calls.

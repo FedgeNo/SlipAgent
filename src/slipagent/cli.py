@@ -500,7 +500,7 @@ class Renderer:
                 # Ordinary responses start within seconds; only a long silence is shown.
                 if remaining is not None and time.monotonic() - started >= FIRST_OUTPUT_NOTICE_SECONDS:
                     action = "next model" if skippable else "timeout"
-                    terminal.set_retry_status(f"No model output yet; {math.ceil(remaining)}s until {action}",
+                    terminal.set_retry_status(f"No output yet; {math.ceil(remaining)}s until {action}",
                                               spinning=True)
                     # Esc keeps this model only while the countdown offers it.
                     if terminal.__dict__.get("_hold_callback") is None and not getattr(deadline, "held", False):

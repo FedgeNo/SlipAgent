@@ -4324,7 +4324,7 @@ async def test_silent_request_shows_deadline_and_ctrl_n_skips(display, monkeypat
             renderer.first_output_wait(deadline, skippable=True)
             await wait_until(lambda: any("88s until next model" in line for line in snapshot()))
             from slipagent.statusline import PULSE_FRAMES
-            assert any(f"{frame} No model output yet" in line for line in snapshot() for frame in PULSE_FRAMES)
+            assert any(f"{frame} No output yet" in line for line in snapshot() for frame in PULSE_FRAMES)
             assert ui.status_line.notification == cli.SKIP_NOTICE
             await send_keys(ui, pipe, "\x0e")
             assert skipped == [True]

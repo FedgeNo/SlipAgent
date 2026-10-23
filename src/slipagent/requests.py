@@ -118,12 +118,13 @@ class RequestDriver:
                         self.hooks.emit(AgentEvent(kind="warning", text=f"Request diagnostics: {diagnostics.error}"))
                     elif not diagnostics.error:
                         self.registry.context_notes.pop("request_diagnostics", None)
-            def record_failure(outcome: str, detail: str, response: str, usage: Usage) -> None:
+            def record_failure(outcome: str, detail: str, response: str, usage: Usage,
+                               partial: tuple[str, str] | None = None) -> None:
                 nonlocal step, run_step, step_usage, start_next_step
                 recorder = self.registry.services["request_failure_recorder"]
                 step = recorder({"outcome": outcome, "error": detail,
                                  "response_excerpt": response[:16000],
-                                 "diagnostic_attempt": diagnostic_id}, usage)
+                                 "diagnostic_attempt": diagnostic_id}, usage, partial)
                 run_step += 1
                 step_usage = Usage()
                 start_next_step = True
@@ -237,7 +238,8 @@ class RequestDriver:
                 end_preview(failed=True)
                 # A skip is the user's routing choice, not model behavior to learn from.
                 if not isinstance(exc, APIOutputSkipped):
-                    record_failure("request_error", str(exc), exc.partial_response or exc.body or "", exc.usage)
+                    record_failure("request_error", str(exc), exc.partial_response or exc.body or "", exc.usage,
+                                   (preview.text, exc.partial_reasoning))
                 if self.hooks.stop_requested():
                     return RequestStopped(self.hooks.stop_notice(step))
                 transient = isinstance(exc, APITransportError) or exc.status_code in RETRYABLE_STATUS

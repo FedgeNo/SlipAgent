@@ -8,6 +8,8 @@ Successful `--model` and `/model` selections remember the provider and its model
 
 Add a `"blacklist"` list to `preferences.json` to hide models from model listings and optimal selection on this machine only. A bare ID such as `"google/deplot"` hides the model on every provider; a selector such as `"nvidia::deepseek-ai/deepseek-v4.1-flash"` hides it on that provider alone. These entries add to the built-in list, and a malformed `"blacklist"` is reported at startup. Remembered model choices keep the list intact.
 
+Add `"contextTokens"` to `preferences.json` to cap working context by default, as a number or a string such as `"300k"` or `"1.5M"` (at least 4096). `--context-tokens` overrides it, `/context` changes it for the session and resume restores it, and the model's own limit always applies.
+
 The selected provider requires its own API key. In addition to `.env`,
 you can supply it through the process environment:
 

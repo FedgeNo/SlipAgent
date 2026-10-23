@@ -1,6 +1,7 @@
 """Failed model calls are numbered, durable turns rather than invisible retries."""
 
 import asyncio
+import io
 import json
 
 import httpx
@@ -12,7 +13,7 @@ from slipagent.api import APITransportError
 from slipagent.capabilities import ModelCapabilities
 from slipagent.context import ContextError, message_tokens
 from slipagent.openrouter import OpenRouterClient, RetryPolicy
-from slipagent.requestfailures import retry_state
+from slipagent.requestfailures import failed_steps, retry_state
 from slipagent.sessions import SessionJournal
 from slipagent.tools.base import ToolRegistry
 from slipagent.types import Message, content_text, decode_json_content
@@ -47,12 +48,15 @@ async def test_provider_error_turn_reaches_model_before_it_decides_whether_to_re
             return httpx.Response(200, json=summary)
         requests.append(body)
         if len(requests) == 1:
-            return response(packet({"content": "Writing now."}), packet({"tool_calls": [{
-                "index": 0, "id": "write", "function": {"name": "record", "arguments": '{"value":'},
-            }]}), packet(finish="error"))
+            return response(packet({"reasoning": "Checking the write format. "}), packet({"content": "Writing now."}),
+                            packet({"tool_calls": [{
+                                "index": 0, "id": "write", "function": {"name": "record", "arguments": '{"value":'},
+                            }]}), packet(finish="error"))
         payload = request_input(body["messages"])
         failed = payload["history"][-1]
-        assert failed["step_id"] == 1 and failed["agent_response"] is None
+        assert failed["step_id"] == 1 and failed["incomplete"] is True
+        assert failed["agent_response"] == "Writing now."
+        assert failed["reasoning"] == "Checking the write format. "
         assert failed["tool_calls"] == []
         failure = failed["request_failure"]
         assert failure["outcome"] == "request_error" and failure["tools_executed"] is False
@@ -76,9 +80,12 @@ async def test_provider_error_turn_reaches_model_before_it_decides_whether_to_re
         loaded = journal.load(journal.session_id)
         assert loaded["history"].steps[0].request_failure == agent.history.steps[0].request_failure
         assert loaded["history"].steps[0].record()["request_failure"]["consecutive_failures"] == 1
+        assert loaded["history"].steps[0].record()["response"] == "Writing now."
+        assert loaded["history"].steps[0].record()["reasoning"] == "Checking the write format. "
         original = decode_json_content((await agent.registry.invoke("recall_history", {"step_id": 1})).content)
         assert original["content"]["request_failure"]["tools_executed"] is False
-        assert original["content"]["response"] is None
+        assert original["content"]["response"] == "Writing now."
+        assert original["content"]["incomplete"] is True
         await agent.registry.aclose()
     assert len(requests) == 2
 
@@ -145,6 +152,44 @@ async def test_rejected_tool_arguments_become_failed_turns_without_executing_the
         assert len(agent.history.steps) == 3 and not tool.seen
         assert all(step.request_failure["outcome"] == "rejected" for step in agent.history.steps)
         assert all(not step.tool_calls for step in agent.history.steps)
+        record = agent.history.steps[0].context_messages()[0].content
+        assert "incomplete" not in record and record["agent_response"] is None
+        assert "kept as an incomplete turn" not in agent.history.steps[0].summary
+        await agent.registry.aclose()
+
+
+async def test_reasoning_from_a_dropped_stream_survives_a_journal_crash_and_replays_with_its_failure(tmp_path):
+    from slipagent.cli import Renderer, Style
+
+    def handle(_):
+        return response(packet({"reasoning": "Step 1: expand the product. "}), packet(finish="error"))
+    async with client_for(handle, retries=0) as client:
+        agent = Agent(client, ToolRegistry(), "test")
+        journal = SessionJournal(str(tmp_path), directory=tmp_path / "state")
+        agent.registry.resources.journal = journal
+        with pytest.raises(APITransportError):
+            await agent.run("Prove it")
+        failed = agent.messages[-1]
+        assert failed.content is None and failed.reasoning == "Step 1: expand the product. "
+        assert failed.reasoning_model == "test"
+        assert "kept as an incomplete turn" in agent.history.steps[0].summary
+        # Drop every line after the failed reply, as a crash would.
+        lines = journal.path.read_text().splitlines(keepends=True)
+        cut = next(index for index, line in enumerate(lines)
+                   if json.loads(line).get("message", {}).get("reasoning") == failed.reasoning)
+        assert json.loads(lines[cut])["request_failure"]["id"] == 1
+        journal.path.write_text("".join(lines[:cut + 1]))
+        data = journal.load(journal.session_id)
+        restored = Agent(client, ToolRegistry(), "test")
+        journal.restore(restored, data, fork=True)
+        record = restored.history.steps[0].context_messages()[0].content
+        assert record["incomplete"] is True and record["request_failure"]["outcome"] == "request_error"
+        output = io.StringIO()
+        renderer = Renderer(Style(False), output, False)
+        await renderer.restore_transcript(restored.messages, [], failures=failed_steps(restored.history.steps))
+        shown = output.getvalue()
+        assert shown.index("Step 1: expand the product.") < shown.index("Harness-recorded failed model request")
+        await restored.registry.aclose()
         await agent.registry.aclose()
 
 

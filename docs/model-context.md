@@ -231,10 +231,13 @@ Authentication, credit, and permanent request failures remain errors.
 
 Every failed working request is preserved as a numbered history turn, including
 provider/transport errors, explicit context overflows, rejected responses,
-repetition stops and cancellations. Its `request_failure` record preserves the
-error, a bounded rejected/partial-response excerpt, the diagnostic attempt number,
-and consecutive/session failure counts. It explicitly marks that no tools from
-the attempt executed. Failures receive a deterministic summary rather than an
+repetition stops and cancellations. When a stream is interrupted, the turn keeps
+the partial reply text and reasoning the same way a completed step keeps them,
+and carries `incomplete=true` so the model reads it as unfinished. Its
+`request_failure` record preserves the error, a bounded rejected/partial-response
+excerpt, the diagnostic attempt number, and consecutive/session failure counts.
+It explicitly marks that no tools from the attempt executed; partial tool calls
+are never kept. Failures receive a deterministic summary rather than an
 extra model call. Full excerpts remain retrievable through `recall_history`.
 Retry requests rebuild their context with those failed turns and `request_retry`
 metadata identifying the failure count and turn IDs. Guidance tells the model
@@ -332,7 +335,7 @@ remain available unless the session itself is deleted.
 Each working request identifies the source step of the active requests in system guidance; their exact text belongs in the structured user-input object. Steps after tool batches explicitly explain that control returned automatically without a new user instruction: assess results against that goal and return an answer without tools when it is fulfilled. This guidance is assembled for the outgoing request only; it is not saved in conversation history or background summaries. Historical requests provide background rather than independently requesting more work.
 
 **History is sent in full until it would exceed the context budget.** The budget
-is 85% of the model's context allowance, subject to `--context-tokens`, after
+is 85% of the model's context allowance, subject to `--context-tokens` or `/context`, after
 reserving instructions, tools, output and the current input. Sizes are estimated
 from the bytes of each record and scaled by measured calibration.
 

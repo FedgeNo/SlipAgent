@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from .context import ConversationHistory, CompletedStep
-from .config import data_directory
+from .config import MIN_CONTEXT_TOKENS, data_directory
 from .api import APIError
 from .task import TaskMemory
 from .tools.blocking import run_blocking
@@ -260,20 +260,32 @@ class SessionJournal:
             if self.cursor and system != self.system:
                 self._append("replace", index=0, message=system)
             self.system = copy.deepcopy(system)
+        # A failed turn's record shares its message's line, so a crash between
+        # lines cannot restore a partial reply as an accepted one.
+        failed = {id(step.messages[-1]): step for step in agent.history.steps[self.step_count:]
+                  if getattr(step, "request_failure", None) is not None}
         for message in agent.messages[self.cursor:]:
-            self._append("message", message=self._message(message))
+            step = failed.pop(id(message), None)
+            if step is None:
+                self._append("message", message=self._message(message))
+            else:
+                self._append("message", message=self._message(message),
+                             request_failure={"id": step.id, "failure": step.request_failure})
             self.cursor += 1
         self.last_message = copy.deepcopy(self._message(agent.messages[-1])) if agent.messages else None
         state = {"task_start": agent.history.task.start_message,
                  "usage": asdict(agent.usage), "pending": list(agent.pending),
                  "queued_message_indices": list(agent.queued_messages),
                  "model": agent.model, "temperature": agent.temperature,
+                 "context_tokens": agent.context_tokens,
                  "user_edits": agent.registry.context_notes.get("user_edits", {})}
         if state != self.state:
             self._append("state", **state)
             self.state = copy.deepcopy(state)
         for step in agent.history.steps[self.step_count:]:
             self.step(step)
+        for step in failed.values():
+            self._append("request_failure", id=step.id, failure=step.request_failure)
         self.step_count = len(agent.history.steps)
 
     def discard_input(self, agent: Agent, index: int | None, pending_index: int | None) -> None:
@@ -295,9 +307,6 @@ class SessionJournal:
                      compaction_status=getattr(step, "compaction_status", "pending"),
                      compaction_error=getattr(step, "compaction_error", None),
                      user_edits=getattr(step, "user_edits", None))
-        failure = getattr(step, "request_failure", None)
-        if failure is not None:
-            self._append("request_failure", id=step.id, failure=failure)
         if (getattr(step, "historical_summary", None) is not None or getattr(step, "history_merge_attempt", 0) > 0
                 or getattr(step, "era_summary", None) is not None or getattr(step, "era_attempt", 0) > 0):
             self._append("history_merge", id=step.id,
@@ -388,6 +397,9 @@ class SessionJournal:
                         data["title"] = self._saved_title(selected, event)
                     elif kind == "message":
                         data["messages"].append(event["message"])
+                        if "request_failure" in event:
+                            marker = event["request_failure"]
+                            data.setdefault("request_failures", {})[marker["id"]] = marker["failure"]
                     elif kind == "replace":
                         if type(event["index"]) is not int or not 0 <= event["index"] < len(data["messages"]):
                             raise ValueError("invalid message replacement")
@@ -432,6 +444,9 @@ class SessionJournal:
                     or data["messages"][index].role != "user" for index in queued)
                     or queued != sorted(set(queued))):
                 raise ValueError("invalid queued message indices")
+            cap = state.get("context_tokens")
+            if cap is not None and (type(cap) is not int or cap < MIN_CONTEXT_TOKENS):
+                raise ValueError("invalid context cap")
             usage = state["usage"]
             if not isinstance(usage, dict) or any(type(usage.get(name)) is not int or usage[name] < 0 for name in ("prompt_tokens", "completion_tokens", "total_tokens")):
                 raise ValueError("invalid token accounting")
@@ -580,6 +595,9 @@ class SessionJournal:
         agent.history._request = loaded._request
         agent.history.task = loaded.task
         agent.pending = list(data["state"]["pending"])
+        # Journals from before the cap existed keep this launch's setting.
+        if "context_tokens" in data["state"]:
+            agent.context_tokens = data["state"]["context_tokens"]
         if data["state"].get("user_edits"):
             agent.registry.context_notes["user_edits"] = data["state"]["user_edits"]
         agent.queued_messages.update({index: messages[index].content or ""

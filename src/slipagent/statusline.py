@@ -100,7 +100,7 @@ class StatusLine:
         if self.phase and not stopping and not pausing:
             elapsed = int(time.monotonic() - self.phase_since)
             label = (f"{self.phase} ({elapsed}s)" if concise
-                     else f"Working: {self.phase} ({elapsed}s, esc to interrupt)")
+                     else f"{self.phase} ({elapsed}s, esc to interrupt)")
         return "class:pulse", f"{frame} {label}", False
 
     def marquee(self, fragments: StyleAndTextTuples, columns: int, key: str) -> StyleAndTextTuples:

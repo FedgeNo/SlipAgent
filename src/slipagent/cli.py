@@ -34,7 +34,7 @@ from typing import Any, TextIO, cast
 
 from .agent import Agent, AgentEvent, STEP_LIMIT_NOTICE, STOP_NOTICE, build_system_prompt
 from .automation import JsonEventStream
-from .config import (Config, ConfigError, configured_provider, dotenv_path, dotenv_values, environment_source,
+from .config import (Config, ConfigError, configured_provider, context_tokens_preference, dotenv_path, dotenv_values, environment_source,
                      forget_environment, hide_from_commands, remove_dotenv_value, save_dotenv_value, save_model_choice)
 from .instructions import load_project_instructions
 from .lifecycle import finish_cleanup
@@ -63,6 +63,7 @@ from .palette import ERROR_COLOR, MUTED_COLOR, THOUGHT_COLOR, USER_BACKGROUND_CO
 from .runtime import CORE_MODULES, RuntimeFrame
 from . import plugins
 from .repomap import RepositoryMap
+from .requestfailures import failed_steps, failure_summary
 from .tools.blocking import run_blocking
 from .sessionstate import Session as Session
 from .sessions import SessionJournal, SessionError, session_title
@@ -354,7 +355,8 @@ class Renderer:
         self._prompt = None
 
     async def restore_transcript(self, messages: list[Message], pending: list[str], *,
-                                 queued_messages: dict[int, str] | None = None) -> None:
+                                 queued_messages: dict[int, str] | None = None,
+                                 failures: dict[int, dict[str, Any]] | None = None) -> None:
         """Display archived originals only; never dispatch their tools or requests."""
         self._finish_stream()
         if self.terminal is not None:
@@ -365,7 +367,7 @@ class Renderer:
         self._last_output_blank = True
         self._tool_group = False
         try:
-            await self._restore_records(messages, queued_messages or {})
+            await self._restore_records(messages, queued_messages or {}, failures or {})
             for text in pending:
                 self.user_prompt(text, queued=True)
         finally:
@@ -374,7 +376,8 @@ class Renderer:
                 self.terminal.show_tail_first()
                 self.terminal.scroll_to_end()
 
-    async def _restore_records(self, messages: list[Message], queued_messages: dict[int, str]) -> None:
+    async def _restore_records(self, messages: list[Message], queued_messages: dict[int, str],
+                               failures: dict[int, dict[str, Any]]) -> None:
         restored_step = 0
         restored_calls: dict[str, ToolCall] = {}
         yielded_at = time.monotonic()
@@ -388,6 +391,9 @@ class Renderer:
                     self._finish_stream()
                 if message.content:
                     self.handle(AgentEvent(kind="assistant_text", text=message.content))
+                if restored_step in failures:
+                    # Shown after any partial reply, so it never reads as an accepted answer.
+                    self.handle(AgentEvent(kind="warning", text=failure_summary(failures[restored_step])))
                 for call in message.tool_calls or []:
                     restored_calls[call.id] = call
                     self.handle(AgentEvent(kind="tool_start", tool_call=call, step=restored_step))
@@ -779,7 +785,7 @@ class Launcher:
                 context_steps=config.context_steps,
                 overthinking=config.overthinking,
                 planning=getattr(args, "planning", True),
-                context_tokens=getattr(args, "context_tokens", None),
+                context_tokens=getattr(args, "context_tokens", None) or context_tokens_preference(),
                 reasoning_history_steps=getattr(args, "reasoning_history_steps", 25),
                 filtered_thoughts=not getattr(args, "raw_reasoning_history", False),
                 exposed_tools=tuple(args.tools.split(',')) if getattr(args, "tools", None) else None,
@@ -1220,7 +1226,8 @@ class Repl:
                 await PluginMenu(session, style, _RendererStream(renderer)).offer()
             if session.extensions.pop("restore_transcript", False):
                 await renderer.restore_transcript(session.agent.messages, session.agent.pending,
-                                                  queued_messages=session.agent.queued_messages)
+                                                  queued_messages=session.agent.queued_messages,
+                                                  failures=failed_steps(session.agent.history.steps))
             quota_task = asyncio.create_task(Quota(session).poll())
             reload_task = asyncio.create_task(session.reloader.watch()) if session.reloader is not None else None
             while True:

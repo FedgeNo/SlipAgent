@@ -8,6 +8,9 @@ if TYPE_CHECKING:
     from .context import HistoryStep
 
 FAILURE_OUTCOMES = {"request_error", "context_overflow", "rejected", "loop_stopped", "cancelled"}
+# The stream stopped before the reply finished, and its partial reply and
+# reasoning are kept. Rejected and looping replies did finish.
+INCOMPLETE_OUTCOMES = {"request_error"}
 
 
 def retry_state(steps: list[HistoryStep]) -> dict[str, Any] | None:
@@ -41,10 +44,21 @@ def validate_failure(value: Any) -> None:
         raise ValueError("invalid failed request diagnostic reference")
 
 
+def is_incomplete(failure: dict[str, Any]) -> bool:
+    return failure["outcome"] in INCOMPLETE_OUTCOMES
+
+
 def failure_summary(failure: dict[str, Any]) -> str:
     error: str = failure["error"]
     return (f"Harness-recorded failed model request: {failure['outcome']}. "
             + error[:2000] + ("…" if len(error) > 2000 else "")
             + f" Consecutive failures: {failure['consecutive_failures']}; "
             + f"session failed attempts: {failure['total_failed_attempts']}. "
-            + "No tools from this attempt executed. The partial response was not accepted.")
+            + "No tools from this attempt executed. "
+            + ("The partial response is kept as an incomplete turn and was not accepted." if is_incomplete(failure)
+               else "The partial response was not accepted."))
+
+
+def failed_steps(steps: list[HistoryStep]) -> dict[int, dict[str, Any]]:
+    """Each failed turn's record by step ID."""
+    return {step.id: failure for step in steps if (failure := getattr(step, "request_failure", None)) is not None}

@@ -39,6 +39,7 @@ from .types import Message, ToolCall, ToolSpec, content_text
 from .protocol import COMPRESSED_FIELDS, ResponseRecord, response_format
 from .task import TaskMemory
 from .records import linked_tool_results, record_message, step_record
+from .requestfailures import is_incomplete
 from .data_text import JSONInput, MessageSections, render_data
 from .sources import FileText, materialize
 
@@ -355,7 +356,9 @@ class CompletedStep(HistoryStep):
                 "tool_results": [{"call_id": result.tool_call_id, "content": result.content} for result in self.tool_results]}
         failure = getattr(self, "request_failure", None)
         if failure is not None:
-            parts.update(response=None, request_failure=failure)
+            parts.update(request_failure=failure, response=self.agent_response or None)
+            if is_incomplete(failure):
+                parts["incomplete"] = True
         if getattr(self, "user_edits", None):
             parts["user_edits"] = self.user_edits
         return parts
@@ -387,7 +390,7 @@ class CompletedStep(HistoryStep):
                 return [record_message(dict(self._disk_summary["model"]))]
             record: dict[str, Any] = {"record_type": "history_step", "representation": "compressed",
                       "step_id": self.id, "compressed_summary": self.compressed_text()}
-            for name in ("artifacts", "user_edits", "request_failure"):
+            for name in ("artifacts", "user_edits", "request_failure", "incomplete"):
                 if name in original:
                     record[name] = original[name]
             if "user_edits" in record:
@@ -411,8 +414,8 @@ class CompletedStep(HistoryStep):
             record = dict(part[0].content)
             record["request_failure"] = ({key: value for key, value in failure.items() if key != "response_excerpt"}
                                          if compressed else failure)
-            if not compressed:
-                record["agent_response"] = None
+            if is_incomplete(failure):
+                record["incomplete"] = True
             return [record_message(record)]
         return part
 
@@ -426,6 +429,8 @@ class CompletedStep(HistoryStep):
         failure = getattr(self, "request_failure", None)
         if failure is not None:
             metadata["request_failure"] = {key: value for key, value in failure.items() if key != "response_excerpt"}
+            if is_incomplete(failure):
+                metadata["incomplete"] = True
         overhead = message_tokens([record_message(metadata)]) if metadata else 0
         part = super().excerpt_context_messages(budget - overhead)
         if part is not None and metadata:

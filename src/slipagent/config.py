@@ -132,6 +132,34 @@ def _read_preferences() -> dict[str, object]:
     return value
 
 
+_COUNT_SUFFIXES = {"k": 1_000, "m": 1_000_000}
+MIN_CONTEXT_TOKENS = 4096
+
+
+def parse_token_count(text: str) -> int:
+    """A token count such as 300000, 300k, 1.5M or 1m."""
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)([km]?)", text.strip(), re.IGNORECASE)
+    if match is None:
+        raise ValueError(f"{text.strip()!r} is not a token count such as 300000, 300k or 1.5M")
+    return round(float(match[1]) * _COUNT_SUFFIXES.get(match[2].lower(), 1))
+
+
+def context_tokens_preference() -> int | None:
+    """The working-context cap saved in preferences, or None; the model's limit still applies."""
+    value = _read_preferences().get("contextTokens")
+    if value is None:
+        return None
+    try:
+        if type(value) is not int and type(value) is not str:
+            raise ValueError("expected a number or a string such as \"300k\"")
+        count = parse_token_count(str(value))
+        if count < MIN_CONTEXT_TOKENS:
+            raise ValueError(f"must be at least {MIN_CONTEXT_TOKENS}")
+    except ValueError as exc:
+        raise ConfigError(f'invalid "contextTokens" in {_preferences_path()}: {exc}') from exc
+    return count
+
+
 def user_blacklist() -> frozenset[str]:
     """Models the user hid in preferences: a bare ID on every provider, or provider::id on one."""
     return frozenset(str(entry).strip() for entry in _read_preferences().get("blacklist", []))

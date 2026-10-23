@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from .markdown import THEMES, literal
 from .mcp import MCPError, ServerSpec, config_path, load_servers
 from .sessions import SessionError, session_title
+from .requestfailures import failed_steps
 from .checkpoints import CheckpointError
 from .task import TaskMemory
 from .prompts import load_prompt
@@ -577,6 +578,54 @@ class TemperatureCommand(Command):
         return None
 
 
+class ContextCommand(Command):
+    name = 'context'
+    banner = '/context [tokens|reset]'
+    help = (
+        CommandHelp('/context', 'show the working-context cap and the selected model\'s limit', '/context'),
+        CommandHelp('/context <tokens>', 'cap working context, such as 300k or 1.5M; the model\'s limit still applies (queues while working)', '/context '),
+        CommandHelp('/context reset', 'clear the cap so the model\'s own limit applies (also /context default or off; queues while working)', '/context reset'),
+    )
+
+    def changes_session(self, argument: str) -> bool:
+        return bool(argument)
+
+    def background(self, argument: str) -> bool:
+        return not argument
+
+    async def run(self, context: CommandContext, argument: str) -> bool | None:
+        from .api import APIError
+        from .config import MIN_CONTEXT_TOKENS, parse_token_count
+        session, style, out = context.session, context.style, context.out
+        agent = session.agent
+        if argument.lower() in {"reset", "default", "off"}:
+            agent.context_tokens = None
+        elif argument:
+            try:
+                count = parse_token_count(argument)
+                if count < MIN_CONTEXT_TOKENS:
+                    raise ValueError(f"the cap must be at least {MIN_CONTEXT_TOKENS:,} tokens")
+            except ValueError as exc:
+                print(style.red(f"  {exc}"), file=out)
+                return None
+            agent.context_tokens = count
+        if argument:
+            # The cap belongs to the session, so save it with the journal now.
+            agent._persist()
+        try:
+            limit = await agent._context_length()
+        except APIError:
+            limit = None
+        cap = agent.context_tokens
+        if cap is None:
+            print("  context cap: none" + (f"; the model's limit is {limit:,} tokens" if limit else ""), file=out)
+        elif limit and cap >= limit:
+            print(f"  context cap: {cap:,} tokens, above the model's limit of {limit:,}; the model's limit applies", file=out)
+        else:
+            print(f"  context cap: {cap:,} tokens" + (f" (the model's limit is {limit:,})" if limit else ""), file=out)
+        return None
+
+
 class KeyCommand(Command):
     name = 'key'
     banner = '/key [list|show|delete <provider>|[provider] key]'
@@ -910,7 +959,8 @@ class ResumeCommand(StoredSessionCommand):
                 await jobs.stop_all()
             journal.restore(session.agent, data)
             await session.renderer.restore_transcript(session.agent.messages, session.agent.pending,
-                                                      queued_messages=session.agent.queued_messages)
+                                                      queued_messages=session.agent.queued_messages,
+                                                      failures=failed_steps(session.agent.history.steps))
             print(f"  Restored {journal.session_id}; no tools were replayed. Type a task or continue when ready.", file=out)
         except SessionError as exc:
             print(style.red(f"  {exc}"), file=out)
@@ -1309,6 +1359,7 @@ COMMANDS: tuple[Command, ...] = (
     OptimalCommand(),
     ProviderCommand(),
     TemperatureCommand(),
+    ContextCommand(),
     KeyCommand(),
     CostCommand(),
     QueueCommand(),

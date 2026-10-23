@@ -24,7 +24,7 @@ async def test_phases_follow_a_request_and_clear_at_the_end():
             lambda request: stream({"reasoning": "hmm"}, {"content": "Done"}))) as client:
         await client.chat(model="test", messages=[Message.user("work")], on_delta=lambda *args: None,
                           single_attempt=True, first_output_timeout=60, on_phase=phases.append)
-    assert phases == ["Sending request to openrouter", "Waiting for first output", "Thinking", "Receiving reply", ""]
+    assert phases == ["Sending request to openrouter", "Waiting for output", "Thinking", "Receiving reply", ""]
 
 
 async def test_tool_call_output_clears_the_waiting_phase():
@@ -33,7 +33,7 @@ async def test_tool_call_output_clears_the_waiting_phase():
     async with OpenRouterClient("dummy", transport=httpx.MockTransport(lambda request: stream(call))) as client:
         await client.chat(model="test", messages=[Message.user("work")], on_delta=lambda *args: None,
                           single_attempt=True, first_output_timeout=60, on_phase=phases.append)
-    assert phases[:2] == ["Sending request to openrouter", "Waiting for first output"] and phases[-2:] == ["", ""]
+    assert phases[:2] == ["Sending request to openrouter", "Waiting for output"] and phases[-2:] == ["", ""]
 
 
 async def test_pacing_reports_remaining_time_and_queueing(monkeypatch):
@@ -63,10 +63,10 @@ async def test_pacing_reports_remaining_time_and_queueing(monkeypatch):
 def test_status_line_shows_the_phase_with_elapsed_time():
     status = StatusLine()
     assert status.activity(held=False, working=True, stopping=False, concise=False, frame="*")[1] == "* Working (esc to interrupt)"
-    status.set_phase("Waiting for first output")
+    status.set_phase("Waiting for output")
     text = status.activity(held=False, working=True, stopping=False, concise=False, frame="*")[1]
-    assert text.startswith("* Working: Waiting for first output (0s, esc to interrupt)")
-    assert status.activity(held=False, working=True, stopping=False, concise=True, frame="*")[1].startswith("* Waiting for first output (")
+    assert text.startswith("* Waiting for output (0s, esc to interrupt)")
+    assert status.activity(held=False, working=True, stopping=False, concise=True, frame="*")[1].startswith("* Waiting for output (")
     status.retry = "Retrying in 5s"
     assert status.activity(held=False, working=True, stopping=False, concise=False, frame="*")[1] == "Retrying in 5s"
     status.set_phase("")

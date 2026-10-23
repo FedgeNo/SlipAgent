@@ -55,6 +55,8 @@ class APIResponseError(APIError):
         self.body = body
         self.retry_after: str | None = None
         self.partial_response = ""
+        # Readable reasoning received before the failure; never JSON-wrapped.
+        self.partial_reasoning = ""
         self.usage = Usage()
 
 
@@ -318,7 +320,7 @@ class APIClient:
                             continue
                         declined = error
                         raise error
-                    phase("Waiting for first output")
+                    phase("Waiting for output")
                     if deadline is not None and first_output.when() is not None and not (deadline.held or deadline.skipped):
                         first_output.reschedule(asyncio.get_running_loop().time() + first_output_timeout)
                     # Gateways and test servers may return a regular completion.
@@ -977,6 +979,7 @@ class _StreamCompletion:
     def attach_diagnostics(self, error: APIResponseError) -> None:
         error.partial_response = json.dumps({"content": self.content, "tool_calls": self.joined_calls(),
                                              "reasoning": "".join(self.reasoning)}, ensure_ascii=False)[:16000]
+        error.partial_reasoning = "".join(self.reasoning)
         try:
             error.usage = Usage.from_api(self.usage)
         except (ValueError, TypeError, AttributeError, OverflowError):

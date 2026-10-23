@@ -88,6 +88,17 @@ evaluations and code-security risk measurements do not establish a comparable
 code-correctness result. Its `None` score keeps manual selection available and
 prevents an unsupported automatic placement.
 
+Nemotron 3.5 Bolt E4B has no published coding result, so its 34.7 is placed by
+comparison with peers. Its [model card](https://huggingface.co/nvidia/Nemotron-3.5-Bolt-E4B)
+measures it beside Gemma 4 E4B-it, Qwen3.5 4B, and Nemotron 3 Nano 4B under one
+harness. Those peers report LiveCodeBench 52.0, 55.8, and 51.8 on their own cards,
+which score 32.7, 36.2, and 32.5. On the card's tool-use rows (BFCL-v3,
+ToolSandbox, Tau2-Bench), Bolt falls between Gemma and Qwen each time.
+Interpolating its position onto their LiveCodeBench span gives 53.8, 55.1, and
+53.7, averaging 54.2. This is a peer-derived equivalent, not a measurement; the
+peer range bounds it to roughly 32.5–36.2. Replace it when NVIDIA or an
+independent evaluation publishes a calibrated coding result.
+
 ## MT-Bench Coding Conversion
 
 Use the **coding category averaged across both turns**, on its native 1–10

@@ -90,6 +90,7 @@ def test_model_display_uses_estimated_score_and_sorts_highest_first():
     ("nvidia/nemotron-3.5-lightning-30b-a3b", False, 1_000_000, 32_768),
     ("nvidia/nemotron-3-super-120b-a12b", False, 1_000_000, 32_768),
     ("openai/gpt-oss-20b", True, 128_000, 4_096),
+    ("nvidia/nemotron-3.5-bolt-e4b", True, 65_536, 65_536),
 ])
 async def test_ranked_nvidia_models_can_be_selected_and_requested(model, native, limit, output):
     requests = []

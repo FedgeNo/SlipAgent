@@ -50,6 +50,7 @@ SCORES: dict[str, float | None] = {
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning": 43.5,
     "liquid/lfm-2.5-2.6b": 39.6,
     "meta/llama-3.2-90b-vision-instruct": 38.8,
+    "nvidia/nemotron-3.5-bolt-e4b": 34.7,
     "mistralai/codestral-22b-instruct-v0.1": 32.8,
     "nvidia/llama-3.1-nemotron-70b-instruct": 31.4,
     "deepseek-ai/deepseek-coder-6.7b-instruct": 30.8,

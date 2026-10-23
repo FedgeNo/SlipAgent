@@ -47,6 +47,9 @@ In the REPL:
 | `/provider <provider>` | Select and remember a free default: OpenRouter/NVIDIA Nemotron 3 Ultra, or Kilo Auto Free; refuse missing models or nonzero/unknown pricing |
 | `/temperature` | Show the explicit temperature or provider default, and whether the selected model supports changing it |
 | `/temperature <value>` | Set the working-model temperature from 0 to 2; unsupported changes report an error |
+| `/context` | Show the working-context cap and the selected model's limit |
+| `/context <tokens>` | Cap working context, such as `300000`, `300k` or `1.5M`; older history compresses to fit, the model's limit still applies, the cap is saved with the session, and the change queues while working |
+| `/context reset` | Clear the cap so the model's own limit applies (`/context default` and `/context off` do the same) |
 | `/key show`, `/key status` | Show the masked current key, spend limit, and reported free quota |
 | `/key` | Choose a configured key to delete (after "Are you sure?"), or enter a new one; keys show only their start and end |
 | `/key list` | List configured keys, masked, with where each is stored: active, this session, shell, or the saved `.env` |
@@ -432,7 +435,7 @@ the previous work. Slash commands are never sent to the model as user messages.
 The working indicator shows a moon-phase spinner beside `Working (esc to interrupt)`.
 While a model request runs, it names the current step and the seconds spent in it:
 `Sending request to <provider>`, `Pacing upload to the provider's token limit, about Ns left`
-or `Waiting for another upload to finish` for rate-limited providers, `Waiting for first output`,
+or `Waiting for another upload to finish` for rate-limited providers, `Waiting for output`,
 `Thinking` once reasoning text arrives, and `Receiving reply` once answer text arrives. A retry
 countdown or the silent-model countdown replaces the step while it shows.
 The spinner uses eight emoji frames of two terminal columns each and also appears

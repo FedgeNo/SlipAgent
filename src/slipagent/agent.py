@@ -334,7 +334,8 @@ class Agent:
     def _account_usage(self, usage: Usage) -> None:
         self.usage = self.usage + usage
 
-    def _record_request_failure(self, failure: dict[str, Any], usage: Usage) -> int:
+    def _record_request_failure(self, failure: dict[str, Any], usage: Usage,
+                                partial: tuple[str, str] | None = None) -> int:
         from .requestfailures import failure_summary, retry_state, validate_failure
 
         self.history.sync(self.messages)
@@ -345,16 +346,20 @@ class Agent:
                    "total_failed_attempts": total + 1, "tools_executed": False}
         validate_failure(failure)
         summary = failure_summary(failure)
-        # A labelled harness notice keeps the failure legible even if a crash
-        # leaves its following step-metadata event incomplete. It is not model prose.
-        self.messages.append(Message.assistant(summary))
+        # The partial reply and reasoning are stored like a completed step's, marked
+        # incomplete by the failure record. Tool calls are never kept: they did not run.
+        content, reasoning = partial or ("", "")
+        self.messages.append(Message(role="assistant", content=content or None, reasoning=reasoning or None,
+                                     reasoning_model=self.model if reasoning else None))
         self.history.sync(self.messages)
         failed = self.history.steps[-1]
         setattr(failed, "request_failure", failure)
         failed.summary = summary
         failed.results_summarized = True
         if isinstance(failed, CompletedStep):
-            failed.reasoning_summary = ""
+            # No compactor runs for a failed step, so no filtered thoughts exist;
+            # the original reasoning is shown.
+            failed.reasoning_summary = None
             failed.compaction_status = "complete"
             failed.observed = False
         self._persist()

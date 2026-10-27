@@ -1,123 +1,101 @@
 {
   "schema_version": 1,
-  "reviewed": "2026-10-16",
   "scale": "text-coding-v1",
   "anchor": "SWE Verified",
   "probability_clip": 0.005,
   "huber_delta": 0.75,
   "method": "Huber additive benchmark difficulty in log-odds; logit(result) = ability - offset.",
-  "model_count": 87,
-  "reference_model_count": 22,
-  "benchmarks": {
-    "BigCodeBench complete": {
-      "offset": -0.7081267032185069,
-      "observations": 26,
-      "overlap_models": 23,
-      "observed_percent_range": [
-        21.4,
-        61.1
-      ]
-    },
-    "DeepSWE 1.1": {
-      "offset": 1.9482095956385075,
-      "observations": 9,
-      "overlap_models": 6,
-      "observed_percent_range": [
-        2.7,
-        74.2
-      ]
-    },
-    "Description-only coding": {
-      "offset": 0.4364256940283286,
-      "observations": 4,
-      "overlap_models": 3,
-      "observed_percent_range": [
-        3.7,
-        45.4
-      ]
-    },
-    "FLTEval pass1": {
-      "offset": 2.2668002259503472,
-      "observations": 4,
-      "overlap_models": 3,
-      "observed_percent_range": [
-        23.0,
-        39.6
-      ]
-    },
-    "HumanEval": {
-      "offset": -1.8744842996212578,
-      "observations": 39,
-      "overlap_models": 18,
-      "observed_percent_range": [
-        21.3,
-        92.1
-      ]
-    },
-    "LiveCodeBench": {
-      "offset": -0.8015072937677055,
-      "observations": 16,
-      "overlap_models": 12,
-      "observed_percent_range": [
-        34.3,
-        91.5
-      ]
-    },
-    "MT-Bench coding": {
-      "offset": -1.7248025398743945,
-      "min_score": 1,
-      "max_score": 10,
-      "observations": 6,
-      "overlap_models": 6,
-      "observed_score_range": [1.0, 6.3],
-      "evidence": "model-score-mt-bench.json",
-      "method": "Huber offset against existing coding scores, holding the original calibration fixed.",
-      "validation": {
-        "count": 6,
-        "mean_absolute_error": 2.7479596531644503,
-        "median_absolute_error": 2.4510381364032616,
-        "maximum_absolute_error": 6.333700272053781
-      }
-    },
-    "SWE Verified": {
-      "offset": 0.0,
-      "observations": 27,
-      "overlap_models": 25,
-      "observed_percent_range": [
-        27.6,
-        81.6
-      ]
-    },
-    "Terminal 2.0": {
-      "offset": 1.0770288993474673,
-      "observations": 6,
-      "overlap_models": 6,
-      "observed_percent_range": [
-        31.0,
-        66.7
-      ]
-    },
-    "Terminal 2.1": {
-      "offset": 0.7287729279434954,
-      "observations": 18,
-      "overlap_models": 16,
-      "observed_percent_range": [
-        24.58,
-        90.6
-      ]
-    }
-  },
-  "validation": {
-    "count": 66,
-    "mean_absolute_error": 5.5738012035461155,
-    "median_absolute_error": 4.3301130793016185,
-    "p90_absolute_error": 11.216901040666471
-  },
   "limits": [
     "Synthetic comparison score, not a measured pass rate or task success probability.",
     "LiveCodeBench releases and date windows are pooled; harness and reasoning budgets differ.",
     "Single-benchmark, specialist-proof, and old-model extrapolations are less reliable.",
     "MT-Bench uses coding-category judge ratings on a 1-10 scale; chart readings and shared model families limit precision.",
     "Calibration includes paid reference models; runtime eligibility still requires a free endpoint."
-  ]
+  ],
+  "reviewed": "2026-10-26",
+  "model_count": 89,
+  "reference_model_count": 40,
+  "benchmarks": {
+    "BigCodeBench complete": {
+      "offset": -0.7778471005031246,
+      "observations": 30,
+      "overlap_models": 23,
+      "observed_percent_range": [
+        11.3,
+        62.2
+      ]
+    },
+    "DeepSWE 1.1": {
+      "offset": 2.2069720783483073,
+      "observations": 26,
+      "overlap_models": 25,
+      "observed_percent_range": [
+        12.0,
+        74.2
+      ]
+    },
+    "HumanEval": {
+      "offset": -2.038643687187281,
+      "observations": 25,
+      "overlap_models": 20,
+      "observed_percent_range": [
+        22.24,
+        92.1
+      ]
+    },
+    "LiveCodeBench": {
+      "offset": -0.669164286394815,
+      "observations": 15,
+      "overlap_models": 14,
+      "observed_percent_range": [
+        61.0,
+        91.7
+      ]
+    },
+    "MT-Bench coding": {
+      "offset": -1.7669178431339805,
+      "min_score": 1,
+      "max_score": 10,
+      "observations": 7,
+      "overlap_models": 6,
+      "observed_score_range": [
+        1.0,
+        6.3
+      ]
+    },
+    "SWE Verified": {
+      "offset": 0.0,
+      "observations": 26,
+      "overlap_models": 26,
+      "observed_percent_range": [
+        38.8,
+        81.6
+      ]
+    },
+    "Terminal 2.0": {
+      "offset": 1.1330421549708012,
+      "observations": 11,
+      "overlap_models": 11,
+      "observed_percent_range": [
+        18.7,
+        68.5
+      ]
+    },
+    "Terminal 2.1": {
+      "offset": 0.7637914075667976,
+      "observations": 37,
+      "overlap_models": 34,
+      "observed_percent_range": [
+        30.0,
+        90.6
+      ]
+    }
+  },
+  "validation": {
+    "count": 159,
+    "mean_absolute_error": 6.546902951867132,
+    "median_absolute_error": 4.515175782783082,
+    "p90_absolute_error": 16.843089895646486,
+    "maximum_absolute_error": 28.337741814978674
+  }
 }

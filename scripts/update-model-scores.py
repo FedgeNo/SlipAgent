@@ -8,17 +8,21 @@ from __future__ import annotations
 
 import argparse
 import ast
+from collections import defaultdict
+import datetime
 import json
 import math
 import os
 from pathlib import Path
 import re
+import statistics
 import stat
 import tempfile
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CALIBRATION = Path(__file__).with_name("model-score-calibration.json")
+DEFAULT_MEASUREMENTS = Path(__file__).with_name("model-score-measurements.json")
 DEFAULT_TABLE = ROOT / "src/slipagent/modelscores.py"
 
 
@@ -68,7 +72,8 @@ def estimate(results: object, calibration: dict[str, Any]) -> float:
     clip = calibration["probability_clip"]
     for name, raw in results.items():
         if name not in calibration["benchmarks"]:
-            raise ValueError(f"Uncalibrated benchmark {name!r}; add shared-model evidence before using it")
+            raise ValueError(f"Uncalibrated benchmark {name!r}; add reference models measured on it and on a calibrated "
+                             "benchmark to the measurements file, then run --fit")
         benchmark = calibration["benchmarks"][name]
         score = number(raw, name)
         minimum, maximum = benchmark.get("min_score", 0), benchmark.get("max_score", 100)
@@ -87,6 +92,198 @@ def estimate(results: object, calibration: dict[str, Any]) -> float:
             return round(100 * probability, 1)
         ability = updated
     raise ValueError("Model score calculation did not converge")
+
+
+def sigmoid(value: float) -> float:
+    """Stable logistic function; also handles extreme finite abilities."""
+    return 1 / (1 + math.exp(-value)) if value >= 0 else math.exp(value) / (1 + math.exp(value))
+
+
+def read_measurements(path: Path) -> tuple[dict[str, tuple[float, float]], list[dict[str, Any]]]:
+    """Raw published results per model: the scales used and validated model records."""
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict) or set(raw) - {"reviewed", "scales", "models"}:
+        raise ValueError("Expected an object with reviewed, scales, and models")
+    scales: dict[str, tuple[float, float]] = {}
+    for name, row in (raw.get("scales") or {}).items():
+        if not isinstance(row, dict) or set(row) - {"min_score", "max_score"}:
+            raise ValueError(f"Invalid scale for {name}")
+        minimum, maximum = number(row.get("min_score"), f"{name} min_score"), number(row.get("max_score"), f"{name} max_score")
+        if not 0 <= minimum < maximum:
+            raise ValueError(f"Invalid score range for {name}")
+        scales[name] = (minimum, maximum)
+    rows = raw.get("models")
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("Provide at least one model")
+    records, seen = [], set()
+    for row in rows:
+        if not isinstance(row, dict) or set(row) - {"model", "benchmarks", "aliases", "sources", "notes", "reference"}:
+            raise ValueError("Expected model, benchmarks, sources, and optional aliases/notes/reference")
+        model = identity(row.get("model"))
+        if model in seen:
+            raise ValueError(f"Repeated model {model}")
+        seen.add(model)
+        sources = row.get("sources")
+        if not isinstance(sources, list) or not sources or any(
+                not isinstance(source, str) or not source.startswith("https://") for source in sources):
+            raise ValueError(f"{model}: provide HTTPS source links for manual verification")
+        benchmarks = row.get("benchmarks")
+        if not isinstance(benchmarks, dict) or not benchmarks:
+            raise ValueError(f"{model}: provide at least one benchmark result")
+        for name, value in benchmarks.items():
+            minimum, maximum = scales.get(name, (0.0, 100.0))
+            if not minimum <= number(value, f"{model} {name}") <= maximum:
+                raise ValueError(f"{model}: {name} must be between {minimum:g} and {maximum:g}")
+        aliases = row.get("aliases", [])
+        if not isinstance(aliases, list):
+            raise ValueError(f"{model}: aliases must be a list")
+        reference = row.get("reference", False)
+        if not isinstance(reference, bool):
+            raise ValueError(f"{model}: reference must be true or false")
+        records.append({"model": model, "benchmarks": benchmarks, "reference": reference,
+                        "aliases": [identity(alias) for alias in aliases]})
+    return scales, records
+
+
+def observations(records: list[dict[str, Any]], scales: dict[str, tuple[float, float]], clip: float) -> list[tuple[str, str, float]]:
+    """Each published result as (model, benchmark, log-odds)."""
+    result = []
+    for record in records:
+        for name, value in record["benchmarks"].items():
+            probability = min(1 - clip, max(clip, value / scales.get(name, (0.0, 100.0))[1]))
+            result.append((record["model"], name, math.log(probability / (1 - probability))))
+    return result
+
+
+def check_connected(rows: list[tuple[str, str, float]], anchor: str) -> None:
+    """Every benchmark needs a chain of shared models to the anchor, and two models of its own."""
+    parent: dict[str, str] = {}
+
+    def find(node: str) -> str:
+        parent.setdefault(node, node)
+        while parent[node] != node:
+            parent[node] = parent[parent[node]]
+            node = parent[node]
+        return node
+
+    benchmarks_of: dict[str, set[str]] = defaultdict(set)
+    for model, benchmark, _ in rows:
+        benchmarks_of[model].add(benchmark)
+        parent[find("m:" + model)] = find("b:" + benchmark)
+    benchmarks = {benchmark for _, benchmark, _ in rows}
+    if anchor not in benchmarks:
+        raise ValueError(f"No model has a {anchor} result to anchor the scale")
+    for benchmark in sorted(benchmarks):
+        if find("b:" + benchmark) != find("b:" + anchor):
+            raise ValueError(f"{benchmark} shares no chain of models with {anchor}; add reference models measured on it "
+                             "and on a calibrated benchmark")
+        overlap = sum(1 for names in benchmarks_of.values() if benchmark in names and len(names) > 1)
+        if overlap < 2:
+            raise ValueError(f"{benchmark} needs at least two models with shared benchmark results; has {overlap}")
+
+
+def solve(rows: list[tuple[str, str, float]], anchor: str, delta: float,
+          start: tuple[dict[str, float], dict[str, float]] | None = None) -> tuple[dict[str, float], dict[str, float]]:
+    """Huber fit of logit(result) = ability - offset, with the anchor's offset fixed at zero."""
+    check_connected(rows, anchor)
+    ability = {model: 0.0 for model, _, _ in rows}
+    offset = {benchmark: 0.0 for _, benchmark, _ in rows}
+    if start is not None:
+        ability.update({key: value for key, value in start[0].items() if key in ability})
+        offset.update({key: value for key, value in start[1].items() if key in offset})
+    offset[anchor] = 0.0
+
+    def weights() -> list[float]:
+        return [min(1.0, delta / max(1e-12, abs(y - (ability[model] - offset[benchmark])))) for model, benchmark, y in rows]
+
+    for _ in range(100000):
+        moved = 0.0
+        total, weight = defaultdict(float), defaultdict(float)
+        for (model, benchmark, y), w in zip(rows, weights()):
+            total[model] += w * (y + offset[benchmark])
+            weight[model] += w
+        for model in ability:
+            updated = total[model] / weight[model]
+            moved, ability[model] = max(moved, abs(updated - ability[model])), updated
+        total, weight = defaultdict(float), defaultdict(float)
+        for (model, benchmark, y), w in zip(rows, weights()):
+            total[benchmark] += w * (ability[model] - y)
+            weight[benchmark] += w
+        for benchmark in offset:
+            if benchmark == anchor:
+                continue
+            updated = total[benchmark] / weight[benchmark]
+            moved, offset[benchmark] = max(moved, abs(updated - offset[benchmark])), updated
+        if moved < 1e-10:
+            return ability, offset
+    raise ValueError("Benchmark calibration did not converge")
+
+
+def leave_one_out(rows: list[tuple[str, str, float]], fitted: tuple[dict[str, float], dict[str, float]],
+                  anchor: str, delta: float) -> list[float]:
+    """Absolute errors, in percentage points, predicting each result of a multi-result model without it."""
+    counts: dict[str, int] = defaultdict(int)
+    for model, _, _ in rows:
+        counts[model] += 1
+    errors = []
+    for index, (model, benchmark, y) in enumerate(rows):
+        if counts[model] < 2:
+            continue
+        rest = rows[:index] + rows[index + 1:]
+        try:
+            ability, offset = solve(rest, anchor, delta, fitted)
+        except ValueError:
+            continue
+        if benchmark in offset:
+            errors.append(abs(100 * (sigmoid(ability[model] - offset[benchmark]) - sigmoid(y))))
+    return errors
+
+
+def plain(value: float) -> float | int:
+    """Whole numbers stay integers in saved JSON, as in `1 and 10`."""
+    return int(value) if value == int(value) else value
+
+
+def percentile(values: list[float], fraction: float) -> float:
+    ordered = sorted(values)
+    return ordered[min(len(ordered) - 1, math.ceil(fraction * len(ordered)) - 1)]
+
+
+def fit_scores(records: list[dict[str, Any]], scales: dict[str, tuple[float, float]], base: dict[str, Any],
+               reviewed: str) -> tuple[dict[str, float], dict[str, Any]]:
+    """Scores for every measured model, and the calibration that produced them."""
+    clip, delta, anchor = base["probability_clip"], base["huber_delta"], base["anchor"]
+    rows = observations(records, scales, clip)
+    fitted = solve(rows, anchor, delta)
+    ability, offset = fitted
+    scores = {model: round(100 * sigmoid(value), 1) for model, value in ability.items()}
+    benchmarks_of: dict[str, set[str]] = defaultdict(set)
+    values: dict[str, list[float]] = defaultdict(list)
+    for record in records:
+        for name, value in record["benchmarks"].items():
+            benchmarks_of[record["model"]].add(name)
+            values[name].append(value)
+    calibration = {key: base[key] for key in ("schema_version", "scale", "anchor", "probability_clip", "huber_delta",
+                                                "method", "limits")}
+    calibration["reviewed"] = reviewed
+    calibration["model_count"] = len(ability)
+    calibration["reference_model_count"] = sum(1 for record in records if record["reference"])
+    calibration["benchmarks"] = {}
+    for name in sorted(offset):
+        row: dict[str, Any] = {"offset": offset[name]}
+        if name in scales:
+            row.update(min_score=plain(scales[name][0]), max_score=plain(scales[name][1]))
+        row["observations"] = len(values[name])
+        row["overlap_models"] = sum(1 for names in benchmarks_of.values() if name in names and len(names) > 1)
+        row["observed_score_range" if name in scales else "observed_percent_range"] = [min(values[name]), max(values[name])]
+        calibration["benchmarks"][name] = row
+    errors = leave_one_out(rows, fitted, anchor, delta)
+    if errors:
+        calibration["validation"] = {"count": len(errors), "mean_absolute_error": statistics.fmean(errors),
+                                     "median_absolute_error": statistics.median(errors),
+                                     "p90_absolute_error": percentile(errors, 0.9),
+                                     "maximum_absolute_error": max(errors)}
+    return scores, calibration
 
 
 def identity(value: Any) -> str:
@@ -187,9 +384,42 @@ def save_table(path: Path, original: str, updated: str) -> None:
             temporary.unlink(missing_ok=True)
 
 
+def refit(args: argparse.Namespace, base: dict[str, Any]) -> int:
+    """Recalculate scores and offsets from raw measurements; unmeasured table entries are kept."""
+    scales, records = read_measurements(args.fit)
+    reviewed = args.reviewed or datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+    scores, calibration = fit_scores(records, scales, base, reviewed)
+    updates = [(record["model"], scores[record["model"]], record["aliases"]) for record in records if not record["reference"]]
+    original = args.table.read_text(encoding="utf-8")
+    updated = render_table(original, updates)
+    old = ast.literal_eval(next(node.value for node in ast.parse(original).body
+                                if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") == "SCORES"))
+    for model, score, _ in sorted(updates, key=lambda item: -item[1]):
+        before = old.get(model)
+        print(f"{model}: {'new' if model not in old else 'unscored' if before is None else f'{before:.1f}'} -> {score:.1f}")
+    print("Benchmark offsets (SWE Verified = 0): " + ", ".join(
+        f"{name} {row['offset']:+.2f}" for name, row in calibration["benchmarks"].items()))
+    if "validation" in calibration:
+        validation = calibration["validation"]
+        print(f"Leave-one-out error over {validation['count']} results: mean {validation['mean_absolute_error']:.1f}, "
+              f"median {validation['median_absolute_error']:.1f}, p90 {validation['p90_absolute_error']:.1f}, "
+              f"max {validation['maximum_absolute_error']:.1f} points")
+    if not args.dry_run:
+        previous = args.calibration.read_text(encoding="utf-8")
+        if updated != original:
+            save_table(args.table, original, updated)
+        save_table(args.calibration, previous, json.dumps(calibration, indent=2) + "\n")
+    print("Preview only." if args.dry_run else "Score table and calibration updated.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path, nargs="?", help="JSON model record or array; see model-score-example.json")
+    parser.add_argument("--fit", type=Path, nargs="?", const=DEFAULT_MEASUREMENTS, metavar="MEASUREMENTS",
+                        help="Recalculate every measured model and the benchmark offsets from raw results "
+                             "(default: model-score-measurements.json)")
+    parser.add_argument("--reviewed", default=None, help="Review date recorded with --fit (default: today, UTC)")
     parser.add_argument("--calibration", type=Path, default=DEFAULT_CALIBRATION)
     parser.add_argument("--table", type=Path, default=DEFAULT_TABLE, help="Curated Python score table to update")
     parser.add_argument("--dry-run", action="store_true", help="Calculate and validate without changing the table")
@@ -200,8 +430,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.list_benchmarks:
             print("\n".join(calibration["benchmarks"]))
             return 0
+        if args.fit is not None:
+            return refit(args, calibration)
         if args.input is None:
-            parser.error("provide an input file or --list-benchmarks")
+            parser.error("provide an input file, --fit, or --list-benchmarks")
         updates = read_updates(args.input, calibration)
         original = args.table.read_text(encoding="utf-8")
         updated = render_table(original, updates)

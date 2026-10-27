@@ -1,0 +1,1055 @@
+{
+ "reviewed": "2026-10-26",
+ "scales": {
+  "MT-Bench coding": {
+   "min_score": 1,
+   "max_score": 10
+  }
+ },
+ "models": [
+  {
+   "model": "deepseek/deepseek-v4.1-flash",
+   "benchmarks": {
+    "DeepSWE 1.1": 74.2,
+    "Terminal 2.1": 90.6
+   },
+   "sources": [
+    "https://arxiv.org/pdf/2609.19969"
+   ],
+   "aliases": [
+    "deepseek-ai/deepseek-v4.1-flash"
+   ],
+   "notes": "Developer-reported; mini-SWE harness for DeepSWE."
+  },
+  {
+   "model": "google/gemini-3.8-flash",
+   "benchmarks": {
+    "DeepSWE 1.1": 73.7,
+    "Terminal 2.1": 89.4
+   },
+   "sources": [
+    "https://deepmind.google/models/model-cards/gemini-3-8-flash/"
+   ],
+   "notes": "Developer-reported."
+  },
+  {
+   "model": "minimax/minimax-m3.1-flash",
+   "benchmarks": {
+    "DeepSWE 1.1": 73.7
+   },
+   "sources": [
+    "https://aimlapi.com/blog/minimax-m3-1-flash-review"
+   ],
+   "aliases": [
+    "minimaxai/minimax-m3.1-flash"
+   ],
+   "notes": "From MiniMax's launch table image as reported by a third party; not independently reproduced."
+  },
+  {
+   "model": "z-ai/glm-5.3",
+   "benchmarks": {
+    "Terminal 2.1": 88.2,
+    "DeepSWE 1.1": 66.9
+   },
+   "sources": [
+    "https://huggingface.co/zai-org/glm-5.3"
+   ],
+   "notes": "Developer-reported; Claude Code and mini-swe-agent harnesses."
+  },
+  {
+   "model": "stepfun/step-5-preview",
+   "benchmarks": {
+    "Terminal 2.1": 85.0
+   },
+   "sources": [
+    "https://benchlm.ai/md/compare/step-5-preview-vs-swe-2.md"
+   ],
+   "aliases": [
+    "stepfun-ai/step-5-preview",
+    "stepfun/step-5-preview-free"
+   ],
+   "notes": "Aggregator figure; StepFun's own announcement was not found."
+  },
+  {
+   "model": "z-ai/glm-5.3-flash",
+   "benchmarks": {
+    "Terminal 2.1": 84.3,
+    "DeepSWE 1.1": 63.4
+   },
+   "sources": [
+    "https://huggingface.co/zai-org/GLM-5.3-Flash",
+    "https://www.qubrid.com/blog-news/glm-53-flash-benchmarks-official-and-independent-results"
+   ],
+   "notes": "Terminal 2.1 from the model card; DeepSWE from a third party quoting the card."
+  },
+  {
+   "model": "google/gemini-3.6-flash",
+   "benchmarks": {
+    "DeepSWE 1.1": 49.0,
+    "Terminal 2.1": 78.0
+   },
+   "sources": [
+    "https://deepmind.google/models/model-cards/gemini-3-6-flash/"
+   ],
+   "notes": "Developer-reported; Terminal 2.1 uses Terminus-2."
+  },
+  {
+   "model": "reflection/beam",
+   "benchmarks": {
+    "SWE Verified": 81.6,
+    "DeepSWE 1.1": 43.3,
+    "Terminal 2.1": 80.1,
+    "LiveCodeBench": 88.3
+   },
+   "sources": [
+    "https://huggingface.co/reflection/Beam-1.0-501B-A23B"
+   ],
+   "aliases": [
+    "reflection/beam-free"
+   ],
+   "notes": "BF16 results; confirm that the provider endpoint serves this model version."
+  },
+  {
+   "model": "qwen/qwen3.8-27b",
+   "benchmarks": {
+    "LiveCodeBench": 90.3,
+    "Terminal 2.1": 73.0,
+    "DeepSWE 1.1": 42.2
+   },
+   "sources": [
+    "https://huggingface.co/Qwen/Qwen3.8-27B"
+   ],
+   "notes": "Alibaba self-reported; DeepSWE with the Claude Code harness."
+  },
+  {
+   "model": "poolside/laguna-s-2.1",
+   "benchmarks": {
+    "Terminal 2.1": 70.2,
+    "DeepSWE 1.1": 40.4
+   },
+   "sources": [
+    "https://huggingface.co/poolside/Laguna-S-2.1"
+   ],
+   "notes": "Developer-reported."
+  },
+  {
+   "model": "dots-studio/dots-3-note-preview",
+   "benchmarks": {
+    "SWE Verified": 78.4,
+    "Terminal 2.1": 75.1
+   },
+   "sources": [
+    "https://www.benchlm.ai/models/dots3-note-preview"
+   ],
+   "notes": "Aggregator listing from one unverified source; no developer card found."
+  },
+  {
+   "model": "moonshotai/kimi-k2.6",
+   "benchmarks": {
+    "SWE Verified": 80.2,
+    "Terminal 2.0": 66.7,
+    "LiveCodeBench": 89.6
+   },
+   "sources": [
+    "https://huggingface.co/moonshotai/Kimi-K2.6"
+   ],
+   "notes": "Developer-reported; Terminus-2 for Terminal 2.0."
+  },
+  {
+   "model": "thinkingmachines/inkling-small",
+   "benchmarks": {
+    "SWE Verified": 80.2,
+    "Terminal 2.1": 64.7,
+    "LiveCodeBench": 85.9
+   },
+   "sources": [
+    "https://www.together.ai/models/inkling-small",
+    "https://benchmarklist.com/models/thinking-machines-inkling-small/"
+   ],
+   "notes": "SWE and Terminal from the developer via Together; LiveCodeBench is a Vals run."
+  },
+  {
+   "model": "thinkingmachines/inkling",
+   "benchmarks": {
+    "SWE Verified": 77.6,
+    "Terminal 2.1": 63.8
+   },
+   "sources": [
+    "https://capitalandcompute.net/blog/inkling-thinking-machines-launch/"
+   ],
+   "notes": "Developer-reported; bash-only harness."
+  },
+  {
+   "model": "xingchen-agi/xing4.0-29b-a4b",
+   "benchmarks": {
+    "SWE Verified": 75.0,
+    "Terminal 2.1": 57.5
+   },
+   "sources": [
+    "https://huggingface.co/XingChen-AGI/Xing4.0-29B-A4B"
+   ],
+   "notes": "Developer-reported."
+  },
+  {
+   "model": "nvidia/nemotron-3-ultra-550b-a55b",
+   "benchmarks": {
+    "SWE Verified": 70.7,
+    "Terminal 2.1": 56.4,
+    "LiveCodeBench": 89.0
+   },
+   "sources": [
+    "https://arxiv.org/pdf/2606.15007"
+   ],
+   "notes": "Developer-reported; some mirrors list SWE Verified 71.9."
+  },
+  {
+   "model": "recursive/flint-v1.0",
+   "benchmarks": {
+    "SWE Verified": 74.2,
+    "Terminal 2.1": 54.9
+   },
+   "sources": [
+    "https://huggingface.co/RecursiveSI/flint"
+   ],
+   "notes": "Developer-reported; mini-swe-agent and Terminus 2."
+  },
+  {
+   "model": "meta/muse-glimmer-30b",
+   "benchmarks": {
+    "SWE Verified": 76.0,
+    "Terminal 2.1": 51.7
+   },
+   "sources": [
+    "https://www.qubrid.com/blog-news/muse-glimmer-benchmarks-official-and-independent-results"
+   ],
+   "notes": "Developer-reported via a third party; not independently reproduced."
+  },
+  {
+   "model": "poolside/laguna-xs-2.1",
+   "benchmarks": {
+    "SWE Verified": 70.9,
+    "Terminal 2.0": 37.5
+   },
+   "sources": [
+    "https://huggingface.co/poolside/Laguna-XS-2.1"
+   ],
+   "notes": "Developer-reported; Harbor framework."
+  },
+  {
+   "model": "cohere/north-mini-code",
+   "benchmarks": {
+    "SWE Verified": 67.6,
+    "Terminal 2.0": 36.0
+   },
+   "sources": [
+    "https://huggingface.co/poolside/Laguna-XS-2.1"
+   ],
+   "notes": "Taken from Poolside's comparison table; Cohere's own card was not read."
+  },
+  {
+   "model": "google/gemma-4-31b-it",
+   "benchmarks": {
+    "LiveCodeBench": 80.0
+   },
+   "sources": [
+    "https://huggingface.co/google/gemma-4-31B-it"
+   ],
+   "notes": "LiveCodeBench v6."
+  },
+  {
+   "model": "google/gemma-4-26b-a4b-it",
+   "benchmarks": {
+    "LiveCodeBench": 77.1,
+    "SWE Verified": 53.0,
+    "Terminal 2.1": 30.0
+   },
+   "sources": [
+    "https://huggingface.co/google/gemma-4-31B-it",
+    "https://huggingface.co/XingChen-AGI/Xing4.0-29B-A4B"
+   ],
+   "notes": "LiveCodeBench from Google; SWE and Terminal from Xing's comparison table."
+  },
+  {
+   "model": "openai/gpt-oss-120b",
+   "benchmarks": {
+    "SWE Verified": 62.4,
+    "Terminal 2.0": 18.7
+   },
+   "sources": [
+    "https://arxiv.org/abs/2508.10925",
+    "https://huggingface.co/poolside/Laguna-XS-2.1"
+   ],
+   "notes": "SWE from the model card (high reasoning with the exec tool); Terminal 2.0 from the official leaderboard as cited by Poolside."
+  },
+  {
+   "model": "openai/gpt-oss-20b",
+   "benchmarks": {
+    "SWE Verified": 60.7,
+    "LiveCodeBench": 61.0
+   },
+   "sources": [
+    "https://arxiv.org/abs/2508.10925",
+    "https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-3-nano-30b-a3b"
+   ],
+   "notes": "SWE from the model card; LiveCodeBench v6 from NVIDIA's Nemotron 3 Nano table."
+  },
+  {
+   "model": "nvidia/nemotron-3-super-120b-a12b",
+   "benchmarks": {
+    "SWE Verified": 60.47,
+    "Terminal 2.0": 31.0
+   },
+   "sources": [
+    "https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-3-super-120b-a12b"
+   ],
+   "notes": "Developer-reported; SWE via OpenHands."
+  },
+  {
+   "model": "nvidia/nemotron-3-nano-30b-a3b",
+   "benchmarks": {
+    "LiveCodeBench": 68.3,
+    "SWE Verified": 38.8
+   },
+   "sources": [
+    "https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-3-nano-30b-a3b"
+   ],
+   "aliases": [
+    "nvidia/nemotron-nano-3-30b-a3b"
+   ],
+   "notes": "Developer-reported; SWE is the OpenHands harness."
+  },
+  {
+   "model": "google/gemini-3.5-flash-lite",
+   "benchmarks": {
+    "Terminal 2.1": 54.0
+   },
+   "sources": [
+    "https://deepmind.google/models/model-cards/gemini-3-5-flash-lite/"
+   ],
+   "notes": "Developer-reported; Terminus-2."
+  },
+  {
+   "model": "google/gemini-3.1-flash-lite",
+   "benchmarks": {
+    "Terminal 2.1": 31.0
+   },
+   "sources": [
+    "https://deepmind.google/models/model-cards/gemini-3-5-flash-lite/"
+   ],
+   "notes": "Developer-reported in the Gemini 3.5 Flash-Lite card."
+  },
+  {
+   "model": "google/gemini-2.5-pro",
+   "benchmarks": {
+    "SWE Verified": 63.8,
+    "LiveCodeBench": 70.4
+   },
+   "sources": [
+    "https://rivista.ai/wp-content/uploads/2025/04/gemini-2.5-pro-preview.pdf"
+   ],
+   "notes": "Launch table; custom agent for SWE; LiveCodeBench v5."
+  },
+  {
+   "model": "mistralai/codestral-22b-instruct-v0.1",
+   "benchmarks": {
+    "HumanEval": 79.9,
+    "BigCodeBench complete": 52.5
+   },
+   "sources": [
+    "https://evalplus.github.io/results.json",
+    "https://bigcode-bench.github.io/results.json"
+   ]
+  },
+  {
+   "model": "nvidia/llama-3.1-nemotron-70b-instruct",
+   "benchmarks": {
+    "BigCodeBench complete": 48.2
+   },
+   "sources": [
+    "https://bigcode-bench.github.io/results.json"
+   ]
+  },
+  {
+   "model": "deepseek-ai/deepseek-coder-6.7b-instruct",
+   "benchmarks": {
+    "HumanEval": 74.4,
+    "BigCodeBench complete": 43.8
+   },
+   "sources": [
+    "https://evalplus.github.io/results.json",
+    "https://bigcode-bench.github.io/results.json"
+   ]
+  },
+  {
+   "model": "01-ai/yi-large",
+   "benchmarks": {
+    "BigCodeBench complete": 47.2
+   },
+   "sources": [
+    "https://bigcode-bench.github.io/results.json"
+   ]
+  },
+  {
+   "model": "meta/codellama-70b",
+   "benchmarks": {
+    "HumanEval": 72.0,
+    "BigCodeBench complete": 49.6
+   },
+   "sources": [
+    "https://evalplus.github.io/results.json",
+    "https://bigcode-bench.github.io/results.json"
+   ],
+   "aliases": [
+    "meta-llama/codellama-70b-instruct"
+   ],
+   "notes": "The Instruct checkpoint."
+  },
+  {
+   "model": "databricks/dbrx-instruct",
+   "benchmarks": {
+    "HumanEval": 75.0
+   },
+   "sources": [
+    "https://evalplus.github.io/results.json"
+   ]
+  },
+  {
+   "model": "mistralai/mistral-large",
+   "benchmarks": {
+    "BigCodeBench complete": 38.3
+   },
+   "sources": [
+    "https://bigcode-bench.github.io/results.json"
+   ],
+   "notes": "Mistral-Large-2402."
+  },
+  {
+   "model": "mistralai/mixtral-8x22b-v0.1",
+   "benchmarks": {
+    "BigCodeBench complete": 45.3
+   },
+   "sources": [
+    "https://bigcode-bench.github.io/results.json"
+   ],
+   "notes": "The base checkpoint."
+  },
+  {
+   "model": "google/codegemma-7b",
+   "benchmarks": {
+    "HumanEval": 44.5,
+    "BigCodeBench complete": 38.3
+   },
+   "sources": [
+    "https://evalplus.github.io/results.json",
+    "https://bigcode-bench.github.io/results.json"
+   ]
+  },
+  {
+   "model": "bigcode/starcoder2-15b",
+   "benchmarks": {
+    "HumanEval": 46.3,
+    "BigCodeBench complete": 38.4
+   },
+   "sources": [
+    "https://evalplus.github.io/results.json",
+    "https://bigcode-bench.github.io/results.json"
+   ]
+  },
+  {
+   "model": "google/gemma-2b",
+   "benchmarks": {
+    "HumanEval": 25.0
+   },
+   "sources": [
+    "https://evalplus.github.io/results.json"
+   ]
+  },
+  {
+   "model": "ibm/granite-34b-code-instruct",
+   "benchmarks": {
+    "BigCodeBench complete": 44.4
+   },
+   "sources": [
+    "https://bigcode-bench.github.io/results.json"
+   ]
+  },
+  {
+   "model": "ibm/granite-8b-code-instruct",
+   "benchmarks": {
+    "BigCodeBench complete": 39.7
+   },
+   "sources": [
+    "https://bigcode-bench.github.io/results.json"
+   ]
+  },
+  {
+   "model": "ibm/granite-3.0-8b-instruct",
+   "benchmarks": {
+    "BigCodeBench complete": 35.4
+   },
+   "sources": [
+    "https://bigcode-bench.github.io/results.json"
+   ]
+  },
+  {
+   "model": "meta/llama-3.2-90b-vision-instruct",
+   "benchmarks": {
+    "HumanEval": 80.5
+   },
+   "sources": [
+    "https://ai.meta.com/blog/llama-3-2-connect-2024-vision-edge-mobile-devices/"
+   ],
+   "aliases": [
+    "meta-llama/llama-3.2-90b-vision-instruct"
+   ],
+   "notes": "The shared text backbone's HumanEval; not a measurement of the vision checkpoint."
+  },
+  {
+   "model": "meta/llama-3.2-11b-vision-instruct",
+   "benchmarks": {
+    "HumanEval": 72.6
+   },
+   "sources": [
+    "https://ai.meta.com/blog/llama-3-2-connect-2024-vision-edge-mobile-devices/"
+   ],
+   "aliases": [
+    "meta-llama/llama-3.2-11b-vision-instruct"
+   ],
+   "notes": "The shared text backbone's HumanEval; not a measurement of the vision checkpoint."
+  },
+  {
+   "model": "meta/llama2-70b",
+   "benchmarks": {
+    "HumanEval": 32.2,
+    "MT-Bench coding": 3.15
+   },
+   "sources": [
+    "https://evalplus.github.io/results.json",
+    "https://bigcode-bench.github.io/results.json",
+    "https://arxiv.org/html/2411.15242v1#S6.F9"
+   ],
+   "notes": "Saved MT-Bench coding pairing (scripts/model-score-mt-bench.json)."
+  },
+  {
+   "model": "mistralai/mistral-7b-instruct-v0.3",
+   "benchmarks": {
+    "BigCodeBench complete": 27.3,
+    "MT-Bench coding": 5.4
+   },
+   "sources": [
+    "https://evalplus.github.io/results.json",
+    "https://bigcode-bench.github.io/results.json",
+    "https://arxiv.org/html/2411.15242v1#S6.F9"
+   ],
+   "notes": "Saved MT-Bench coding pairing (scripts/model-score-mt-bench.json)."
+  },
+  {
+   "model": "meta/llama-3.1-8b-instruct",
+   "benchmarks": {
+    "HumanEval": 69.5,
+    "BigCodeBench complete": 40.5,
+    "MT-Bench coding": 6.3
+   },
+   "sources": [
+    "https://evalplus.github.io/results.json",
+    "https://bigcode-bench.github.io/results.json",
+    "https://arxiv.org/html/2411.15242v1#S6.F9"
+   ],
+   "notes": "Saved MT-Bench coding pairing (scripts/model-score-mt-bench.json).",
+   "reference": true
+  },
+  {
+   "model": "google/gemma-7b-it",
+   "benchmarks": {
+    "HumanEval": 28.7,
+    "MT-Bench coding": 1.0
+   },
+   "sources": [
+    "https://evalplus.github.io/results.json",
+    "https://bigcode-bench.github.io/results.json",
+    "https://arxiv.org/html/2411.15242v1#S6.F9"
+   ],
+   "notes": "Saved MT-Bench coding pairing (scripts/model-score-mt-bench.json).",
+   "reference": true
+  },
+  {
+   "model": "meta/llama-3.2-1b-instruct",
+   "benchmarks": {
+    "BigCodeBench complete": 11.3,
+    "MT-Bench coding": 4.0
+   },
+   "sources": [
+    "https://evalplus.github.io/results.json",
+    "https://bigcode-bench.github.io/results.json",
+    "https://arxiv.org/html/2411.15242v1#S6.F9"
+   ],
+   "notes": "Saved MT-Bench coding pairing (scripts/model-score-mt-bench.json).",
+   "reference": true
+  },
+  {
+   "model": "meta/llama-3.2-3b-instruct",
+   "benchmarks": {
+    "BigCodeBench complete": 28.3,
+    "MT-Bench coding": 5.2
+   },
+   "sources": [
+    "https://evalplus.github.io/results.json",
+    "https://bigcode-bench.github.io/results.json",
+    "https://arxiv.org/html/2411.15242v1#S6.F9"
+   ],
+   "notes": "Saved MT-Bench coding pairing (scripts/model-score-mt-bench.json).",
+   "reference": true
+  },
+  {
+   "model": "zyphra/zamba2-7b-instruct",
+   "benchmarks": {
+    "MT-Bench coding": 5.2
+   },
+   "sources": [
+    "https://arxiv.org/html/2411.15242v1#S6.F9"
+   ],
+   "notes": "Chart reading of roughly 5.2/10."
+  },
+  {
+   "model": "anthropic/claude-opus-4.6",
+   "benchmarks": {
+    "SWE Verified": 80.8,
+    "Terminal 2.0": 65.4,
+    "LiveCodeBench": 88.8,
+    "Terminal 2.1": 78.2
+   },
+   "sources": [
+    "https://huggingface.co/moonshotai/Kimi-K2.6",
+    "https://huggingface.co/Qwen/Qwen3.8-27B"
+   ],
+   "notes": "Opus 4.6 max; Terminal 2.1 from Alibaba's table.",
+   "reference": true
+  },
+  {
+   "model": "google/gemini-3.1-pro",
+   "benchmarks": {
+    "SWE Verified": 80.6,
+    "Terminal 2.0": 68.5,
+    "LiveCodeBench": 91.7,
+    "Terminal 2.1": 73.8,
+    "DeepSWE 1.1": 12.0
+   },
+   "sources": [
+    "https://huggingface.co/moonshotai/Kimi-K2.6",
+    "https://deepmind.google/models/model-cards/gemini-3-6-flash/"
+   ],
+   "notes": "High reasoning.",
+   "reference": true
+  },
+  {
+   "model": "moonshotai/kimi-k2.5",
+   "benchmarks": {
+    "SWE Verified": 76.8,
+    "Terminal 2.0": 50.8,
+    "LiveCodeBench": 85.0
+   },
+   "sources": [
+    "https://huggingface.co/moonshotai/Kimi-K2.6"
+   ],
+   "reference": true
+  },
+  {
+   "model": "anthropic/claude-haiku-4.5",
+   "benchmarks": {
+    "SWE Verified": 73.3,
+    "Terminal 2.0": 29.8
+   },
+   "sources": [
+    "https://huggingface.co/poolside/Laguna-XS-2.1"
+   ],
+   "reference": true
+  },
+  {
+   "model": "qwen/qwen3.6-35b-a3b",
+   "benchmarks": {
+    "SWE Verified": 73.4,
+    "Terminal 2.0": 51.5
+   },
+   "sources": [
+    "https://huggingface.co/poolside/Laguna-XS-2.1"
+   ],
+   "reference": true
+  },
+  {
+   "model": "microsoft/mai-code-1-flash",
+   "benchmarks": {
+    "SWE Verified": 71.6,
+    "Terminal 2.0": 54.8
+   },
+   "sources": [
+    "https://huggingface.co/poolside/Laguna-XS-2.1"
+   ],
+   "reference": true
+  },
+  {
+   "model": "anthropic/claude-opus-5",
+   "benchmarks": {
+    "Terminal 2.1": 89.1,
+    "DeepSWE 1.1": 74.0
+   },
+   "sources": [
+    "https://deepmind.google/models/model-cards/gemini-3-8-flash/",
+    "https://aimlapi.com/blog/minimax-m3-1-flash-review"
+   ],
+   "reference": true
+  },
+  {
+   "model": "anthropic/claude-sonnet-5",
+   "benchmarks": {
+    "Terminal 2.1": 80.4,
+    "DeepSWE 1.1": 53.8
+   },
+   "sources": [
+    "https://deepmind.google/models/model-cards/gemini-3-8-flash/",
+    "https://deepmind.google/models/model-cards/gemini-3-6-flash/"
+   ],
+   "reference": true
+  },
+  {
+   "model": "openai/gpt-5.6-sol",
+   "benchmarks": {
+    "Terminal 2.1": 88.8,
+    "DeepSWE 1.1": 72.7
+   },
+   "sources": [
+    "https://deepmind.google/models/model-cards/gemini-3-8-flash/",
+    "https://huggingface.co/zai-org/glm-5.3"
+   ],
+   "reference": true
+  },
+  {
+   "model": "openai/gpt-5.6-terra",
+   "benchmarks": {
+    "Terminal 2.1": 87.4,
+    "DeepSWE 1.1": 69.6
+   },
+   "sources": [
+    "https://deepmind.google/models/model-cards/gemini-3-8-flash/"
+   ],
+   "reference": true
+  },
+  {
+   "model": "openai/gpt-5.6-luna",
+   "benchmarks": {
+    "Terminal 2.1": 84.7,
+    "DeepSWE 1.1": 67.0
+   },
+   "sources": [
+    "https://deepmind.google/models/model-cards/gemini-3-6-flash/"
+   ],
+   "reference": true
+  },
+  {
+   "model": "moonshotai/kimi-k3",
+   "benchmarks": {
+    "Terminal 2.1": 88.3,
+    "DeepSWE 1.1": 67.5
+   },
+   "sources": [
+    "https://huggingface.co/zai-org/glm-5.3",
+    "https://huggingface.co/poolside/Laguna-S-2.1"
+   ],
+   "reference": true
+  },
+  {
+   "model": "deepseek/deepseek-v4-pro",
+   "benchmarks": {
+    "Terminal 2.1": 87.9,
+    "DeepSWE 1.1": 62.7
+   },
+   "sources": [
+    "https://huggingface.co/zai-org/glm-5.3"
+   ],
+   "reference": true
+  },
+  {
+   "model": "qwen/qwen3.8-max",
+   "benchmarks": {
+    "Terminal 2.1": 86.6,
+    "DeepSWE 1.1": 56.6
+   },
+   "sources": [
+    "https://huggingface.co/zai-org/glm-5.3"
+   ],
+   "reference": true
+  },
+  {
+   "model": "anthropic/claude-opus-4.8",
+   "benchmarks": {
+    "Terminal 2.1": 85.0,
+    "DeepSWE 1.1": 58.0
+   },
+   "sources": [
+    "https://huggingface.co/zai-org/glm-5.3"
+   ],
+   "reference": true
+  },
+  {
+   "model": "z-ai/glm-5.2",
+   "benchmarks": {
+    "Terminal 2.1": 81.0,
+    "DeepSWE 1.1": 46.2
+   },
+   "sources": [
+    "https://huggingface.co/zai-org/glm-5.3"
+   ],
+   "reference": true
+  },
+  {
+   "model": "anthropic/claude-fable-5",
+   "benchmarks": {
+    "Terminal 2.1": 88.0,
+    "DeepSWE 1.1": 69.7
+   },
+   "sources": [
+    "https://huggingface.co/zai-org/glm-5.3"
+   ],
+   "reference": true
+  },
+  {
+   "model": "xai/grok-4.5",
+   "benchmarks": {
+    "Terminal 2.1": 83.3,
+    "DeepSWE 1.1": 54.0
+   },
+   "sources": [
+    "https://deepmind.google/models/model-cards/gemini-3-6-flash/"
+   ],
+   "reference": true
+  },
+  {
+   "model": "google/gemini-3.7-flash",
+   "benchmarks": {
+    "Terminal 2.1": 85.8,
+    "DeepSWE 1.1": 65.3
+   },
+   "sources": [
+    "https://deepmind.google/models/model-cards/gemini-3-8-flash/"
+   ],
+   "reference": true
+  },
+  {
+   "model": "google/gemini-3.5-flash",
+   "benchmarks": {
+    "Terminal 2.1": 76.2,
+    "DeepSWE 1.1": 37.0
+   },
+   "sources": [
+    "https://deepmind.google/models/model-cards/gemini-3-6-flash/"
+   ],
+   "reference": true
+  },
+  {
+   "model": "qwen/qwen3.6-27b",
+   "benchmarks": {
+    "Terminal 2.1": 63.4,
+    "DeepSWE 1.1": 13.3,
+    "LiveCodeBench": 83.9
+   },
+   "sources": [
+    "https://huggingface.co/Qwen/Qwen3.8-27B"
+   ],
+   "reference": true
+  },
+  {
+   "model": "qwen/qwen3.7-plus",
+   "benchmarks": {
+    "Terminal 2.1": 64.0,
+    "DeepSWE 1.1": 14.2,
+    "LiveCodeBench": 89.6
+   },
+   "sources": [
+    "https://huggingface.co/Qwen/Qwen3.8-27B"
+   ],
+   "reference": true
+  },
+  {
+   "model": "anthropic/claude-3.5-sonnet-20241022",
+   "benchmarks": {
+    "SWE Verified": 49.0,
+    "BigCodeBench complete": 57.5
+   },
+   "sources": [
+    "https://www.anthropic.com/news/3-5-models-and-computer-use",
+    "https://bigcode-bench.github.io/results.json"
+   ],
+   "reference": true
+  },
+  {
+   "model": "anthropic/claude-3.5-haiku-20241022",
+   "benchmarks": {
+    "SWE Verified": 40.6,
+    "BigCodeBench complete": 59.0
+   },
+   "sources": [
+    "https://www.anthropic.com/news/3-5-models-and-computer-use",
+    "https://bigcode-bench.github.io/results.json"
+   ],
+   "reference": true
+  },
+  {
+   "model": "deepseek/deepseek-v3",
+   "benchmarks": {
+    "SWE Verified": 42.0,
+    "HumanEval": 91.5,
+    "BigCodeBench complete": 62.2
+   },
+   "sources": [
+    "https://arxiv.org/abs/2412.19437",
+    "https://evalplus.github.io/results.json",
+    "https://bigcode-bench.github.io/results.json"
+   ],
+   "reference": true
+  },
+  {
+   "model": "deepseek/deepseek-coder-v2-instruct",
+   "benchmarks": {
+    "HumanEval": 85.4,
+    "BigCodeBench complete": 59.7
+   },
+   "sources": [
+    "https://evalplus.github.io/results.json",
+    "https://bigcode-bench.github.io/results.json"
+   ],
+   "reference": true
+  },
+  {
+   "model": "qwen/qwen2.5-coder-32b-instruct",
+   "benchmarks": {
+    "HumanEval": 92.1,
+    "BigCodeBench complete": 58.0
+   },
+   "sources": [
+    "https://evalplus.github.io/results.json",
+    "https://bigcode-bench.github.io/results.json"
+   ],
+   "reference": true
+  },
+  {
+   "model": "meta/llama-3-70b-instruct",
+   "benchmarks": {
+    "HumanEval": 77.4,
+    "BigCodeBench complete": 54.5
+   },
+   "sources": [
+    "https://evalplus.github.io/results.json",
+    "https://bigcode-bench.github.io/results.json"
+   ],
+   "reference": true
+  },
+  {
+   "model": "anthropic/claude-3-opus",
+   "benchmarks": {
+    "HumanEval": 82.9,
+    "BigCodeBench complete": 57.4
+   },
+   "sources": [
+    "https://evalplus.github.io/results.json",
+    "https://bigcode-bench.github.io/results.json"
+   ],
+   "reference": true
+  },
+  {
+   "model": "anthropic/claude-3-sonnet",
+   "benchmarks": {
+    "HumanEval": 70.7,
+    "BigCodeBench complete": 53.8
+   },
+   "sources": [
+    "https://evalplus.github.io/results.json",
+    "https://bigcode-bench.github.io/results.json"
+   ],
+   "reference": true
+  },
+  {
+   "model": "anthropic/claude-3-haiku",
+   "benchmarks": {
+    "HumanEval": 76.8,
+    "BigCodeBench complete": 50.1
+   },
+   "sources": [
+    "https://evalplus.github.io/results.json",
+    "https://bigcode-bench.github.io/results.json"
+   ],
+   "reference": true
+  },
+  {
+   "model": "google/gemini-1.5-pro-002",
+   "benchmarks": {
+    "HumanEval": 89.0,
+    "BigCodeBench complete": 57.5
+   },
+   "sources": [
+    "https://evalplus.github.io/results.json",
+    "https://bigcode-bench.github.io/results.json"
+   ],
+   "notes": "BigCodeBench row is Gemini-1.5-Pro-API-0514.",
+   "reference": true
+  },
+  {
+   "model": "google/gemini-1.5-flash-002",
+   "benchmarks": {
+    "HumanEval": 82.3,
+    "BigCodeBench complete": 55.1
+   },
+   "sources": [
+    "https://evalplus.github.io/results.json",
+    "https://bigcode-bench.github.io/results.json"
+   ],
+   "notes": "BigCodeBench row is Gemini-1.5-Flash-API-0514.",
+   "reference": true
+  },
+  {
+   "model": "mistralai/mixtral-8x22b-instruct-v0.1",
+   "benchmarks": {
+    "HumanEval": 76.2,
+    "BigCodeBench complete": 50.2
+   },
+   "sources": [
+    "https://evalplus.github.io/results.json",
+    "https://bigcode-bench.github.io/results.json"
+   ],
+   "reference": true
+  },
+  {
+   "model": "deepseek/deepseek-coder-33b-instruct",
+   "benchmarks": {
+    "HumanEval": 81.1,
+    "BigCodeBench complete": 51.1
+   },
+   "sources": [
+    "https://evalplus.github.io/results.json",
+    "https://bigcode-bench.github.io/results.json"
+   ],
+   "reference": true
+  },
+  {
+   "model": "microsoft/phi-3-mini-4k-instruct",
+   "benchmarks": {
+    "HumanEval": 64.6,
+    "BigCodeBench complete": 40.6
+   },
+   "sources": [
+    "https://evalplus.github.io/results.json",
+    "https://bigcode-bench.github.io/results.json"
+   ],
+   "notes": "BigCodeBench row is Phi-3-Mini-128K-Instruct.",
+   "reference": true
+  },
+  {
+   "model": "groq/allam-2-7b",
+   "benchmarks": {
+    "HumanEval": 22.24
+   },
+   "sources": [
+    "https://arxiv.org/abs/2407.15390"
+   ],
+   "notes": "ALLaM paper Table 8: ALLaM-Instruct 7B (the Llama-derived row) HumanEval pass@1 22.24, BigCode harness. The from-scratch 7B instruct row reports no HumanEval. The paper's checkpoints are earlier than the 2-7b release served by Groq, so this is a same-family estimate, not a measurement of allam-2-7b."
+  }
+ ]
+}

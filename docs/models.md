@@ -89,7 +89,8 @@ model-specific failures are tracked separately for those two uses.
 New free catalog models without a score remain manually selectable. SlipAgent
 announces their release and asks you to update SlipAgent for updated scores.
 Scores are refreshed with software updates, without model calls or automatic
-benchmark collection at runtime. The October 16 review scores 68 models, including
+benchmark collection at runtime. The October 26 review scores 73 models, recalculating 48 of
+them from raw published results and keeping the previous reviewed score for the rest. It includes
 Reflection Beam, Xing 4.0, Zamba2, and the Llama 3.2 11B/90B Vision models.
 Zamba2 uses a calibrated MT-Bench coding rating; the Llamas use their preserved
 text-model results. SEA-LION v1 7B Instruct remains unscored because no comparable

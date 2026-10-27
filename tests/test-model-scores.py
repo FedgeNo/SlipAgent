@@ -48,6 +48,11 @@ def test_score_never_makes_a_paid_endpoint_free():
     assert model_score("kilo", "stepfun/step-5-preview-free-experimental") is None
 
 
+def test_groq_models_without_a_vendor_prefix_resolve_to_their_scores():
+    from slipagent.modelscores import SCORES
+    assert ModelInfo("allam-2-7b", provider="groq").score == SCORES["groq/allam-2-7b"] is not None
+
+
 def test_reviewed_free_catalog_exposes_only_documented_benchmark_gaps():
     catalog = json.loads((Path(__file__).parent / "fixtures/free-model-catalog.json").read_text())
     missing = [model.selector for provider, ids in catalog.items()

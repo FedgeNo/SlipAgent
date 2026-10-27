@@ -42,14 +42,17 @@ def test_saved_offsets_reproduce_reviewed_examples(calibration):
     from slipagent.modelscores import model_score
     example = json.loads((ROOT / "scripts/model-score-example.json").read_text())
     assert updater.estimate(example["benchmarks"], calibration) == model_score("kilo", "reflection/beam-free")
-    for model in ("labs-leanstral-1-5", "labs-leanstral-1-5-1"):
-        assert updater.estimate({"FLTEval pass1": 28.9}, calibration) == model_score("mistral", model)
+    scales, records = updater.read_measurements(ROOT / "scripts/model-score-measurements.json")
+    # A fitted score is each model's own Huber location at the fitted offsets.
+    for record in records:
+        if not record["reference"]:
+            assert updater.estimate(record["benchmarks"], calibration) == model_score(
+                "nvidia", record["model"]), record["model"]
 
 
 def test_coding_judge_rating_uses_its_native_scale(calibration):
     from slipagent.modelscores import model_score
-    assert updater.estimate({"MT-Bench coding": 5.2}, calibration) == 16.2
-    assert model_score("nvidia", "zyphra/zamba2-7b-instruct") == 16.2
+    assert updater.estimate({"MT-Bench coding": 5.2}, calibration) == model_score("nvidia", "zyphra/zamba2-7b-instruct")
     with pytest.raises(ValueError, match="between 1 and 10"):
         updater.estimate({"MT-Bench coding": 52}, calibration)
     with pytest.raises(ValueError, match="between 1 and 10"):
@@ -144,4 +147,130 @@ def test_concurrent_table_change_is_preserved(table):
 def test_list_benchmarks_requires_no_model_input(capsys):
     assert updater.main(["--list-benchmarks"]) == 0
     output = capsys.readouterr().out
-    assert "SWE Verified\n" in output and "FLTEval pass1\n" in output
+    assert "SWE Verified\n" in output and "Terminal 2.1\n" in output
+
+
+ABILITIES = {"vendor/a": 3.0, "vendor/b": 1.5, "vendor/c": 0.0, "vendor/d": -1.0, "vendor/e": 2.2}
+OFFSETS = {"SWE Verified": 0.0, "Alpha Bench": 1.0, "Beta Bench": -0.6, "Gamma Bench": 2.0}
+
+
+def measured(model, benchmark, scale=100):
+    from math import exp
+    return round(scale / (1 + exp(-(ABILITIES[model] - OFFSETS[benchmark]))), 6)
+
+
+def measurement(model, *benchmarks, **changes):
+    return {"model": model, "benchmarks": {name: measured(model, name) for name in benchmarks},
+            "sources": ["https://example.invalid/results"], **changes}
+
+
+def write_measurements(tmp_path, models, **extra):
+    path = tmp_path / "measurements.json"
+    path.write_text(json.dumps({"reviewed": "2026-10-26", "models": models, **extra}))
+    return path
+
+
+def synthetic():
+    return [measurement("vendor/a", "SWE Verified", "Alpha Bench"),
+            measurement("vendor/b", "SWE Verified", "Alpha Bench", "Beta Bench"),
+            measurement("vendor/c", "SWE Verified", "Beta Bench"),
+            measurement("vendor/d", "Alpha Bench", "Beta Bench"),
+            measurement("vendor/e", "Alpha Bench")]
+
+
+def test_fit_recovers_scores_and_offsets_from_raw_results(tmp_path, calibration):
+    scales, records = updater.read_measurements(write_measurements(tmp_path, synthetic()))
+    scores, fitted = updater.fit_scores(records, scales, calibration, "2026-10-26")
+    for model, ability in ABILITIES.items():
+        assert scores[model] == round(100 / (1 + 2.718281828459045 ** -ability), 1)
+    for name in ("Alpha Bench", "Beta Bench"):
+        assert fitted["benchmarks"][name]["offset"] == pytest.approx(OFFSETS[name], abs=1e-3)
+    assert fitted["benchmarks"]["SWE Verified"]["offset"] == 0
+    assert fitted["benchmarks"]["Alpha Bench"]["overlap_models"] == 3
+    assert fitted["model_count"] == 5
+
+
+def test_reference_models_calibrate_a_benchmark_without_entering_the_table(tmp_path, calibration, table, capsys):
+    models = synthetic() + [
+        measurement("vendor/a", "SWE Verified", "Alpha Bench", "Gamma Bench", reference=True) | {"model": "paid/ref-1"},
+        measurement("vendor/b", "SWE Verified", "Gamma Bench", reference=True) | {"model": "paid/ref-2"},
+    ]
+    models[-2]["benchmarks"] = {name: measured("vendor/a", name) for name in ("SWE Verified", "Alpha Bench", "Gamma Bench")}
+    models[-1]["benchmarks"] = {name: measured("vendor/b", name) for name in ("SWE Verified", "Gamma Bench")}
+    models.append({"model": "vendor/new", "benchmarks": {"Gamma Bench": measured("vendor/c", "Gamma Bench")},
+                   "sources": ["https://example.invalid/results"]})
+    path = write_measurements(tmp_path, models)
+    args = updater.argparse.Namespace(fit=path, reviewed="2026-10-26", table=table, dry_run=True,
+                                       calibration=tmp_path / "calibration.json")
+    (tmp_path / "calibration.json").write_text("{}")
+    updater.refit(args, calibration)
+    output = capsys.readouterr().out
+    assert "vendor/new: new -> 50.0" in output
+    assert "paid/ref-1" not in output and "paid/ref-2" not in output
+
+
+def test_unconnected_or_thinly_shared_benchmarks_are_rejected(tmp_path, calibration):
+    def fit(models):
+        scales, records = updater.read_measurements(write_measurements(tmp_path, models))
+        return updater.fit_scores(records, scales, calibration, "2026-10-26")
+    def result(model, **benchmarks):
+        return {"model": model, "benchmarks": benchmarks, "sources": ["https://example.invalid/results"]}
+    with pytest.raises(ValueError, match="(Delta|Gamma) Bench shares no chain"):
+        fit(synthetic() + [result("vendor/f", **{"Gamma Bench": 40, "Delta Bench": 30}),
+                           result("vendor/g", **{"Gamma Bench": 50, "Delta Bench": 20})])
+    with pytest.raises(ValueError, match="Gamma Bench needs at least two models"):
+        fit(synthetic() + [result("vendor/f", **{"Gamma Bench": 40, "SWE Verified": 50})])
+    with pytest.raises(ValueError, match="to anchor the scale"):
+        fit([measurement("vendor/a", "Alpha Bench", "Beta Bench"), measurement("vendor/b", "Alpha Bench", "Beta Bench")])
+
+
+def test_conflicting_result_is_downweighted_but_kept(tmp_path, calibration):
+    models = synthetic()
+    models[1]["benchmarks"]["Beta Bench"] = 99.0
+    scales, records = updater.read_measurements(write_measurements(tmp_path, models))
+    scores, _ = updater.fit_scores(records, scales, calibration, "2026-10-26")
+    assert scores["vendor/b"] != round(100 / (1 + 2.718281828459045 ** -ABILITIES["vendor/b"]), 1)
+    assert 70 < scores["vendor/b"] < 90
+
+
+def test_validation_predicts_each_result_of_multi_result_models(tmp_path, calibration):
+    scales, records = updater.read_measurements(write_measurements(tmp_path, synthetic()))
+    _, fitted = updater.fit_scores(records, scales, calibration, "2026-10-26")
+    assert fitted["validation"]["count"] <= 9
+    assert fitted["validation"]["maximum_absolute_error"] < 100
+
+
+@pytest.mark.parametrize("change, message", [
+    ({"reference": "yes"}, "reference must be true or false"),
+    ({"benchmarks": {"SWE Verified": 120}}, "must be between"),
+    ({"benchmarks": {}}, "at least one benchmark"),
+    ({"sources": ["http://example.invalid"]}, "HTTPS source links"),
+])
+def test_invalid_measurements_are_rejected(tmp_path, change, message):
+    with pytest.raises(ValueError, match=message):
+        updater.read_measurements(write_measurements(tmp_path, [measurement("vendor/a", "SWE Verified") | change]))
+
+
+def test_custom_scale_is_applied_to_measurements(tmp_path, calibration):
+    models = synthetic()
+    models[1]["benchmarks"]["Beta Bench"] = measured("vendor/b", "Beta Bench", 10)
+    models[2]["benchmarks"]["Beta Bench"] = measured("vendor/c", "Beta Bench", 10)
+    models[3]["benchmarks"]["Beta Bench"] = measured("vendor/d", "Beta Bench", 10)
+    path = write_measurements(tmp_path, models, scales={"Beta Bench": {"min_score": 1, "max_score": 10}})
+    scales, records = updater.read_measurements(path)
+    scores, fitted = updater.fit_scores(records, scales, calibration, "2026-10-26")
+    assert fitted["benchmarks"]["Beta Bench"]["max_score"] == 10
+    assert fitted["benchmarks"]["Beta Bench"]["offset"] == pytest.approx(OFFSETS["Beta Bench"], abs=1e-3)
+
+
+def test_fit_writes_table_and_calibration_together(tmp_path, calibration, table):
+    path = write_measurements(tmp_path, synthetic())
+    target = tmp_path / "calibration.json"
+    target.write_text((ROOT / "scripts/model-score-calibration.json").read_text())
+    assert updater.main(["--fit", str(path), "--table", str(table), "--calibration", str(target),
+                         "--reviewed", "2026-10-26"]) == 0
+    saved = json.loads(target.read_text())
+    assert saved["reviewed"] == "2026-10-26" and saved["benchmarks"]["Alpha Bench"]["overlap_models"] == 3
+    assert "vendor/a" in table.read_text()
+    # An unmeasured entry keeps its reviewed score.
+    assert '"google/gemini-2.5-flash": 44.2' in table.read_text()

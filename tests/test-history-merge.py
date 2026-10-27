@@ -23,13 +23,15 @@ def make_agent(responses):
     return Agent(client, ToolRegistry(), "test"), client
 
 
-def history_with_posts(total, size=3000):
+def history_with_posts(total, size=3000, run_length=20):
+    """Steps that each read a file; a user request opens every run of run_length steps."""
     history = ConversationHistory()
     messages = []
     for index in range(1, total + 1):
         call_id = f"read-{index}"
-        messages.extend([Message.user(f"Inspect file-{index}.py"),
-                         Message.assistant("Reading", [ToolCall(call_id, "read_file", {"path": f"file-{index}.py"})]),
+        if (index - 1) % run_length == 0:
+            messages.append(Message.user(f"Inspect files from {index}"))
+        messages.extend([Message.assistant("Reading", [ToolCall(call_id, "read_file", {"path": f"file-{index}.py"})]),
                          Message.tool_result(call_id, {"tool": "read_file", "call_id": call_id, "status": "success",
                              "content": "ORIGINAL " * 1000,
                              "artifacts": [{"record_id": index, "step_id": index, "call_id": call_id}]})])
@@ -65,10 +67,13 @@ def schedule(owner, history, client, capabilities=None):
 
 
 def append_posts(history, messages, count, size=3000):
+    """Continue the current run with more file reads."""
     added, _ = history_with_posts(count, size)
     for step in added.steps:
         index = len(history.steps) + 1
-        messages.extend([Message.user(f"Next {index}"), Message.assistant("ORIGINAL " * 1000)])
+        call_id = f"next-{index}"
+        messages.extend([Message.assistant("Reading", [ToolCall(call_id, "read_file", {"path": f"next-{index}.py"})]),
+                         Message.tool_result(call_id, "ORIGINAL " * 1000)])
         history.sync(messages)
         history.steps[-1].summary = step.summary
         history.steps[-1].reasoning_summary = ""
@@ -119,7 +124,7 @@ async def test_each_fixed_block_of_twenty_gets_a_narrative_as_soon_as_its_summar
     record = historical_records(history.steps)[0]
     assert record["step_ids"] == list(range(1, 21)) and record["step_id"] == 20
     assert record["created_at_step"] == 20
-    assert record["sources"][0] == {"step_id": 1, "tool_calls": [{"call_id": "read-1", "tool_name": "read_file"}],
+    assert record["sources"][0] == {"step_id": 1, "run": 1, "tool_calls": [{"call_id": "read-1", "tool_name": "read_file"}],
                                       "artifacts": [{"record_id": 1, "step_id": 1, "call_id": "read-1"}]}
     prompt = content_text(client.calls[0]["messages"][0].content)
     assert "one compact narrative" in prompt and "original `step_id` numbers" in prompt and "call_id" in prompt
@@ -342,7 +347,8 @@ async def test_second_compactor_is_wired_into_completed_agent_steps():
     await agent._archive_step(None)
     await agent.wait_for_compaction()
     assert agent.history.steps[-1].summary == "Completed the newest turn."
-    assert historical_records(agent.history.steps)[0]["step_ids"] == list(range(1, 21))
+    # The new request ends the 19-turn run, which closes its block.
+    assert historical_records(agent.history.steps)[0]["step_ids"] == list(range(1, 20))
     await agent.registry.aclose()
 
 
@@ -460,4 +466,118 @@ async def test_resume_ignores_narratives_from_before_fixed_blocks(tmp_path):
     journal.step(legacy)
     data = journal.load(journal.session_id)
     assert not historical_records(data["history"].steps)
+    await agent.registry.aclose()
+
+
+def history_with_runs(lengths, *, last_ended=True):
+    """Runs of the given lengths; each opens with a request and ends with a reply that calls no tools."""
+    history = ConversationHistory()
+    messages = []
+    for run, length in enumerate(lengths, 1):
+        messages.append(Message.user(f"Request {run}"))
+        for turn in range(length):
+            index = sum(1 for message in messages if message.role == "assistant") + 1
+            if turn == length - 1 and (run < len(lengths) or last_ended):
+                messages.append(Message.assistant(f"Run {run} done"))
+                continue
+            call_id = f"read-{index}"
+            messages.extend([Message.assistant("Reading", [ToolCall(call_id, "read_file", {"path": f"f{index}.py"})]),
+                             Message.tool_result(call_id, "ORIGINAL " * 100)])
+    history.sync(messages)
+    for step in history.steps:
+        step.summary = f"Turn {step.id}: observations " + "detail " * 10
+        step.reasoning_summary = ""
+        step.results_summarized = True
+        step.observed = True
+    return history, messages
+
+
+def spans(history):
+    from slipagent.historymerge import blocks, run_numbers
+    return [(history.steps[first].id, history.steps[last].id)
+            for first, last in blocks(history.steps, run_numbers(history.steps))]
+
+
+def test_a_request_or_a_reply_without_tools_starts_the_next_run():
+    from slipagent.historymerge import run_numbers
+    history = ConversationHistory()
+    history.sync([Message.user("First"), Message.assistant("Look", [ToolCall("a", "list_dir", {})]),
+                  Message.tool_result("a", "x"),
+                  # A prompt sent mid-run starts a new run.
+                  Message.user("Also check y"), Message.assistant("Look", [ToolCall("b", "list_dir", {})]),
+                  Message.tool_result("b", "y"), Message.assistant("Done"),
+                  # A turn after a reply without tools starts a run even without a prompt.
+                  Message.assistant("Following up", [ToolCall("c", "list_dir", {})]), Message.tool_result("c", "z")])
+    assert run_numbers(history.steps) == [1, 2, 2, 3]
+
+
+def test_blocks_close_at_run_ends_after_ten_turns_and_split_long_runs_at_twenty():
+    history, messages = history_with_runs([3, 4, 5, 25, 2])
+    # Short runs share a block until it reaches ten turns; a long run is cut at 20.
+    assert spans(history) == [(1, 12), (13, 32)]
+    extended, _ = history_with_runs([3, 4, 5, 25, 2, 5])
+    # Turns 33–39 waited for more; earlier blocks do not move.
+    assert spans(extended) == [(1, 12), (13, 32), (33, 44)]
+    running, _ = history_with_runs([3, 4, 5], last_ended=False)
+    assert spans(running) == []  # The run is still going and the block is under 20 turns.
+
+
+async def test_run_blocks_get_narratives_with_their_runs_and_five_make_an_era():
+    history, _ = history_with_runs([10, 12, 10, 15, 11])
+    client = MergeClient()
+    owner = StepCompactor(lambda _: None, lambda error: pytest.fail(error))
+    schedule(owner, history, client)
+    await owner.wait()
+    narratives = historical_records(history.steps)
+    assert [(record["step_ids"][0], record["step_ids"][-1]) for record in narratives] == [
+        (1, 10), (11, 22), (23, 32), (33, 47), (48, 58)]
+    assert [record["runs"] for record in narratives] == [[1], [2], [3], [4], [5]]
+    assert {source["run"] for source in narratives[1]["sources"]} == {2}
+    source = client.calls[0]["messages"][1].content
+    assert {item["run"] for item in source["steps"]} == {1}
+    prompt = content_text(client.calls[0]["messages"][0].content)
+    assert "Organize the narrative by run" in prompt and "recall_history` search" not in prompt
+    era = era_records(history.steps)[0]
+    assert era["step_ids"] == list(range(1, 59)) and era["runs"] == [1, 2, 3, 4, 5] and era["step_id"] == 58
+    era_source = client.calls[-1]["messages"][1].content
+    assert [item["runs"] for item in era_source["narratives"]] == [[1], [2], [3], [4], [5]]
+
+
+def test_sessions_with_fixed_block_narratives_keep_them_and_continue_with_run_blocks():
+    history, messages = history_with_posts(55, size=70)
+    attach_layers(history)
+    # The fixed blocks through the last stored narrative stay; later turns follow runs,
+    # and the run that began at turn 41 is still going.
+    assert spans(history) == [(1, 20), (21, 40)]
+    append_posts(history, messages, 5, size=70)
+    assert spans(history) == [(1, 20), (21, 40), (41, 60)]
+
+
+async def test_requests_show_each_turns_run_and_the_current_run():
+    history, messages = history_with_runs([2, 3])
+    messages.append(Message.user("Next request"))
+    view = await history.view(messages, [], keep_steps=50, context_length=200_000, max_output=1000)
+    records = request_input(view)["history"]
+    assert [record["run"] for record in records] == [1, 1, 2, 2, 2]
+    from test_agent import context_records
+    assert context_records(view)[-1]["run"] == 3
+
+
+async def test_run_block_narratives_with_gaps_survive_resume(tmp_path):
+    history, messages = history_with_runs([12, 3])
+    history.steps[4].summary = None
+    history.steps[4].compaction_status = "failed"
+    agent, _ = make_agent([])
+    agent.messages = messages
+    agent.history = history
+    journal = SessionJournal(str(tmp_path), directory=tmp_path / "state")
+    journal.begin(agent)
+    owner = StepCompactor(lambda _: None, lambda error: pytest.fail(error))
+    owner.on_step = journal.step
+    schedule(owner, history, MergeClient())
+    await owner.wait()
+    expected = copy.deepcopy(historical_records(history.steps))
+    assert [record["step_ids"] for record in expected] == [[i for i in range(1, 13) if i != 5]]
+    data = journal.load(journal.session_id)
+    assert historical_records(data["history"].steps) == expected
     await agent.registry.aclose()

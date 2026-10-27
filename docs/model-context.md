@@ -51,7 +51,11 @@ input envelope or system guidance as conversation turns.
 `representation` distinguishes `full`, `compressed`, and `excerpt` history records.
 Full records also include available `compressed_summary` analysis; compressed
 records contain summaries and metadata instead of originals. Every record has a
-`step_id` for retrieving originals with `recall_history`. Excerpts use
+`step_id` for retrieving originals with `recall_history`. Full and compressed
+records, and the current step's metadata, also carry a `run` number. A run starts
+with a user request and ends when the model replies without tool calls or the user
+prompts again; runs are derived from saved records, so older sessions number theirs
+the same way. Narratives and eras list the `runs` they cover. Excerpts use
 `result_excerpt`, `error_excerpt`, or `unclassified_result_excerpt` on calls,
 with separate response excerpts, omission counts, and retrieval guidance.
 Task-source IDs and the current step's `is_tool_result_response` appear in system
@@ -348,10 +352,10 @@ only as far as needed**, and stops as soon as the request fits:
 1. Individual steps are replaced by their summaries, oldest first, until up to
    **two thirds** of the steps are summarized. A step whose summary is missing or
    no smaller keeps its original.
-2. Each fixed block of **20 steps** (1–20, 21–40, …) that lies wholly in the
-   summarized part is replaced by its **narrative**, oldest first.
-3. Each fixed block of **five narratives** (steps 1–100, 101–200, …) is replaced
-   by its **era**, oldest first.
+2. Each narrative block that lies wholly in the summarized part is replaced by
+   its **narrative**, oldest first. A block follows runs: it closes at the end of
+   a run once it holds **10 steps**, and a longer run is cut every **20 steps**.
+3. Each **five consecutive narratives** are replaced by their **era**, oldest first.
 4. Steps in the newest third are summarized, oldest first. The latest tool
    results the model has not seen stay full.
 5. Only then is history omitted, starting at the very beginning of the
@@ -366,12 +370,15 @@ retrievable even when omitted. Project instructions and the retained user prompt
 stay pinned outside the history.
 
 Narratives and eras are written in the background as soon as their inputs
-exist: a narrative once all 20 steps of its block have first-pass summaries
+exist: a narrative once all steps of its block have first-pass summaries
 (a step whose summary failed is left out as a gap), and an era once all five
 narratives of its block exist. Every level is kept, so any request can use
 whichever level fits. Each narrative is built from its steps' individual
-summaries and each era from its five narratives. The prompts require source turn
-citations; narratives also keep the source turn list, call IDs, tool names and
+summaries and each era from its five narratives. The prompts ask for summaries
+organized by run, each run introduced with its number and step range, and for the
+step where each fact, decision, and unresolved item occurred, so `recall_history`
+can fetch it without searching. The harness accepts whatever structure the model
+returns; narratives also keep the source turn list, call IDs, tool names and
 artifact references copied by the harness. `recall_history` can retrieve exact
 turns or search the full archive when a turn number is unknown. A failed block
 is attempted again after 20 more turns. Results and attempt markers persist

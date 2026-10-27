@@ -299,6 +299,10 @@ async def test_compaction_materializes_only_active_work_and_drains_deferred_step
     class Client:
         async def chat(self, **kwargs):
             nonlocal active, peak, calls
+            from slipagent.types import content_text
+            if "Merging Older Conversation History" in content_text(kwargs["messages"][0].content):
+                # The ten one-turn runs also close a narrative block; only turn summaries are counted.
+                return Completion(Message.assistant('{"summary":"Ten requests answered."}'), "stub")
             active += 1
             peak = max(peak, active)
             calls += 1

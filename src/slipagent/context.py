@@ -605,7 +605,10 @@ class ConversationHistory:
         # Budget with every guidance section; each assembled candidate includes only applicable ones.
         system_prefix = system_prefix_for(HistoryText().history_guidance(None), overthinking)
         pinned = [*leading, Message.system(system_prefix.rstrip() + "\n")]
-        metadata: dict[str, Any] = {"step_id": len(self.steps) + 1, "is_tool_result_response": has_results}
+        from .historymerge import next_run, run_numbers
+        runs = run_numbers(self.steps)
+        metadata: dict[str, Any] = {"step_id": len(self.steps) + 1, "run": next_run(self.steps, runs, has_new_user_input),
+                                    "is_tool_result_response": has_results}
         if recovery:
             metadata["request_retry"] = recovery
         edit_guidance = load_prompt('user-edits.md') if user_edits or any(getattr(step, 'user_edits', None) for step in self.steps) else ''
@@ -667,6 +670,7 @@ class ConversationHistory:
                          include_summary: bool = True) -> list[Message]:
             step = self.steps[index]
             part = step.context_messages(compressed=compressed)
+            part = [record_message({**part[0].content, "run": runs[index]})]
             if not compressed and include_summary and step.summary is not None:
                 part = [record_message({**part[0].content, "compressed_summary": step.compressed_text()})]
             if overthinking and index >= len(self.steps) - reasoning_history_steps:
@@ -706,7 +710,7 @@ class ConversationHistory:
             step = self.steps[index]
             disk = step.__dict__.get("_disk") if isinstance(step, CompletedStep) else None
             attached = overthinking and index >= len(self.steps) - reasoning_history_steps
-            key = (*form, attached, filtered_thoughts, step.summary, getattr(step, "reasoning_summary", None),
+            key = (*form, runs[index], attached, filtered_thoughts, step.summary, getattr(step, "reasoning_summary", None),
                    getattr(step, "compaction_status", None), getattr(step, "compaction_error", None))
             cache: dict[Any, tuple[Any, int]] | None = (
                 step.__dict__.setdefault("_sent_bytes", {}) if disk is not None else None)
@@ -749,8 +753,8 @@ class ConversationHistory:
 
         # Selection starts from full originals on every request and compresses
         # only what the budget requires, always from the oldest end: step
-        # summaries up to two thirds of the steps, then 20-turn narratives, then
-        # 100-turn eras, then newer step summaries, then dropping the oldest
+        # summaries up to two thirds of the steps, then run-aligned narratives,
+        # then eras of five narratives, then newer step summaries, then dropping the oldest
         # history. keep_steps remains accepted for older callers.
         count = len(self.steps)
         FULL, STEP, NARRATIVE, ERA, DROPPED = range(5)

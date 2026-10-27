@@ -288,7 +288,8 @@ async def test_summary_comparison_uses_the_same_json_records_for_all_tool_profil
     for native in (True, False):
         view = await history.view(messages, [], keep_steps=5, context_length=small, max_output=256,
                                   native_tools=native, text_tool_history=not native)
-        assert context_records(view)[0] == {"record_type": "history_step", "representation": "compressed", "step_id": step.id, "compressed_summary": step.summary}
+        assert context_records(view)[0] == {"record_type": "history_step", "representation": "compressed", "step_id": step.id,
+                                            "run": 1, "compressed_summary": step.summary}
 
 
 def archived_code_history(lines):

@@ -521,7 +521,7 @@ class SessionJournal:
                     batch = history.steps[previous]
                     if isinstance(batch, CompletedStep) and batch.has_results:
                         batch.observed = False
-            from .historymerge import MERGE_INTERVAL, aligned, validate_era_record, validate_historical_record
+            from .historymerge import MERGE_INTERVAL, servable, validate_era_record, validate_historical_record
             for step_id, saved in data.get("history_merges", {}).items():
                 if type(step_id) is not int or not 1 <= step_id <= len(history.steps):
                     raise ValueError("invalid historical summary anchor")
@@ -534,7 +534,7 @@ class SessionJournal:
                 record = saved.get("summary")
                 # Narratives from before fixed 20-turn blocks are not served;
                 # their blocks are summarized again in the background.
-                if record is not None and aligned(record, MERGE_INTERVAL) and record.get("step_id") == step_id:
+                if record is not None and servable(record, MERGE_INTERVAL) and record.get("step_id") == step_id:
                     validate_historical_record(record, step_id, len(history.steps))
                     setattr(step, "historical_summary", record)
                 era = saved.get("era")

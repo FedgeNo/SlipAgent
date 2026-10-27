@@ -51,8 +51,8 @@ sections, compression inputs, and terminal output use labelled literal text.
 Journals and HTTP transport encode JSON only at their destination boundaries.
 Completed turns have three disk representations: `NNNNNNNN.raw.json`, an
 individual `NNNNNNNN.compressed.json`, a `FIRST-LAST.grouped.json` narrative
-for each 20-turn block made from individual summary files, and a
-`FIRST-LAST.era.json` for each 100-turn block made from its five narratives.
+for each run-aligned block of up to 20 turns made from individual summary files, and a
+`FIRST-LAST.era.json` for each five consecutive blocks made from their narratives.
 Grouped records retain covered turn numbers, call IDs, and artifact references. The
 append-only session journal remains the recovery authority; resume rebuilds the
 file-backed indexes, including for older sessions. Completed Calls inspector
@@ -179,8 +179,8 @@ Context construction proceeds in this order:
    Every step is sent in full while the history fits the budget. Over budget,
    `ConversationHistory.view` applies reductions from the oldest end until the
    estimate fits and the assembled request measures within the limit: step
-   summaries up to two thirds of the steps, then each wholly summarized 20-turn
-   narrative, then each 100-turn era, then summaries in the newest third (never
+   summaries up to two thirds of the steps, then each wholly summarized
+   narrative, then each era, then summaries in the newest third (never
    the unseen batch), then omission from the very beginning. A summary replaces
    its original only when smaller. A narrative or era replaces exactly the
    records covering its listed source steps. Representation costs are cached per
@@ -618,9 +618,15 @@ of primary step accounting. Both compactors omit temperature regardless of the
 working model's explicit setting, and use the selected destination's
 reasoning/routing settings for each attempt.
 
-`historymerge.py` provides the narrative and era jobs. A fixed 20-turn block is
-ready once every turn has a first-pass summary or a failed first pass (a gap);
-a fixed block of five narratives is ready once they all exist. The complete
+`historymerge.py` provides the narrative and era jobs. `run_numbers` derives each
+turn's run from saved records: a turn with user input starts a run, as does a turn
+after a reply without tool calls. `blocks` cuts history into narrative blocks that
+close at a run boundary once they hold ten turns, or at 20 turns within a run; a
+block closes using only its own turns and the next one, so its boundaries never
+move. Sessions with fixed 20-turn narratives (records without `runs`) keep fixed
+blocks through the last of them. A block is ready once every turn has a
+first-pass summary or a failed first pass (a gap); five consecutive blocks are
+ready for an era once all their narratives exist. The complete
 source must fit the provisional route budget; sources are never truncated. All
 jobs call `StepCompactor.request`:
 transient transport failures retry persistently with shared API backoff. Other
@@ -638,13 +644,13 @@ not a list of per-step recaps. Its prompt preserves attribution, uncertainty,
 source turn citations and exact retrieval identifiers.
 
 The block's last `CompletedStep` owns its `historical_summary` record, and the
-last step of a 100-turn block owns its `era_summary`. Narratives retain
-`step_ids` and `sources` (turn IDs, call IDs, names and artifact references)
-copied by the harness, independent of generated prose; eras retain `step_ids`.
+last step of an era's fifth block owns its `era_summary`. Narratives retain
+`step_ids`, `runs`, and `sources` (turn IDs, runs, call IDs, names and artifact references)
+copied by the harness, independent of generated prose; eras retain `step_ids` and `runs`.
 Anchors store `history_merge_attempt` and `era_attempt` before dispatch; journal
-`history_merge` events persist all four fields. Resume validates block alignment,
-IDs and metadata shape; narratives that do not match a fixed block are not
-restored, and their blocks are summarized again. Fork retains the records and
+`history_merge` events persist all four fields. Resume validates IDs and metadata
+shape; a narrative without `runs` must match a fixed 20-turn block, and one that
+does not is not restored, so its turns are summarized again. Fork retains the records and
 attempt markers. These optional
 attributes initialize lazily on existing mutable completed-step objects, so no
 stable dataclass layout changes. The existing compactor owns all merge tasks,

@@ -28,13 +28,14 @@ async def test_full_context_has_one_object_per_turn_and_preserves_original_parts
     assert '# Current Turn Input' in system
     previous, current = context_records(view)
     assert previous == {
-        "record_type": "history_step", "representation": "full", "step_id": 1, "user_prompts": [prompt],
+        "record_type": "history_step", "representation": "full", "step_id": 1, "run": 1, "user_prompts": [prompt],
         "agent_response": "Reading",
         "tool_calls": [{"call_id": "read-1", "tool_name": "read_file", "arguments": {"path": "notes.md"}}],
         "tool_results": [{"call_id": "read-1", "tool_name": "read_file", "status": "unknown", "content": source}],
     }
     assert current == {
-        "record_type": "current_step", "representation": "full", "step_id": 2, "user_prompts": ["Now explain it", "Use ASCII"],
+        "record_type": "current_step", "representation": "full", "step_id": 2, "run": 2,
+        "user_prompts": ["Now explain it", "Use ASCII"],
         "agent_response": None, "tool_calls": [], "tool_results": [], "is_tool_result_response": True,
     }
     assert [message.to_api() for message in originals] == before
@@ -53,8 +54,8 @@ async def test_compressed_records_are_separate_objects_without_original_fields()
     view = await history.view(messages, [], keep_steps=1, context_length=1_000_000, max_output=8192)
     records = context_records(view)
     # Summarizing the two oldest large answers is enough to fit.
-    assert records[:2] == [{"record_type": "history_step", "representation": "compressed", "step_id": i, "compressed_summary": f"Summary {i}"}
-                           for i in range(1, 3)]
+    assert records[:2] == [{"record_type": "history_step", "representation": "compressed", "step_id": i, "run": i,
+                            "compressed_summary": f"Summary {i}"} for i in range(1, 3)]
     assert [record["agent_response"] for record in records[2:-1]] == answers[2:]
     assert records[-1]["record_type"] == "current_step"
     assert records[-1]["user_prompts"] == ["Current task"]

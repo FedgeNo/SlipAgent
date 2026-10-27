@@ -1,10 +1,14 @@
 """Layered summaries over immutable first-pass turn summaries.
 
-Each fixed block of 20 turns (1–20, 21–40, ...) gets one narrative as soon as
-all its turns have finished first-pass compaction, built from their summaries.
-Each fixed block of five narratives (turns 1–100, 101–200, ...) gets one era as
-soon as those narratives exist. Every level is kept; the context view chooses
-which one to serve. The step compactor schedules these jobs with turn summaries.
+A run starts with a user request and ends when the model replies without tool
+calls or the user prompts again. History is cut into blocks that close at a run
+boundary once they hold ten turns, or at 20 turns within a long run. Each block
+gets one narrative as soon as all its turns have finished first-pass compaction,
+built from their summaries; each five consecutive blocks get one era as soon as
+those narratives exist. Sessions that already have fixed 20-turn narratives keep
+fixed blocks through the last of them. Every level is kept; the context view
+chooses which one to serve. The step compactor schedules these jobs with turn
+summaries.
 """
 
 from __future__ import annotations
@@ -25,6 +29,8 @@ if TYPE_CHECKING:
     from .context import HistoryStep
 
 MERGE_INTERVAL = 20
+# A shorter block's narrative rarely shrinks its turn summaries enough to be accepted.
+NARRATIVE_MIN_STEPS = 10
 ERA_NARRATIVES = 5
 ERA_INTERVAL = MERGE_INTERVAL * ERA_NARRATIVES
 MERGE_MAX_CHARS = 12_000
@@ -41,21 +47,98 @@ def aligned(record: Any, interval: int) -> TypeGuard[dict[str, Any]]:
             and all(type(i) is int and anchor - interval < i <= anchor for i in ids))
 
 
+def servable(record: Any, interval: int) -> TypeGuard[dict[str, Any]]:
+    """A fixed-block record from before runs, or a run-block record within one span ending at its anchor.
+
+    Turns whose first pass failed are gaps, so the listed turns need not be consecutive.
+    """
+    if not isinstance(record, dict):
+        return False
+    if "runs" not in record:
+        return aligned(record, interval)
+    anchor, ids = record.get("step_id"), record.get("step_ids")
+    return (type(anchor) is int and anchor > 0 and isinstance(ids, list) and bool(ids)
+            and all(type(i) is int and anchor - interval < i <= anchor for i in ids))
+
+
 def historical_records(steps: list[HistoryStep]) -> list[dict[str, Any]]:
-    """Narratives for fixed 20-turn blocks, oldest first."""
+    """Narratives, oldest first."""
     return [getattr(step, "_disk_group", record) for step in steps
-            if aligned(record := getattr(step, "historical_summary", None), MERGE_INTERVAL)]
+            if servable(record := getattr(step, "historical_summary", None), MERGE_INTERVAL)]
 
 
 def era_records(steps: list[HistoryStep]) -> list[dict[str, Any]]:
-    """Eras for fixed 100-turn blocks, oldest first."""
+    """Eras, oldest first."""
     return [getattr(step, "_disk_era", record) for step in steps
-            if aligned(record := getattr(step, "era_summary", None), ERA_INTERVAL)]
+            if servable(record := getattr(step, "era_summary", None), ERA_INTERVAL)]
+
+
+def _model_record(step: HistoryStep) -> dict[str, Any] | None:
+    disk = getattr(step, "_disk", None)
+    return disk["model"] if disk is not None else None
+
+
+def _prompted(step: HistoryStep) -> bool:
+    record = _model_record(step)
+    if record is not None:
+        return bool(record.get("user_prompts"))
+    return any(message.role == "user" for message in step.messages)
+
+
+def _calls_tools(step: HistoryStep) -> bool:
+    record = _model_record(step)
+    if record is not None:
+        return bool(record.get("tool_calls"))
+    return any(message.tool_calls for message in step.messages if message.role == "assistant")
+
+
+def run_numbers(steps: list[HistoryStep]) -> list[int]:
+    """Each turn's run, numbered from one: user input starts a run, as does a turn after a reply without tools."""
+    runs: list[int] = []
+    run, ended = 0, True
+    for step in steps:
+        if ended or _prompted(step):
+            run += 1
+        runs.append(run)
+        ended = not _calls_tools(step)
+    return runs
+
+
+def next_run(steps: list[HistoryStep], runs: list[int], prompted: bool) -> int:
+    """The run of the turn being requested."""
+    if not runs:
+        return 1
+    return runs[-1] + 1 if prompted or not _calls_tools(steps[-1]) else runs[-1]
+
+
+def blocks(steps: list[HistoryStep], runs: list[int]) -> list[tuple[int, int]]:
+    """Closed narrative blocks as inclusive turn-index ranges, oldest first.
+
+    A block never reopens: it closes on information from its own turns and the
+    turn after it, so later turns cannot move its boundaries.
+    """
+    fixed_end = max((step.id for step in steps if "runs" not in (record := getattr(step, "historical_summary", None) or {})
+                     and aligned(record, MERGE_INTERVAL)), default=0)
+    result = [(start, start + MERGE_INTERVAL - 1) for start in range(0, fixed_end, MERGE_INTERVAL)]
+    first = fixed_end
+    for index in range(fixed_end, len(steps)):
+        size = index - first + 1
+        run_ended = runs[index + 1] != runs[index] if index + 1 < len(steps) else not _calls_tools(steps[index])
+        if size == MERGE_INTERVAL or size >= NARRATIVE_MIN_STEPS and run_ended:
+            result.append((first, index))
+            first = index + 1
+    return result
+
+
+def _covers(record: Any, steps: list[HistoryStep], first: int, last: int) -> bool:
+    """Whether a stored record summarizes this block, gaps aside."""
+    return (isinstance(record, dict) and record.get("step_id") == steps[last].id
+            and bool(record.get("step_ids")) and record["step_ids"][0] >= steps[first].id)
 
 
 def _validate_ids(record: dict[str, Any], anchor: int, total: int, interval: int, representation: str) -> None:
     ids = record["step_ids"]
-    if (not aligned(record, interval) or record["step_id"] != anchor
+    if (not servable(record, interval) or record["step_id"] != anchor
             or not 1 <= anchor <= total or ids != sorted(set(ids))
             or record["record_type"] != "history_step"
             or record["representation"] != representation
@@ -65,23 +148,27 @@ def _validate_ids(record: dict[str, Any], anchor: int, total: int, interval: int
     summary = record["compressed_summary"]
     if not isinstance(summary, str) or not summary.strip() or len(summary) > MERGE_MAX_CHARS:
         raise ValueError("invalid historical narrative")
+    runs = record.get("runs")
+    if runs is not None and (not isinstance(runs, list) or not runs or runs != sorted(set(runs))
+                             or any(type(run) is not int or run < 1 for run in runs)):
+        raise ValueError("invalid historical summary runs")
 
 
 def validate_historical_record(record: Any, anchor: int, total: int) -> None:
     """Validate persisted source identities before they can hide originals."""
-    if not isinstance(record, dict) or set(record) != {
-        "record_type", "representation", "step_id", "step_ids", "sources",
-        "compressed_summary", "created_at_step",
-    }:
+    keys = {"record_type", "representation", "step_id", "step_ids", "sources", "compressed_summary", "created_at_step"}
+    if not isinstance(record, dict) or set(record) - {"runs"} != keys:
         raise ValueError("invalid historical summary record")
     _validate_ids(record, anchor, total, MERGE_INTERVAL, "historical_summary")
     sources = record["sources"]
     ids = record["step_ids"]
     if not isinstance(sources, list) or len(sources) != len(ids):
         raise ValueError("invalid historical retrieval metadata")
+    source_keys = {"step_id", "tool_calls", "artifacts"} | ({"run"} if "runs" in record else set())
     for source, step_id in zip(sources, ids):
-        if (not isinstance(source, dict) or set(source) != {"step_id", "tool_calls", "artifacts"}
-                or source["step_id"] != step_id or not isinstance(source["tool_calls"], list)
+        if (not isinstance(source, dict) or set(source) != source_keys
+                or source["step_id"] != step_id or "run" in source and source["run"] not in record["runs"]
+                or not isinstance(source["tool_calls"], list)
                 or not isinstance(source["artifacts"], list)):
             raise ValueError("invalid historical retrieval metadata")
         for call in source["tool_calls"]:
@@ -91,9 +178,8 @@ def validate_historical_record(record: Any, anchor: int, total: int) -> None:
 
 
 def validate_era_record(record: Any, anchor: int, total: int) -> None:
-    if not isinstance(record, dict) or set(record) != {
-        "record_type", "representation", "step_id", "step_ids", "compressed_summary", "created_at_step",
-    }:
+    keys = {"record_type", "representation", "step_id", "step_ids", "compressed_summary", "created_at_step"}
+    if not isinstance(record, dict) or set(record) - {"runs"} != keys:
         raise ValueError("invalid era summary record")
     _validate_ids(record, anchor, total, ERA_INTERVAL, "era_summary")
 
@@ -120,14 +206,13 @@ def _due(anchor: HistoryStep, attribute: str, total: int) -> bool:
     return not attempt or total - attempt >= MERGE_INTERVAL
 
 
-def _narrative_source(steps: list[HistoryStep], block: int) -> tuple[list[HistoryStep], dict[str, Any]] | None:
+def _narrative_source(steps: list[HistoryStep], runs: list[int], first: int,
+                      last: int) -> tuple[list[HistoryStep], dict[str, Any]] | None:
     """The block's summarized turns, or None while any turn's first pass is unsettled."""
-    members = steps[block * MERGE_INTERVAL:(block + 1) * MERGE_INTERVAL]
-    if len(members) < MERGE_INTERVAL:
-        return None
     batch = []
     source: dict[str, Any] = {"steps": []}
-    for step in members:
+    for index in range(first, last + 1):
+        step = steps[index]
         if step.summary is None:
             # A failed first pass is a permanent gap; anything else may still finish.
             if getattr(step, "compaction_status", None) != "failed":
@@ -137,6 +222,7 @@ def _narrative_source(steps: list[HistoryStep], block: int) -> tuple[list[Histor
         summary = step._disk_summary["summary"] if hasattr(step, "_disk_summary") else step.summary
         source["steps"].append({
             "step_id": step.id,
+            "run": runs[index],
             "tool_calls": [{"call_id": call["call_id"], "tool_name": call["tool_name"]}
                            for call in original["tool_calls"]],
             "artifacts": step.context_messages(compressed=True)[0].content.get("artifacts", []),
@@ -160,14 +246,16 @@ def ready_job(owner: StepCompactor, steps: list[HistoryStep], active: set[Any],
     client, model, capabilities, max_tokens = route
     total = len(steps)
     budget, reserve = _limits(owner, model, capabilities, max_tokens)
+    runs = run_numbers(steps)
+    closed = blocks(steps, runs)
     narrative_prompt = Message.system(load_prompt("historical-summary-prompt.md", max_characters=MERGE_MAX_CHARS))
-    for block in range(total // MERGE_INTERVAL):
-        anchor = steps[(block + 1) * MERGE_INTERVAL - 1]
-        key = ("narrative", block)
-        if (key in active or aligned(getattr(anchor, "historical_summary", None), MERGE_INTERVAL)
+    for first, last in closed:
+        anchor = steps[last]
+        key = ("narrative", anchor.id)
+        if (key in active or _covers(getattr(anchor, "historical_summary", None), steps, first, last)
                 or not _due(anchor, "history_merge_attempt", total)):
             continue
-        prepared = _narrative_source(steps, block)
+        prepared = _narrative_source(steps, runs, first, last)
         if prepared is None:
             continue
         batch, source = prepared
@@ -179,28 +267,31 @@ def ready_job(owner: StepCompactor, steps: list[HistoryStep], active: set[Any],
         return key, _merge(owner, anchor, batch, copy.deepcopy(source), narrative_prompt, client,
                            model, capabilities, reserve, total, owner.generation)
     era_prompt = Message.system(load_prompt("era-summary-prompt.md", max_characters=MERGE_MAX_CHARS))
-    for era in range(total // ERA_INTERVAL):
-        anchor = steps[(era + 1) * ERA_INTERVAL - 1]
-        key = ("era", era)
-        if (key in active or aligned(getattr(anchor, "era_summary", None), ERA_INTERVAL)
+    for start in range(0, len(closed) - ERA_NARRATIVES + 1, ERA_NARRATIVES):
+        group = closed[start:start + ERA_NARRATIVES]
+        anchor = steps[group[-1][1]]
+        key = ("era", anchor.id)
+        if (key in active or _covers(getattr(anchor, "era_summary", None), steps, group[0][0], group[-1][1])
                 or not _due(anchor, "era_attempt", total)):
             continue
         narratives = []
-        for block in range(era * ERA_NARRATIVES, (era + 1) * ERA_NARRATIVES):
-            record = getattr(steps[(block + 1) * MERGE_INTERVAL - 1], "historical_summary", None)
-            if not aligned(record, MERGE_INTERVAL):
+        for first, last in group:
+            record = getattr(steps[last], "historical_summary", None)
+            if not _covers(record, steps, first, last):
                 break
             narratives.append(record)
         if len(narratives) < ERA_NARRATIVES:
             continue
-        era_source = {"narratives": [{"step_ids": record["step_ids"], "compressed_summary": record["compressed_summary"]}
+        era_source = {"narratives": [{"step_ids": record["step_ids"],
+                                      "runs": sorted({runs[step_id - 1] for step_id in record["step_ids"]}),
+                                      "compressed_summary": record["compressed_summary"]}
                                      for record in narratives]}
         if message_tokens([era_prompt, Message.user(era_source)]) > budget:
             continue
         setattr(anchor, "era_attempt", total)
         if owner.on_step is not None:
             owner.on_step(anchor)  # type: ignore[arg-type]
-        return key, _era(owner, anchor, narratives, copy.deepcopy(era_source), era_prompt, client,
+        return key, _era(owner, anchor, narratives, copy.deepcopy(era_source), runs, era_prompt, client,
                          model, capabilities, reserve, total, owner.generation)
     return None
 
@@ -261,7 +352,8 @@ async def _merge(owner: StepCompactor, anchor: HistoryStep, batch: list[HistoryS
     def build(summary: str) -> dict[str, Any]:
         record = {"record_type": "history_step", "representation": "historical_summary",
                   "step_id": anchor.id, "step_ids": [step.id for step in batch],
-                  "sources": [{key: item[key] for key in ("step_id", "tool_calls", "artifacts")}
+                  "runs": sorted({item["run"] for item in source["steps"]}),
+                  "sources": [{key: item[key] for key in ("step_id", "run", "tool_calls", "artifacts")}
                               for item in source["steps"]],
                   "compressed_summary": summary, "created_at_step": created_at}
         validate_historical_record(record, anchor.id, created_at)
@@ -274,17 +366,17 @@ async def _merge(owner: StepCompactor, anchor: HistoryStep, batch: list[HistoryS
         return await _summarize(owner, system, source, replaced, destination, selected, profile,
                                 allowance, generation, build)
 
-    first, last = anchor.id - MERGE_INTERVAL + 1, anchor.id
     await _publish(owner, anchor, "historical_summary", operation, (client, model, capabilities, reserve),
-                   generation, f"turns {first}–{last}")
+                   generation, f"turns {batch[0].id}–{batch[-1].id}")
 
 
 async def _era(owner: StepCompactor, anchor: HistoryStep, narratives: list[dict[str, Any]], source: dict[str, Any],
-               system: Message, client: APIClient, model: str, capabilities: RequestProfile | None,
+               runs: list[int], system: Message, client: APIClient, model: str, capabilities: RequestProfile | None,
                reserve: int, created_at: int, generation: int) -> None:
     def build(summary: str) -> dict[str, Any]:
+        ids = [step_id for narrative in narratives for step_id in narrative["step_ids"]]
         record = {"record_type": "history_step", "representation": "era_summary", "step_id": anchor.id,
-                  "step_ids": [step_id for narrative in narratives for step_id in narrative["step_ids"]],
+                  "step_ids": ids, "runs": sorted({runs[step_id - 1] for step_id in ids}),
                   "compressed_summary": summary, "created_at_step": created_at}
         validate_era_record(record, anchor.id, created_at)
         return record
@@ -296,6 +388,6 @@ async def _era(owner: StepCompactor, anchor: HistoryStep, narratives: list[dict[
         return await _summarize(owner, system, source, replaced, destination, selected, profile,
                                 allowance, generation, build)
 
-    first, last = anchor.id - ERA_INTERVAL + 1, anchor.id
+    ids = [step_id for narrative in narratives for step_id in narrative["step_ids"]]
     await _publish(owner, anchor, "era_summary", operation, (client, model, capabilities, reserve),
-                   generation, f"the era of turns {first}–{last}")
+                   generation, f"the era of turns {ids[0]}–{ids[-1]}")

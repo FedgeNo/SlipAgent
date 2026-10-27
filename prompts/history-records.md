@@ -13,7 +13,7 @@ The user message begins with a JSON metadata object. Tool observations are suppl
 
 ## Calls and Outcomes
 
-Each full history step has `step_id`, `user_prompts`, `agent_response`, and `tool_calls`. `user_prompts` lists the messages the user sent in that step. Each call contains `call_id`, `tool_name`, and `arguments`, with its observation attached by key:
+Each full history step has `step_id`, `run`, `user_prompts`, `agent_response`, and `tool_calls`. `user_prompts` lists the messages the user sent in that step. A run starts with a user request and ends when the agent replies without tool calls or the user prompts again; every history step and the current step's metadata carry their `run` number. Each call contains `call_id`, `tool_name`, and `arguments`, with its observation attached by key:
 
 | Key on the call | Meaning |
 | --- | --- |

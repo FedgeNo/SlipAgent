@@ -214,3 +214,11 @@ async def test_exit_preserves_prompts_waiting_after_commands(tmp_path, metadata_
         assert not session.work.deferred_commands
     finally:
         await cli.Repl(session).shutdown()
+
+
+def test_suggested_prompt_stays_verbatim_and_a_suggestion_when_stripped():
+    from slipagent.terminal import SuggestedPrompt
+    line = SuggestedPrompt("/etc/hosts has a typo ")
+    stripped = line.strip()
+    assert stripped is line and isinstance(stripped, SuggestedPrompt)
+    assert line.strip(" ") == "/etc/hosts has a typo"

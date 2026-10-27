@@ -65,6 +65,10 @@ def _key_supplied(text: str) -> bool:
 class SuggestedPrompt(str):
     """A feed action submitted verbatim, without slash-command dispatch."""
 
+    def strip(self, chars: str | None = None) -> str:
+        # Stripping must not turn a suggestion back into text that dispatches as a command.
+        return self if chars is None else super().strip(chars)
+
 
 class QueuedSuggestion(Submission, SuggestedPrompt):
     """Retain the suggestion contract while waiting in the submission queue."""

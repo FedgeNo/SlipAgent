@@ -306,3 +306,15 @@ async def test_discard_refreshes_queued_previews_without_adding_to_feed():
             assert terminal._queued_prompts == []
         finally:
             terminal.close()
+
+
+async def test_delivered_input_does_not_look_like_a_queue_change():
+    agent = Agent(StubClient([completion('Done')]), ToolRegistry(), 'test')
+    agent.enqueue('Follow-up')
+    await agent._queued_context([], 1)
+    assert not input_queue(agent).changed()
+    agent._queued_messages_sent()
+    # A retry of the delivered request must not rebuild its context for nothing.
+    assert not input_queue(agent).changed()
+    agent.enqueue('Typed after delivery')
+    assert input_queue(agent).changed()

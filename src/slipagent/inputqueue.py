@@ -51,6 +51,9 @@ class InputQueue:
     def sent(self, count: int) -> None:
         self.snapshot()
         del self.entries[:count]
+        # Delivered input was part of the prepared context; only later changes count.
+        if self.prepared is not None:
+            self.prepared = self.prepared[count:]
 
     def signature(self) -> tuple[str, ...]:
         return tuple(identifier for identifier, _ in self.snapshot())

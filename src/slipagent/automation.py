@@ -30,7 +30,7 @@ class JsonEventStream:
     def event(self, event: AgentEvent) -> None:
         # Completed observations and saved sessions retain the useful data;
         # provider token fragments would swamp an evaluation trace.
-        if event.kind in {"reasoning_delta", "assistant_delta", "tool_output"}:
+        if event.kind in {"reasoning_delta", "assistant_delta", "tool_output", "tool_label", "tool_label_reset"}:
             return
         values = asdict(replace(event, request_body=None))
         values.pop("request_body")

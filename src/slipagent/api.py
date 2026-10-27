@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import re
 import copy
 import math
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -938,6 +939,11 @@ class _PacingExcluded(httpx.AsyncByteStream):
             yield chunk
 
 
+# A call's description is shown early only when it is the first argument.
+_LEADING_KEY = re.compile(r'\s*\{\s*"((?:[^"\\]|\\.)*)"')
+_LEADING_LABEL = re.compile(r'\s*\{\s*"call_label"\s*:\s*("(?:[^"\\]|\\.)*")')
+
+
 class _StreamCompletion:
     """Assemble text, indexed tool fragments, and final usage from SSE events."""
 
@@ -959,6 +965,34 @@ class _StreamCompletion:
         self.reasoning: list[str] = []
         self.function_call: dict[str, Any] = {}
         self.tool_blocks: list[dict[str, Any]] = []
+        # Calls whose leading description was announced, or that cannot have one.
+        self.labelled: set[int] = set()
+
+    def announce_label(self, index: int) -> None:
+        """Report a call's description as soon as it completes, when it leads the arguments."""
+        call = self.calls[index]
+        parts = self.argument_parts.get(index)
+        if parts is None:
+            arguments = call["function"]["arguments"]
+            first = next(iter(arguments), None) if isinstance(arguments, dict) else None
+            label = arguments.get(first) if first == "call_label" else None
+            decided = True
+        else:
+            text = "".join(parts)
+            match = _LEADING_LABEL.match(text)
+            label = json.loads(match[1]) if match else None
+            key = _LEADING_KEY.match(text)
+            decided = match is not None or (key is not None and key[1] != "call_label") or len(text) > 100_000
+        if label is None:
+            if decided:
+                self.labelled.add(index)
+            return
+        name = call["function"]["name"]
+        if not call["id"] or not name:
+            return
+        self.labelled.add(index)
+        if isinstance(label, str) and label.strip():
+            self.on_delta("tool_label", json.dumps({"id": call["id"], "name": name, "label": label}))
 
     @property
     def content(self) -> str:
@@ -1098,6 +1132,8 @@ class _StreamCompletion:
                         else:
                             call["function"]["arguments"] = arguments
                             self.argument_parts[index] = None
+                        if index not in self.labelled:
+                            self.announce_label(index)
                 legacy = delta.get("function_call")
                 if legacy is not None:
                     if not isinstance(legacy, dict):

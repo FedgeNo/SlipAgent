@@ -1510,6 +1510,14 @@ class TerminalUI:
         self._wrapped_columns = 0
         return True
 
+    def clear_records(self, start: int, stop: int) -> None:
+        """Empty the records of an abandoned block, keeping every other record's index."""
+        self._ensure_transcript()
+        for index in range(start, min(stop, len(self._raw_output))):
+            self._raw_output.clear_record(index)
+        self._wrapped_columns = 0
+        self.app.invalidate()
+
     def record_count(self) -> int:
         """Records written so far; a position for `show_tail_first`."""
         self._ensure_transcript()

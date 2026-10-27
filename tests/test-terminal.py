@@ -2955,6 +2955,28 @@ async def test_directory_launch_notifies_without_replacing_agent_status(display,
                                                 "New notice" if new_notice else "")
 
 
+async def test_early_description_leaves_the_feed_when_its_attempt_is_abandoned(display):
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        renderer = Renderer(Style(False), sink, False)
+        renderer.terminal = ui
+        task = asyncio.create_task(ui.run())
+        try:
+            renderer.handle(AgentEvent(kind="tool_label", text="Reading the config", tool_call=ToolCall("call-1", "read_file")))
+            await wait_until(lambda: "Reading the config" in "\n".join(snapshot()[:17]))
+            renderer.handle(AgentEvent(kind="tool_label_reset"))
+            await wait_until(lambda: "Reading the config" not in "\n".join(snapshot()[:17]))
+            call = ToolCall("call-1", "read_file", {"call_label": "Reading the config", "path": "a.py"})
+            renderer.handle(AgentEvent(kind="tool_label", text="Reading the config", tool_call=ToolCall("call-1", "read_file")))
+            renderer.handle(AgentEvent(kind="tool_start", step=1, tool_call=call))
+            await wait_until(lambda: 'read_file({"path": "a.py"})' in "\n".join(snapshot()[:17]))
+            assert "\n".join(snapshot()[:17]).count("Reading the config") == 1
+        finally:
+            ui.close()
+            await task
+
+
 async def test_model_readout_before_the_danger_divider_is_not_a_folder_link(display, tmp_path, monkeypatch):
     from slipagent import terminal
     sink, _, output, _, _ = display

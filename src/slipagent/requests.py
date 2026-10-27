@@ -18,7 +18,7 @@ from .prompts import load_prompt, model_prompt_profile
 from .protocol import AgentResponse, ResponseFormatError, model_response_format, parse_agent_response
 from .streaming import ResponseStream
 from .tools.base import ToolRegistry
-from .types import Completion, Message, ToolSpec, Usage
+from .types import Completion, Message, ToolCall, ToolSpec, Usage
 
 from .events import AgentEvent
 
@@ -103,8 +103,13 @@ class RequestDriver:
             xml_tool_calls = model_prompt_profile(self.settings.model).get("xml_tool_calls", False)
             preview = ResponseStream(xml_tool_calls=xml_tool_calls)
             received_content = False
+            labels_shown = False
             def end_preview(*, failed: bool = False) -> None:
+                nonlocal labels_shown
                 self.hooks.emit(AgentEvent(kind="stream_end", step=step))
+                if failed and labels_shown:
+                    labels_shown = False
+                    self.hooks.emit(AgentEvent(kind="tool_label_reset", step=step))
                 if failed and preview.text:
                     self.hooks.emit(AgentEvent(kind="warning", step=step, text=(
                         "Response preview was not accepted. No tools from this attempt were executed."
@@ -148,9 +153,16 @@ class RequestDriver:
                     instructions.presented(self.registry.services.get("instruction_snapshot", {}))
                 self.hooks.emit(AgentEvent(kind="context", step=step, request_body=request))
             def delta(kind: str, chunk: str) -> None:
-                nonlocal received_content
+                nonlocal received_content, labels_shown
                 if kind == "content":
                     received_content = True
+                if kind == "tool_label":
+                    # A description that leads a call's arguments reaches the feed before the call runs.
+                    announced = json.loads(chunk)
+                    labels_shown = True
+                    self.hooks.emit(AgentEvent(kind="tool_label", step=step, text=announced["label"],
+                                               tool_call=ToolCall(announced["id"], announced["name"])))
+                    return
                 stream_guard.feed(kind, chunk)
                 if kind == "reasoning" and chunk:
                     self.hooks.emit(AgentEvent(kind="reasoning_delta", step=step, text=chunk))

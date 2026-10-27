@@ -248,6 +248,7 @@ class Renderer:
     ) -> None:
         plain = strip_sequences(text)
         self._last_output_blank = not plain.rsplit("\n", 1)[-1].strip()
+        self.__dict__["_writes"] = self.__dict__.get("_writes", 0) + 1
         if self.terminal is not None:
             self.terminal.write(text, continuation_indents=continuation_indents, user_prompt=user_prompt)
             return
@@ -529,9 +530,33 @@ class Renderer:
         elif error and (not previous or seconds % 10 == 0):
             self.emit(self.style.dim(f"  Retrying in {seconds}s."), separate=False)
 
+    def _early_label(self, call: ToolCall, text: str) -> None:
+        """Show a description that led its call's arguments, before the call runs."""
+        label = " ".join(text.split())
+        # Searches keep their heading until the result, so concurrent calls cannot split the file list.
+        if not label or call.name == "answer" or (self.terminal is not None and call.name == "grep"):
+            return
+        start = self.terminal.record_count() if self.terminal is not None else 0
+        self.emit(self.style.magenta(f"  ⚙ {label}"), block=self._model_block, tool=True)
+        stop = self.terminal.record_count() if self.terminal is not None else 0
+        self.__dict__.setdefault("_early_labels", {})[call.id] = {
+            "label": label, "start": start, "stop": stop, "writes": self.__dict__.get("_writes", 0)}
+
+    def _drop_early_labels(self) -> None:
+        """An abandoned attempt's descriptions describe calls that will never run."""
+        early = self.__dict__.pop("_early_labels", {})
+        if self.terminal is not None:
+            for entry in early.values():
+                self.terminal.clear_records(entry["start"], entry["stop"])
+
     def _tool_heading(self, call: ToolCall) -> None:
         from .calllabels import call_label, raw_call
         label = call_label(call)
+        early = self.__dict__.get("_early_labels", {}).pop(call.id, None)
+        # With nothing written since the description, only the exact call remains to show.
+        if early is not None and early["label"] == label and early["writes"] == self.__dict__.get("_writes", 0):
+            self.emit(self.style.thought(f"    {raw_call(call)}"), block=self._model_block, tool=True)
+            return
         if label:
             # The label is for everyone; the exact call stays visible beneath it.
             self.emit(self.style.magenta(f"  ⚙ {label}") + "\n" + self.style.thought(f"    {raw_call(call)}"),
@@ -580,6 +605,7 @@ class Renderer:
 
         elif event.kind == "step_start":
             self._finish_stream()
+            self.__dict__.pop("_early_labels", None)
             self.__dict__["_reply_preview"] = []
             if event.step == 1:
                 self._model_block = object()
@@ -643,6 +669,12 @@ class Renderer:
         elif event.kind == "user_queue_changed":
             if self.terminal is not None:
                 self.terminal.set_queued_prompts(json.loads(event.text))
+
+        elif event.kind == "tool_label" and event.tool_call is not None:
+            self._early_label(event.tool_call, event.text)
+
+        elif event.kind == "tool_label_reset":
+            self._drop_early_labels()
 
         elif event.kind == "tool_start" and event.tool_call is not None:
             self._tool_streamed = False

@@ -654,58 +654,6 @@ async def test_feed_scrollbar_click_drag_and_follow(display):
             await task
 
 
-@pytest.mark.parametrize("inspect", [False, True])
-async def test_scrollbar_uses_pixel_movements_within_one_terminal_cell(display, inspect):
-    sink, _, output, _, snapshot = display
-    with create_pipe_input() as pipe:
-        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
-        ui.write("\n".join(f"row {n:03}" for n in range(300)))
-        ui.input.text = "Keep this draft"
-        if inspect:
-            ui.toggle_inspection()
-        task = asyncio.create_task(ui.run())
-        try:
-            await wait_until(lambda: "row 299" in "\n".join(snapshot()))
-            # The terminal supports mode 1016 and reports 10x20-pixel cells.
-            pipe.send_text("\x1b[?1016;2$y\x1b[6;20;10t")
-            await wait_until(lambda: "\x1b[?1016h" in sink.getvalue())
-            column = 741 if inspect else 991
-            # Click near the top, then grab the thumb in its first cell.
-            await send_keys(ui, pipe, f"\x1b[?1016;1$y\x1b[<0;{column};1M\x1b[<0;{column};1m")
-            assert snapshot()[0].startswith("row 000")
-            await send_keys(ui, pipe, f"\x1b[<0;{column};1M")
-            positions = []
-            for pixel in (24, 28, 32, 36):
-                await send_keys(ui, pipe, f"\x1b[<32;{column};{pixel}M")
-                positions.append(int(snapshot()[0].split()[1]))
-            assert positions == sorted(set(positions))
-            assert 17 < positions[0] < positions[-1] < 35
-            await send_keys(ui, pipe, f"\x1b[<0;{column};36m")
-            await render_after(ui, ui.app.invalidate)
-            assert int(snapshot()[0].split()[1]) == positions[-1]
-            thumb_row = next(row for row, line in enumerate(snapshot()[:17]) if line[column // 10] == "┃")
-            pixel = thumb_row * 20 + 5
-            # Grabbing a rounded thumb preserves the exact viewport origin.
-            await send_keys(ui, pipe, f"\x1b[<0;{column};{pixel}M\x1b[<32;{column};{pixel}M\x1b[<0;{column};{pixel}m")
-            assert int(snapshot()[0].split()[1]) == positions[-1]
-            # A font/renderer reset can retain exactly the same grid dimensions.
-            queries = sink.getvalue().count("\x1b[16t")
-            await render_after(ui, ui.app._on_resize)
-            assert sink.getvalue().count("\x1b[16t") == queries + 1
-            activations = sink.getvalue().count("\x1b[?1016h")
-            pipe.send_text("\x1b[6;20;10t")
-            await wait_until(lambda: sink.getvalue().count("\x1b[?1016h") == activations + 1)
-            # Ordinary prompt clicks still use terminal-cell hit targets.
-            await send_keys(ui, pipe, "\x1b[?1016;1$y\x1b[<0;51;361M\x1b[<0;51;361m")
-            assert ui.input.text == "Keep this draft"
-            assert ui.input.buffer.cursor_position == 3
-            assert ui.app.layout.current_control is ui.input.control
-        finally:
-            ui.close()
-            await task
-        assert sink.getvalue().rfind("\x1b[?1016l") > sink.getvalue().rfind("\x1b[?1016h")
-
-
 async def test_scrollbar_last_cell_reaches_the_end_of_the_feed(display):
     sink, _, output, _, snapshot = display
     with create_pipe_input() as pipe:
@@ -737,21 +685,18 @@ async def test_held_thumb_at_the_end_keeps_following_new_output(display):
         task = asyncio.create_task(ui.run())
         try:
             await wait_until(lambda: "row 299" in "\n".join(snapshot()))
-            pipe.send_text("\x1b[?1016;2$y\x1b[6;20;10t")
-            await wait_until(lambda: "\x1b[?1016h" in sink.getvalue())
-            await send_keys(ui, pipe, "\x1b[?1016;1$y\x1b[<0;991;1M\x1b[<0;991;1m")
+            await send_keys(ui, pipe, "\x1b[<0;100;1M\x1b[<0;100;1m")
             assert snapshot()[0].startswith("row 000")
-            # Dragged to 15.6 of 16 cells of travel, the thumb paints in the
-            # track's last cell: that is the bottom position, held down.
-            await send_keys(ui, pipe, "\x1b[<0;991;1M\x1b[<32;991;313M")
+            # Dragged to the track's last cell, the thumb is at the bottom position, held down.
+            await send_keys(ui, pipe, "\x1b[<0;100;1M\x1b[<32;100;17M")
             assert snapshot()[16][99] == "┃"
             assert ui.transcript._following
             for n in range(3):
                 ui.write(f"new {n}")
-                await send_keys(ui, pipe, "\x1b[<32;991;313M")
+                await send_keys(ui, pipe, "\x1b[<32;100;17M")
                 assert snapshot()[15].startswith(f"new {n}")
                 assert ui.transcript._following
-            pipe.send_text("\x1b[<0;991;313m")
+            pipe.send_text("\x1b[<0;100;17m")
             await wait_until(lambda: ui._scrollbar.drag_offset is None)
         finally:
             ui.close()
@@ -4481,3 +4426,10 @@ async def test_restored_transcript_shows_its_end_first_and_completes_in_backgrou
         finally:
             ui.close()
             await task
+
+
+def test_redraws_are_capped_at_ten_per_second(display):
+    sink, _, output, _, _ = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        assert ui.app.min_redraw_interval == pytest.approx(0.1)

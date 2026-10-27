@@ -9,12 +9,33 @@ from prompt_toolkit.data_structures import Point
 from prompt_toolkit.formatted_text.utils import fragment_list_to_text
 from prompt_toolkit.layout.layout import walk
 from prompt_toolkit.layout.mouse_handlers import MouseHandlers
+from prompt_toolkit.output.vt100 import Vt100_Output
 from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 
-from .pixelmouse import PixelMouse
 
 if TYPE_CHECKING:
     from .terminal import TerminalUI
+
+
+def limit_mouse_reports(output: object) -> None:
+    """Ask the terminal for clicks, drags, and the wheel, not every pointer movement.
+
+    prompt_toolkit requests all-motion reporting (1003), which floods a slow
+    link while the pointer moves.
+    """
+    if not isinstance(output, Vt100_Output):
+        return
+
+    def enable() -> None:
+        for mode in ("1000", "1002", "1015", "1006"):
+            output.write_raw(f"\x1b[?{mode}h")
+
+    def disable() -> None:
+        for mode in ("1000", "1015", "1006", "1002", "1003"):
+            output.write_raw(f"\x1b[?{mode}l")
+
+    output.enable_mouse_support = enable
+    output.disable_mouse_support = disable
 
 
 def _click_takes_no_input(ui: TerminalUI, app: Application[None]) -> bool:
@@ -34,12 +55,6 @@ def _click_takes_no_input(ui: TerminalUI, app: Application[None]) -> bool:
 def route_mouse(ui: TerminalUI, app: Application[None]) -> None:
     from .terminal import FEED_LINK_PREFIXES, InputWindow
 
-    if app.is_running and not app.is_done:
-        if "_pixel_mouse" not in ui.__dict__:
-            ui.__dict__["_pixel_mouse"] = PixelMouse.attach(app)
-        pixel_mouse = ui.__dict__["_pixel_mouse"]
-        if pixel_mouse is not None:
-            pixel_mouse.refresh()
     original = app.renderer.mouse_handlers
 
     def mouse_handler(event: MouseEvent) -> object:
@@ -96,22 +111,12 @@ def route_mouse(ui: TerminalUI, app: Application[None]) -> None:
         try:
             screen = app.renderer._last_screen
             if screen is not None:
-                precise = ui.__dict__.get("_pixel_position")
                 if ui._scrollbar.drag_offset is not None and event.event_type == MouseEventType.MOUSE_MOVE:
                     # A grabbed thumb follows the pointer's height wherever it
                     # drifts: off the one-column track, or past either end.
                     for hit_window, position in screen.visible_windows_to_write_positions.items():
                         if hit_window.content is ui._scrollbar:
-                            row = precise[1] - app.renderer.rows_above_layout if precise is not None else event.position.y
-                            return ui._scrollbar.pointer(event, row - position.ypos)
-                if precise is not None:
-                    for hit_window, position in screen.visible_windows_to_write_positions.items():
-                        if hit_window.content is ui._scrollbar and (
-                            position.xpos <= event.position.x < position.xpos + position.width
-                            and position.ypos <= event.position.y < position.ypos + position.height
-                        ):
-                            return ui._scrollbar.pointer(event, precise[1] - position.ypos
-                                                         - app.renderer.rows_above_layout)
+                            return ui._scrollbar.pointer(event, event.position.y - position.ypos)
                 position = screen.visible_windows_to_write_positions.get(ui.transcript)
                 info = ui.transcript.render_info
                 # The feed must be live on screen, whichever window has focus; the

@@ -50,7 +50,7 @@ from .statusline import NOTICE_SECONDS, PULSE_FRAMES, TIP_SECONDS, StatusLine
 from .mainarea import MainArea
 from .menulifecycle import MenuLifecycle
 from .terminalbindings import build_bindings
-from .terminalmouse import route_mouse
+from .terminalmouse import limit_mouse_reports, route_mouse
 from .terminallayout import build_layout, build_style
 
 FOOTER_ROWS = 7
@@ -70,7 +70,7 @@ class QueuedSuggestion(Submission, SuggestedPrompt):
     """Retain the suggestion contract while waiting in the submission queue."""
 
 
-MIN_REDRAW_INTERVAL = 1 / 30
+MIN_REDRAW_INTERVAL = 1 / 10
 # Animation frames; idle screens redraw only on events and display deadlines.
 REFRESH_INTERVAL = .15
 FEED_LINK_PREFIXES = ("class:artifact-", "class:file-", "class:directory-", "class:suggestion-")
@@ -206,6 +206,7 @@ class TerminalUI:
         project_directory: Path | None = None,
     ) -> None:
         self.output = output if output is not None else create_output(stdout=stream)
+        limit_mouse_reports(self.output)
         self._status = status
         self._status_suffix = status_suffix
         self._project_directory = project_directory
@@ -2037,8 +2038,7 @@ class TerminalUI:
     def _refresh_needed(self, last: float, now: float) -> bool:
         """Whether time alone changed what the screen shows since the last tick."""
         status = self.status_line
-        pixel = self.__dict__.get("_pixel_mouse")
-        if (self.working or status.marquees or (pixel is not None and pixel.enabling)
+        if (self.working or status.marquees
                 or status.changed_at is not None and now - status.changed_at < 1):
             return True
         if (self._viewer_active or self.__dict__.get("_editor_active")) and now - last >= 1:
@@ -2072,9 +2072,6 @@ class TerminalUI:
             self._close_transcript()
 
     def _close_transcript(self) -> None:
-        pixel_mouse = self.__dict__.pop("_pixel_mouse", None)
-        if pixel_mouse is not None:
-            pixel_mouse.close()
         panel = self.__dict__.get("_editor_panel")
         if panel is not None:
             panel.dispose()

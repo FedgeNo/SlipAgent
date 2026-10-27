@@ -1326,7 +1326,7 @@ to the model along with the active generation number.
   after the active response and tool batch finish. Reset, resume,
   and compatible component reloads preserve this process setting; journals do
   not restore it. Each request supplies a current Workspace Access section, and
-  the footer reserves room for a red `| Danger Mode` suffix when active.
+  the footer reserves room for a `  │  Danger Mode` suffix (readout-colored divider, red label) when active.
   External atomic writes retain descriptor-based traversal from the target's
   filesystem root. Git ancestor discovery stops at the filesystem root in danger
   mode. External instruction scopes include the target's ancestors and are

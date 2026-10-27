@@ -1606,7 +1606,9 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             assert "Ready" in screen.display[17]
             assert "Startup complete" in "\n".join(screen.display[:17])
             os.write(master, b"/danger on\r")
-            wait_for(lambda: " | Danger Mode" in screen.display[23])
+            wait_for(lambda: "  │  Danger Mode" in screen.display[23])
+            pipe_column = screen.display[23].index("  │  Danger Mode") + 2
+            assert screen.buffer[23][pipe_column].fg == screen.buffer[23][screen.display[23].index("Model:")].fg
             start = screen.display[23].index("Danger Mode")
             assert all(screen.buffer[23][column].fg == "ff929b" for column in range(start, start + len("Danger Mode")))
             os.write(master, b"/danger off\r")

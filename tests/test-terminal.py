@@ -2955,6 +2955,19 @@ async def test_directory_launch_notifies_without_replacing_agent_status(display,
                                                 "New notice" if new_notice else "")
 
 
+async def test_model_readout_before_the_danger_divider_is_not_a_folder_link(display, tmp_path, monkeypatch):
+    from slipagent import terminal
+    sink, _, output, _, _ = display
+    monkeypatch.setattr(terminal, "folder_opener", lambda: ("test-opener",))
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "Model: stub/model  \u2502  Danger Mode", sink, input=pipe, output=output,
+                        project_directory=tmp_path)
+        try:
+            assert not any("clickable" in fragment[0] for fragment in ui._status_fragments())
+        finally:
+            ui.close()
+
+
 @pytest.mark.parametrize("available", [True, False])
 async def test_tool_directory_links_wrap_hover_click_and_preserve_selection(display, tmp_path, monkeypatch, available):
     from unittest.mock import Mock
@@ -3020,13 +3033,15 @@ async def test_danger_status_suffix_is_red_last_and_survives_resize(display, tmp
             assert "Danger Mode" not in snapshot()[23]
             session.workspace.access.danger = True
             ui.app.invalidate()
-            await wait_until(lambda: " | Danger Mode" in snapshot()[23])
+            await wait_until(lambda: "  │  Danger Mode" in snapshot()[23])
             assert snapshot()[23].index("Model: stub/model") < snapshot()[23].index("Danger Mode")
+            pipe_column = snapshot()[23].index("  │  Danger Mode") + 2
+            assert screen.buffer[23][pipe_column].fg == screen.buffer[23][snapshot()[23].index("Model:")].fg
             start = snapshot()[23].index("Danger Mode")
             assert all(screen.buffer[23][column].fg == "ff929b" for column in range(start, start + len("Danger Mode")))
             choice = asyncio.create_task(ui.choose("Commands", [("one", "One")]))
             await wait_until(lambda: snapshot()[17].strip() == "Commands")
-            assert " | Danger Mode" in snapshot()[23]
+            assert "  │  Danger Mode" in snapshot()[23]
             assert "Enter or click = select" in snapshot()[23]
             pipe.send_text("\x1b")
             assert await asyncio.wait_for(choice, 3) is None
@@ -3034,7 +3049,7 @@ async def test_danger_status_suffix_is_red_last_and_survives_resize(display, tmp
             size[0] = Size(rows=24, columns=35)
             screen.resize(lines=24, columns=35)
             ui.app._on_resize()
-            await wait_until(lambda: " | Danger Mode" in snapshot()[23] and "Model: stub/model" in snapshot()[23])
+            await wait_until(lambda: "  │  Danger Mode" in snapshot()[23] and "Model: stub/model" in snapshot()[23])
             session.workspace.access.danger = False
             ui.app.invalidate()
             await wait_until(lambda: "Danger Mode" not in snapshot()[23])

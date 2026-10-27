@@ -103,6 +103,9 @@ MENU_OPTIONS = command_menu_options()
 
 # Divider between the working directory and the free-call readout.
 _READOUT_SEP = "  │  "
+# Danger-mode indicator: a separator in the readout's dim color, then a red label.
+_DANGER_SEP = "  │  "
+_DANGER_LABEL = "Danger Mode"
 
 
 # --------------------------------------------------------------------------- #
@@ -1697,12 +1700,25 @@ class StatusLine:
             if not cwd:
                 model = self.fit(model, available)
         parts = [part for part in (cwd, model) if part]
+        suffix = self.fit(danger, columns, keep_end=True) if columns else danger
         return (style.dim(self.fit(_READOUT_SEP.join(parts), available) if columns else _READOUT_SEP.join(parts))
-                + style.red(self.fit(danger, columns, keep_end=True) if columns else danger))
+                + self._danger_text(suffix))
 
     def danger_suffix(self) -> str:
         session, style = self.session, self.style
-        return style.red(" | Danger Mode") if session.workspace.access.danger else ""
+        if not session.workspace.access.danger:
+            return ""
+        return style.dim(_DANGER_SEP) + style.red(_DANGER_LABEL)
+
+    def _danger_text(self, plain: str) -> str:
+        """Style a fitted suffix: the separator matches the readout, the label stays red."""
+        if not plain:
+            return ""
+        index = plain.find(_DANGER_LABEL)
+        if index < 0:
+            # A narrow terminal can clip into the label; the remainder stays red.
+            return self.style.red(plain)
+        return self.style.dim(plain[:index]) + self.style.red(plain[index:])
 
     def cwd(self) -> str:
         """Show the tools' working directory, abbreviating the home directory."""

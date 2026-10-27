@@ -939,7 +939,7 @@ class TerminalUI:
             return fragments
         text = fragment_list_to_text(fragments)
         cwd, separator, _ = text.partition("  │  ")
-        if not separator or cwd.startswith("model:"):
+        if not separator or cwd.lower().startswith("model:"):
             return fragments
         remaining = len(cwd)
         result: StyleAndTextTuples = []

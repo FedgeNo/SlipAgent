@@ -461,7 +461,8 @@ navigation, and Git tools. `/danger off` restores confinement; a bare `/danger`
 or `/danger status` reports the mode. During work, changes queue until the current response and
 complete tool batch finish, keeping that batch on one access policy.
 While active, the bottom readout ends with
-`| Danger Mode` in red. The current mode is supplied to the model on every request.
+`│  Danger Mode`: the divider, with two spaces on each side, takes the readout's color
+and the label is red. The current mode is supplied to the model on every request.
 The working directory and relative-path base stay the same. OS permissions and
 the tools' validation, atomic writes, and resource limits still apply.
 

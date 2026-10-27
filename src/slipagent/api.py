@@ -303,7 +303,7 @@ class APIClient:
             # A retry after an error keeps the running deadline, so repeated
             # 429s cannot extend the wait; only a 200 response restarts it.
             first_output = asyncio.timeout(first_output_timeout) if carried is None else asyncio.timeout_at(carried)
-            deadline = None if first_output_timeout is None else FirstOutputDeadline(first_output)
+            deadline = None if first_output_timeout is None else FirstOutputDeadline(first_output, first_output_timeout)
             content = body if deadline is None else _PacingExcluded(body, deadline)
             if deadline is not None and on_first_output is not None:
                 on_first_output(deadline)
@@ -322,7 +322,7 @@ class APIClient:
                         declined = error
                         raise error
                     phase("Waiting for output")
-                    if deadline is not None and first_output.when() is not None and not (deadline.held or deadline.skipped):
+                    if deadline is not None and first_output.when() is not None and not (deadline.held or deadline.skipped or deadline.paused):
                         first_output.reschedule(asyncio.get_running_loop().time() + first_output_timeout)
                     # Gateways and test servers may return a regular completion.
                     if "application/json" in response.headers.get("content-type", ""):
@@ -871,10 +871,12 @@ def _parse_completion(raw: dict[str, Any]) -> Completion:
 class FirstOutputDeadline:
     """A working request's wait for output, which the user can end early."""
 
-    def __init__(self, timeout: asyncio.Timeout) -> None:
+    def __init__(self, timeout: asyncio.Timeout, seconds: float) -> None:
         self.timeout = timeout
+        self.seconds = seconds
         self.skipped = False
         self.held = False
+        self.paused = False
 
     def remaining(self) -> float | None:
         """Seconds left, or None while the deadline is suspended or disarmed."""
@@ -891,6 +893,34 @@ class FirstOutputDeadline:
         except RuntimeError:
             # The request enters its timeout right after announcing the deadline.
             asyncio.get_running_loop().call_soon(self._apply_hold)
+
+    def pause(self) -> None:
+        """Stop the clock while the model is deliberately not being served."""
+        if self.skipped or self.held or self.paused:
+            return
+        self.paused = True
+        try:
+            self.timeout.reschedule(None)
+        except RuntimeError:
+            asyncio.get_running_loop().call_soon(self._apply_pause)
+
+    def _apply_pause(self) -> None:
+        if self.paused:
+            try:
+                self.timeout.reschedule(None)
+            except RuntimeError:
+                pass
+
+    def resume(self) -> None:
+        """Start the full wait over after a pause."""
+        if not self.paused:
+            return
+        self.paused = False
+        if not (self.skipped or self.held):
+            try:
+                self.timeout.reschedule(asyncio.get_running_loop().time() + self.seconds)
+            except RuntimeError:
+                pass
 
     def _apply_hold(self) -> None:
         if self.held:
@@ -934,7 +964,7 @@ class _PacingExcluded(httpx.AsyncByteStream):
             finally:
                 if self.deadline.skipped:
                     timeout.reschedule(loop.time())
-                elif remaining is not None and not self.deadline.held:
+                elif remaining is not None and not (self.deadline.held or self.deadline.paused):
                     timeout.reschedule(loop.time() + remaining)
             yield chunk
 

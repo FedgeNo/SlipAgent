@@ -4330,6 +4330,36 @@ async def test_silent_request_shows_deadline_and_ctrl_n_skips(display, monkeypat
             await task
 
 
+async def test_countdown_stops_while_the_editor_is_open_and_restarts_when_it_closes(display, monkeypatch):
+    import slipagent.cli as cli
+    from slipagent.api import FirstOutputDeadline
+
+    sink, _, output, _, snapshot = display
+    monkeypatch.setattr(cli, "FIRST_OUTPUT_NOTICE_SECONDS", 0)
+    async with asyncio.timeout(100) as wait:
+        deadline = FirstOutputDeadline(wait, 100)
+        with create_pipe_input() as pipe:
+            ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+            renderer = Renderer(Style(True), sink, False)
+            renderer.terminal = ui
+            task = asyncio.create_task(ui.run())
+            try:
+                ui.set_working(True)
+                renderer.first_output_wait(deadline, skippable=True)
+                await wait_until(lambda: any("until next model" in line for line in snapshot()))
+                ui._editor_active = True
+                await wait_until(lambda: deadline.paused)
+                assert deadline.remaining() is None
+                assert not any("until next model" in line for line in snapshot())
+                ui._editor_active = False
+                await wait_until(lambda: not deadline.paused)
+                assert deadline.remaining() > 98
+            finally:
+                renderer.first_output_wait(None, skippable=True)
+                ui.close()
+                await task
+
+
 async def test_esc_during_the_countdown_stays_on_the_model_and_the_next_esc_cancels(display, monkeypatch):
     import slipagent.cli as cli
 

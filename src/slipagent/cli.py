@@ -507,6 +507,15 @@ class Renderer:
             started = time.monotonic()
             while True:
                 await asyncio.sleep(1)
+                # The editor holds the agent, so the model cannot answer; the wait restarts on close.
+                if terminal.__dict__.get("_editor_active"):
+                    if not getattr(deadline, "paused", False):
+                        deadline.pause()
+                        terminal.set_retry_status("")
+                    continue
+                if getattr(deadline, "paused", False):
+                    deadline.resume()
+                    started = time.monotonic()
                 remaining = deadline.remaining()
                 # Ordinary responses start within seconds; only a long silence is shown.
                 if remaining is not None and time.monotonic() - started >= FIRST_OUTPUT_NOTICE_SECONDS:

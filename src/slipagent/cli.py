@@ -607,6 +607,68 @@ class Renderer:
                     or isinstance(edits, list) and len(edits) > 1)
         self.terminal.write_file_reference(path, line=line or 1, show_line=line is not None and not multiple)
 
+    def _queue_heading(self, call: ToolCall) -> None:
+        """Print a call's heading when its turn comes, so each result follows its own call.
+
+        Calls of one batch start together but their results arrive in order; a heading
+        waits until the call before it has shown its result.
+        """
+        waiting = self.__dict__.setdefault("_waiting_calls", [])
+        waiting.append(call)
+        if len(waiting) == 1:
+            self._tool_heading(call)
+            self.__dict__["_headed_call"] = call.id
+
+    def _show_heading_before_result(self, call: ToolCall | None) -> None:
+        waiting = self.__dict__.get("_waiting_calls", [])
+        if call is None and waiting:
+            call = waiting[0]  # Results arrive in call order.
+        if call is None or not any(item.id == call.id for item in waiting):
+            return
+        if self.__dict__.get("_headed_call") != call.id:
+            self._tool_heading(call)
+        waiting[:] = [item for item in waiting if item.id != call.id]
+        self.__dict__["_headed_call"] = None
+
+    def _show_next_heading(self) -> None:
+        waiting = self.__dict__.get("_waiting_calls", [])
+        if waiting and self.__dict__.get("_headed_call") is None:
+            self._tool_heading(waiting[0])
+            self.__dict__["_headed_call"] = waiting[0].id
+
+    def _tool_end(self, event: AgentEvent) -> None:
+        self._finish_stream()
+        result = event.result
+        if result is None:
+            return
+        result = self.display_result(result, event.tool_call)
+        if self.terminal is not None and event.tool_call is not None and event.tool_call.name == "grep":
+            self._tool_heading(event.tool_call)
+        if self.terminal is not None and event.tool_call is not None:
+            self.terminal.finish_call(event.tool_call, event.step, result.content, result.is_error)
+        if self.terminal is not None and event.tool_call is not None and event.tool_call.name in COMMAND_OUTPUT_TOOLS:
+            body = "Command failed; see Calls." if result.is_error else "Command completed."
+            color = self.style.red if result.is_error else self.style.green
+            self.emit(color(f"  {'✗' if result.is_error else '✓'} {body}"), block=self._model_block, tool=True)
+        elif result.is_error:
+            # Errors are the most useful signal; always surface them.
+            self.emit(self.style.red(f"  ✗ {result.text()}"), block=self._model_block, tool=True)
+        elif event.tool_call is not None and event.tool_call.name == "answer":
+            self.handle(AgentEvent(kind="assistant_text", step=event.step, text=result.content["text"]))
+        elif self.terminal is not None and event.tool_call is not None and event.tool_call.name in {"write_file", "edit_file"} and self.terminal.has_diff(event.tool_call.id, event.step):
+            self.emit(self.style.dim("    " + result.text().splitlines()[0]), block=self._model_block, tool=True)
+        elif getattr(self, "_tool_streamed", False):
+            self.emit(self.style.dim("  ✓ Command completed."), block=self._model_block, tool=True)
+        elif self.verbose and result.text().strip():
+            body = result.text().strip()
+            for line in body.splitlines():
+                self.emit(self.style.dim(f"    {line}"), block=self._model_block, tool=True)
+        if self.terminal is not None and event.tool_call is not None and not result.is_error:
+            self._result_references(event.tool_call, result)
+            if event.tool_call.name == "grep":
+                for match in re.finditer(r"^(.+?):(\d+):", result.text(), re.MULTILINE):
+                    self.terminal.write_file_reference(match[1], line=int(match[2]))
+
     def handle(self, event: AgentEvent) -> None:
         if event.kind == "context":
             self.__dict__["_reply_preview"] = []
@@ -616,6 +678,8 @@ class Renderer:
         elif event.kind == "step_start":
             self._finish_stream()
             self.__dict__.pop("_early_labels", None)
+            self.__dict__.pop("_waiting_calls", None)
+            self.__dict__.pop("_headed_call", None)
             self.__dict__["_reply_preview"] = []
             if event.step == 1:
                 self._model_block = object()
@@ -695,7 +759,7 @@ class Renderer:
             # Calls tracks running searches immediately. Their transcript heading
             # waits for the result so concurrent calls cannot split the file list.
             if self.terminal is None or event.tool_call.name != "grep":
-                self._tool_heading(event.tool_call)
+                self._queue_heading(event.tool_call)
 
         elif event.kind == "tool_output":
             if self.terminal is not None:
@@ -707,37 +771,9 @@ class Renderer:
             self._stream_text("tool_output", text)
 
         elif event.kind == "tool_end":
-            self._finish_stream()
-            result = event.result
-            if result is None:
-                return
-            result = self.display_result(result, event.tool_call)
-            if self.terminal is not None and event.tool_call is not None and event.tool_call.name == "grep":
-                self._tool_heading(event.tool_call)
-            if self.terminal is not None and event.tool_call is not None:
-                self.terminal.finish_call(event.tool_call, event.step, result.content, result.is_error)
-            if self.terminal is not None and event.tool_call is not None and event.tool_call.name in COMMAND_OUTPUT_TOOLS:
-                body = "Command failed; see Calls." if result.is_error else "Command completed."
-                color = self.style.red if result.is_error else self.style.green
-                self.emit(color(f"  {'✗' if result.is_error else '✓'} {body}"), block=self._model_block, tool=True)
-            elif result.is_error:
-                # Errors are the most useful signal; always surface them.
-                self.emit(self.style.red(f"  ✗ {result.text()}"), block=self._model_block, tool=True)
-            elif event.tool_call is not None and event.tool_call.name == "answer":
-                self.handle(AgentEvent(kind="assistant_text", step=event.step, text=result.content["text"]))
-            elif self.terminal is not None and event.tool_call is not None and event.tool_call.name in {"write_file", "edit_file"} and self.terminal.has_diff(event.tool_call.id, event.step):
-                self.emit(self.style.dim("    " + result.text().splitlines()[0]), block=self._model_block, tool=True)
-            elif getattr(self, "_tool_streamed", False):
-                self.emit(self.style.dim("  ✓ Command completed."), block=self._model_block, tool=True)
-            elif self.verbose and result.text().strip():
-                body = result.text().strip()
-                for line in body.splitlines():
-                    self.emit(self.style.dim(f"    {line}"), block=self._model_block, tool=True)
-            if self.terminal is not None and event.tool_call is not None and not result.is_error:
-                self._result_references(event.tool_call, result)
-                if event.tool_call.name == "grep":
-                    for match in re.finditer(r"^(.+?):(\d+):", result.text(), re.MULTILINE):
-                        self.terminal.write_file_reference(match[1], line=int(match[2]))
+            self._show_heading_before_result(event.tool_call)
+            self._tool_end(event)
+            self._show_next_heading()
 
         elif event.kind == "artifact" and event.result is not None:
             reference = event.result.content

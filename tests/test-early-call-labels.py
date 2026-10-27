@@ -109,3 +109,33 @@ def test_reset_forgets_descriptions_of_an_abandoned_attempt():
     shown.handle(AgentEvent(kind="tool_start", step=1, tool_call=call()))
     # The call's own heading is complete again, so nothing refers to the abandoned display.
     assert out.getvalue().count("Reading the config") == 2
+
+
+def batch(count=3):
+    return [ToolCall(f"call-{n}", "read_file", {"path": f"f{n}.py"}) for n in range(count)]
+
+
+def test_concurrent_calls_are_each_followed_by_their_own_result():
+    from slipagent.tools.base import ToolResult
+    shown, out = renderer()
+    calls = batch()
+    for item in calls:
+        shown.handle(AgentEvent(kind="tool_start", step=1, tool_call=item))
+    assert "f0.py" in out.getvalue() and "f1.py" not in out.getvalue()
+    for n, item in enumerate(calls):
+        shown.handle(AgentEvent(kind="tool_end", step=1, tool_call=item, result=ToolResult.error(f"bad {n}")))
+    text = out.getvalue()
+    positions = [text.index(marker) for n in range(3) for marker in (f"f{n}.py", f"bad {n}")]
+    assert positions == sorted(positions)
+
+
+def test_next_call_appears_as_soon_as_the_one_before_it_finishes():
+    from slipagent.tools.base import ToolResult
+    shown, out = renderer()
+    calls = batch(2)
+    for item in calls:
+        shown.handle(AgentEvent(kind="tool_start", step=1, tool_call=item))
+    shown.handle(AgentEvent(kind="tool_end", step=1, tool_call=calls[0], result=ToolResult.error("bad 0")))
+    assert "f1.py" in out.getvalue()
+    shown.handle(AgentEvent(kind="tool_end", step=1, tool_call=calls[1], result=ToolResult.error("bad 1")))
+    assert out.getvalue().count("f1.py") == 1

@@ -59,6 +59,8 @@ def test_feed_shows_the_label_in_tool_color_with_the_exact_call_in_thought_grey(
     renderer.handle(AgentEvent(kind="tool_start", step=1, tool_call=ToolCall(
         "one", "read_file", {"path": "index.dat", LABEL: "Reading index.dat"})))
     renderer.handle(AgentEvent(kind="tool_start", step=1, tool_call=ToolCall("two", "list_dir", {"path": "."})))
+    assert "list_dir" not in sink.getvalue()  # Its heading waits for the call before it to finish.
+    renderer.handle(AgentEvent(kind="tool_end", step=1, tool_call=ToolCall("one", "read_file"), result=ToolResult.ok("done")))
     text = sink.getvalue()
     tool, grey = "\x1b[38;2;196;167;239m", "\x1b[38;2;160;160;160m"
     assert f"{tool}  ⚙ Reading index.dat\x1b[0m" in text

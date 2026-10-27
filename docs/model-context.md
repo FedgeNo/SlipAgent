@@ -115,7 +115,10 @@ Opaque provider reasoning metadata is never included. Background compression ret
 separate `summary` and `reasoning_summary` fields. It receives the completed step's
 thoughts and up to 25 preceding steps as context, but compresses only that completed
 step. Overthinking uses filtered thoughts when available, otherwise the originals.
-An empty filtered result stays empty. Original thoughts remain available through
+An empty filtered result stays empty. The instructions for reading thoughts (`overthinking-on.md`)
+are sent only in requests whose selected history contains thoughts; with the mode off, on the first
+turn, or with no thoughts in the selected records, the model is told nothing about the mode.
+Original thoughts remain available through
 `recall_history`; streaming thoughts still appear in the terminal.
 For OpenRouter, the harness selects the highest reasoning effort
 explicitly listed by the API. When reasoning is supported without listed effort

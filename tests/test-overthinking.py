@@ -90,9 +90,9 @@ def test_mode_configuration_defaults():
     assert Config.from_env(environ={"OPENROUTER_API_KEY": "dummy"}, overthinking=False).overthinking is False
 
 
-async def test_enabled_mode_with_zero_retained_thoughts_is_described_as_enabled():
+async def test_enabled_mode_with_no_thoughts_to_send_is_not_described():
     history = ConversationHistory()
     view = await history.view([Message.user("Question")], [], overthinking=True,
                               reasoning_history_steps=0, keep_steps=50, context_length=100000, max_output=1000)
-    assert "Overthinking Mode is enabled" in view[0].to_api()["content"]
-    assert "Up to 0 recent completed steps" in view[0].to_api()["content"]
+    content = view[0].to_api()["content"]
+    assert "verthinking" not in content and "archived `reasoning`" not in content

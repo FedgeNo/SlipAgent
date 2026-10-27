@@ -574,14 +574,10 @@ class ConversationHistory:
             return math.ceil(message_tokens(tool_history_as_text(part, glm_xml=glm_xml) if text_tool_history else part) * token_scale)
         replies = "native-tools.md" if native_tools else "response-glm-xml.md" if glm_xml else "json-tools.md"
         head_sections = [load_prompt(replies), load_prompt("history-records.md")]
-        tail_sections = [load_prompt("system-history.md")]
-        if overthinking:
-            tail_sections.append(
-                load_prompt('overthinking-on.md', steps=reasoning_history_steps)
-            )
         # Stable response/tool guidance precedes changing step IDs and task
         # state. Keep one system-message prefix for provider compatibility.
-        tail_sections.extend([extra_instructions, self.instructions(native_tools=native_tools)])
+        later_sections = [extra_instructions, self.instructions(native_tools=native_tools)]
+        tail_sections: list[str] = []
         if self.task.current_prompt_step is not None:
             input_guidance = (
                 load_prompt('new-user-request.md')
@@ -597,14 +593,17 @@ class ConversationHistory:
         leading = pinned_sources[:-1]
         pinned_base = (pinned_sources[-1].content or "").rstrip() + "\n" if pinned_sources else "\n"
 
-        def system_prefix_for(guidance: str) -> str:
+        def system_prefix_for(guidance: str, thoughts: bool) -> str:
             # History-shape guidance follows the record format and covers only the selected records.
-            sections = [*head_sections, guidance, *tail_sections]
+            # The model learns about Overthinking Mode only when thoughts accompany its history.
+            overthinking_guidance = load_prompt('overthinking-on.md', steps=reasoning_history_steps) if thoughts else ""
+            sections = [*head_sections, guidance, load_prompt("system-history.md"), overthinking_guidance,
+                        *later_sections, *tail_sections]
             instructions = "\n" + "\n\n".join(section.strip() for section in sections if section.strip()) + "\n"
             return (pinned_base + instructions).rstrip() + "\n\n"
 
         # Budget with every guidance section; each assembled candidate includes only applicable ones.
-        system_prefix = system_prefix_for(HistoryText().history_guidance(None))
+        system_prefix = system_prefix_for(HistoryText().history_guidance(None), overthinking)
         pinned = [*leading, Message.system(system_prefix.rstrip() + "\n")]
         metadata: dict[str, Any] = {"step_id": len(self.steps) + 1, "is_tool_result_response": has_results}
         if recovery:
@@ -637,7 +636,9 @@ class ConversationHistory:
                 payload["user_edits_omitted"] = edits_omitted
             has_edits = bool(edit_view or edits_omitted or any(
                 isinstance(message.content, dict) and message.content.get("user_edits") for message in selected))
-            prefix = system_prefix_for(HistoryText().history_guidance([message.content for message in selected]))
+            prefix = system_prefix_for(
+                HistoryText().history_guidance([message.content for message in selected]),
+                any(isinstance(message.content, dict) and message.content.get("reasoning") for message in selected))
             current_system = Message.system(MessageSections([
                 prefix + (edit_guidance if has_edits else ''), current_turn_guidance, metadata]))
             return [*leading, current_system, Message.user(JSONInput(payload))]

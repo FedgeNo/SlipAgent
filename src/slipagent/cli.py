@@ -1723,6 +1723,10 @@ class StatusLine:
         if isinstance(getattr(session, "client", None), APIClient):
             model = f"{session.client.provider}::{model}"
         model = f"Model: {model}"
+        # Read existing routing rather than calling model_routing(), which registers services on every redraw.
+        routing = getattr(session, "extensions", {}).get("model_routing")
+        if routing is not None and routing.enabled:
+            model += " (Optimal)"
         if columns is None:
             columns = shutil.get_terminal_size(fallback=(0, 0)).columns
         danger = StatusLine(session, Style(False)).danger_suffix()

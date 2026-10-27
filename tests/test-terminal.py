@@ -3041,6 +3041,16 @@ async def test_tool_directory_links_wrap_hover_click_and_preserve_selection(disp
         ui._close_transcript()
 
 
+def test_status_line_marks_model_when_optimal_is_on(tmp_path):
+    from slipagent.workspace import Workspace
+    routing = SimpleNamespace(enabled=True)
+    session = SimpleNamespace(workspace=Workspace(tmp_path), agent=SimpleNamespace(model="stub/model"),
+                              extensions={"model_routing": routing})
+    assert StatusLine(session, Style(False)).text(columns=120).endswith("Model: stub/model (Optimal)")
+    routing.enabled = False
+    assert StatusLine(session, Style(False)).text(columns=120).endswith("Model: stub/model")
+
+
 async def test_danger_status_suffix_is_red_last_and_survives_resize(display, tmp_path):
     from types import SimpleNamespace
     from slipagent.workspace import Workspace

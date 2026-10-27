@@ -22,8 +22,9 @@ MODEL_LIMITS: dict[str, tuple[int, int | None]] = {
     "google/diffusiongemma-26b-a4b-it": (250_000, 32_768),
     "poolside/laguna-xs-2.1": (262_144, 16_384),
     "openai/gpt-oss-20b": (128_000, 4_096),
-    # NVIDIA documents only MiniMax M3; the Flash limits are OpenRouter's listing.
-    "minimaxai/minimax-m3.1-flash": (1_048_576, 524_288),
+    # NVIDIA documents only MiniMax M3. The hosted Flash endpoint rejects requests
+    # over 262,144 tokens with a 400 context_length error, not OpenRouter's 1M.
+    "minimaxai/minimax-m3.1-flash": (262_144, None),
     # The API reference is unpublished; the model card states 64K input and output.
     "nvidia/nemotron-3.5-bolt-e4b": (65_536, 65_536),
 }

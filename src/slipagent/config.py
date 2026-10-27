@@ -175,7 +175,30 @@ def save_model_choice(model: str, provider: str = "openrouter") -> None:
     if not isinstance(models, dict):
         raise ConfigError("invalid provider model preferences")
     models[provider] = model
+    # Choosing a model by hand turns automatic selection off until it is chosen again.
+    preferences["optimal"] = False
     save_private_text(_preferences_path(), json.dumps(preferences) + "\n")
+
+
+def saved_optimal(preferences: dict[str, object] | None = None) -> bool:
+    """Whether the last choice was automatic selection; true until a model is chosen by hand."""
+    saved = _read_preferences() if preferences is None else preferences
+    value = saved.get("optimal", True)
+    if not isinstance(value, bool):
+        raise ConfigError(f"invalid optimal preference in {_preferences_path()}: expected true or false")
+    return value
+
+
+def save_optimal_choice(enabled: bool) -> None:
+    """Remember across launches whether automatic selection was chosen."""
+    preferences = _read_preferences()
+    preferences["optimal"] = enabled
+    save_private_text(_preferences_path(), json.dumps(preferences) + "\n")
+
+
+def starts_optimal(model: str | None, provider: str | None) -> bool:
+    """Launch options start in manual mode; otherwise the remembered choice decides."""
+    return not (model or provider) and saved_optimal()
 
 
 def configured_provider(provider: str | None = None, *, environ: Mapping[str, str] | None = None,

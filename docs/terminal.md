@@ -41,9 +41,8 @@ In the REPL:
 | `/model <provider>` | Choose from that provider's models, free models first in the free color |
 | `/model provider` | Choose a provider, then one of its models |
 | `/model free` | Choose from zero-cost models |
-| `/model optimal`, `/model next`, `/model reset` | Automatic selection, skip to the next ranked model, or retry from the top (same as `/optimal`) |
+| `/model optimal`, `/model next`, `/model reset` | Automatic selection, skip to the next ranked model, or retry from the top |
 | `/models [filter]` | Shortcut: choose from the catalog, optionally filtered |
-| `/optimal [on\|off\|next\|reset]` | Show automatic free-model routing; on/reset clears failures and selects the highest score; next skips the current model; off keeps the current model under manual control |
 | `/provider <provider>` | Select and remember a free default: OpenRouter/NVIDIA Nemotron 3 Ultra, or Kilo Auto Free; refuse missing models or nonzero/unknown pricing |
 | `/temperature` | Show the explicit temperature or provider default, and whether the selected model supports changing it |
 | `/temperature <value>` | Set the working-model temperature from 0 to 2; unsupported changes report an error |

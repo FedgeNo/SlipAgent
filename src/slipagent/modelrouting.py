@@ -176,7 +176,7 @@ class ModelRouting:
             self.notice(f"Optimal selected {model.selector} (estimated coding score {model.score:.1f}/100).")
             return
         raise APIConfigError("Optimal exhausted the eligible ranked free models. "
-                             "Use /optimal reset to retry from the top, or /model to select a model.")
+                             "Use /model reset to retry from the top, or /model to select a model.")
 
     async def fallback(self, error: Exception) -> bool:
         if not self.enabled:

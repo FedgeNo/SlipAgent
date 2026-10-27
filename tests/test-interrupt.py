@@ -54,12 +54,12 @@ async def test_model_change_pause_resumes_and_preserves_submitted_input(tmp_path
         await finish_change.wait()
 
     monkeypatch.setattr(cli.Repl, 'read_line', read)
-    monkeypatch.setattr(cli.ModelPicker, 'menu', model)
+    monkeypatch.setattr(type(cli.BY_NAME['plugins']), 'run', model)
     monkeypatch.setattr(type(session.agent), 'run', run)
     task = asyncio.create_task(cli.Repl(session).run_request('Inspect', session.renderer.style))
     try:
         await asyncio.wait_for(first_started.wait(), 2)
-        await lines.put('/model replacement')
+        await lines.put('/plugins')
         async with asyncio.timeout(2):
             while not session.agent.stop_requested:
                 await asyncio.sleep(0)

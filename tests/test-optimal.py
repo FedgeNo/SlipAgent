@@ -215,7 +215,7 @@ async def test_reset_clears_both_purposes_and_provider_failures(optimal_session)
     routing = session.model_routing()
     try:
         await routing.enable()
-        for command in ("/optimal on", "/optimal reset"):
+        for command in ("/model optimal", "/model reset"):
             routing.failed["working"].add("openrouter::first")
             routing.failed["compression"].add("openrouter::first")
             routing.failed_providers.add("openrouter")
@@ -224,7 +224,7 @@ async def test_reset_clears_both_purposes_and_provider_failures(optimal_session)
             assert session.agent.model == "first"
             assert not any(routing.failed.values()) and not routing.failed_providers
         await routing.fallback(APIResponseError("unavailable", status_code=400))
-        await CommandRunner(session).handle("/optimal off")
+        await session.select_model(entry("openrouter", "second", 2))
         assert not routing.enabled and session.agent.model == "second"
         assert routing.failed["working"] == {"openrouter::first"}
     finally:
@@ -281,7 +281,7 @@ async def test_preflight_connection_failure_keeps_candidates_eligible(optimal_se
         await session.client.aclose()
 
 
-@pytest.mark.parametrize("command", ["/optimal on", "/optimal reset", "/optimal off"])
+@pytest.mark.parametrize("command", ["/model optimal", "/model reset"])
 async def test_optimal_command_at_tool_boundary_keeps_task_running(optimal_session, monkeypatch, command):
     import asyncio
     from slipagent import cli
@@ -560,13 +560,13 @@ async def test_next_skips_down_the_ranking_until_reset(optimal_session):
     try:
         # With optimal off, next starts it normally at the highest score.
         session.agent.model = "second"
-        await CommandRunner(session).handle("/optimal next")
+        await CommandRunner(session).handle("/model next")
         assert routing.enabled and session.agent.model == "first"
-        await CommandRunner(session).handle("/optimal next")
+        await CommandRunner(session).handle("/model next")
         assert session.agent.model == "second"
         assert routing.failed["working"] == {"openrouter::first"}
         assert "Optimal skipped openrouter::first" in session.renderer.stream.getvalue()
-        await CommandRunner(session).handle("/optimal reset")
+        await CommandRunner(session).handle("/model reset")
         assert session.agent.model == "first" and not routing.failed["working"]
     finally:
         await session.client.aclose()
@@ -625,3 +625,29 @@ async def test_interactive_startup_uses_saved_metadata_and_403_moves_to_the_next
     finally:
         network.set()
         await cli.Repl(second).shutdown()
+
+
+def test_choosing_a_model_applies_at_a_tool_boundary_but_other_commands_still_pause(optimal_session):
+    from slipagent.cli import CommandRunner
+    from slipagent.commands import BY_NAME
+    session, _, _ = optimal_session
+    runner = CommandRunner(session)
+    assert "optimal" not in BY_NAME
+    for line in ("/model", "/model optimal", "/model next", "/MODEL Reset", "/model free", "/model some words",
+                 "/models nemotron", "/provider kilo"):
+        assert runner.at_boundary(line)
+    for line in ("/temperature 1", "/clear"):
+        assert not runner.at_boundary(line)
+
+
+async def test_choosing_optimal_is_remembered_for_the_next_launch(optimal_session):
+    from slipagent.cli import CommandRunner
+    from slipagent.config import saved_optimal, save_model_choice
+    session, _, _ = optimal_session
+    try:
+        save_model_choice("manual/model")
+        assert not saved_optimal()
+        await CommandRunner(session).handle("/model optimal")
+        assert saved_optimal()
+    finally:
+        await session.client.aclose()

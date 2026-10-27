@@ -287,3 +287,28 @@ def test_mcp_servers_receive_a_minimal_environment(monkeypatch) -> None:
     assert env["PATH"] == "/opt/server/bin" and env["EXA_API_KEY"] == "configured"
     assert env["LC_ALL"] == "C.UTF-8" and env["HTTPS_PROXY"] == "http://proxy.invalid:8080"
     assert "OPENROUTER_API_KEY" not in env and "TERM" not in env
+
+
+def test_optimal_is_the_default_until_a_model_is_chosen_by_hand():
+    from slipagent.config import save_model_choice, save_optimal_choice, saved_optimal, starts_optimal
+    assert saved_optimal() and starts_optimal(None, None)
+    save_model_choice("chosen/model")
+    assert not saved_optimal() and not starts_optimal(None, None)
+    save_optimal_choice(True)
+    assert saved_optimal() and starts_optimal(None, None)
+    # The remembered model stays available for when optimal is turned off again.
+    assert Config.from_env(environ={"OPENROUTER_API_KEY": "k"}).model == "chosen/model"
+
+
+def test_launch_flags_start_manual_whatever_was_remembered():
+    from slipagent.config import save_optimal_choice, starts_optimal
+    save_optimal_choice(True)
+    assert not starts_optimal("flag/model", None) and not starts_optimal(None, "nvidia")
+
+
+def test_invalid_optimal_preference_is_reported():
+    from slipagent.config import ConfigError, _preferences_path, save_optimal_choice, saved_optimal
+    save_optimal_choice(True)
+    _preferences_path().write_text('{"optimal": "yes"}\n')
+    with pytest.raises(ConfigError, match="optimal"):
+        saved_optimal()

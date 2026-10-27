@@ -20,7 +20,7 @@ own harness.
 ### Optimal Mode
 
 Ordinary startup selects the highest-ranked eligible free model. Explicit
-`--model` or `--provider` launch options start in manual mode.
+`--model` or `--provider` launch options start in manual mode. Otherwise the last choice is remembered: selecting a model by hand saves optimal as off, and `/model optimal`, `next`, or `reset` saves it as on (the default).
 
 Interactive startup does not wait for the network. Provider catalogs and the
 selected models' capability profiles are saved in `startup-cache.json` in the
@@ -29,7 +29,7 @@ are available, startup selects from them and refreshes them in the background,
 along with the quota. A model that has since become unavailable fails its first
 request (for example with 403 or 404) and optimal mode moves straight to the
 next model. The first interactive launch without any API key asks for one,
-lists providers with free models, and offers to save it. `/optimal on`
+lists providers with free models, and offers to save it. `/model optimal`
 enables automatic selection again. Model metadata stores one **estimated text-coding
 score from 0 to 100; higher is better**. Published benchmark results are calibrated
 onto a common scale using models tested on multiple benchmarks, including paid
@@ -67,20 +67,22 @@ reports an error and retains the selected model. Background compression retains
 its separate 20-minute timeout.
 
 The replacement remains selected until another failure, manual selection, or
-reset. Both `/optimal on` and `/optimal reset` clear failed coding/compression
-routes and retry from the highest score. `/optimal next` excludes the current
+reset. Both `/model optimal` and `/model reset` clear failed coding/compression
+routes and retry from the highest score. `/model next` excludes the current
 model until reset and selects the next ranked one; with optimal off, it starts
-optimal like `/optimal on`. `/optimal off` keeps the current model
-under manual control; `/optimal` reports the state. Successful manual model or
-provider selection through `/model`, `/models`, or `/provider` also disables
-optimal mode. During active work, `/optimal` changes apply at the next safe step
-boundary in input order, without stopping the task. Opening or cancelling a
-picker leaves the mode unchanged. Optimal
-mode is session-only; ordinary saved model preferences remain unchanged by
-automatic selection and remain available when launching with `--provider`.
+optimal like `/model optimal`. Successfully selecting a specific model or provider
+through `/model`, `/models`, or `/provider` turns optimal mode off, and it stays
+off until `/model optimal` (or `next` or `reset`) is used again.
+During active work, choosing a model or provider (`/model`, `/models`, `/provider`) applies at the
+next safe step boundary in input order, without stopping the task. Opening or cancelling a
+picker leaves the mode unchanged. Whether optimal is on is remembered across
+launches: choosing a specific model saves it off (with that model), and
+`/model optimal`, `next`, or `reset` saves it on. Failure exclusions are
+session-only, and automatic selection never overwrites the saved model, which
+remains available when launching with `--provider`.
 
 When every eligible model fails, coding stops with an explanation. Another
-prompt cannot reuse an excluded model: use `/optimal reset`, update credentials,
+prompt cannot reuse an excluded model: use `/model reset`, update credentials,
 or select a model manually. Failure exclusions are session-local and clear on
 a new conversation; a credential change clears that provider's exclusions.
 An authentication failure excludes that provider for both coding and compression;

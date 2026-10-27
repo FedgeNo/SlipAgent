@@ -58,7 +58,7 @@ async def test_queued_command_pause_is_labelled_a_pause_not_a_stop(tmp_path):
         await started.wait()
         session.renderer.terminal = SimpleNamespace(set_working=lambda working, **flags: labels.append(flags))
         # A queued setting halts the run only to apply it, then work continues.
-        cli.CommandRunner(session).queue("/model other", "model")
+        cli.CommandRunner(session).queue("/plugins", "plugins")
         assert session.agent.stop_requested and labels[-1] == {"stopping": False, "pausing": True}
     finally:
         session.renderer.terminal = None

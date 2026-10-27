@@ -35,7 +35,8 @@ from typing import Any, TextIO, cast
 from .agent import Agent, AgentEvent, STEP_LIMIT_NOTICE, STOP_NOTICE, build_system_prompt
 from .automation import JsonEventStream
 from .config import (Config, ConfigError, configured_provider, context_tokens_preference, dotenv_path, dotenv_values, environment_source,
-                     forget_environment, hide_from_commands, remove_dotenv_value, save_dotenv_value, save_model_choice)
+                     forget_environment, hide_from_commands, remove_dotenv_value, save_dotenv_value, save_model_choice,
+                     save_optimal_choice, starts_optimal)
 from .instructions import load_project_instructions
 from .lifecycle import finish_cleanup
 from .mcp import MCPManager, MCPError
@@ -869,7 +870,7 @@ class Launcher:
         renderer, registry, agent = session.renderer, session.registry, session.agent
         model_error: APIError | None = None
         routing = session.model_routing()
-        routing.enabled = not (args.model or getattr(args, "provider", None))
+        routing.enabled = starts_optimal(args.model, getattr(args, "provider", None))
         # Interactive startup selects from saved metadata and refreshes it afterwards.
         cached_start = False
 
@@ -1458,7 +1459,7 @@ class Repl:
             if previous_boundary is not None:
                 await previous_boundary()
             if not session.agent.has_queued_input and not session.agent.stop_requested:
-                # Optimal changes affect the next request and need no task stop.
+                # Model changes affect the next request and need no task stop.
                 commands = session.work.deferred_commands or []
                 while commands and CommandRunner(session).at_boundary(commands[0]):
                     await CommandRunner(session).execute(commands.pop(0), at_boundary=True)
@@ -2042,9 +2043,10 @@ class CommandRunner:
         task.add_done_callback(tasks.discard)
 
     def at_boundary(self, line: str) -> bool:
-        """Routing commands can apply between batches without ending the task."""
-        return (not isinstance(line, SuggestedPrompt) and not submitted_suggestion(line)
-                and line.split(None, 1)[0].lower() == "/optimal")
+        """Choosing a model or provider applies between batches without ending the task."""
+        if isinstance(line, SuggestedPrompt) or submitted_suggestion(line):
+            return False
+        return line.split(None, 1)[0].lower() in {"/model", "/models", "/provider"}
 
     def runs_in_background(self, text: str) -> bool:
         if not text.startswith("/"):
@@ -2406,6 +2408,11 @@ class ModelPicker:
             await (routing.skip() if action == "next" else routing.enable())
         except APIError as exc:
             print(style.red(f"  {exc}"), file=out)
+            return
+        try:
+            await asyncio.to_thread(save_optimal_choice, True)
+        except (OSError, ConfigError) as exc:
+            print(style.red(f"  could not remember optimal choice: {exc}"), file=out)
 
     async def provider_models(self, provider: str) -> None:
         """List a provider's models, free ones first, choosing the provider when none is named."""

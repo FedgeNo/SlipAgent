@@ -325,10 +325,10 @@ selects manual mode. Fetch candidate catalogs alongside the other startup
 services, then preflight selection after MCP, environment, and history restore
 finish. Startup failure closes any provider client selected during this phase.
 Automatic eligibility requires a configured key, verified free pricing/tier,
-and a known score. Billed Google accounts are excluded. `/optimal on` and
-`/optimal reset` clear all exclusions and preflight candidates by descending score;
-manual selection or `/optimal off` disables working fallback. This mode and
-failure state are process-local; automatic selection does not save preferences.
+and a known score. Billed Google accounts are excluded. `/model optimal` and
+`/model reset` clear all exclusions and preflight candidates by descending score;
+manual selection disables working fallback until `/model optimal` is used again. This mode and
+failure state are process-local; automatic selection does not save the model, but whether optimal is on is a remembered preference.
 Credential/endpoint changes clear that provider's exclusions; conversation reset
 clears all exclusions. The migration from rank to score in the stable `ModelInfo`
 dataclass requires a restart. Subsequent score-table edits are reloadable.
@@ -347,7 +347,7 @@ take precedence.
 Transport exceptions use `APIConnectionError` and retain the selected model
 after ordinary retry exhaustion. Metadata connection failures also leave routing
 exclusions unchanged. Explicit provider errors and the two-minute silent-output
-deadline remain eligible for fallback. Queued `/optimal` commands apply between
+deadline remain eligible for fallback. Queued `/model`, `/models`, and `/provider` commands apply between
 batches in FIFO order without requesting a task stop.
 
 `prompts/model-profiles.json` applies exact-model prompt sections, optional

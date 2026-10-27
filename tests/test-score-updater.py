@@ -1,4 +1,4 @@
-"""Offline score maintenance preserves existing ratings and rejects bad evidence."""
+"""Scores are calculated from raw published results; bad evidence changes nothing."""
 
 import importlib.util
 import json
@@ -27,36 +27,26 @@ def table(tmp_path):
     return path
 
 
-def write_input(tmp_path, records):
-    path = tmp_path / "models.json"
-    path.write_text(json.dumps(records))
+@pytest.fixture
+def small_table(tmp_path):
+    path = tmp_path / "small-scores.py"
+    path.write_text('SCORES: dict[str, float | None] = {\n    "vendor/gap": None,\n}\n\nMODEL_ALIASES = {}\n')
+    path.chmod(0o640)
     return path
 
 
-def record(**changes):
-    return {"model": "vendor/new-model", "benchmarks": {"SWE Verified": 77.0},
-            "sources": ["https://example.invalid/published-model-card"], **changes}
-
-
-def test_saved_offsets_reproduce_reviewed_examples(calibration):
-    from slipagent.modelscores import model_score
-    example = json.loads((ROOT / "scripts/model-score-example.json").read_text())
-    assert updater.estimate(example["benchmarks"], calibration) == model_score("kilo", "reflection/beam-free")
+def test_saved_table_and_calibration_match_the_saved_measurements(calibration):
+    from slipagent.modelscores import SCORES
     scales, records = updater.read_measurements(ROOT / "scripts/model-score-measurements.json")
-    # A fitted score is each model's own Huber location at the fitted offsets.
+    scores, fitted = updater.fit_scores(records, scales, calibration, calibration["reviewed"], validate=False)
     for record in records:
         if not record["reference"]:
-            assert updater.estimate(record["benchmarks"], calibration) == model_score(
-                "nvidia", record["model"]), record["model"]
-
-
-def test_coding_judge_rating_uses_its_native_scale(calibration):
-    from slipagent.modelscores import model_score
-    assert updater.estimate({"MT-Bench coding": 5.2}, calibration) == model_score("nvidia", "zyphra/zamba2-7b-instruct")
-    with pytest.raises(ValueError, match="between 1 and 10"):
-        updater.estimate({"MT-Bench coding": 52}, calibration)
-    with pytest.raises(ValueError, match="between 1 and 10"):
-        updater.estimate({"MT-Bench coding": 0.5}, calibration)
+            assert SCORES[record["model"]] == scores[record["model"]], record["model"]
+    # Every score has recorded evidence; only reviewed gaps lack it.
+    measured = {record["model"] for record in records if not record["reference"]}
+    assert {model for model, score in SCORES.items() if score is not None} == measured
+    assert {name: row["offset"] for name, row in fitted["benchmarks"].items()} == pytest.approx(
+        {name: row["offset"] for name, row in calibration["benchmarks"].items()})
 
 
 @pytest.mark.parametrize("minimum, maximum", [(1, 1), (-1, 10), (0, 0), (0, float("inf")), (0, True)])
@@ -68,65 +58,7 @@ def test_invalid_benchmark_scale_is_rejected(tmp_path, calibration, minimum, max
         updater.load_calibration(path)
 
 
-def test_new_models_use_fixed_calibration_and_preserve_existing_scores(tmp_path, table, capsys):
-    before = runpy.run_path(str(table))
-    data = write_input(tmp_path, [record(aliases=["host/new-model-free"]),
-                                 record(model="vendor/another-model", benchmarks={"HumanEval": 81.1})])
-    assert updater.main([str(data), "--table", str(table)]) == 0
-    after = runpy.run_path(str(table))
-    assert all(after["SCORES"][model] == score for model, score in before["SCORES"].items())
-    assert after["model_score"]("openrouter", "vendor/new-model:free") == 77.0
-    assert after["model_score"]("kilo", "host/new-model-free") == 77.0
-    assert 0 < after["SCORES"]["vendor/another-model"] < 81.1
-    assert set(after["SCORES"]) - set(before["SCORES"]) == {"vendor/new-model", "vendor/another-model"}
-    assert table.stat().st_mode & 0o777 == 0o640
-    assert "estimated coding score 77.0/100" in capsys.readouterr().out
-
-
-def test_preview_does_not_modify_table_and_explicit_update_replaces_only_that_model(tmp_path, table):
-    before = table.read_bytes()
-    data = write_input(tmp_path, record(model="reflection/beam", benchmarks={"SWE Verified": 80}))
-    assert updater.main([str(data), "--table", str(table), "--dry-run"]) == 0
-    assert table.read_bytes() == before
-    old_scores = runpy.run_path(str(table))["SCORES"]
-    assert updater.main([str(data), "--table", str(table)]) == 0
-    new_scores = runpy.run_path(str(table))["SCORES"]
-    assert {name for name in old_scores if new_scores[name] != old_scores[name]} == {"reflection/beam"}
-    assert new_scores["reflection/beam"] == 80.0
-
-
-@pytest.mark.parametrize("evidence", [
-    {}, None, [], {"Unknown benchmark": 75}, {"Visual coding": 90}, {"SWE Verified": -1},
-    {"SWE Verified": 101}, {"SWE Verified": True}, {"SWE Verified": "80"},
-    {"SWE Verified": float("nan")}, {"SWE Verified": float("inf")}, {"SWE Verified": 10**400},
-])
-def test_invalid_evidence_leaves_whole_batch_unchanged(tmp_path, table, evidence):
-    before = table.read_bytes()
-    data = write_input(tmp_path, [record(), record(model="vendor/second", benchmarks=evidence)])
-    with pytest.raises(SystemExit) as error:
-        updater.main([str(data), "--table", str(table)])
-    assert error.value.code == 2
-    assert table.read_bytes() == before
-
-
-@pytest.mark.parametrize("records", [
-    [record(), record()],
-    record(aliases=["reflection/beam-free"]),
-    record(aliases=["reflection/beam"]),
-    record(model="reflection/beam-free"),
-    [record(aliases=["vendor/second"]), record(model="vendor/second")],
-    record(sources=[]),
-    record(benchmarks={"SWE Verified": 75}, benchmark={"HumanEval": 99}),
-])
-def test_bad_identity_or_source_does_not_change_table(tmp_path, table, records):
-    before = table.read_bytes()
-    data = write_input(tmp_path, records)
-    with pytest.raises(SystemExit):
-        updater.main([str(data), "--table", str(table)])
-    assert table.read_bytes() == before
-
-
-def test_insufficient_shared_calibration_is_rejected(tmp_path, table, calibration):
+def test_insufficient_shared_calibration_is_rejected(tmp_path, calibration):
     calibration["benchmarks"]["HumanEval"]["overlap_models"] = 1
     saved = tmp_path / "calibration.json"
     saved.write_text(json.dumps(calibration))
@@ -144,7 +76,7 @@ def test_concurrent_table_change_is_preserved(table):
     assert list(table.parent.iterdir()) == [table]
 
 
-def test_list_benchmarks_requires_no_model_input(capsys):
+def test_list_benchmarks_requires_no_measurements(capsys):
     assert updater.main(["--list-benchmarks"]) == 0
     output = capsys.readouterr().out
     assert "SWE Verified\n" in output and "Terminal 2.1\n" in output
@@ -190,7 +122,7 @@ def test_fit_recovers_scores_and_offsets_from_raw_results(tmp_path, calibration)
     assert fitted["model_count"] == 5
 
 
-def test_reference_models_calibrate_a_benchmark_without_entering_the_table(tmp_path, calibration, table, capsys):
+def test_reference_models_calibrate_a_benchmark_without_entering_the_table(tmp_path, calibration, small_table, capsys):
     models = synthetic() + [
         measurement("vendor/a", "SWE Verified", "Alpha Bench", "Gamma Bench", reference=True) | {"model": "paid/ref-1"},
         measurement("vendor/b", "SWE Verified", "Gamma Bench", reference=True) | {"model": "paid/ref-2"},
@@ -200,7 +132,7 @@ def test_reference_models_calibrate_a_benchmark_without_entering_the_table(tmp_p
     models.append({"model": "vendor/new", "benchmarks": {"Gamma Bench": measured("vendor/c", "Gamma Bench")},
                    "sources": ["https://example.invalid/results"]})
     path = write_measurements(tmp_path, models)
-    args = updater.argparse.Namespace(fit=path, reviewed="2026-10-26", table=table, dry_run=True,
+    args = updater.argparse.Namespace(measurements=path, reviewed="2026-10-26", table=small_table, dry_run=True,
                                        calibration=tmp_path / "calibration.json")
     (tmp_path / "calibration.json").write_text("{}")
     updater.refit(args, calibration)
@@ -263,14 +195,49 @@ def test_custom_scale_is_applied_to_measurements(tmp_path, calibration):
     assert fitted["benchmarks"]["Beta Bench"]["offset"] == pytest.approx(OFFSETS["Beta Bench"], abs=1e-3)
 
 
-def test_fit_writes_table_and_calibration_together(tmp_path, calibration, table):
+def test_fit_writes_table_and_calibration_together(tmp_path, small_table):
     path = write_measurements(tmp_path, synthetic())
     target = tmp_path / "calibration.json"
     target.write_text((ROOT / "scripts/model-score-calibration.json").read_text())
-    assert updater.main(["--fit", str(path), "--table", str(table), "--calibration", str(target),
+    assert updater.main([str(path), "--table", str(small_table), "--calibration", str(target),
                          "--reviewed", "2026-10-26"]) == 0
     saved = json.loads(target.read_text())
     assert saved["reviewed"] == "2026-10-26" and saved["benchmarks"]["Alpha Bench"]["overlap_models"] == 3
-    assert "vendor/a" in table.read_text()
-    # An unmeasured entry keeps its reviewed score.
-    assert '"google/gemini-2.5-flash": 44.2' in table.read_text()
+    scores = runpy.run_path(str(small_table))["SCORES"]
+    assert scores["vendor/a"] == 95.3 and scores["vendor/gap"] is None
+    assert small_table.stat().st_mode & 0o777 == 0o640
+
+
+def test_dry_run_changes_no_file(tmp_path, small_table):
+    path = write_measurements(tmp_path, synthetic())
+    target = tmp_path / "calibration.json"
+    target.write_text((ROOT / "scripts/model-score-calibration.json").read_text())
+    before = (small_table.read_bytes(), target.read_bytes())
+    assert updater.main([str(path), "--table", str(small_table), "--calibration", str(target), "--dry-run"]) == 0
+    assert (small_table.read_bytes(), target.read_bytes()) == before
+
+
+def test_a_score_without_measurements_is_rejected_and_nothing_changes(tmp_path, small_table):
+    small_table.write_text(small_table.read_text().replace('"vendor/gap": None', '"vendor/gap": None,\n    "vendor/old": 55.0'))
+    target = tmp_path / "calibration.json"
+    target.write_text((ROOT / "scripts/model-score-calibration.json").read_text())
+    before = (small_table.read_bytes(), target.read_bytes())
+    with pytest.raises(SystemExit) as error:
+        updater.main([str(write_measurements(tmp_path, synthetic())), "--table", str(small_table), "--calibration", str(target)])
+    assert error.value.code == 2
+    assert (small_table.read_bytes(), target.read_bytes()) == before
+
+
+@pytest.mark.parametrize("models", [
+    [],
+    [measurement("vendor/a", "SWE Verified"), measurement("vendor/a", "Alpha Bench")],
+    [measurement("vendor/a", "SWE Verified", aliases=["vendor/b"]), measurement("vendor/b", "SWE Verified")],
+    [measurement("vendor/a", "SWE Verified", sources=[])],
+])
+def test_invalid_measurements_leave_the_files_unchanged(tmp_path, small_table, models):
+    target = tmp_path / "calibration.json"
+    target.write_text((ROOT / "scripts/model-score-calibration.json").read_text())
+    before = (small_table.read_bytes(), target.read_bytes())
+    with pytest.raises(SystemExit):
+        updater.main([str(write_measurements(tmp_path, models)), "--table", str(small_table), "--calibration", str(target)])
+    assert (small_table.read_bytes(), target.read_bytes()) == before

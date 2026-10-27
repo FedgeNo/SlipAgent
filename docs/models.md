@@ -89,12 +89,11 @@ model-specific failures are tracked separately for those two uses.
 New free catalog models without a score remain manually selectable. SlipAgent
 announces their release and asks you to update SlipAgent for updated scores.
 Scores are refreshed with software updates, without model calls or automatic
-benchmark collection at runtime. The October 26 review scores 73 models, recalculating 48 of
-them from raw published results and keeping the previous reviewed score for the rest. It includes
-Reflection Beam, Xing 4.0, Zamba2, and the Llama 3.2 11B/90B Vision models.
-Zamba2 uses a calibrated MT-Bench coding rating; the Llamas use their preserved
-text-model results. SEA-LION v1 7B Instruct remains unscored because no comparable
-code-correctness result was found. Known evidence gaps do not trigger new-release notices.
+benchmark collection at runtime. The October 27 review scores 67 models, every one calculated from raw published results,
+including Reflection Beam, Xing 4.0, and Zamba2 (from a calibrated MT-Bench coding rating).
+SEA-LION v1 7B Instruct, Nemotron 3.5 Bolt E4B, Llama 3.1 Nemotron 51B, and Glyph Cluster
+remain unscored because no comparable code-correctness result was found. Known evidence gaps
+do not trigger new-release notices.
 With `GEMINI_BILLING_TIER=paid`, Google's billed Gemini IDs are excluded from automatic
 free selection; the always-free Gemma 4 models remain eligible.
 
@@ -109,7 +108,7 @@ and retryable server errors, retain that provider's last known inventory. A
 successful empty catalog removes its models from selection; definitive
 authentication failures do not retain availability.
 
-Model listings hide a curated blacklist of dedicated non-coding models, maintained
+Model listings hide a curated blacklist of dedicated non-coding models, including vision-only models without coding results, maintained
 with reasons in `src/slipagent/model_catalog.py`. New model IDs remain visible by
 default; missing tool-call or structured-output metadata does not exclude them.
 This applies to `/models`, the `/model` picker, and `--list-models`.

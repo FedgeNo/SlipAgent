@@ -1,7 +1,8 @@
-"""Add published text-coding results using saved calibration, without network I/O.
+"""Calculate the curated text-coding scores from raw published results, without network I/O.
 
-Run with --help. This maintenance command updates the curated score table;
-provider catalogs and pricing independently determine automatic eligibility.
+Run with --help. This maintenance command fits every model and benchmark offset from
+model-score-measurements.json and rewrites the score table and calibration; provider
+catalogs and pricing independently determine automatic eligibility.
 """
 
 from __future__ import annotations
@@ -62,36 +63,6 @@ def load_calibration(path: Path) -> dict[str, Any]:
     if benchmarks[data["anchor"]]["offset"] != 0:
         raise ValueError("The reference benchmark must have zero offset")
     return data
-
-
-def estimate(results: object, calibration: dict[str, Any]) -> float:
-    """Fit one model's ability with the benchmark offsets held fixed."""
-    if not isinstance(results, dict) or not results:
-        raise ValueError("Provide at least one calibrated text-coding benchmark")
-    values = []
-    clip = calibration["probability_clip"]
-    for name, raw in results.items():
-        if name not in calibration["benchmarks"]:
-            raise ValueError(f"Uncalibrated benchmark {name!r}; add reference models measured on it and on a calibrated "
-                             "benchmark to the measurements file, then run --fit")
-        benchmark = calibration["benchmarks"][name]
-        score = number(raw, name)
-        minimum, maximum = benchmark.get("min_score", 0), benchmark.get("max_score", 100)
-        if not minimum <= score <= maximum:
-            raise ValueError(f"{name} must be between {minimum} and {maximum}")
-        probability = min(1 - clip, max(clip, score / maximum))
-        values.append(math.log(probability / (1 - probability)) + benchmark["offset"])
-    ability = sum(values) / len(values)
-    delta = calibration["huber_delta"]
-    for _ in range(5000):
-        weights = [min(1.0, delta / max(1e-12, abs(value - ability))) for value in values]
-        updated = sum(value * weight for value, weight in zip(values, weights)) / sum(weights)
-        if abs(updated - ability) < 1e-9:
-            # Stable logistic evaluation also handles extreme finite offsets.
-            probability = 1 / (1 + math.exp(-updated)) if updated >= 0 else math.exp(updated) / (1 + math.exp(updated))
-            return round(100 * probability, 1)
-        ability = updated
-    raise ValueError("Model score calculation did not converge")
 
 
 def sigmoid(value: float) -> float:
@@ -250,7 +221,7 @@ def percentile(values: list[float], fraction: float) -> float:
 
 
 def fit_scores(records: list[dict[str, Any]], scales: dict[str, tuple[float, float]], base: dict[str, Any],
-               reviewed: str) -> tuple[dict[str, float], dict[str, Any]]:
+               reviewed: str, *, validate: bool = True) -> tuple[dict[str, float], dict[str, Any]]:
     """Scores for every measured model, and the calibration that produced them."""
     clip, delta, anchor = base["probability_clip"], base["huber_delta"], base["anchor"]
     rows = observations(records, scales, clip)
@@ -277,7 +248,7 @@ def fit_scores(records: list[dict[str, Any]], scales: dict[str, tuple[float, flo
         row["overlap_models"] = sum(1 for names in benchmarks_of.values() if name in names and len(names) > 1)
         row["observed_score_range" if name in scales else "observed_percent_range"] = [min(values[name]), max(values[name])]
         calibration["benchmarks"][name] = row
-    errors = leave_one_out(rows, fitted, anchor, delta)
+    errors = leave_one_out(rows, fitted, anchor, delta) if validate else []
     if errors:
         calibration["validation"] = {"count": len(errors), "mean_absolute_error": statistics.fmean(errors),
                                      "median_absolute_error": statistics.median(errors),
@@ -290,31 +261,6 @@ def identity(value: Any) -> str:
     if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_./:-]+", value):
         raise ValueError("Use a canonical vendor/model ID without whitespace")
     return value.removesuffix(":free")
-
-
-def read_updates(path: Path, calibration: dict[str, Any]) -> list[tuple[str, float, list[str]]]:
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    rows = raw if isinstance(raw, list) else [raw]
-    if not rows:
-        raise ValueError("Provide at least one model")
-    result = []
-    seen = set()
-    for row in rows:
-        if not isinstance(row, dict) or set(row) - {"model", "benchmarks", "aliases", "sources", "notes"}:
-            raise ValueError("Expected model, benchmarks, sources, and optional aliases/notes")
-        model = identity(row.get("model"))
-        if model in seen:
-            raise ValueError(f"Repeated model {model}")
-        seen.add(model)
-        sources = row.get("sources")
-        if not isinstance(sources, list) or not sources or any(
-                not isinstance(source, str) or not source.startswith("https://") for source in sources):
-            raise ValueError(f"{model}: provide HTTPS source links for manual verification")
-        aliases = row.get("aliases", [])
-        if not isinstance(aliases, list):
-            raise ValueError(f"{model}: aliases must be a list")
-        result.append((model, estimate(row.get("benchmarks"), calibration), [identity(alias) for alias in aliases]))
-    return result
 
 
 def render_table(original: str, updates: list[tuple[str, float, list[str]]]) -> str:
@@ -385,15 +331,20 @@ def save_table(path: Path, original: str, updated: str) -> None:
 
 
 def refit(args: argparse.Namespace, base: dict[str, Any]) -> int:
-    """Recalculate scores and offsets from raw measurements; unmeasured table entries are kept."""
-    scales, records = read_measurements(args.fit)
+    """Recalculate scores and offsets from raw measurements."""
+    scales, records = read_measurements(args.measurements)
     reviewed = args.reviewed or datetime.datetime.now(datetime.timezone.utc).date().isoformat()
     scores, calibration = fit_scores(records, scales, base, reviewed)
     updates = [(record["model"], scores[record["model"]], record["aliases"]) for record in records if not record["reference"]]
     original = args.table.read_text(encoding="utf-8")
-    updated = render_table(original, updates)
     old = ast.literal_eval(next(node.value for node in ast.parse(original).body
                                 if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") == "SCORES"))
+    measured = {model for model, _, _ in updates}
+    unmeasured = sorted(model for model, score in old.items() if score is not None and model not in measured)
+    if unmeasured:
+        raise ValueError("Scored without measurements: " + ", ".join(unmeasured)
+                         + ". Add their published results to the measurements file, or remove the entries.")
+    updated = render_table(original, updates)
     for model, score, _ in sorted(updates, key=lambda item: -item[1]):
         before = old.get(model)
         print(f"{model}: {'new' if model not in old else 'unscored' if before is None else f'{before:.1f}'} -> {score:.1f}")
@@ -415,14 +366,12 @@ def refit(args: argparse.Namespace, base: dict[str, Any]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("input", type=Path, nargs="?", help="JSON model record or array; see model-score-example.json")
-    parser.add_argument("--fit", type=Path, nargs="?", const=DEFAULT_MEASUREMENTS, metavar="MEASUREMENTS",
-                        help="Recalculate every measured model and the benchmark offsets from raw results "
-                             "(default: model-score-measurements.json)")
-    parser.add_argument("--reviewed", default=None, help="Review date recorded with --fit (default: today, UTC)")
+    parser.add_argument("measurements", type=Path, nargs="?", default=DEFAULT_MEASUREMENTS,
+                        help="Raw published results (default: model-score-measurements.json)")
+    parser.add_argument("--reviewed", default=None, help="Review date recorded in the calibration (default: today, UTC)")
     parser.add_argument("--calibration", type=Path, default=DEFAULT_CALIBRATION)
     parser.add_argument("--table", type=Path, default=DEFAULT_TABLE, help="Curated Python score table to update")
-    parser.add_argument("--dry-run", action="store_true", help="Calculate and validate without changing the table")
+    parser.add_argument("--dry-run", action="store_true", help="Calculate and validate without changing any file")
     parser.add_argument("--list-benchmarks", action="store_true", help="Print calibrated benchmark names and exit")
     args = parser.parse_args(argv)
     try:
@@ -430,19 +379,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.list_benchmarks:
             print("\n".join(calibration["benchmarks"]))
             return 0
-        if args.fit is not None:
-            return refit(args, calibration)
-        if args.input is None:
-            parser.error("provide an input file, --fit, or --list-benchmarks")
-        updates = read_updates(args.input, calibration)
-        original = args.table.read_text(encoding="utf-8")
-        updated = render_table(original, updates)
-        if not args.dry_run and updated != original:
-            save_table(args.table, original, updated)
-        for model, score, _ in updates:
-            print(f"{model}: estimated coding score {score:.1f}/100")
-        print("Preview only." if args.dry_run else "Score table updated; existing models retain their scores.")
-        return 0
+        return refit(args, calibration)
     except (OSError, ValueError, SyntaxError, TypeError, KeyError) as exc:
         parser.exit(2, f"Error: {exc}\n")
 

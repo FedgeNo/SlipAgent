@@ -48,6 +48,14 @@ def test_score_never_makes_a_paid_endpoint_free():
     assert model_score("kilo", "stepfun/step-5-preview-free-experimental") is None
 
 
+def test_dedicated_vision_models_are_hidden_but_the_coding_capable_one_is_kept():
+    from slipagent.model_catalog import coding_models
+    ids = ["meta/llama-3.2-90b-vision-instruct", "meta-llama/llama-3.2-11b-vision-instruct",
+           "microsoft/phi-3-vision-128k-instruct", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+           "nvidia/nemotron-3.5-super-vl-120b-a12b"]
+    assert [model.id for model in coding_models([ModelInfo(i) for i in ids])] == ["nvidia/nemotron-3.5-super-vl-120b-a12b"]
+
+
 def test_groq_models_without_a_vendor_prefix_resolve_to_their_scores():
     from slipagent.modelscores import SCORES
     assert ModelInfo("allam-2-7b", provider="groq").score == SCORES["groq/allam-2-7b"] is not None
@@ -58,8 +66,9 @@ def test_reviewed_free_catalog_exposes_only_documented_benchmark_gaps():
     missing = [model.selector for provider, ids in catalog.items()
                for model in coding_models([ModelInfo(mid, provider=provider) for mid in ids])
                if model.score is None and model.id not in MODEL_ROUTERS]
-    # Visual and general-knowledge results cannot supply text-coding scores.
-    assert missing == ["nvidia::aisingapore/sea-lion-7b-instruct"]
+    # These publish no text-coding result that could supply a score.
+    assert missing == ["kilo::stealth/glyph-cluster", "nvidia::aisingapore/sea-lion-7b-instruct",
+                       "nvidia::nvidia/llama-3.1-nemotron-51b-instruct", "nvidia::nvidia/nemotron-3.5-bolt-e4b"]
     assert all(reviewed_model(*selector.split("::", 1)) for selector in missing)
 
 
@@ -96,7 +105,6 @@ def test_model_display_uses_estimated_score_and_sorts_highest_first():
     ("nvidia/nemotron-3-super-120b-a12b", False, 1_000_000, 32_768),
     ("openai/gpt-oss-20b", True, 128_000, 4_096),
     ("minimaxai/minimax-m3.1-flash", True, 262_144, None),
-    ("nvidia/nemotron-3.5-bolt-e4b", True, 65_536, 65_536),
 ])
 async def test_ranked_nvidia_models_can_be_selected_and_requested(model, native, limit, output):
     requests = []
@@ -120,6 +128,13 @@ async def test_ranked_nvidia_models_can_be_selected_and_requested(model, native,
     assert ("tools" in requests[0]) == native
     assert "chat_template_kwargs" not in requests[0]
     assert "response_format" not in requests[0]
+
+
+def test_unscored_bolt_keeps_its_documented_hosted_limits():
+    from slipagent.nvidiaprofiles import builtin_profile
+    profile = builtin_profile("nvidia/nemotron-3.5-bolt-e4b")
+    assert (profile.context_length, profile.max_completion_tokens) == (65_536, 65_536)
+    assert ModelInfo("nvidia/nemotron-3.5-bolt-e4b", provider="nvidia").score is None
 
 
 @pytest.mark.parametrize("model", ["google/gemma-4-31b-it", "google/diffusiongemma-26b-a4b-it"])

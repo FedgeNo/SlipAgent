@@ -341,13 +341,13 @@
   {
    "model": "google/gemini-2.5-pro",
    "benchmarks": {
-    "SWE Verified": 63.8,
-    "LiveCodeBench": 70.4
+    "SWE Verified": 59.6,
+    "LiveCodeBench": 74.2
    },
    "sources": [
-    "https://rivista.ai/wp-content/uploads/2025/04/gemini-2.5-pro-preview.pdf"
+    "https://arxiv.org/pdf/2507.06261"
    ],
-   "notes": "Launch table; custom agent for SWE; LiveCodeBench v5."
+   "notes": "Single-attempt SWE-bench Verified and LiveCodeBench v5 from the Gemini 2.5 report."
   },
   {
    "model": "mistralai/codestral-22b-instruct-v0.1",
@@ -485,37 +485,14 @@
   {
    "model": "ibm/granite-3.0-8b-instruct",
    "benchmarks": {
-    "BigCodeBench complete": 35.4
+    "BigCodeBench complete": 35.4,
+    "HumanEval": 51.55
    },
    "sources": [
-    "https://bigcode-bench.github.io/results.json"
-   ]
-  },
-  {
-   "model": "meta/llama-3.2-90b-vision-instruct",
-   "benchmarks": {
-    "HumanEval": 80.5
-   },
-   "sources": [
-    "https://ai.meta.com/blog/llama-3-2-connect-2024-vision-edge-mobile-devices/"
+    "https://bigcode-bench.github.io/results.json",
+    "https://huggingface.co/ibm-granite/granite-3.0-8b-instruct"
    ],
-   "aliases": [
-    "meta-llama/llama-3.2-90b-vision-instruct"
-   ],
-   "notes": "The shared text backbone's HumanEval; not a measurement of the vision checkpoint."
-  },
-  {
-   "model": "meta/llama-3.2-11b-vision-instruct",
-   "benchmarks": {
-    "HumanEval": 72.6
-   },
-   "sources": [
-    "https://ai.meta.com/blog/llama-3-2-connect-2024-vision-edge-mobile-devices/"
-   ],
-   "aliases": [
-    "meta-llama/llama-3.2-11b-vision-instruct"
-   ],
-   "notes": "The shared text backbone's HumanEval; not a measurement of the vision checkpoint."
+   "notes": "HumanEval is the HumanEvalSynthesis (Python) pass@1 from the model card."
   },
   {
    "model": "meta/llama2-70b",
@@ -616,13 +593,15 @@
     "SWE Verified": 80.8,
     "Terminal 2.0": 65.4,
     "LiveCodeBench": 88.8,
-    "Terminal 2.1": 78.2
+    "Terminal 2.1": 78.2,
+    "FLTEval pass1": 39.6
    },
    "sources": [
     "https://huggingface.co/moonshotai/Kimi-K2.6",
-    "https://huggingface.co/Qwen/Qwen3.8-27B"
+    "https://huggingface.co/Qwen/Qwen3.8-27B",
+    "https://mistral.ai/news/leanstral"
    ],
-   "notes": "Opus 4.6 max; Terminal 2.1 from Alibaba's table.",
+   "notes": "Opus 4.6 max; Terminal 2.1 from Alibaba's table. FLTEval is from Mistral's Leanstral post (Kimi's is an approximate cap).",
    "reference": true
   },
   {
@@ -646,23 +625,29 @@
    "benchmarks": {
     "SWE Verified": 76.8,
     "Terminal 2.0": 50.8,
-    "LiveCodeBench": 85.0
+    "LiveCodeBench": 85.0,
+    "FLTEval pass1": 20.1
    },
    "sources": [
-    "https://huggingface.co/moonshotai/Kimi-K2.6"
+    "https://huggingface.co/moonshotai/Kimi-K2.6",
+    "https://mistral.ai/news/leanstral"
    ],
-   "reference": true
+   "reference": true,
+   "notes": "FLTEval is from Mistral's Leanstral post (Kimi's is an approximate cap)."
   },
   {
    "model": "anthropic/claude-haiku-4.5",
    "benchmarks": {
     "SWE Verified": 73.3,
-    "Terminal 2.0": 29.8
+    "Terminal 2.0": 29.8,
+    "FLTEval pass1": 23.0
    },
    "sources": [
-    "https://huggingface.co/poolside/Laguna-XS-2.1"
+    "https://huggingface.co/poolside/Laguna-XS-2.1",
+    "https://mistral.ai/news/leanstral"
    ],
-   "reference": true
+   "reference": true,
+   "notes": "FLTEval is from Mistral's Leanstral post (Kimi's is an approximate cap)."
   },
   {
    "model": "qwen/qwen3.6-35b-a3b",
@@ -1050,6 +1035,285 @@
     "https://arxiv.org/abs/2407.15390"
    ],
    "notes": "ALLaM paper Table 8: ALLaM-Instruct 7B (the Llama-derived row) HumanEval pass@1 22.24, BigCode harness. The from-scratch 7B instruct row reports no HumanEval. The paper's checkpoints are earlier than the 2-7b release served by Groq, so this is a same-family estimate, not a measurement of allam-2-7b."
+  },
+  {
+   "model": "google/gemma-3-12b-it",
+   "benchmarks": {
+    "HumanEval": 85.4,
+    "LiveCodeBench": 24.6
+   },
+   "sources": [
+    "https://arxiv.org/pdf/2503.19786"
+   ],
+   "notes": "Instruction-tuned results from the Gemma 3 technical report."
+  },
+  {
+   "model": "google/gemma-3-4b-it",
+   "benchmarks": {
+    "HumanEval": 71.3,
+    "LiveCodeBench": 12.6
+   },
+   "sources": [
+    "https://arxiv.org/pdf/2503.19786"
+   ],
+   "notes": "Instruction-tuned results from the Gemma 3 technical report."
+  },
+  {
+   "model": "microsoft/phi-3.5-moe-instruct",
+   "benchmarks": {
+    "HumanEval": 70.7
+   },
+   "sources": [
+    "https://huggingface.co/microsoft/Phi-3.5-MoE-instruct"
+   ]
+  },
+  {
+   "model": "ai21labs/jamba-1.5-large-instruct",
+   "benchmarks": {
+    "HumanEval": 71.3
+   },
+   "sources": [
+    "https://arxiv.org/pdf/2408.12570"
+   ]
+  },
+  {
+   "model": "mistralai/mistral-large-2-instruct",
+   "benchmarks": {
+    "HumanEval": 92.0
+   },
+   "sources": [
+    "https://mistral.ai/news/mistral-large-2407/",
+    "https://arxiv.org/pdf/2408.12570"
+   ],
+   "notes": "Mistral's published HumanEval, as quoted in the Jamba 1.5 paper."
+  },
+  {
+   "model": "nvidia/nemotron-4-340b-instruct",
+   "benchmarks": {
+    "HumanEval": 73.2
+   },
+   "sources": [
+    "https://arxiv.org/pdf/2406.11704"
+   ],
+   "notes": "Final instruct model; MBPP 0-shot is 75.4."
+  },
+  {
+   "model": "nvidia/mistral-nemo-minitron-8b-8k-instruct",
+   "benchmarks": {
+    "HumanEval": 71.3
+   },
+   "sources": [
+    "https://huggingface.co/nvidia/mistral-nemo-minitron-8b-instruct"
+   ]
+  },
+  {
+   "model": "nv-mistralai/mistral-nemo-12b-instruct",
+   "benchmarks": {
+    "HumanEval": 68.3
+   },
+   "sources": [
+    "https://developer.nvidia.com/blog/?p=87739"
+   ],
+   "notes": "NVIDIA's comparison table for Mistral-NeMo-12B-Instruct."
+  },
+  {
+   "model": "google/recurrentgemma-2b",
+   "benchmarks": {
+    "HumanEval": 21.3
+   },
+   "sources": [
+    "https://huggingface.co/google/recurrentgemma-2b"
+   ],
+   "notes": "Base model."
+  },
+  {
+   "model": "google/codegemma-1.1-7b",
+   "benchmarks": {
+    "HumanEval": 60.4
+   },
+   "sources": [
+    "https://huggingface.co/google/codegemma-1.1-7b-it"
+   ],
+   "notes": "The 1.1 instruction-tuned checkpoint."
+  },
+  {
+   "model": "ibm/granite-3.0-3b-a800m-instruct",
+   "benchmarks": {
+    "HumanEval": 37.7
+   },
+   "sources": [
+    "https://huggingface.co/ibm-granite/granite-3.0-3b-a800m-instruct"
+   ],
+   "notes": "HumanEvalSynthesis (Python) pass@1."
+  },
+  {
+   "model": "google/gemini-2.5-flash",
+   "benchmarks": {
+    "SWE Verified": 48.9,
+    "LiveCodeBench": 59.3
+   },
+   "sources": [
+    "https://arxiv.org/pdf/2507.06261"
+   ],
+   "notes": "Single-attempt SWE-bench Verified; LiveCodeBench v5."
+  },
+  {
+   "model": "google/gemini-2.5-flash-lite",
+   "benchmarks": {
+    "SWE Verified": 27.6,
+    "LiveCodeBench": 34.3
+   },
+   "sources": [
+    "https://www.datalearner.com/ai-models/pretrained-models/Gemini-2_5-Flash-Lite/analysis"
+   ],
+   "notes": "Aggregator listing of Google's figures; another aggregator lists SWE 31.6."
+  },
+  {
+   "model": "google/gemini-2.0-flash",
+   "benchmarks": {
+    "SWE Verified": 21.4,
+    "LiveCodeBench": 29.1
+   },
+   "sources": [
+    "https://arxiv.org/pdf/2507.06261"
+   ],
+   "notes": "Single attempt.",
+   "reference": true
+  },
+  {
+   "model": "google/gemini-2.0-flash-lite",
+   "benchmarks": {
+    "SWE Verified": 12.5,
+    "LiveCodeBench": 29.1
+   },
+   "sources": [
+    "https://arxiv.org/pdf/2507.06261"
+   ],
+   "notes": "Single attempt.",
+   "reference": true
+  },
+  {
+   "model": "google/gemini-1.5-pro",
+   "benchmarks": {
+    "SWE Verified": 22.3,
+    "LiveCodeBench": 29.7
+   },
+   "sources": [
+    "https://arxiv.org/pdf/2507.06261"
+   ],
+   "notes": "Single attempt.",
+   "reference": true
+  },
+  {
+   "model": "google/gemini-1.5-flash",
+   "benchmarks": {
+    "SWE Verified": 9.6,
+    "LiveCodeBench": 30.3
+   },
+   "sources": [
+    "https://arxiv.org/pdf/2507.06261"
+   ],
+   "notes": "Single attempt.",
+   "reference": true
+  },
+  {
+   "model": "google/diffusiongemma-26b-a4b-it",
+   "benchmarks": {
+    "LiveCodeBench": 69.1
+   },
+   "sources": [
+    "https://arxiv.org/pdf/2608.00146"
+   ],
+   "notes": "Default mode; LiveCodeBench v6."
+  },
+  {
+   "model": "nvidia/nemotron-3.5-super-vl",
+   "benchmarks": {
+    "LiveCodeBench": 88.22,
+    "SWE Verified": 71.1,
+    "Terminal 2.1": 60.67
+   },
+   "sources": [
+    "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16"
+   ],
+   "aliases": [
+    "nvidia/nemotron-3.5-super-vl-120b-a12b"
+   ],
+   "notes": "BF16 model card; the NVIDIA harness."
+  },
+  {
+   "model": "nvidia/nemotron-3.5-lightning",
+   "benchmarks": {
+    "SWE Verified": 51.56,
+    "Terminal 2.1": 24.6
+   },
+   "sources": [
+    "https://interfaze.ai/models/nvidianvidia-nemotron-35-lightning-30b-a3b-bf16"
+   ],
+   "aliases": [
+    "nvidia/nemotron-3.5-lightning-30b-a3b"
+   ],
+   "notes": "Mirror of the BF16 model card, not NVIDIA's own page."
+  },
+  {
+   "model": "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+   "benchmarks": {
+    "LiveCodeBench": 66.3
+   },
+   "sources": [
+    "https://docs.api.nvidia.com/nim/reference/nvidia-llama-3_1-nemotron-ultra-253b-v1"
+   ],
+   "notes": "Reasoning on; aggregator-quoted, since the model card's table could not be read."
+  },
+  {
+   "model": "anthropic/claude-sonnet-4.6",
+   "benchmarks": {
+    "SWE Verified": 79.6,
+    "FLTEval pass1": 23.7
+   },
+   "sources": [
+    "https://www.anthropic.com/news/claude-sonnet-4-6",
+    "https://mistral.ai/news/leanstral"
+   ],
+   "notes": "SWE Verified is quoted by aggregators from the system card, not read there.",
+   "reference": true
+  },
+  {
+   "model": "mistral/labs-leanstral-1-5-1",
+   "benchmarks": {
+    "FLTEval pass1": 28.9
+   },
+   "sources": [
+    "https://mistral.ai/news/leanstral-1-5/"
+   ],
+   "aliases": [
+    "mistral/labs-leanstral-1-5"
+   ],
+   "notes": "Specialist Lean prover scored on a formal-proof benchmark; a proof result may overestimate broad software ability."
+  },
+  {
+   "model": "google/gemini-3-flash-preview",
+   "benchmarks": {
+    "SWE Verified": 78.0,
+    "Terminal 2.0": 47.6,
+    "Terminal 2.1": 58.0
+   },
+   "sources": [
+    "https://blog.google/products/gemini/gemini-3-flash/",
+    "https://deepmind.google/models/model-cards/gemini-3-5-flash/",
+    "https://en.namu.wiki/w/Gemini%203"
+   ],
+   "notes": "SWE Verified from Google's launch post; Terminal 2.0 from a table mirror; Terminal 2.1 from the Gemini 3.5 Flash model card."
+  },
+  {
+   "model": "liquid/lfm-2.5-2.6b",
+   "benchmarks": {
+    "LiveCodeBench": 59.41
+   },
+   "sources": [
+    "https://huggingface.co/LiquidAI/LFM2.5-2.6B"
+   ],
+   "notes": "LiveCodeBench v6 from the model card; the card says the model is not recommended for agentic coding."
   }
  ]
 }

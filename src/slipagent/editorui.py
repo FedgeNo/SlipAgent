@@ -78,10 +78,12 @@ class EditorPanel:
             [("Undo [Ctrl+Z]", self.input.buffer.undo), ("Redo [Ctrl+Y]", self.input.buffer.redo)],
             [("Editor Options [F4]", lambda: self.terminal.app.create_background_task(self.terminal._options_panel.show()))],
         ]
+        # Pad the left labels to one width so the right column starts at a fixed indent.
+        indent = max(display_width(group[0][0]) for group in groups)
         for group in groups:
             for index, (label, action) in enumerate(group):
                 if index:
-                    result.append(("", "  |  "))
+                    result.append(("", " " * (indent - display_width(group[0][0])) + "  |  "))
                 result.extend(self.terminal._action_link(
                     label, ("editor-action", label), action, style="class:menu-item",
                     enabled=lambda label=label: not self.busy and (not self.read_only or label not in {"Save File [Ctrl+S]", "Undo [Ctrl+Z]", "Redo [Ctrl+Y]"}),

@@ -17,6 +17,7 @@ from .capabilities import RequestProfile
 from .types import ToolCall, ToolSpec
 from .prompts import load_prompt, model_prompt_profile
 from .toolcompat import compatible_json, schema_arguments, tool_name
+from wcwidth import iter_graphemes
 
 RECORD_MAX_CHARS = 6000
 COMPRESSED_FIELDS = (
@@ -52,13 +53,23 @@ class ResponseRecord:
         self.agent_response_compressed = agent
 
 
+def session_title_value(value: Any) -> str:
+    """A displayable title; an unusable one is dropped rather than failing a cosmetic field."""
+    if not isinstance(value, str):
+        return ""
+    clusters = list(iter_graphemes(" ".join(re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", value).split())))
+    return "".join(clusters) if len(clusters) <= 60 else "".join(clusters[:59]).rstrip() + "…"
+
+
 class AgentResponse:
     """Reply and actions, independent of background compaction."""
 
-    def __init__(self, text: str, calls: list[ToolCall], suggestions: list[str] | None = None) -> None:
+    def __init__(self, text: str, calls: list[ToolCall], suggestions: list[str] | None = None,
+                 session_title: str = "") -> None:
         self.text = text
         self.calls = calls
         self.suggestions = suggestions or []
+        self.session_title = session_title
 
 
 class ResponseFormats:
@@ -71,11 +82,13 @@ class ResponseFormats:
         schema["properties"] = {key: value for key, value in schema["properties"].items()
                                 if key in {"response", "tool_calls"}}
         schema["required"] = list(schema["properties"])
+        descriptions = json.loads(load_prompt("response-fields.json"))
         schema["properties"]["suggestions"] = {
             "type": "array", "maxItems": 3, "items": {"type": "string", "minLength": 1},
-            "description": json.loads(load_prompt("response-fields.json"))["suggestions"],
+            "description": descriptions["suggestions"],
         }
-        # Strict schemas require every property; suggestions must remain omittable.
+        schema["properties"]["session_title"] = {"type": "string", "description": descriptions["session_title"]}
+        # Strict schemas require every property; suggestions and the title must remain omittable.
         result["json_schema"]["strict"] = False
         return result
 
@@ -255,7 +268,8 @@ class ResponseParser:
                 return AgentResponse("", self.combine_calls(self.normalize_calls(value), tagged))
             if isinstance(value, dict):
                 if set(value) & {"response", "tool_calls", "function_call", *COMPRESSED_FIELDS}:
-                    allowed = {"response", "tool_calls", "function_call", "suggestions", *COMPRESSED_FIELDS}
+                    allowed = {"response", "tool_calls", "function_call", "suggestions", "session_title", *COMPRESSED_FIELDS}
+                    title = session_title_value(value.get("session_title"))
                     suggestions = value.get("suggestions", [])
                     if not isinstance(suggestions, list) or len(suggestions) > 3 or any(
                             not isinstance(item, str) or not item.strip() for item in suggestions):
@@ -267,10 +281,11 @@ class ResponseParser:
                     if any(field in value for field in COMPRESSED_FIELDS):
                         calls = self.combine_calls(self.normalize_calls(value.get("tool_calls")),
                                               self.normalize_calls(value.get("function_call")), tagged)
-                        legacy_value = {key: item for key, item in value.items() if key not in {"function_call", "suggestions"}}
+                        legacy_value = {key: item for key, item in value.items()
+                                        if key not in {"function_call", "suggestions", "session_title"}}
                         legacy_value["tool_calls"] = [call.to_record() for call in calls]
                         legacy = self._legacy_response(legacy_value, bool(value.get(COMPRESSED_FIELDS[0])), [], [])
-                        return AgentResponse(legacy.text, legacy.calls, suggestions)
+                        return AgentResponse(legacy.text, legacy.calls, suggestions, title)
                     reply = value.get("response", "")
                     if isinstance(reply, str) and (xml_tool_calls or reply.lstrip().startswith(TOOL_MARKERS)):
                         embedded = self._detect_response(reply, tools, xml_tool_calls=xml_tool_calls)
@@ -278,7 +293,7 @@ class ResponseParser:
                         tagged = self.combine_calls(tagged, embedded.calls)
                     calls = self.combine_calls(self.normalize_calls(value.get("tool_calls")),
                                           self.normalize_calls(value.get("function_call")), tagged)
-                    return AgentResponse(reply, calls, suggestions)
+                    return AgentResponse(reply, calls, suggestions, title)
                 if not tagged:
                     return AgentResponse(text, [])
         # Markdown examples are not call carriers. Only top-level tags are parsed.
@@ -297,7 +312,7 @@ class ResponseParser:
                         trailing = self._trailing_fence_calls(text[offset:], tools, xml_tool_calls=xml_tool_calls)
                         if trailing is not None:
                             reply = "\n".join(part for part in (text[:offset].rstrip(), trailing.text) if part)
-                            return AgentResponse(reply, trailing.calls, trailing.suggestions)
+                            return AgentResponse(reply, trailing.calls, trailing.suggestions, trailing.session_title)
                         in_fence = marker[1]
                     elif marker[1][0] == in_fence[0] and len(marker[1]) >= len(in_fence):
                         in_fence = ""
@@ -332,7 +347,7 @@ class ResponseParser:
                     if offset and stripped.startswith(("{", "[")) and self._json_call_start(text[offset:].strip()):
                         embedded = self._detect_response(text[offset:], tools, xml_tool_calls=xml_tool_calls)
                         reply = "\n".join(part for part in (text[:offset].rstrip(), embedded.text) if part)
-                        return AgentResponse(reply, embedded.calls, embedded.suggestions)
+                        return AgentResponse(reply, embedded.calls, embedded.suggestions, embedded.session_title)
                     if stripped.startswith(("{", "[")):
                         # A literal JSON value is one block. Never inspect its
                         # nested objects or arrays as independent executable calls.

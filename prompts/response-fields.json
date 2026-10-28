@@ -2,6 +2,7 @@
     "response": "Useful Markdown reply: briefly record findings and supporting evidence from supplied results, decisions, and the purpose of pending tool calls. Empty text is allowed with calls; otherwise provide a nonblank answer or ask for needed information.",
     "tool_calls": "Ordered tools to execute after validation; [] for a final answer.",
     "suggestions": "Optional prompts that logically extend this turn's actions; clicks submit them exactly as supplied.",
+    "session_title": "Short Title Case name for an untitled conversation; include only when the Session Title section asks for one.",
     "call_id": "Nonempty identifier unique within this batch.",
     "tool_name": "Exact advertised tool name.",
     "arguments": "JSON-encoded object matching the tool's parameter schema. Use '{}' for no arguments.",

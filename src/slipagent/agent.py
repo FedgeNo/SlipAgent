@@ -371,6 +371,20 @@ class Agent:
             raise ContextStepLimit
         self._requests += 1
 
+    async def _name_session(self, step: int, title: str) -> None:
+        """Adopt the model's title only while the session keeps its default one."""
+        journal = self.registry.resources.journal
+        if not title or journal is None or journal.named:
+            return
+        from .sessions import SessionError
+        from .tools.blocking import run_blocking
+        try:
+            await run_blocking(journal.rename, title)
+        except SessionError as exc:
+            self._emit(AgentEvent(kind="warning", step=step, text=str(exc)))
+            return
+        self._emit(AgentEvent(kind="session_title", step=step, text=journal.title))
+
     def _record_edit_delivery(self, step: int, edits: list[dict[str, Any]]) -> None:
         from .editdelivery import acknowledge
 
@@ -683,6 +697,7 @@ class Agent:
         message.reasoning_model = self.model
         self.messages.append(message)
         self._record_edit_delivery(step, self.registry.services.pop("accepted_user_edits", []))
+        await self._name_session(step, getattr(record, "session_title", ""))
         if not record.calls:
             await self._archive_step(capabilities)
             if not self.has_queued_input and not self.stop_requested:

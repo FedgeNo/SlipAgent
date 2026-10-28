@@ -152,6 +152,11 @@ class SessionJournal:
         # Older live journals predate titles; their project path is still known.
         return getattr(self, "_title", session_title(self.project))
 
+    @property
+    def named(self) -> bool:
+        """Whether a title other than the project default was given."""
+        return self.title != session_title(self.project)
+
     def rename(self, name: str) -> None:
         """Atomically save mutable title metadata without rewriting the journal."""
         title = session_title(name)

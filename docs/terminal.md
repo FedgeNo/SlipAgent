@@ -105,7 +105,8 @@ Both forms supplying a key are omitted from input history, queued display text,
 model input, and session journals.
 
 Conversation titles default to `{full working directory} | SlipAgent`.
-`/rename Fix login` changes the saved conversation and terminal title to
+While a saved conversation keeps that default, the model names it from your
+request in its first reply. `/rename Fix login` changes the saved conversation and terminal title to
 `Fix login | SlipAgent`, including while the agent works. `/sessions` shows saved
 titles, and `/resume` or `--resume` restores them. In the REPL, restoring also
 loads the original conversation into the scrolling area and starts at the end.

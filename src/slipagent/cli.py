@@ -728,6 +728,10 @@ class Renderer:
                     self.__dict__["_suggestion_step"] = event.step
                 self.terminal.write_suggestion(event.text)
 
+        elif event.kind == "session_title":
+            if self.terminal is not None:
+                self.terminal.set_title(event.text)
+
         elif event.kind == "user_message":
             # Waiting input stays outside the feed until its request is sent.
             self.user_prompt(event.text, queued=True)

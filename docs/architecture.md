@@ -976,6 +976,10 @@ keeps its title in memory until the first journal header is written. Resume reop
 the selected journal; only `/fork` creates a populated child journal.
 
 The conversation title defaults to the full project path plus ` | SlipAgent`.
+While a journal keeps that default, requests carry the dynamic
+`response-session-title.md` section, and the agent saves the reply's optional
+`session_title` field through the same rename path. A title already set, by
+`/rename` or an earlier reply, is never replaced, and the section is then omitted.
 New journal headers carry their initial title. `/rename` atomically replaces a
 private `<session-id>.title.json` file in the same project state directory;
 the sidecar overrides the header without rewriting conversation records.

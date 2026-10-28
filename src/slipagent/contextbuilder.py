@@ -111,6 +111,11 @@ class ContextBuilder:
         if not glm_xml:  # Suggestions need a JSON reply object, which GLM's text replies avoid.
             sections.add("suggestions", "Optional Suggested Next Steps", load_prompt('response-suggestions.md'),
                          1, owner="protocol", dynamic=False)
+            journal = self.registry.resources.journal
+            # Dynamic, so the cached static prefix stays intact once the session is named.
+            if journal is not None and not journal.named:
+                sections.add("session_title", "Session Title", load_prompt('response-session-title.md'),
+                             1, owner="protocol")
         if glm_xml:
             # GLM's own template lists one JSON signature per line inside <tools>.
             sections.add("tools", "Tools", load_prompt('tool-definitions-glm-xml.md', definitions="\n".join(

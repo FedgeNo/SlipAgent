@@ -1089,6 +1089,27 @@ def test_restamp_stamps_unstamped_overrides_and_adds_the_import(workshop):
     assert module.Widget().size() == 2
 
 
+async def test_bare_restamp_covers_every_plugin_and_keeps_only_existing_approval(workshop, monkeypatch):
+    menu, _, _ = menu_for([], monkeypatch)
+    await menu.command("copy widgets.Widget.render approved")
+    await menu.command("copy widgets.Widget.size unapproved")
+    approved, unapproved = workshop.resolve_file("approved"), workshop.resolve_file("unapproved")
+    approvals = plugins.load_approvals()
+    approvals.code.pop(unapproved.name)
+    plugins.save_approvals(approvals)
+    changed = TARGET.replace('return f"<{text}>"', 'return f"<<{text}>>"').replace("return 1", "return 3")
+    (plugins.PACKAGE_ROOT / "widgets.py").write_text(changed)
+    report = load(approved, component(changed), plugins.load_approvals())
+    assert "Review it with /plugin diff approved.py, then /plugin restamp approved.py." in "".join(report.notices())
+    menu, _, applied = menu_for([], monkeypatch)
+    await menu.command("restamp")
+    assert "Restamped approved.py → Widget.render, unapproved.py → Widget.size." in menu.out.getvalue()
+    assert workshop.diff() == [] and len(applied) == 1
+    decisions = plugins.load_approvals()
+    assert decisions.code_decision(approved.name, plugins.source_digest(approved.read_bytes())) is True
+    assert decisions.code_decision(unapproved.name, plugins.source_digest(unapproved.read_bytes())) is None
+
+
 async def test_plugin_copy_approves_what_it_wrote_and_the_listing_shows_each_state(workshop, monkeypatch):
     menu, chooser, applied = menu_for(["widgets.Widget", "size"], monkeypatch)
     await menu.command("copy")

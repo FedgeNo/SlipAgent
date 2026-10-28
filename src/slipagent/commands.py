@@ -1188,7 +1188,7 @@ class PluginCommand(ExclusiveCommand):
     help = (
         CommandHelp('/plugin copy [target] [file]', 'copy module.Class or module.Class.method into a plugin file, stamped and approved', '/plugin copy '),
         CommandHelp('/plugin diff [file]', 'show how application methods changed since plugins copied them', '/plugin diff '),
-        CommandHelp('/plugin restamp <file> [method]', 'record the current fingerprints after reviewing a change', '/plugin restamp '),
+        CommandHelp('/plugin restamp [file [method]]', 'record the current fingerprints after reviewing a change', '/plugin restamp '),
     )
 
     async def run(self, context: CommandContext, argument: str) -> bool | None:

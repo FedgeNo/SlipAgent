@@ -256,8 +256,8 @@ class PluginReport:
             if override.state != "on":
                 continue
             if override.status == "changed":
-                yield (f"{self.name} overrides {override.label}, which has changed since "
-                       "this override was written. Review it with /plugin diff, then restamp it.")
+                yield (f"{self.name} overrides {override.label}, which has changed since this override "
+                       f"was written. Review it with /plugin diff {self.name}, then /plugin restamp {self.name}.")
             elif override.status == "unstamped":
                 yield (f"{self.name} overrides {override.label} without @overrides; "
                        f"add @overrides(\"{override.fingerprint}\") to be warned when it changes.")

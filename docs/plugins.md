@@ -176,9 +176,10 @@ After a warning:
    `/plugin copy` saved when you copied it (in `plugins/.baseline/`). Without a file,
    it checks every plugin.
 2. Bring your override up to date if it needs it.
-3. `/plugin restamp <file> [method]` records the current fingerprint and source.
-   Restamping also adds `@overrides` to unstamped overrides. Approve the resulting
-   file version through `/plugins`.
+3. `/plugin restamp [file [method]]` records the current fingerprint and source.
+   Without a file, it restamps every plugin. Restamping also adds `@overrides` to
+   unstamped overrides. A file that was approved stays approved; an unapproved one
+   still needs approval through `/plugins`.
 
 The absence of a warning is not a guarantee. A method can break without its own code
 changing, for example when a method it calls takes different arguments or an
@@ -215,4 +216,4 @@ attribute it reads is renamed.
 | `/plugins` | List plugins and override states, then approve overrides or resolve conflicts |
 | `/plugin copy [module.Class[.method]] [file]` | Copy a class's methods, or one method, into a plugin file |
 | `/plugin diff [file]` | Show how application methods changed since they were copied |
-| `/plugin restamp <file> [method]` | Record current fingerprints after reviewing a change |
+| `/plugin restamp [file [method]]` | Record current fingerprints after reviewing a change |

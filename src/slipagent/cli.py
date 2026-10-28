@@ -2795,15 +2795,27 @@ class PluginMenu:
                     print("  " + (style.green(line) if line.startswith("+") and not line.startswith("+++")
                                   else style.red(line) if line.startswith("-") and not line.startswith("---")
                                   else line), file=out)
-            elif action == "restamp" and 1 <= len(words) <= 2:
-                members = await run_blocking(tools.restamp, words[0], words[1] if len(words) > 1 else "")
-                print(f"  Restamped {', '.join(members)}." if members else "  Every override is already current.",
+            elif action == "restamp" and len(words) <= 2:
+                paths = [tools.resolve_file(words[0])] if words else plugins.plugin_files()
+                approvals = await run_blocking(plugins.load_approvals)
+                restamped: list[str] = []
+                for path in paths:
+                    before = plugins.source_digest(path.read_bytes()) if path.exists() else ""
+                    members = await run_blocking(tools.restamp, path.name, words[1] if len(words) > 1 else "")
+                    if members:
+                        restamped.append(f"{path.name} → {', '.join(members)}")
+                        # Restamping rewrites only stamps, so an approved file stays approved;
+                        # an unapproved one still needs review through /plugins.
+                        if approvals.code_decision(path.name, before):
+                            approvals.decide_code(path.name, plugins.source_digest(path.read_bytes()), True)
+                print(f"  Restamped {', '.join(restamped)}." if restamped else "  Every override is already current.",
                       file=out)
-                if members:
+                if restamped:
+                    await run_blocking(plugins.save_approvals, approvals)
                     await self.apply()
             else:
                 print("  usage: /plugin copy [module.Class[.method] [file]] | /plugin diff [file] | "
-                      "/plugin restamp <file> [method]", file=out)
+                      "/plugin restamp [file [method]]", file=out)
         except (PluginToolError, OSError) as exc:
             print(style.red(f"  {exc}"), file=out)
 

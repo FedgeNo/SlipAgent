@@ -162,6 +162,10 @@ Every startup warns when fewer than three providers have configured API keys:
 rate limiting and degraded performance, including slower compaction, are likely.
 Configured keys do not guarantee available free-model quota.
 
+OpenRouter's latest aliases use their catalog-advertised target for endpoint
+capability checks. Requests keep the selected alias, so OpenRouter continues to
+resolve it to the latest release. Explicit reselection refreshes the target.
+
 For Anthropic Claude, add `ANTHROPIC_API_KEY=your-key` to the ignored `.env`, or
 enter `/key <key>` with a `sk-ant-` key. Run `slipagent --provider anthropic`,
 use `/models anthropic` to browse its authenticated, paginated model catalog,

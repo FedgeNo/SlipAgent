@@ -67,15 +67,30 @@ class OpenRouterClient(APIClient):
         self._capabilities = cache
         if model in cache and not refresh:
             return cache[model]
-        if not hasattr(self, "_model_properties"):
+        if (not hasattr(self, "_model_properties") or
+                refresh and self._model_properties.get(model, {}).get("alias_target") is not None):
             await self.list_models()
         properties = self._model_properties.get(model)
+        endpoint_model = model
+        seen = {model}
+        # Latest aliases have no endpoints of their own; the catalog names the
+        # target whose routing capabilities apply to requests for the alias.
+        while properties is not None and properties.get("alias_target") is not None:
+            alias = properties["alias_target"]
+            target = alias.get("slug") if isinstance(alias, dict) else None
+            if not isinstance(target, str) or not target.strip() or target in seen:
+                raise OpenRouterConfigError(f"Cannot resolve model alias {model}: invalid or cyclic alias target.")
+            seen.add(target)
+            properties = self._model_properties.get(target)
+            if properties is None:
+                raise OpenRouterConfigError(f"Cannot resolve model alias {model}: target {target!r} is missing from the catalog.")
+            endpoint_model = target
         # Some compatible gateways expose only the older minimal catalog.
         if properties is not None and not isinstance(properties.get("supported_parameters"), list):
             if store and model not in cache:
                 cache[model] = None
             return None
-        raw = await self._request("GET", f"/models/{quote(model, safe='/')}/endpoints")
+        raw = await self._request("GET", f"/models/{quote(endpoint_model, safe='/')}/endpoints")
         data = raw.get("data")
         if properties is None and isinstance(data, dict):
             properties = data

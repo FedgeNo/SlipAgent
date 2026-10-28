@@ -43,7 +43,8 @@ no saved result is marked as having an unknown outcome; an unstarted tool is
 marked as not run. Inspect uncertain effects before retrying.
 
 Use `/sessions` to manage saved sessions without typing their IDs. It lists them
-by title and date, marking the current one; choosing one offers Resume, Rename,
+by title and local date, marking the current one; an unnamed session shows the
+start of its first prompt instead of the project path, as in `/resume`; choosing one offers Resume, Rename,
 Delete, and Back. Deleting another session asks for confirmation, then removes its
 journal, title, logs, diagnostics, and checkpoints; deleting the current one is
 `/delete`. After renaming or deleting another session the list reopens, so several

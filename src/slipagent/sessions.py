@@ -31,7 +31,7 @@ from .api import APIError
 from .task import TaskMemory
 from .tools.blocking import run_blocking
 from .tools.output import CommandLog, OutputStream
-from .types import Message, Usage
+from .types import Message, Usage, content_text
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -358,7 +358,7 @@ class SessionJournal:
                 if header.get("type") != "header" or header.get("project") != self.project:
                     raise SessionError(f"Invalid session header: {path}")
                 result.append({"id": path.stem, "created": header["created"], "current": str(path == self.path),
-                               "title": self._saved_title(path.stem, header)})
+                               "title": self._saved_title(path.stem, header), "prompt": self._first_prompt(path)})
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             raise SessionError(f"Cannot list saved sessions: {exc}") from exc
         return result
@@ -378,6 +378,32 @@ class SessionJournal:
         self.last_message, self.system, self.state = None, None, None
         self.failed = False
         self._title = session_title(self.project)
+
+    @staticmethod
+    def _first_prompt(path: Path) -> str:
+        """The first user prompt, read only as far as its line; listings never scan whole journals."""
+        with path.open(encoding="utf-8") as source:
+            for _, line in zip(range(64), source):
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    return ""  # A torn line only loses the preview; resume reports it.
+                message = record.get("message")
+                if record.get("type") == "message" and isinstance(message, dict) and message.get("role") == "user":
+                    text = content_text(message.get("content"))
+                    if text.strip():
+                        return text
+        return ""
+
+    def label(self, entry: dict[str, str]) -> str:
+        """A listing row for choosers: unnamed sessions show their first prompt, dates read locally."""
+        from .protocol import session_title_value
+        name = entry["title"]
+        if name == session_title(self.project) and entry.get("prompt"):
+            name = session_title_value(entry["prompt"])
+        created = datetime.fromisoformat(entry["created"]).astimezone()
+        date = created.strftime("%b %d %H:%M" if created.year == datetime.now().year else "%b %d %Y %H:%M")
+        return f"{name}  {date}" + ("  (current)" if entry["current"] == "True" else "")
 
     def delete_saved(self, session_id: str) -> None:
         """Remove another saved session's journal and sidecars."""

@@ -793,10 +793,7 @@ class SessionsCommand(StoredSessionCommand):
                 if not entries:
                     print("  no saved sessions for this project.", file=out)
                     return None
-                selected = await terminal.choose("Saved Sessions", [
-                    (entry["id"], f"{entry['title']}  {entry['created']}" + ("  (current)" if entry["current"] == "True" else ""))
-                    for entry in entries.values()
-                ])
+                selected = await terminal.choose("Saved Sessions", [(entry["id"], journal.label(entry)) for entry in entries.values()])
                 if selected is None:
                     return None
                 entry = entries[selected]
@@ -967,11 +964,7 @@ class ResumeCommand(StoredSessionCommand):
                 if not entries:
                     print("  no saved sessions for this project.", file=out)
                     return False
-                options = [
-                    (entry["id"], f"{entry['title']}  {entry['created']}" +
-                     ("  (current)" if entry["current"] == "True" else ""))
-                    for entry in entries
-                ]
+                options = [(entry["id"], journal.label(entry)) for entry in entries]
                 selected = await terminal.choose("Resume Session", options)
                 if selected is None:
                     return False

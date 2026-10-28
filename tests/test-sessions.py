@@ -630,3 +630,29 @@ def test_saved_session_changes_accept_only_other_listed_ids(workspace, tmp_path)
         with pytest.raises(SessionError):
             journal.rename_saved(session_id, "Name")
     assert outside.exists() and journal.path.exists()
+
+
+def test_unnamed_sessions_are_labelled_by_their_first_prompt_and_a_local_date(workspace, tmp_path):
+    from datetime import datetime
+    agent = Agent(StubClient([]), ToolRegistry(), "test")
+    journal = attach(agent, workspace, tmp_path)
+    agent.messages.extend([Message.user("  Fix the\nflaky   login test  "), Message.assistant("Done.")])
+    agent._persist()
+    named = journal.session_id
+    journal.rename("Named Work")
+    agent.reset()
+    agent.messages.append(Message.user("x" * 80))
+    agent._persist()
+    unnamed = journal.session_id
+    agent.reset()
+    agent.messages.append(Message.user("Fix the flaky login test"))
+    agent._persist()
+    entries = {entry["id"]: entry for entry in journal.listing()}
+    created = datetime.fromisoformat(entries[unnamed]["created"]).astimezone().strftime("%b %d %H:%M")
+    assert journal.label(entries[unnamed]) == "x" * 59 + "…  " + created
+    assert journal.label(entries[named]).startswith("Named Work | SlipAgent  ")
+    assert journal.label(entries[journal.session_id]).startswith("Fix the flaky login test  ")
+    assert journal.label(entries[journal.session_id]).endswith("  (current)")
+    torn = journal.directory / (unnamed + ".jsonl")
+    torn.write_text(torn.read_text().splitlines()[0] + "\n{\"type\": \"mess")
+    assert {entry["id"]: entry for entry in journal.listing()}[unnamed]["prompt"] == ""

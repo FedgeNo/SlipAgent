@@ -1419,8 +1419,10 @@ async def test_resume_picker_lists_all_sessions_and_restores_only_the_selected_o
         assert title == "Resume Session"
         assert [value for value, label in options] == [entry["id"] for entry in entries]
         for entry, (value, label) in zip(entries, options):
-            assert entry["title"] in label and entry["created"] in label
+            assert label == journal.label(entry)
             assert ("(current)" in label) == (value == current_id)
+        assert all(entry["title"].removesuffix(" | SlipAgent") in label for entry, (_, label) in zip(entries, options)
+                   if entry["id"] != current_id)
         assert all(path.read_bytes() == content for path, content in originals.items()
                    if cancel or path.stem != ids[2])
         if cancel:

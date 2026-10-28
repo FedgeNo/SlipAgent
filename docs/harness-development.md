@@ -35,11 +35,11 @@ selection belongs to `environment.py`.
 | --- | --- |
 | Tool execution, validation, and result contracts | `tools/base.py`, the tool implementation, `tools/__init__.py` |
 | Tool instructions and argument explanations | `prompts/tools/*.md`, `prompts/tools/*-parameters.json` |
-| Deferred discovery | `tools/discovery.py`, `prompts/tool-discovery.md`, request assembly in `agent.py` |
+| Deferred discovery | `tools/discovery.py`, `prompts/tool-discovery.md`, request assembly in `contextbuilder.py` and `agent.py` |
 | General operating instructions | `prompts/system-prompt.md` and the resource map in `prompts/README.md` |
 | Response formats and provider calls | `protocol.py`, `api.py`, provider and capability modules |
 | History, original requests, and summaries | `context.py`, `records.py`, `task.py`, `compaction.py` |
-| Terminal input, scrolling, and rendering | `terminal.py`, `transcript.py`, renderer in `cli.py` |
+| Terminal input, scrolling, and rendering | `terminal.py`, `terminallayout.py`, `terminalbindings.py`, `terminalmouse.py`, `statusline.py`, `transcript.py`, renderer in `cli.py` |
 | Slash-command behavior | `commands.py`, CLI command dispatch |
 | Repository orientation | `repomap.py`, `symbols.py` |
 | Optional local semantic retrieval | `semantic/`, `tools/semantic.py`; see [its contracts](semantic-search.md) |

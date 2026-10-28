@@ -26,7 +26,8 @@ Interactive startup does not wait for the network. Provider catalogs and the
 selected models' capability profiles are saved in `startup-cache.json` in the
 data directory, for each API key and endpoint, for up to seven days. When they
 are available, startup selects from them and refreshes them in the background,
-along with the quota. A model that has since become unavailable fails its first
+along with the quota. Optimal's selection and skip notices print after
+"Startup complete." rather than inside the startup progress. A model that has since become unavailable fails its first
 request (for example with 403 or 404) and optimal mode moves straight to the
 next model. The first interactive launch without any API key asks for one,
 lists providers with free models, and offers to save it. `/model optimal`
@@ -61,7 +62,9 @@ and the next Esc cancels the turn.
 A working request that produces no output within two minutes is cancelled and
 moves directly to the next eligible model. This deadline runs from request start,
 including connection and upload time but not upload pacing waits; keepalives and empty stream markers do not
-extend it. Once reasoning, answer text, or tool-call content arrives, streaming
+extend it. A 429 or other retried failure does not restart it; only a successful
+(200) response starts a fresh window. While the built-in editor is open the agent
+is held, so the countdown pauses and restarts in full when the editor closes. Once reasoning, answer text, or tool-call content arrives, streaming
 continues under the ordinary transport timeout. In manual mode, the deadline
 reports an error and retains the selected model. Background compression retains
 its separate 20-minute timeout.
@@ -217,8 +220,8 @@ NVIDIA's hosted trial catalog is free, including models developed by other
 companies. Its catalog omits tool support and context limits, so
 [`nvidiaprofiles.py`](../src/slipagent/nvidiaprofiles.py) supplies reviewed endpoint
 profiles for Step 5, DeepSeek V4.1 Flash, GLM 5.3/Flash, Kimi K2.6, current
-Nemotron models, Muse Glimmer, Gemma 4, DiffusionGemma, Laguna XS 2.1, and
-GPT-OSS 20B. Native tools are used where the endpoint documents them; other
+Nemotron models, MiniMax M3.1 Flash, Muse Glimmer, Gemma 4, DiffusionGemma,
+Laguna XS 2.1, and GPT-OSS 20B. Native tools are used where the endpoint documents them; other
 profiles use embedded tool calls. Gemma endpoints that accept only user and
 assistant roles receive the system instructions at the start of the first user
 message, streamed from the same source files. Remaining NVIDIA entries require

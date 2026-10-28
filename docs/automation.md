@@ -29,7 +29,8 @@ and diagnostics remain on stderr. Records share `schema_version` (currently 1),
 Context events carry the outgoing request as a `request` **object**, rather than
 a JSON string inside JSON. Tool arguments and result objects retain their data
 types. Match tool observations by their step and call ID. Per-token reasoning and
-reply fragments and incremental command-output chunks are omitted; completed
+reply fragments, incremental command-output chunks, and early call labels read
+from a still-streaming reply are omitted; completed
 reply/tool events, request snapshots, and the existing saved sessions retain the
 corresponding observations. This avoids enormous fragment-by-fragment logs.
 

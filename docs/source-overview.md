@@ -43,10 +43,18 @@ src/slipagent/
 ├── api.py            shared transport, streaming, parsing, and retry policy
 ├── providers.py      provider registry and client factory
 ├── openrouter.py     OpenRouter routing, capabilities, and key information
-├── nvidia.py         NVIDIA direct API, model profiles, and reasoning controls
+├── nvidia.py         NVIDIA hosted endpoint and reasoning controls
+├── nvidiaprofiles.py reviewed NVIDIA model limits and parameters
+├── google.py         Google's compatible API with catalog token limits
+├── mistral.py        Mistral chat completions and model capabilities
+├── groq.py           Groq chat completions and live catalog capabilities
 ├── kilo.py           Kilo Gateway and live catalog capabilities
 ├── capabilities.py   endpoint selection, native tools, JSON/reasoning, limits
-├── terminal.py       prompt, transcript, layout, key bindings, styles
+├── terminal.py       fixed footer, scrolling transcript, menus, and panels
+├── terminallayout.py layout assembly around retained panels and input
+├── terminalbindings.py keyboard commands and focus filters
+├── terminalmouse.py  mouse routing between feed, input, editor, menus, inspector
+├── statusline.py     status priority, expiring notices, rotating tips
 ├── palette.py        shared terminal colors and ANSI foreground codes
 ├── transcript.py     file-backed transcript and incremental word wrapping
 ├── instructions.py   project guidance discovery before model activity
@@ -54,12 +62,18 @@ src/slipagent/
 ├── workspace.py      symlink-aware path boundary
 ├── types.py          shared messages, tool calls, usage, wire types
 ├── mcp.py            persistent stdio MCP connections
+├── plugins.py        user method overrides, fingerprints, and approvals
+├── plugintools.py    /plugin copy, diff, and restamp
+├── updater.py        --update: download the latest release and run its installer
+├── semantic/         local embedding index, watcher, and retrieval
 └── tools/
     ├── base.py       tool contract, argument validation, registry
     ├── answer.py     user-visible answers and answer-only completion
     ├── planning.py   bounded working-plan updates
     ├── blocking.py   owned worker threads for synchronous filesystem operations
     ├── files.py      read_file, write_file, edit_file
+    ├── hashline.py   optional read_hashlines and edit_hashlines
+    ├── paths.py      copy_path, move_path, delete_path, create_directory
     ├── editing.py    atomic replacement planning, diagnostics, bounded diffs
     ├── search.py     grep, glob
     ├── grep.py       isolated, killable regex worker using a source snapshot
@@ -67,7 +81,10 @@ src/slipagent/
     ├── shell.py      run_command
     ├── output.py     session log quota, storage, and read_command_output
     ├── git.py        confined status, diff, log, staging, commits
-    └── web.py        web_search, fetch_page, http_fetch
+    ├── python.py     create_python_environment
+    ├── semantic.py   semantic_search over the session's index
+    ├── http.py       http_fetch
+    └── web.py        web_search, fetch_page
 ```
 
 The tree above shows the central modules. Smaller components now own the
@@ -75,14 +92,18 @@ request pipeline and interactive inspection features:
 
 | Responsibility | Modules in `src/slipagent/` |
 | --- | --- |
-| Request assembly and recovery | `contextbuilder.py`, `requests.py`, `toolbatch.py`, `contextlegacy.py` |
+| Request assembly and recovery | `contextbuilder.py`, `requests.py`, `toolbatch.py`, `contextlegacy.py`, `requestbody.py`, `requestfailures.py`, `responsecapture.py`, `upload.py`, `toolcompat.py`, `thoughts.py`, `calllabels.py` |
+| Model routing, pricing, and scores | `modelrouting.py`, `compressionproviders.py`, `modelpricing.py`, `modelscores.py`, `startupcache.py` |
+| History summaries and turn storage | `historymerge.py`, `turnstore.py` |
+| User input awaiting dispatch | `submissions.py`, `inputqueue.py`, `diffcomments.py` |
+| Command-output monitoring | `monitoring.py` |
 | Headless JSON Lines output | `automation.py` |
 | Session state and owned resources | `sessionstate.py`, `resources.py`, `work.py`, `events.py` |
 | Slash-command behavior and help | `commands.py` |
-| Saved inspection records | `artifacts.py`, `inspection.py` |
-| File-backed editing and coordination | `editor.py`, `editorcontrol.py`, `editorui.py`, `useredits.py` |
+| Saved inspection records | `artifacts.py`, `inspection.py`, `payloads.py`, `contextview.py`, `rowindex.py` |
+| File-backed editing and coordination | `editor.py`, `editorbuffer.py`, `editorcontrol.py`, `editorui.py`, `useredits.py`, `editdelivery.py`, `fileio.py` |
 | Read-only text and diff viewers | `viewers.py`, `viewerpanels.py` |
-| Reusable lists, links, focus, and layout | `listpanels.py`, `links.py`, `focus.py`, `uiwindows.py` |
+| Reusable lists, links, focus, and layout | `listpanels.py`, `links.py`, `focus.py`, `uiwindows.py`, `mainarea.py`, `menulifecycle.py`, `transcriptlayouts.py` |
 | Inspection configuration and folder opening | `options.py`, `uipreferences.py`, `explorer.py` |
 | Inferred shell file references | `shellpaths.py` |
 | Deferred tool definitions | `tools/discovery.py` |

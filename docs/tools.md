@@ -17,7 +17,12 @@ Every advertised tool, except `answer`, also accepts an optional `call_label`: a
 short plain-language description of the call, such as "Reading the install guide",
 for people who don't read code. The feed shows the label in the tool color with the
 exact call beneath it in grey; a call without a label is shown alone in the tool
-color. The label stays in the saved call but is removed before the tool runs, and
+color. When `call_label` is the call's first argument, the label appears as soon as
+its string closes in the streamed reply, before the call runs; if that attempt is
+abandoned, its early labels are removed from the feed. Calls in one batch start
+together, but each call's heading waits until the call before it has shown its
+result, so every heading sits directly above its own result.
+The label stays in the saved call but is removed before the tool runs, and
 repetition checks ignore it. Tools that define their own `call_label` argument keep
 theirs. The parameter's wording is in `prompts/call-label.md`.
 System definitions separate core and loaded tools, keyed by name in indented
@@ -35,7 +40,7 @@ The complete built-in tool set is:
 | `answer` | Display `text`; end the run when called without other tools, or continue after a mixed tool batch. Also accepts `<tool_call><answer>text</answer></tool_call>`. |
 | `read_file` | Read a whole UTF-8 file up to 32 MB with numbered lines; optional offset/limit ranges, without a line cap. Model context limits still apply. |
 | `write_file` | Create or overwrite a file, making parent directories. |
-| `copy_path` | Copy a file or directory tree to a new exact destination, including binary files. |
+| `copy_path` | Copy a file or directory tree to a new exact destination, including binary files; trees containing symbolic links are refused. |
 | `move_path` | Move or rename a file or directory tree on the same filesystem. |
 | `delete_path` | Delete a file or empty directory; nonempty directories require `recursive=true`. |
 | `create_directory` | Create a directory, optionally including missing parents. |
@@ -75,7 +80,8 @@ edit rejects the whole edit call. Reread after external changes; moved blocks ar
 not matched approximately. Successful edits return fresh anchors near the change.
 
 Use `/hashline off` or `--no-hashline` to remove both tools, their catalog entries,
-and their instructions. `/hashline on` enables them again for the current session.
+and their instructions. `/hashline on` enables them again for the current session;
+`--hashline` states the default at launch.
 Their full definitions are delivered with the next request, rather than duplicated
 in historical `load_tools` results, so disabled feature guidance does not persist
 there. `read_file` and `edit_file` remain available in either mode.

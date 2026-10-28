@@ -287,7 +287,10 @@ role-only deltas, and tool-call IDs without a name or arguments leave it armed.
 Content, reasoning, or tool-call content disarms it so active generation can
 continue. Expiry closes the stream, saves captured diagnostics, and records a
 failed history turn. It bypasses transport retries and reaches the existing
-optimal fallback; manual mode retains its model and reports the error. Background
+optimal fallback; manual mode retains its model and reports the error. A 429 or
+other retried failure keeps the original deadline; only a successful (200)
+response starts a fresh window. While the built-in editor holds the agent, the
+deadline is paused and restarts in full when the editor closes. Background
 compression omits this deadline and keeps its own timeout.
 
 `capabilities.py` selects native tool calling from the live endpoints' `tools`
@@ -983,7 +986,9 @@ While a journal keeps that default, requests carry the dynamic
 New journal headers carry their initial title. `/rename` atomically replaces a
 private `<session-id>.title.json` file in the same project state directory;
 the sidecar overrides the header without rewriting conversation records.
-Listings read headers and title metadata only, rather than scanning each journal.
+Listings read headers, title metadata, and each journal only as far as its first
+user prompt (at most 64 lines), rather than scanning whole journals; a torn line
+there only drops that preview.
 Malformed metadata reports an error; legacy journals without titles use their
 project path. Resume retains the saved title and its sidecar. Fork embeds that
 title in the child header, so renaming a fork leaves the parent untouched. Reset gets the default title.
@@ -1062,8 +1067,12 @@ never resumes the interrupted run automatically.
 
 The CLI exposes `/sessions`, `/resume [id|latest]`, `/fork`, `/delete`, `/rewind`, `--resume [id]`, and
 `--no-session`. `/new` starts a new journal while retaining prior sessions.
-On an interactive terminal, bare `/resume` passes saved titles and dates to
-`TerminalUI.choose`, using full session IDs as selection values. The list keeps
+On an interactive terminal, bare `/resume` and `/sessions` pass
+`SessionJournal.label` rows (the title, or the first prompt of an unnamed session,
+with a local date) to `TerminalUI.choose`, using full session IDs as selection
+values. `/sessions` then offers resume, rename, and delete; renaming or deleting
+another session uses `rename_saved` and `delete_saved`, which accept only IDs of
+other journals in the same project directory. The list keeps
 the journal's newest-first order and marks the current session. The selected row
 stays visible when moving down or up beyond the footer's edges. Escape returns
 before compaction waits, job shutdown, or changes to the active conversation.

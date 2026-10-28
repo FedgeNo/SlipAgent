@@ -25,7 +25,7 @@ In the REPL:
 | `/help [command]` | Show all help or one command's help; `/help init` and `/help /init` are equivalent |
 | `/theme <name>` | Choose dark, light, monochrome, or ironbow colors |
 | `/markdown [source\|rendered]` | Toggle or select Markdown source/rendered view |
-| `/copy [text\|markdown\|code [number]]` | Copy the latest reply or a code block |
+| `/copy [auto\|text\|markdown\|code [number]]` | Copy the latest reply or a code block; `auto` (the default) copies Markdown source in source view, the only code block when there is exactly one, and readable text otherwise |
 | `/menu` | Browse all commands and their arguments; selecting one inserts it into the input |
 | `/view [record] [line]` | Choose a saved output/diff record or open its numeric ID at an optional line |
 | `/danger on` | Disable workspace path confinement; queues while working |
@@ -43,7 +43,7 @@ In the REPL:
 | `/model free` | Choose from zero-cost models |
 | `/model optimal`, `/model next`, `/model reset` | Automatic selection, skip to the next ranked model, or retry from the top |
 | `/models [filter]` | Shortcut: choose from the catalog, optionally filtered |
-| `/provider <provider>` | Select and remember a free default: OpenRouter/NVIDIA Nemotron 3 Ultra, or Kilo Auto Free; refuse missing models or nonzero/unknown pricing |
+| `/provider <provider>` | Select and remember that provider's default model: Nemotron 3 Ultra on OpenRouter and NVIDIA, Kilo Auto Free, Mistral Small, Gemini 3.8 Flash, or GPT-OSS 120B on Groq; refuse missing models or nonzero/unknown pricing |
 | `/temperature` | Show the explicit temperature or provider default, and whether the selected model supports changing it |
 | `/temperature <value>` | Set the working-model temperature from 0 to 2; unsupported changes report an error |
 | `/context` | Show the working-context cap and the selected model's limit |
@@ -88,18 +88,25 @@ In the REPL:
 | `/exit`, `/quit` | Exit the session; cancel retry waits and let an active response/tool batch finish without another request |
 
 `/key <key>` recognizes OpenRouter (`sk-or-v1-`), NVIDIA (`nvapi-`),
-Mistral (`mstrl_`), Google (`AIza` or `AQ.`), and Kilo JWTs identifying a Kilo
-user. Detection happens locally. An unrecognized format asks for the provider;
-you can also use `/key <provider> <key>` with `openrouter`, `nvidia`, `mistral`,
-`google`, or `kilo`. A detected key must agree with an explicitly named provider.
+Mistral (`mstrl_`), Google (`AIza` or `AQ.`), Groq (`gsk_`), and Kilo JWTs
+identifying a Kilo user. Detection happens locally. An unrecognized format asks
+for the provider; you can also use `/key <provider> <key>` with `openrouter`,
+`nvidia`, `mistral`, `google`, `groq`, or `kilo`. A detected key must agree with an explicitly named provider.
 
 The key becomes available to model selection, optimal fallback, and compression.
 Adding another provider keeps the current model selected. Replacing the active
 provider's key rebuilds its connection. OpenRouter verifies through `GET /key`;
-Google and Mistral use their authenticated model catalogs. NVIDIA and Kilo report
+Google, Mistral, and Groq use their authenticated model catalogs. NVIDIA and Kilo report
 that authentication will be checked on inference. Failed verification preserves
 existing credentials. Saving for future runs still requires `y` at the prompt
 and updates only the detected provider's entry in the data-directory `.env`.
+
+A rejected key (HTTP 401) ends the run with the remedy: replace it with
+`/key <key>` or remove it with `/key delete <provider>`. The OpenRouter quota
+check, which runs at most every fifteen minutes, warns once per key when the
+provider rejects it, so an expired key is reported before the next prompt fails.
+When the provider reports an expiry, `/key show` and `/key list` include it, and
+a key that has expired or expires within seven days is warned about once.
 
 Both forms supplying a key are omitted from input history, queued display text,
 model input, and session journals.
@@ -142,7 +149,8 @@ when entering prompts, command arguments, configuration values, or file edits.
 
 On an interactive terminal, seven fixed rows sit at the bottom of the screen:
 a pulsing activity indicator, five rows for wrapping input,
-and the readout `<cwd>  │  Model: <provider>::<model>`. Background colors distinguish this area from the scrolling transcript. Output and redraws preserve
+and the readout `<cwd>  │  Model: <provider>::<model>`, with ` (Optimal)` after the
+model while optimal selection is on. Background colors distinguish this area from the scrolling transcript. Output and redraws preserve
 partially typed input. The controls have a dark blue background, menus use
 dark purple, and the prompt retains its dark green background. Input and output wrap at word boundaries to the
 terminal width and reflow when you resize it. Wrapping preserves the submitted prompt's
@@ -231,8 +239,12 @@ agent continues working. **Ctrl+S** saves; **Esc** or **Close Text Editor**
 closes, showing **Save**, **Don't Save**, and **Cancel** in the bottom menu when
 there are unsaved changes. Clicking text places the cursor there; clicking right of a line places
 it at that line's end, and clicking below the content places it at the file's end.
-Editor action controls replace the prompt area while editing; the same prompt
-buffer, text, cursor, and scrolling return when the editor closes.
+While editing, the **Editor Actions** menu replaces the prompt area, with the
+actions in two aligned columns: **Save File** (Ctrl+S) and **Reload File**
+(Ctrl+R), **Page Up** and **Page Down**, **Undo** (Ctrl+Z) and **Redo** (Ctrl+Y),
+and **Editor Options** (F4). Its title adds "File changed on disk." when the
+file changed outside the editor. The same prompt buffer, text, cursor, and
+scrolling return when the editor closes.
 Files containing unsupported control characters open read-only, with an explanation in the header and status. Editing and saving are disabled; tabs and normal line endings remain editable. Binary files remain unsupported.
 The editor's top line shows the full file path, truncating its middle when needed.
 Help, reload controls, and external-change warnings appear in the bottom area.
@@ -366,6 +378,12 @@ prompt pinned until the new prompt reaches the top. The pinned prompt uses
 one line, shortening at a word boundary with `…` when needed and adjusting on resize. The
 complete original remains in scrollback. The context view keeps its own layout.
 
+A one-column scrollbar runs along the right edge of the feed, beside the
+inspector when it is open, and follows whichever scrolling view is showing.
+Clicking the track jumps there; dragging the thumb scrolls smoothly. The track
+ends at the feed's last row, and holding the thumb at the bottom keeps the feed
+following new output.
+
 The interactive transcript keeps original output and indexed display rows in
 private temporary files for the session. Streaming formats new text and the
 unfinished wrapping tail; ordinary redraws fetch visible rows from a bounded
@@ -427,7 +445,8 @@ reach a model request. Later prompts use the resulting settings. Settings change
 the task without resetting its request limit. `/stop` and exit controls remain
 immediate control actions. `/stop` holds previously queued input until fresh input
 arrives; reset, resume, and `/task new` replace the task instead of restarting
-the previous work. Slash commands are never sent to the model as user messages.
+the previous work. `/sessions` continues the task afterwards unless its menu
+resumed another session or deleted the current one. Slash commands are never sent to the model as user messages.
 
 The working indicator shows a moon-phase spinner beside `Working (esc to interrupt)`.
 While a model request runs, it names the current step and the seconds spent in it:

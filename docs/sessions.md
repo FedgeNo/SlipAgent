@@ -23,7 +23,8 @@ Startup creates no conversation journal until the first task prompt is entered.
 Help, settings, session listing, and renaming before that prompt do not add an
 empty session. Resume reopens the selected conversation's journal.
 
-Use `/resume` to choose a saved session by title and date. During work it queues
+Use `/resume` to choose a saved session by title and local date; an unnamed
+session shows the start of its first prompt instead. During work it queues
 until the current response and tool batch finish. Up/Down
 moves through the list, scrolling at either edge; Enter restores the selection
 and Escape cancels. The current session is marked in the list.

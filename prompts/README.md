@@ -53,7 +53,7 @@ The `z-ai/glm-5.3` and `z-ai/glm-5.3-flash` profiles use the GLM XML channel and
 | --- | --- |
 | `system-prompt.md` | General operating instructions and writing style |
 | `system-history.md` | Input authority and use of historical evidence |
-| `current-turn.md` | Current-step metadata in the system prompt |
+| `current-turn.md`, `current-turn-tool-results.md` | Current-step metadata in the system prompt, and the note that a step carries tool results |
 | `background-summary-prompt.md` | Background compression of completed steps |
 | `historical-summary-prompt.md` | Narrative for each run-aligned block of up to 20 turns, merged from first-pass summaries, organized by run with original turn citations and retrieval metadata |
 | `era-summary-prompt.md` | Era for each five consecutive narratives, organized by run with original turn citations |
@@ -63,7 +63,8 @@ The `z-ai/glm-5.3` and `z-ai/glm-5.3-flash` profiles use the GLM XML channel and
 | `monitor-setup.md`, `monitor-active.md`, `monitor-results.md` | Available command-monitor setup, active reminders, and inline ready results with initialization turns; omitted when the tool is unavailable |
 | `working-plan.md`, `working-plan-record.md` | Persistent plan guidance and last successful update step, subordinate to user instructions |
 | `json-tools.md`, `native-tools.md`, `response-*.md` | Response formats and tool-calling protocols |
-| `history-records.md`, `history-excerpt.md`, `summary-unavailable.md` | History interpretation and retrieval |
+| `history-*.md`, `summary-unavailable.md` | History interpretation and retrieval: record fields, excerpts, compressed summaries, narratives, eras, saved artifacts, failed requests, and unclassified results; `history-records.md` is always sent, and each field note only when the selected history contains its records |
+| `legacy-*.md` | Records and summaries kept for conversations saved in older history formats |
 | `user-request.md`, `new-user-request.md`, `tool-result-response.md`, `continuation.md` | Current request, new input, automatic return after tools, and continuation without new input |
 | `overthinking-*.md` | Archived reasoning guidance |
 | `workspace-*.md`, `environment-*.md` | Access policy and Python environment guidance |

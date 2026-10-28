@@ -492,7 +492,7 @@ class ModelsCommand(ExclusiveCommand):
 class ProviderCommand(ExclusiveCommand):
     name = 'provider'
     help = (
-        CommandHelp('/provider <provider>', 'switch to a free default: openrouter/nvidia Ultra, kilo Auto Free', '/provider '),
+        CommandHelp('/provider <provider>', "switch to the provider's free default model", '/provider '),
     )
 
     async def run(self, context: CommandContext, argument: str) -> bool | None:

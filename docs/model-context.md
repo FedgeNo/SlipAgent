@@ -182,10 +182,13 @@ in the model profile, JSON-only models receive
 `response_format: {"type":"json_object"}` when schemas are unavailable.
 Reply text is encouraged on tool turns but may be empty when calls are present.
 Unless disabled in the model profile, endpoints advertising `structured_outputs`
-receive a small [strict schema](https://openrouter.ai/docs/guides/features/structured-outputs):
+receive a small [structured-output schema](https://openrouter.ai/docs/guides/features/structured-outputs):
 `response` contains the plain terminal reply. Models using embedded calls also
-include `tool_calls`, an ordered array, empty for a final answer. Neither mode
-requires compressed fields or a task record in every response.
+include `tool_calls`, an ordered array, empty for a final answer. Two optional
+fields follow: `suggestions`, up to three suggested next prompts, and
+`session_title`, which names an untitled session when its prompt section asks.
+The schema is sent with `strict: false` so these fields stay omittable. Neither
+mode requires compressed fields or a task record in every response.
 
 For example, a schema-capable native-tool response uses this content:
 
@@ -397,7 +400,7 @@ retrievals return complete objects or arrays without character paging.
 the best available ranked free model from each eligible provider.** Every job
 and retry uses one shared rotation, in both normal and optimal modes. Providers
 participate when their own API key and a ranked free model are available:
-OpenRouter, NVIDIA, Kilo, Mistral, and Google. Each attempt uses its destination's
+OpenRouter, NVIDIA, Kilo, Mistral, Google, and Groq. Each attempt uses its destination's
 own capabilities and context/output limits.
 
 The selected coding provider serves only working requests, whatever its model
@@ -536,7 +539,7 @@ Useful flags:
 | `--python` | Explicit project interpreter, overriding project-file settings and discovery. |
 | `--temperature`, `--max-tokens` | Explicit temperature and output limits; temperature applies only to working-model requests. |
 | `-v, --verbose` | Show full tool output and per-step token usage. |
-| `--provider` | Select `openrouter`, `nvidia`, `kilo`, `mistral`, or `google`; start in manual mode. |
+| `--provider` | Select `openrouter`, `nvidia`, `kilo`, `mistral`, `google`, or `groq`; start in manual mode. |
 | `--update` | Download the latest SlipAgent from GitHub and run its installer, which checks for local edits first. |
 | `--list-models` | Print catalogs for providers with configured API keys and qualified model selectors. |
 | `--api-key` | Override the API key for this process; an environment variable avoids putting it in shell history. |

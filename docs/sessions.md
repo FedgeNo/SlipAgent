@@ -10,7 +10,7 @@ defaulting to `~/.local/share/slipagent`; on macOS it is
 `~/Library/Application Support/SlipAgent/data`; on Windows it is
 `%LOCALAPPDATA%/SlipAgent`. Relative XDG paths are ignored. Each project gets a directory named `<md5>-<sha1>`, computed from
 the same expanded absolute workspace path. Symlink spelling and case are
-preserved; `project.json` retains the original path. `/sessions` prints the
+preserved; `project.json` retains the original path. `/sessions list` prints the
 absolute storage path and saved IDs. `SLIPAGENT_STATE_DIR` overrides the storage
 root. Journals and logs may contain private project text; configuration API
 keys are not included in their metadata.
@@ -41,6 +41,14 @@ above it. Type `continue` when ready; resume
 does not start model requests or replay tools by itself. A started tool with
 no saved result is marked as having an unknown outcome; an unstarted tool is
 marked as not run. Inspect uncertain effects before retrying.
+
+Use `/sessions` to manage saved sessions without typing their IDs. It lists them
+by title and date, marking the current one; choosing one offers Resume, Rename,
+Delete, and Back. Deleting another session asks for confirmation, then removes its
+journal, title, logs, diagnostics, and checkpoints; deleting the current one is
+`/delete`. After renaming or deleting another session the list reopens, so several
+can be cleared in turn. Like `/resume`, it queues during work and leaves the
+agent idle afterwards. Without an interactive terminal it prints the listing.
 
 Use `/fork` to copy the current saved conversation and continue in the new
 session. Its history, summaries, task state, queued input, usage, title, and

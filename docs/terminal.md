@@ -62,7 +62,7 @@ In the REPL:
 | `/queue discard <number>` | Discard one unsent message, retaining accepted history and the active task |
 | `/task new` | Make the next prompt a new task, retaining previous history and command logs |
 | `/rename <name>` | Save this conversation's name and set its terminal title to `{name} \| SlipAgent` |
-| `/sessions` | List saved sessions for this project's path |
+| `/sessions` | Choose a saved session to resume, rename, or delete; `/sessions list` prints IDs and the storage path |
 | `/resume` | Choose a saved session with Up/Down and Enter; Escape cancels (interactive terminal; queues while working) |
 | `/resume <id>` or `/resume latest` | Restore a saved conversation and its scrolling transcript at the end; queues while working; no tools are replayed |
 | `/fork` | Copy the current saved session and continue in the copy; preserve the original; queues while working |

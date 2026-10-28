@@ -225,7 +225,7 @@ async def test_delete_confirmation_removes_only_current_session(tmp_path, metada
             assert not session.agent.pending and not session.agent.history.steps
             terminal.clear_transcript.assert_called_once()
             assert "SlipAgent — coding agent with selectable API providers" in output.getvalue()
-            await cli.CommandRunner(session).handle("/sessions")
+            await cli.CommandRunner(session).handle("/sessions list")
             assert journal.path is None
         else:
             assert current_path.read_bytes() == current_original
@@ -549,3 +549,84 @@ async def test_corrupt_inspection_index_is_reported_as_a_session_error(workspace
     restored = Agent(StubClient([]), ToolRegistry(services={"artifact_store": ArtifactStore(1_000_000)}), "test")
     with pytest.raises(SessionError, match="Cannot restore inspection records"):
         journal.restore(restored, data)
+
+
+async def test_sessions_menu_renames_and_deletes_other_sessions_then_returns_to_the_list(tmp_path, metadata_server):
+    import io
+    from unittest.mock import AsyncMock, Mock
+    from slipagent import cli
+    from slipagent.terminal import TerminalUI
+    session = await cli.Launcher(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)])).build_session()
+    journal = session.registry.services["session_journal"]
+    session.agent.client = StubClient([completion("Old answer"), completion("Current answer")])
+    terminal = Mock(spec=TerminalUI)
+    output = io.StringIO()
+    terminal.write.side_effect = lambda text, **kwargs: output.write(text)
+    try:
+        await session.agent.run("Old prompt")
+        await session.agent.wait_for_compaction()
+        old = journal.session_id
+        # Disposable files stand in for stored sidecar content.
+        (journal.directory / (old + "-logs")).mkdir(exist_ok=True)
+        session.agent.reset()
+        await session.agent.run("Current prompt")
+        await session.agent.wait_for_compaction()
+        current, current_title = journal.session_id, journal.title
+        session.renderer.terminal = terminal
+        terminal.choose = AsyncMock(side_effect=[old, "rename", old, "delete", "delete", None])
+        terminal.ask = AsyncMock(return_value="  Renamed Old  ")
+        await cli.CommandRunner(session).handle("/sessions")
+        listing, actions = terminal.choose.call_args_list[:2]
+        assert listing.args[0] == "Saved Sessions"
+        assert [value for value, _ in listing.args[1]] == [current, old]
+        assert "(current)" in listing.args[1][0][1] and "(current)" not in listing.args[1][1][1]
+        assert [value for value, _ in actions.args[1]] == ["resume", "rename", "delete", "back"]
+        assert "Renamed Old | SlipAgent" in terminal.choose.call_args_list[2].args[1][1][1]
+        assert terminal.choose.call_args_list[4].args[0] == "Permanently Delete Renamed Old | SlipAgent?"
+        assert [entry["id"] for entry in journal.listing()] == [current]
+        assert not list(journal.directory.glob(old + "*"))
+        assert journal.session_id == current and journal.title == current_title
+        assert "Current prompt" in [message.content for message in session.agent.messages]
+    finally:
+        await cli.Repl(session).shutdown()
+
+
+async def test_sessions_menu_resumes_and_hands_current_deletion_to_delete(tmp_path, metadata_server):
+    from unittest.mock import AsyncMock, Mock
+    from slipagent import cli
+    from slipagent.terminal import TerminalUI
+    session = await cli.Launcher(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)])).build_session()
+    journal = session.registry.services["session_journal"]
+    session.agent.client = StubClient([completion("Old answer"), completion("Current answer")])
+    terminal = Mock(spec=TerminalUI)
+    try:
+        await session.agent.run("Old prompt")
+        await session.agent.wait_for_compaction()
+        old = journal.session_id
+        session.agent.reset()
+        await session.agent.run("Current prompt")
+        await session.agent.wait_for_compaction()
+        current = journal.session_id
+        session.renderer.terminal = terminal
+        terminal.choose = AsyncMock(side_effect=[old, "resume"])
+        await cli.CommandRunner(session).handle("/sessions")
+        assert journal.session_id == old
+        terminal.choose = AsyncMock(side_effect=[old, "delete", "delete"])
+        await cli.CommandRunner(session).handle("/sessions")
+        assert [value for value, _ in terminal.choose.call_args_list[1].args[1]] == ["rename", "delete", "back"]
+        assert journal.path is None
+        assert [entry["id"] for entry in journal.listing()] == [current]
+    finally:
+        await cli.Repl(session).shutdown()
+
+
+def test_saved_session_changes_accept_only_other_listed_ids(workspace, tmp_path):
+    journal = attach(Agent(StubClient([]), ToolRegistry(), "test"), workspace, tmp_path)
+    outside = tmp_path / "saved" / "outside.jsonl"
+    outside.write_text("{}\n")
+    for session_id in (journal.session_id, "../outside", "outside", "0" * 32):
+        with pytest.raises(SessionError):
+            journal.delete_saved(session_id)
+        with pytest.raises(SessionError):
+            journal.rename_saved(session_id, "Name")
+    assert outside.exists() and journal.path.exists()

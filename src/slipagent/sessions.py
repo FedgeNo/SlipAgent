@@ -165,6 +165,10 @@ class SessionJournal:
         if self.path is None:
             self._title = title
             return
+        self._write_title(self.session_id, title)
+        self._title = title
+
+    def _write_title(self, session_id: str, title: str) -> None:
         temporary: Path | None = None
         try:
             fd, filename = tempfile.mkstemp(prefix=".title-", dir=self.directory)
@@ -173,13 +177,24 @@ class SessionJournal:
                 json.dump({"title": title}, target, ensure_ascii=False)
                 target.flush()
                 os.fsync(target.fileno())
-            temporary.replace(self.directory / (self.session_id + ".title.json"))
+            temporary.replace(self.directory / (session_id + ".title.json"))
         except OSError as exc:
             raise SessionError(f"Could not save the session title: {exc}") from exc
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
-        self._title = title
+
+    def _saved_session(self, session_id: str) -> str:
+        """An ID from the listing that names another saved journal, never a path."""
+        if session_id == self.session_id:
+            raise SessionError("Use the current-session commands for the open session.")
+        if not re.fullmatch(r"[0-9a-f]{32}", session_id) or not (self.directory / (session_id + ".jsonl")).is_file():
+            raise SessionError(f"No saved session {session_id}.")
+        return session_id
+
+    def rename_saved(self, session_id: str, name: str) -> None:
+        """Retitle another saved session without opening it."""
+        self._write_title(self._saved_session(session_id), session_title(name))
 
     def _saved_title(self, session_id: str, header: dict[str, Any]) -> str:
         title = header.get("title", session_title(self.project))
@@ -353,21 +368,31 @@ class SessionJournal:
         if self.path is None:
             raise SessionError("No current saved session to delete.")
         try:
-            for suffix in ("-logs", "-requests", "-checkpoints", "-artifacts", "-turns"):
-                directory = self.directory / (self.session_id + suffix)
-                if directory.exists():
-                    shutil.rmtree(directory)
-            (self.directory / (self.session_id + ".title.json")).unlink(missing_ok=True)
-            self.path.unlink()
-        except OSError as exc:
+            self._remove(self.session_id)
+        except SessionError:
             self.failed = True
-            raise SessionError(f"Could not delete session {self.session_id}: {exc}. Some session files may have been removed.") from exc
+            raise
         self.path = None
         self.session_id = ""
         self.cursor, self.step_count = 0, 0
         self.last_message, self.system, self.state = None, None, None
         self.failed = False
         self._title = session_title(self.project)
+
+    def delete_saved(self, session_id: str) -> None:
+        """Remove another saved session's journal and sidecars."""
+        self._remove(self._saved_session(session_id))
+
+    def _remove(self, session_id: str) -> None:
+        try:
+            for suffix in ("-logs", "-requests", "-checkpoints", "-artifacts", "-turns"):
+                directory = self.directory / (session_id + suffix)
+                if directory.exists():
+                    shutil.rmtree(directory)
+            (self.directory / (session_id + ".title.json")).unlink(missing_ok=True)
+            (self.directory / (session_id + ".jsonl")).unlink()
+        except OSError as exc:
+            raise SessionError(f"Could not delete session {session_id}: {exc}. Some session files may have been removed.") from exc
 
     def load(self, selected: str) -> dict[str, Any]:
         if selected == "latest":

@@ -80,7 +80,7 @@ messages queue and are sent at the next step. **Esc** interrupts immediately;
 | `/status` | Show the model, workspace, interpreter, and settings |
 | `/new` | Start a fresh conversation |
 | `/task new` | Treat your next prompt as a new task in this conversation |
-| `/resume`, `/sessions`, `/fork` | Return to, list, or copy saved sessions |
+| `/resume`, `/sessions`, `/fork` | Return to, manage, or copy saved sessions |
 | `/rewind` | Undo the agent's file edits back to a chosen point |
 | `/copy`, `/view` | Copy the latest reply; open saved outputs and diffs |
 | `/key`, `/cost` | Manage API keys; show token usage |

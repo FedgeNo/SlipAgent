@@ -763,16 +763,70 @@ class RenameCommand(Command):
 
 class SessionsCommand(StoredSessionCommand):
     name = 'sessions'
-    banner = '/sessions'
+    banner = '/sessions [list]'
     help = (
-        CommandHelp('/sessions', 'list saved sessions for this project', '/sessions'),
+        CommandHelp('/sessions', 'choose a saved session to resume, rename, or delete (queues while working)', '/sessions'),
+        CommandHelp('/sessions list', 'list saved session IDs and the storage path', '/sessions list'),
     )
+
+    def replaces_task(self, argument: str) -> bool:
+        return not argument
+
+    def changes_session(self, argument: str) -> bool:
+        return not argument
 
     async def execute_saved(self, context: CommandContext, argument: str, journal: SessionJournal) -> bool | None:
         session, style, out = context.session, context.style, context.out
-        for entry in await asyncio.to_thread(journal.listing):
-            print(f"  {entry['id']}  {entry['created']}  {entry['title']}" + ("  (current)" if entry["current"] == "True" else ""), file=out)
-        print(f"  storage: {journal.directory}", file=out)
+        terminal = session.renderer.terminal
+        if argument not in {"", "list"}:
+            print(style.red("  usage: /sessions [list]"), file=out)
+            return None
+        try:
+            if argument or terminal is None:
+                for entry in await asyncio.to_thread(journal.listing):
+                    print(f"  {entry['id']}  {entry['created']}  {entry['title']}" + ("  (current)" if entry["current"] == "True" else ""), file=out)
+                print(f"  storage: {journal.directory}", file=out)
+                return None
+            # Return to the list after changing another session, so several can be cleared in turn.
+            while True:
+                entries = {entry["id"]: entry for entry in await asyncio.to_thread(journal.listing)}
+                if not entries:
+                    print("  no saved sessions for this project.", file=out)
+                    return None
+                selected = await terminal.choose("Saved Sessions", [
+                    (entry["id"], f"{entry['title']}  {entry['created']}" + ("  (current)" if entry["current"] == "True" else ""))
+                    for entry in entries.values()
+                ])
+                if selected is None:
+                    return None
+                entry = entries[selected]
+                current = entry["current"] == "True"
+                action = await terminal.choose(entry["title"], [
+                    *([] if current else [("resume", "Resume Session")]),
+                    ("rename", "Rename Session"), ("delete", "Delete Session"), ("back", "Back to Saved Sessions"),
+                ])
+                if action == "resume":
+                    return await ResumeCommand().execute_saved(context, selected, journal)
+                if action == "delete" and current:
+                    return await DeleteCommand().run(context, "")
+                if action == "delete":
+                    confirm = await terminal.choose(f"Permanently Delete {entry['title']}?", [
+                        ("delete", "Delete Session and All Logs"), ("cancel", "Cancel"),
+                    ])
+                    if confirm == "delete":
+                        await asyncio.to_thread(journal.delete_saved, selected)
+                        print(f"  deleted {entry['title']}", file=out)
+                elif action == "rename":
+                    name = (await terminal.ask("Session name › ")).strip()
+                    if name and current:
+                        await asyncio.to_thread(journal.rename, name)
+                        terminal.set_title(journal.title)
+                    elif name:
+                        await asyncio.to_thread(journal.rename_saved, selected, name)
+                    if name:
+                        print(f"  title: {session_title(name)}", file=out)
+        except SessionError as exc:
+            print(style.red(f"  {exc}"), file=out)
         return None
 
 

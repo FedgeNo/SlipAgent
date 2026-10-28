@@ -52,6 +52,8 @@ def build_layout(ui: TerminalUI) -> Layout:
     ui._editor_panel.controls.height = body_height
     if not isinstance(ui._editor_panel.controls.content, ActionControl):
         ui._editor_panel.controls.content = ActionControl(ui._editor_panel.actions)
+    # A bound method keeps the pre-reload function; look it up at render time instead.
+    ui._editor_panel.controls.content.text = lambda: ui._editor_panel.actions()
     ui._editor_panel.controls.style = "class:menu"
     ui._options_panel.field.window.height = body_height
     # Attach during layout rebuilds so existing sessions gain input wrapping.

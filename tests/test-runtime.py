@@ -653,6 +653,25 @@ def test_terminal_rebuild_preserves_draft_history_scroll_and_input_queue(run_cop
     ''')
 
 
+def test_component_reload_reaches_existing_editor_actions_menu(run_copy):
+    run_copy('''
+        from prompt_toolkit.formatted_text import fragment_list_to_text
+        from prompt_toolkit.input import create_pipe_input
+        from prompt_toolkit.output import DummyOutput
+        from slipagent.terminal import TerminalUI
+        with create_pipe_input() as pipe:
+            terminal = TerminalUI(lambda columns: 'status', sink, input=pipe, output=DummyOutput())
+            renderer.terminal = terminal
+            controls = terminal._editor_panel.controls
+            edit('editorui.py', '"Editor Actions"', '"Live Editor Actions"')
+            await frame.checkpoint()
+            assert frame.generation == 1, sink.getvalue()
+            assert terminal._editor_panel.controls is controls
+            assert 'Live Editor Actions' in fragment_list_to_text(controls.content.text())
+            renderer.terminal = None
+    ''')
+
+
 def test_repl_shutdown_drains_final_redraw_before_retiring_generation(run_copy):
     run_copy('''
         import sys

@@ -162,6 +162,21 @@ Every startup warns when fewer than three providers have configured API keys:
 rate limiting and degraded performance, including slower compaction, are likely.
 Configured keys do not guarantee available free-model quota.
 
+For Anthropic Claude, add `ANTHROPIC_API_KEY=your-key` to the ignored `.env`, or
+enter `/key <key>` with a `sk-ant-` key. Run `slipagent --provider anthropic`,
+use `/models anthropic` to browse its authenticated, paginated model catalog,
+or select `/model anthropic::<model-id>`. The default is `claude-sonnet-4-6`;
+`ANTHROPIC_MODEL` and `ANTHROPIC_BASE_URL` override the model and endpoint.
+Claude is a paid primary model and does not join automatic free selection or
+background compaction. The catalog supplies input/output limits but no prices,
+so prices display as unknown. Compaction requires other configured free providers.
+
+Claude uses Anthropic's [OpenAI-compatible completions endpoint](https://platform.claude.com/docs/en/cli-sdks-libraries/libraries/openai-sdk)
+for streaming replies and native tool calls. This endpoint does not expose
+thinking text or prompt caching. Sampling stays at Anthropic's defaults, and
+forced tool calls and JSON response-format constraints are not advertised.
+When no output limit is configured, requests reserve up to 8,192 output tokens.
+
 For Kilo Gateway, add `KILO_API_KEY=your-key` to the ignored `.env`, then run
 `slipagent --provider kilo`. Its default is `kilo-auto/free`, Kilo's automatic
 free-model selector. `/model free` searches the active catalogs;

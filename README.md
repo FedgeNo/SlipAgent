@@ -9,6 +9,9 @@ finished, you stop it, or the step limit is reached. By default it picks the
 best-scoring free model available to your API keys and moves to the next one
 when a model fails.
 
+[Anthropic Claude](https://platform.claude.com) is also supported as a paid primary
+model. Background compaction continues to use eligible free models.
+
 - **Free-model workflow:** automatic selection of the best free model and quick
   switching.
 - **Resumable work:** sessions are saved as you go; resume, fork, or rewind

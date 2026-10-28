@@ -1190,7 +1190,7 @@ class Launcher:
 
     def first_run_key(self) -> bool:
         """Ask for a first API key before an interactive launch that has none."""
-        print("SlipAgent needs an API key from one of these providers; each offers free models:", file=sys.stderr)
+        print("SlipAgent needs an API key from one of these providers (Anthropic models are paid):", file=sys.stderr)
         for _, name, url in FIRST_RUN_PROVIDERS:
             print(f"  {name:<14} {url}", file=sys.stderr)
         try:
@@ -3072,6 +3072,7 @@ FIRST_RUN_PROVIDERS = (
     ("mistral", "Mistral", "https://console.mistral.ai/api-keys"),
     ("groq", "Groq", "https://console.groq.com/keys"),
     ("kilo", "Kilo", "https://kilo.ai"),
+    ("anthropic", "Anthropic Claude", "https://platform.claude.com/settings/keys"),
 )
 
 

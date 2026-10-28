@@ -69,6 +69,7 @@ async def key_session(tmp_path, monkeypatch):
     ("mstrl_new", "mistral"),
     ("AIza-new", "google"),
     ("AQ.new", "google"),
+    ("sk-ant-api03-new", "anthropic"),
     (token({"kiloUserId": "test-user", "version": 3}), "kilo"),
 ])
 async def test_detected_key_is_saved_to_its_provider(key_session, tmp_path, monkeypatch, key, provider):

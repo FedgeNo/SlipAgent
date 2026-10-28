@@ -158,6 +158,10 @@ NVIDIA defaults to `nvidia/nemotron-3-ultra-550b-a55b`, without OpenRouter's `:f
 
 Search reads only providers with configured API keys, including keys supplied for the current session. Providers without keys are neither queried nor listed. Duplicate model IDs remain separate choices. A provider's catalog failure is reported while results from the others remain available. Selection checks credentials are present, loads capabilities, and validates the context budget before replacing the current client. Same-provider changes let existing summaries continue; provider changes cancel and drain pending summaries before closing their client. Originals remain available. Authentication is established by an authenticated API request, not by catalog access.
 
+Every startup warns when fewer than three providers have configured API keys:
+rate limiting and degraded performance, including slower compaction, are likely.
+Configured keys do not guarantee available free-model quota.
+
 For Kilo Gateway, add `KILO_API_KEY=your-key` to the ignored `.env`, then run
 `slipagent --provider kilo`. Its default is `kilo-auto/free`, Kilo's automatic
 free-model selector. `/model free` searches the active catalogs;

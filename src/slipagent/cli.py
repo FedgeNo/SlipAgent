@@ -917,6 +917,12 @@ class Launcher:
         """Overlap independent startup work; build context only after its services settle."""
         args = self.args
         renderer, registry, agent = session.renderer, session.registry, session.agent
+        provider_count = len(active_providers(keys={config.provider: config.api_key}))
+        if provider_count < 3:
+            renderer.emit(renderer.style.warning(
+                f"  Warning: Only {provider_count} API provider{'s' if provider_count != 1 else ''} configured. "
+                "Configure at least 3 providers; otherwise you are likely to encounter rate limiting "
+                "and degraded performance, including slower compaction."))
         model_error: APIError | None = None
         routing = session.model_routing()
         routing.enabled = starts_optimal(args.model, getattr(args, "provider", None))

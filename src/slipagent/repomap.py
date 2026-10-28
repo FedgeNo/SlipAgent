@@ -123,10 +123,20 @@ class RepositoryMap:
                 paths = [path for path in paths if relative[path] not in excluded]
         except (OSError, subprocess.TimeoutExpired):
             pass
+        words = set(re.findall(r"[a-z_][a-z_0-9]{2,}", query.casefold()))
+
+        def outline_priority(path: Path) -> tuple[int, str]:
+            name = relative[path]
+            cached = self.cache.get(name)
+            text = name + (" " + cached[1] if cached is not None else "")
+            terms = set(re.findall(r"[a-z_][a-z_0-9]{2,}", text.casefold()))
+            return -len(words & terms), name
+
         retained: dict[str, tuple[tuple[int, int, int], str, set[str]]] = {}
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + 10
         parsed_bytes = 0
-        for path in sorted(paths):
+        # Spend the parsing budget on relevant paths and known declarations first.
+        for path in sorted(paths, key=outline_priority):
             name = relative[path]
             try:
                 stat = self.workspace.resolve(path).stat()
@@ -144,7 +154,6 @@ class RepositoryMap:
             except (OSError, WorkspaceError):
                 continue
         self.cache = {name: entry for name, entry in retained.items() if entry[1] != "[outline deferred]"}
-        words = set(re.findall(r"[a-z_][a-z_0-9]{2,}", query.casefold()))
         # Identical files, query terms, and size produce an identical ranking.
         key = (frozenset(words), limit, incomplete, tuple((name, entry[0], entry[1] == "[outline deferred]")
                                                           for name, entry in retained.items()))

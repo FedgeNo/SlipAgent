@@ -485,6 +485,8 @@ grammars with no parser downloads during a run. Ranking combines words in recent
 user input with a graph of symbol references and Python imports. Symbol matches
 are orientation hints, not compiler-verified bindings. Cached outlines refresh
 when file metadata changes, and syntax errors label the outline as partial.
+Uncached outlines share a 10-second parsing budget per snapshot. Files matching
+the current request in their paths or cached declarations are outlined first.
 The map excludes dependencies, hidden directories, symlinks, and Git-ignored
 files without changing file-tool visibility. Limits on scanning, source size,
 and output keep it partial by design: use `glob`, `grep`, and `read_file` for

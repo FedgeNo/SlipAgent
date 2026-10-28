@@ -31,7 +31,7 @@ from .thoughts import ThoughtStream
 if TYPE_CHECKING:
     from .requestbody import RequestBody
 
-DEFAULT_TIMEOUT = 180.0
+DEFAULT_TIMEOUT = 600.0
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_TEMPERATURE: float | None = None
 

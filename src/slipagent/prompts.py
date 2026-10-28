@@ -60,7 +60,7 @@ def __getattr__(name: str) -> str:
     resources = {"SYSTEM_PROMPT": "system-prompt.md", "COMPACTION_PROMPT": "background-summary-prompt.md"}
     if name not in resources:
         raise AttributeError(name)
-    return load_prompt(resources[name])
+    return load_prompt(resources[name]) + (load_prompt("response-common.md") if name == "SYSTEM_PROMPT" else "")
 
 
 def model_prompt_profile(model: str) -> dict[str, Any]:

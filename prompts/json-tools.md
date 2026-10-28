@@ -2,9 +2,9 @@
 
 ## Response Object
 
-Return one JSON object with `response` (user-facing text) and `tool_calls` (an ordered call array), plus optional fields explicitly allowed by the reply format.
+Return one JSON object with `response` (user-facing text) and `tool_calls` (an ordered call array), plus optional fields explicitly allowed by the reply format. Put planned calls in `tool_calls`.
 
-Prefer brief reply text recording findings from supplied results and the purpose of pending calls. Empty text is allowed with calls. Finish with a nonblank answer and `tool_calls: []`, or a successful batch containing only the available `answer` tool. Other tool batches normally continue the run.
+Use `tool_calls: []` for a final answer without tools.
 
 ## Call Arguments
 

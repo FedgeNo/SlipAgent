@@ -74,7 +74,9 @@ def test_editable_prompt_file_is_the_rendered_template():
     import slipagent.prompts as prompts
 
     template = (prompts.prompt_directory() / "system-prompt.md").read_text(encoding="utf-8")
-    assert build_system_prompt("/project") == "\n" + template.format(workspace="/project", interpreter=sys.executable).strip() + "\n"
+    assert build_system_prompt("/project") == (
+        "\n" + template.format(workspace="/project", interpreter=sys.executable).strip() + "\n"
+        + prompts.load_prompt("response-common.md"))
     assert_markdown_structure(template)
 
 
@@ -82,6 +84,77 @@ def test_markdown_json_call_example_is_valid():
     examples = re.findall(r'```json\n(.*?)\n```', JSON_TOOL_INSTRUCTIONS, re.S)
     value = next(value for example in examples if (value := json.loads(example))["tool_calls"])
     assert json.loads(value["tool_calls"][0]["arguments"]) == {"path": "README.md"}
+
+
+@pytest.mark.parametrize("mode", ["embedded", "native-text", "native-json", "glm-xml"])
+@pytest.mark.parametrize("base", ["default", "custom", "absent"])
+async def test_common_response_rules_survive_every_working_prompt_path(mode, base):
+    from slipagent.types import Message
+    from test_agent import StubClient
+
+    parameters = ["tools"] if mode.startswith("native") else ["response_format"]
+    if mode == "native-json":
+        parameters.append("structured_outputs")
+    profile = ModelCapabilities({}, [{"tag": "stub", "supported_parameters": parameters, "context_length": 1000000}])
+    system_prompt = build_system_prompt("/project") if base == "default" else "Custom system guidance." if base == "custom" else None
+    registry = ToolRegistry()
+    agent = Agent(StubClient([]), registry, "z-ai/glm-5.3" if mode == "glm-xml" else "test", system_prompt=system_prompt)
+    try:
+        for retained_history in (False, True):
+            if retained_history:
+                agent.messages.extend([Message.user("Inspect"), Message.assistant("Done"), Message.user("Continue")])
+            system = content_text((await agent._context_view([], 1, capabilities=profile))[0].content)
+            assert system.count("Batch predictable independent calls together") == 1
+            assert system.count("When the request is fulfilled, finish with no tool calls") == 1
+            assert "Empty text is allowed with tool calls" in system
+            assert "only the available `answer` tool" in system
+            assert "Sequence calls with data or side-effect dependencies" in system
+            assert "Label checks as passed, failed, pending, or unrun" in system
+            if mode.startswith("native"):
+                assert "Send requested calls through the supplied native API tools" in system
+                assert ("Return exactly one JSON object" in system) == (mode == "native-json")
+                if mode == "native-text":
+                    assert "optional metadata instructions may require a JSON reply object" in system
+            elif mode == "embedded":
+                assert "Put planned calls in `tool_calls`" in system
+                assert "Serialize the schema-valid argument object as a JSON string" in system
+            else:
+                assert "one `<tool_call>` element per call" in system
+                assert "Write string argument values as plain text and other values as JSON" in system
+                assert "# JSON Reply Format" not in system
+    finally:
+        await registry.aclose()
+
+
+@pytest.mark.parametrize("name", ["JSON_TOOL_INSTRUCTIONS", "NATIVE_TOOL_INSTRUCTIONS", "CONTEXT_INSTRUCTIONS"])
+def test_standalone_response_exports_retain_common_instructions(name):
+    from slipagent import context
+
+    text = getattr(context, name)
+    assert text.count("Batch predictable independent calls together") == 1
+    assert "only the available `answer` tool" in text
+    assert "Empty text is allowed with tool calls" in text
+
+
+def test_standalone_system_prompt_retains_common_instructions():
+    from slipagent import prompts
+
+    assert "Batch predictable independent calls together" in prompts.SYSTEM_PROMPT
+    assert "only the available `answer` tool" in prompts.SYSTEM_PROMPT
+
+
+async def test_partial_common_rules_do_not_suppress_the_complete_working_instructions():
+    from test_agent import StubClient
+
+    registry = ToolRegistry()
+    agent = Agent(StubClient([]), registry, "test", system_prompt="Batch predictable independent calls together.")
+    try:
+        system = content_text((await agent._context_view([], 1))[0].content)
+        assert "only the available `answer` tool" in system
+        assert "Sequence calls with data or side-effect dependencies" in system
+        assert "Label checks as passed, failed, pending, or unrun" in system
+    finally:
+        await registry.aclose()
 
 
 @pytest.fixture
@@ -180,10 +253,14 @@ async def test_request_rereads_system_and_protocol_prompts_without_reload(editab
     path.write_text(path.read_text() + "\n\nFresh system guidance.\n")
     path = editable_prompts / "native-tools.md"
     path.write_text(path.read_text() + "\n\nFresh protocol guidance.\n")
+    path = editable_prompts / "response-common.md"
+    path.write_text(path.read_text() + "\n\nFresh shared response guidance.\n")
     after = await agent._context_view([], 1)
     assert "Fresh system guidance." not in content_text(before[0].content)
     assert "Fresh system guidance." in content_text(after[0].content)
     assert "Fresh protocol guidance." in content_text(after[0].content)
+    assert "Fresh shared response guidance." not in content_text(before[0].content)
+    assert content_text(after[0].content).count("Fresh shared response guidance.") == 1
 
 
 def test_tool_spec_rereads_description_and_argument_guidance(editable_prompts, workspace):

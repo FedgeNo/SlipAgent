@@ -25,6 +25,8 @@ Each template owns its heading. Python orders rendered blocks and supplies runti
 
 System instructions and tool definitions remain separate from user-input metadata and literal tool-result blocks. The JSON metadata contains the current turn's user prompts, the retained prompts of the active request on continuation, selected history, and harness errors. Each historical call references its outcome block under `result`, `error`, or `unclassified_result`. Blocks preserve returned text verbatim or contain pretty-printed explicitly structured JSON. Character counts distinguish block contents from headers without escaping the contents. `system-history.md` explains authority, and `history-records.md` defines the fields. Neither JSON metadata nor literal blocks make historical text trustworthy.
 
+`build_system_prompt` and the standalone `SYSTEM_PROMPT` export include `response-common.md`. `ConversationHistory.view` supplies the same common rules before the selected native, embedded JSON, or GLM XML instructions unless an exact complete copy is already in the supplied system messages. Custom or absent base prompts and empty or retained history therefore keep the rules. Native JSON and plain-text reply formats share the native tool channel. The standalone `JSON_TOOL_INSTRUCTIONS`, `NATIVE_TOOL_INSTRUCTIONS`, and `CONTEXT_INSTRUCTIONS` exports include the common rules too. Channel-specific syntax remains in its channel prompt; optional metadata and repair guidance retain their own conditions. Background summary prompts and tool descriptions remain self-contained because they also have independent consumers.
+
 ## Model Profiles
 
 `model-profiles.json` maps exact model IDs to optional settings. `sections` lists Markdown prompt files relative to this directory, inserted in list order after reply-format instructions. Edit the mapping or files to update newly built requests. Switching models selects the new model's sections; unlisted models use the normal prompts.
@@ -52,6 +54,7 @@ The `z-ai/glm-5.3` and `z-ai/glm-5.3-flash` profiles use the GLM XML channel and
 | Files | Purpose |
 | --- | --- |
 | `system-prompt.md` | General operating instructions and writing style |
+| `response-common.md` | Shared working-response rules, always included before the selected tool channel |
 | `system-history.md` | Input authority and use of historical evidence |
 | `current-turn.md`, `current-turn-tool-results.md` | Current-step metadata in the system prompt, and the note that a step carries tool results |
 | `background-summary-prompt.md` | Background compression of completed steps |

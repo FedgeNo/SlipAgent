@@ -46,14 +46,23 @@ from .sources import FileText, materialize
 DEFAULT_CONTEXT_LENGTH = 1_000_000
 HISTORY_PART_NAMES = ("prompt", "response", "reasoning", "tool_calls", "tool_results", "user_edits")
 
+
+def _response_instructions(filename: str, *, existing: str = "") -> str:
+    common = load_prompt("response-common.md")
+    # Standalone system prompts already include these rules. Only omit an
+    # exact complete copy; partial or custom instructions cannot replace it.
+    return ("" if common.strip() in existing else common + "\n\n") + load_prompt(filename)
+
+
 def __getattr__(name: str) -> str:
     resources = {"JSON_TOOL_INSTRUCTIONS": "json-tools.md", "NATIVE_TOOL_INSTRUCTIONS": "native-tools.md",
                  "RECORD_INSTRUCTIONS": "history-records.md"}
     if name == "CONTEXT_INSTRUCTIONS":
-        return load_prompt("json-tools.md") + "\n\n" + load_prompt("history-records.md") + "\n\n"
+        return _response_instructions("json-tools.md") + "\n\n" + load_prompt("history-records.md") + "\n\n"
     if name not in resources:
         raise AttributeError(name)
-    return load_prompt(resources[name]) + "\n\n"
+    return (_response_instructions(resources[name]) if name != "RECORD_INSTRUCTIONS" else
+            load_prompt(resources[name])) + "\n\n"
 
 
 class ContextError(APIError):
@@ -573,7 +582,6 @@ class ConversationHistory:
         def tokens(part: list[Message]) -> int:
             return math.ceil(message_tokens(tool_history_as_text(part, glm_xml=glm_xml) if text_tool_history else part) * token_scale)
         replies = "native-tools.md" if native_tools else "response-glm-xml.md" if glm_xml else "json-tools.md"
-        head_sections = [load_prompt(replies), load_prompt("history-records.md")]
         # Stable response/tool guidance precedes changing step IDs and task
         # state. Keep one system-message prefix for provider compatibility.
         later_sections = [extra_instructions, self.instructions(native_tools=native_tools)]
@@ -592,6 +600,10 @@ class ConversationHistory:
         pinned_sources = [message for message in messages if message.role == "system"]
         leading = pinned_sources[:-1]
         pinned_base = (pinned_sources[-1].content or "").rstrip() + "\n" if pinned_sources else "\n"
+        # Custom or absent system prompts still receive the complete working
+        # rules, independently of the channel and selected history records.
+        head_sections = [_response_instructions(replies, existing="\n".join(
+            content_text(source.content) for source in pinned_sources)), load_prompt("history-records.md")]
 
         def system_prefix_for(guidance: str, thoughts: bool) -> str:
             # History-shape guidance follows the record format and covers only the selected records.

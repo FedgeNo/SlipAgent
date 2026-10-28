@@ -45,6 +45,7 @@ def build_system_prompt(workspace: str, *, project_instructions: str = "") -> st
         )
     except (KeyError, IndexError, ValueError) as exc:
         raise PromptError(f"Invalid prompt template system-prompt.md: {exc}") from None
+    prompt += load_prompt("response-common.md")
     if project_instructions:
         prompt += (
             load_prompt('project-instructions-initial.md', project_instructions=project_instructions)

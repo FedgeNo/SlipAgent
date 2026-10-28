@@ -2053,12 +2053,17 @@ class CommandRunner:
             argument = parts[1].strip() if len(parts) > 1 else ""
             if BY_NAME.get(command) is not None and BY_NAME[command].replaces_task(argument):
                 resume = False
+            journal = session.registry.resources.journal
+            opened = journal.session_id if journal is not None else None
             try:
                 if session.renderer.terminal is not None:
                     session.renderer.terminal.set_working(False)
                     session.renderer.terminal.set_command_status(f"Applying /{command} (Esc to interrupt)")
                 if await self.run_interactive(line):
                     return False, True
+                # Work paused for a menu continues unless the menu left its session.
+                if journal is not None and journal.session_id != opened:
+                    resume = False
                 if session.extensions.get("interrupt_sequence", 0) != interrupt_sequence:
                     self.cancel_queued(commands[position + 1:])
                     return False, False

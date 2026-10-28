@@ -769,9 +769,6 @@ class SessionsCommand(StoredSessionCommand):
         CommandHelp('/sessions list', 'list saved session IDs and the storage path', '/sessions list'),
     )
 
-    def replaces_task(self, argument: str) -> bool:
-        return not argument
-
     def changes_session(self, argument: str) -> bool:
         return not argument
 

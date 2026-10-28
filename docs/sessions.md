@@ -48,8 +48,9 @@ start of its first prompt instead of the project path, as in `/resume`; choosing
 Delete, and Back. Deleting another session asks for confirmation, then removes its
 journal, title, logs, diagnostics, and checkpoints; deleting the current one is
 `/delete`. After renaming or deleting another session the list reopens, so several
-can be cleared in turn. Like `/resume`, it queues during work and leaves the
-agent idle afterwards. Without an interactive terminal it prints the listing.
+can be cleared in turn. During work it queues until the current tool batch
+finishes; the work then continues unless the menu resumed another session or
+deleted the current one. Without an interactive terminal it prints the listing.
 
 Use `/fork` to copy the current saved conversation and continue in the new
 session. Its history, summaries, task state, queued input, usage, title, and

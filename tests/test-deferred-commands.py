@@ -186,3 +186,57 @@ async def test_stop_holds_earlier_input_until_new_input(
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         await cli.Repl(session).shutdown()
+
+
+@pytest.mark.parametrize("action", ["rename", "resume"])
+async def test_sessions_menu_continues_paused_work_unless_it_switches_sessions(tmp_path, monkeypatch, metadata_server, action):
+    from unittest.mock import AsyncMock, Mock
+    from slipagent.terminal import TerminalUI
+    session = await cli.Launcher(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)])).build_session()
+    session.renderer.stream = io.StringIO()
+    journal = session.registry.services["session_journal"]
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class GatedTool(Tool):
+        name = "gated_read"
+        description = "Read once the test releases the disk wait."
+        parameters = {"type": "object", "properties": {}}
+
+        async def run(self):
+            entered.set()
+            await release.wait()
+            return ToolResult.ok("Read.")
+
+    client = StubClient([completion("Old answer"), completion(tool_calls=[call("gated_read")]), completion("Finished.")])
+    session.agent.client = client
+
+    async def read(*arguments):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(cli.Repl, "read_line", read)
+    try:
+        await session.agent.run("Old prompt")
+        await session.agent.wait_for_compaction()
+        old = journal.session_id
+        session.agent.reset()
+        session.registry.register(GatedTool())
+        tool_catalog(session.registry).loaded.add("gated_read")
+        step = asyncio.create_task(cli.Repl(session).run_request("Inspect the project", session.renderer.style))
+        await asyncio.wait_for(entered.wait(), 2)
+        current = journal.session_id
+        terminal = Mock(spec=TerminalUI)
+        terminal.choose = AsyncMock(side_effect=[old, "rename", None] if action == "rename" else [old, "resume"])
+        terminal.ask = AsyncMock(return_value="Renamed Old")
+        session.renderer.terminal = terminal
+        await cli.CommandRunner(session).handle("/sessions")
+        terminal.choose.assert_not_awaited()
+        release.set()
+        await asyncio.wait_for(step, 5)
+        if action == "rename":
+            assert len(client.calls) == 3 and journal.session_id == current
+        else:
+            assert len(client.calls) == 2 and journal.session_id == old
+    finally:
+        release.set()
+        await cli.Repl(session).shutdown()

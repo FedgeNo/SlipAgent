@@ -319,7 +319,7 @@ class Agent:
         if isinstance(self.client, APIClient):
             capabilities = await self.client.model_capabilities(self.model)
             if capabilities is not None:
-                length = capabilities.context_length or DEFAULT_CONTEXT_LENGTH
+                length = capabilities.context_length
                 if capabilities.max_prompt_tokens is not None:
                     length = min(length, capabilities.max_prompt_tokens)
                 return length
@@ -412,6 +412,8 @@ class Agent:
         input because the model cannot see terminal notices or local state.
         """
         model = self.model if candidate_model is None else candidate_model
+        if candidate_model is not None and capabilities is None:
+            raise ContextError("Candidate-model previews require the candidate's capabilities.")
         specs = self._visible_specs(specs)
         if capabilities is None and isinstance(self.client, APIClient):
             capabilities = await self.client.model_capabilities(self.model)
@@ -426,14 +428,19 @@ class Agent:
         if self.context_tokens is not None:
             length = min(length, self.context_tokens)
         workspace = self.registry.resources.workspace
+        messages = self.messages
         if workspace is not None and self.registry.services.get("editable_prompts"):
-            self.system_prompt = build_system_prompt(str(workspace.root))
-            if self.messages and self.messages[0].role == "system":
-                self.messages[0] = Message.system(self.system_prompt)
+            prompt = build_system_prompt(str(workspace.root))
+            if preview:
+                messages = list(self.messages)
+            else:
+                self.system_prompt = prompt
+            if messages and messages[0].role == "system":
+                messages[0] = Message.system(prompt)
         from .contextbuilder import ContextBuilder, ContextSettings
 
         builder = ContextBuilder(
-            self.registry, self.history, self.messages, self._budget(),
+            self.registry, self.history, messages, self._budget(),
             ContextSettings(model, self.planning, self.context_steps, self.overthinking,
                             self.reasoning_history_steps, self.filtered_thoughts, self.max_tokens),
         )

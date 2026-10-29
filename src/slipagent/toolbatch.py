@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from .activity import command_output
 from .batching import run_batch
 from .checkpoints import FileCheckpoints, current_checkpoint
-from .checks import EDIT_TOOLS, check_edit_batch
+from .checks import check_edit_batch_report
 from .calllabels import tool_arguments
 from .tools.base import ToolRegistry, ToolResult, current_invocation, validate_arguments, _binds_arguments
 from .tools.discovery import UNAVAILABLE_BATCH
@@ -32,6 +32,7 @@ class ToolBatch:
         self.checkpoints = checkpoints
         self.allowed_tools = allowed_tools
         self.results: list[tuple[ToolCall, ToolResult]] = []
+        self.observations: dict[str, tuple[int, Message]] = {}
 
     async def invoke_call(self, tool_call: ToolCall) -> ToolResult:
         journal = self.registry.resources.journal
@@ -54,14 +55,32 @@ class ToolBatch:
         return result
 
     def commit_call(self, tool_call: ToolCall, result: ToolResult) -> None:
-        artifacts = self.registry.resources.artifacts
-        references = artifacts.references(self.step, tool_call.id) if artifacts is not None else []
-        observation = tool_message(tool_call, result)
+        if tool_call.id in self.observations:
+            return
+        references = []
+        try:
+            artifacts = self.registry.resources.artifacts
+            references = artifacts.references(self.step, tool_call.id) if artifacts is not None else []
+            observation = tool_message(tool_call, result)
+        except Exception as exc:
+            result = ToolResult.error(f"Tool ran; recording its result failed: {type(exc).__name__}: {exc}. "
+                                      "Effects may have occurred; inspect before retrying.")
+            observation = tool_message(tool_call, result)
         if references:
             observation.content["artifacts"] = references
         self.messages.append(observation)
-        self.persist()
+        self.observations[tool_call.id] = len(self.results), observation
         self.results.append((tool_call, result))
+        try:
+            self.persist()
+        except Exception as exc:
+            failed = ToolResult.error(f"Tool ran; saving its result failed: {type(exc).__name__}: {exc}. "
+                                      "Effects may have occurred; inspect before retrying.")
+            observation.content = tool_message(tool_call, failed).content
+            if references:
+                observation.content["artifacts"] = references
+            self.results[-1] = tool_call, failed
+            raise
         self.emit(
             AgentEvent(kind="tool_end", step=self.step, tool_call=tool_call, result=result)
         )
@@ -111,21 +130,22 @@ class ToolBatch:
             if checkpoints is not None:
                 checkpoints.finish()
 
-        check_report = await check_edit_batch(self.registry, self.results, self.step)
+        report = await check_edit_batch_report(self.registry, self.results, self.step)
+        check_report = report.text
         if check_report:
-            # Attach to the last edit that succeeded; a failed edit's result stays its own error.
-            position = next(index for index in range(len(self.results) - 1, -1, -1)
-                            if isinstance(self.registry.get(self.results[index][0].name), EDIT_TOOLS)
-                            and not self.results[index][1].is_error)
+            target = self.observations.get(report.call_id) if report.call_id is not None else None
+            if target is None:
+                self.emit(AgentEvent(kind="warning", step=self.step, text=check_report))
+                return self.results
+            position, observation = target
             call, result = self.results[position]
-            message_index = len(self.messages) - len(self.results) + position
             content = (result.content + "\n\nHarness Checks After This Complete Tool Batch:\n" + check_report
                        if isinstance(result.content, str) else {"result": result.content, "harness_checks": check_report})
             checked = ToolResult(content, result.is_error)
-            artifacts = self.messages[message_index].content.get("artifacts", [])
-            self.messages[message_index] = tool_message(call, checked)
+            artifacts = observation.content.get("artifacts", [])
+            observation.content = tool_message(call, checked).content
             if artifacts:
-                self.messages[message_index].content["artifacts"] = artifacts
+                observation.content["artifacts"] = artifacts
             self.results[position] = call, checked
             visible_diagnostics = "\n".join(line for line in check_report.splitlines()
                                             if "SKIPPED — no selected project Python." not in line)

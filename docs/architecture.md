@@ -62,7 +62,10 @@ the viewer, and clearing the feed releases that inspector storage.
 `turnstore.py` retains small metadata and file ranges in memory. Large strings
 are read on demand by explicit history retrieval or streamed during selection
 and serialization. Private hard links pin immutable versions while summaries
-and late artifact metadata update their canonical files. Session teardown drains
+update their canonical files. Late artifacts and discarded unsent inputs use a
+small `NNNNNNNN.metadata.json` overlay referencing the original raw file. Updating
+that overlay preserves the original observation ranges instead of copying the
+raw turn again. Already-built views keep their earlier metadata bindings. Session teardown drains
 background jobs before removing these temporary pins. Session deletion also
 removes its turn files.
 
@@ -136,6 +139,10 @@ queued input, the shared request budget, usage accounting, and stop controls.
 rejected calls as executable history. `ToolBatch` owns invocation provenance, ordered
 observations, checkpoint scope, and post-batch checks. Its interruption callback
 archives paired results before checkpoint cleanup and exception propagation.
+Publication retains each observation's object and call ID, is idempotent, and
+pairs the remaining calls even if saving one result fails. Tools are not replayed
+to repair recording failures. Post-batch reports identify their target call ID;
+checks follow recorded moves to final paths and report removed files as skipped.
 Archival and compaction scheduling remain with the conversation coordinator.
 
 Shared event contracts live in `events.py`. Earlier inline-summary readers live
@@ -151,7 +158,8 @@ Context construction proceeds in this order:
 2. System messages are pinned without rewriting their contents. The last receives the response
    contract and named sections assembled by `PromptSections`: schema/tool/MCP
    guidance first, then current project instructions, environment, runtime
-   state, and repair details. Current step IDs and task state follow those
+   state. Harness repairs and loop corrections appear once in the user input's
+   `errors` channel. Current step IDs and task state follow those
    sections. Names are unique, owners and static/dynamic roles are explicit,
    and order is deterministic. Section registries belong to one request, so
    a rejected generation cannot leave global prompt registrations behind.
@@ -238,7 +246,9 @@ size, not a model tokenizer. History uses the remaining model allowance;
 `--context-steps` is retained as a deprecated compatibility option; the newest
 third of retained individual posts determines the full-call target.
 Selection preflight uses a copy of history/task selection state so an incompatible
-model cannot mutate the active conversation merely by being considered.
+model cannot mutate the active conversation merely by being considered. Editable
+system-prompt refresh stays local to the preview. Candidate previews require the
+candidate's explicit capability profile, whose context length must be a positive integer.
 
 `ContextBudget` calibrates estimates against the final working request's measured
 prompt tokens, including its tool/schema overhead. The multiplier is the mean measured-to-estimated ratio of the latest five valid measurements with a 10% safety margin. It can rise or fall, resets on model/profile replacement, and does not change configured limits. Existing live instances initialize the measurement window at their next observation. It is applied to a fresh
@@ -989,7 +999,9 @@ the sidecar overrides the header without rewriting conversation records.
 Listings read headers, title metadata, and each journal only as far as its first
 user prompt (at most 64 lines), rather than scanning whole journals; a torn line
 there only drops that preview.
-Malformed metadata reports an error; legacy journals without titles use their
+Damaged headers or metadata produce individually labelled listing entries with
+their session IDs; valid sessions remain selectable, and `latest` skips damaged
+entries. Legacy journals without titles use their
 project path. Resume retains the saved title and its sidecar. Fork embeds that
 title in the child header, so renaming a fork leaves the parent untouched. Reset gets the default title.
 The CLI uses that same title for terminal output; `Session.app_title` remains the
@@ -1007,7 +1019,10 @@ Complete originals are never rewritten by compression.
 
 Resume reads and validates the journal before changing the active conversation.
 Only an unterminated final entry is ignored, with a recovery note; malformed
-complete records fail. Missing tool observations are filled explicitly as
+complete records fail. The loader records the last complete byte offset so tail
+truncation does not load the whole journal. Resource sidecars and file-backed
+history are prepared before clearing the open session; failed preflight preserves
+its conversation and resource owners. Missing tool observations are filled explicitly as
 unknown outcomes for started calls and not-run outcomes for unstarted calls.
 No saved tool call executes during restore. Original numbered steps, task
 sources, summaries, queued input, usage and command logs are restored from the
@@ -1362,8 +1377,11 @@ to the model along with the active generation number.
   notifications and unrelated or duplicate replies immediately, and declines
   unsupported server requests even while idle. Declines have a bounded write
   deadline. A disconnected reader releases pending requests and rejects further
-  sends; one undelivered read error is retained for the next request. Server
-  stderr retains only its last 20 lines, capped at 2,000 characters per line plus
+  sends; one undelivered read error is retained for the next request. A
+  reader failure marks the connection disconnected, retains its actual cause,
+  and reaps the process. Stray non-JSON stdout lines become bounded diagnostics;
+  the reader continues waiting for the matching response within the original deadline.
+  Server stderr retains only its last 20 lines, capped at 2,000 characters per line plus
   a truncation marker. Tools receive structural schema checks and registry
   validation; servers remain responsible for their full JSON Schema semantics. Structured content,
   server guidance, and tool errors must survive adaptation into model context.

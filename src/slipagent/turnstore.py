@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import os
 import tempfile
 from pathlib import Path
@@ -132,7 +133,13 @@ class TurnStore:
                   "parts": {**step._disk["parts"], "prompt": step.request},
                   "model": {**step._disk["model"], "user_prompts": [
                       message.content or "" for message in step.messages if message.role == "user"]}}
-        step._disk = self.write(f"{step.id:08d}.raw.json", source)
+        # Only the input overlay changes. FileText observations keep pointing at
+        # the immutable original, including in already-built request snapshots.
+        overlays = copy.deepcopy(step.__dict__.get("_disk_metadata", {}))
+        overlays["input"] = {"request": step.request,
+                             "user_prompts": source["model"]["user_prompts"]}
+        self._metadata(step, overlays)
+        step._disk = source
         step.__dict__.pop("_request", None)
         for message, record in zip(step.messages, step._disk["messages"]):
             if isinstance(message, ArchivedMessage):
@@ -147,16 +154,28 @@ class TurnStore:
         self.close()
 
     def attach_artifact(self, step: CompletedStep, call_id: str, reference: dict[str, Any]) -> None:
-        for result in step._disk["model"].get("tool_results", []):
+        # Copy containers, not observation bytes, so an earlier context view
+        # remains a snapshot while new views receive the metadata overlay.
+        source = copy.deepcopy(step._disk)
+        overlays = copy.deepcopy(step.__dict__.get("_disk_metadata", {}))
+        records = overlays.setdefault("artifacts", [])
+        addition = {"call_id": call_id, "reference": reference}
+        if addition in records:
+            return
+        records.append(addition)
+        self._metadata(step, overlays)
+        for result in source["model"].get("tool_results", []):
             if result["call_id"] == call_id:
                 result.setdefault("artifacts", []).append(reference)
-        step._disk["model"].setdefault("artifacts", []).append(reference)
-        for result in step._disk["parts"].get("tool_results", []):
+        source["model"].setdefault("artifacts", []).append(reference)
+        for result in source["parts"].get("tool_results", []):
             if result["call_id"] == call_id and isinstance(result["content"], dict):
                 result["content"].setdefault("artifacts", []).append(reference)
-        step._disk = self.write(f"{step.id:08d}.raw.json", step._disk)
-        for message, record in zip(step.messages, step._disk["messages"]):
-            if isinstance(message, ArchivedMessage):
-                message._stored = record
+        step._disk = source
         step.__dict__.pop("_disk_summary_state", None)
         self.summarized(step)
+
+    def _metadata(self, step: CompletedStep, metadata: dict[str, Any]) -> None:
+        self.write(f"{step.id:08d}.metadata.json", {"version": 1, "step_id": step.id,
+                                                 "original": f"{step.id:08d}.raw.json", **metadata})
+        step.__dict__["_disk_metadata"] = metadata

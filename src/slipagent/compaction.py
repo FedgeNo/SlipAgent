@@ -127,6 +127,7 @@ class StepCompactor:
 
     def dispatch(self) -> None:
         """Start the dispatcher unless this generation's is already running."""
+        self.__dict__.setdefault("_wake", asyncio.Event()).set()
         generation = self.generation
         name = f"slipagent-step-compactor-{generation}"
         if not any(job.get_name() == name and not job.done() for job in self.jobs):
@@ -173,6 +174,8 @@ class StepCompactor:
             await asyncio.gather(*previous, return_exceptions=True)
         running: dict[asyncio.Task[None], Any] = {}
         while generation == self.generation:
+            wake = self.__dict__.setdefault("_wake", asyncio.Event())
+            wake.clear()
             slots = await self.slots()
             if slots == 1 and not running:
                 # A single slot runs jobs in order on this task, as one worker.
@@ -194,9 +197,15 @@ class StepCompactor:
             if not running:
                 self.__dict__.pop("_standalone_steps", None)
                 return
-            done, _ = await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
+            changed = asyncio.create_task(wake.wait())
+            try:
+                done, _ = await asyncio.wait([*running, changed], return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                changed.cancel()
+                await asyncio.gather(changed, return_exceptions=True)
             for task in done:
-                running.pop(task)
+                if task is not changed:
+                    running.pop(task)
 
     async def _summarize_step(self, step: CompletedStep, request: tuple[Any, ...], generation: int) -> None:
         client, model, capabilities, max_tokens, history, conversation, frozen = request

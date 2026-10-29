@@ -366,17 +366,25 @@ class SessionJournal:
 
     def listing(self) -> list[dict[str, str]]:
         result = []
+        modified: dict[str, int] = {}
         try:
-            for path in sorted(self.directory.glob("*.jsonl"), key=lambda item: item.stat().st_mtime_ns, reverse=True):
+            paths = sorted(self.directory.glob("*.jsonl"), key=lambda item: item.name, reverse=True)
+        except OSError as exc:
+            raise SessionError(f"Cannot list saved sessions: {exc}") from exc
+        for path in paths:
+            try:
+                modified[path.stem] = path.stat().st_mtime_ns
                 with path.open(encoding="utf-8") as source:
                     header = json.loads(source.readline())
                 if header.get("type") != "header" or header.get("project") != self.project:
-                    raise SessionError(f"Invalid session header: {path}")
+                    raise ValueError("invalid session header")
+                datetime.fromisoformat(header["created"])
                 result.append({"id": path.stem, "created": header["created"], "current": str(path == self.path),
                                "title": self._saved_title(path.stem, header), "prompt": self._first_prompt(path)})
-        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
-            raise SessionError(f"Cannot list saved sessions: {exc}") from exc
-        return result
+            except (OSError, ValueError, KeyError, TypeError, AttributeError, SessionError) as exc:
+                result.append({"id": path.stem, "created": "", "current": str(path == self.path),
+                               "title": f"Damaged session {path.stem}", "prompt": "", "damaged": str(exc)})
+        return sorted(result, key=lambda item: modified.get(item["id"], 0), reverse=True)
 
     def delete_current(self) -> None:
         """Remove the current journal and its sidecars after owners are drained."""
@@ -413,6 +421,8 @@ class SessionJournal:
     def label(self, entry: dict[str, str]) -> str:
         """A listing row for choosers: unnamed sessions show their first prompt, dates read locally."""
         from .protocol import session_title_value
+        if "damaged" in entry:
+            return f"{entry['title']}  ({entry['damaged']})"
         name = entry["title"]
         if name == session_title(self.project) and entry.get("prompt"):
             name = session_title_value(entry["prompt"])
@@ -437,14 +447,14 @@ class SessionJournal:
 
     def load(self, selected: str) -> dict[str, Any]:
         if selected == "latest":
-            choices = [item for item in self.listing() if item["id"] != self.session_id]
+            choices = [item for item in self.listing() if item["id"] != self.session_id and "damaged" not in item]
             if not choices:
                 raise SessionError("No earlier sessions are saved for this project.")
             selected = choices[0]["id"]
         if not re.fullmatch(r"[0-9a-f]{32}", selected):
             raise SessionError("Session ID must be a complete ID from /sessions, or latest.")
         path = self.directory / (selected + ".jsonl")
-        data: dict[str, Any] = {"messages": [], "state": {}, "steps": {}, "started": set(), "logs": {}, "id": selected, "torn": False}
+        data: dict[str, Any] = {"messages": [], "state": {}, "steps": {}, "started": set(), "logs": {}, "id": selected, "torn": False, "complete_bytes": 0}
         try:
             with path.open("rb") as source:
                 for index, raw in enumerate(source):
@@ -500,6 +510,7 @@ class SessionJournal:
                         data["logs"][event["metadata"]["log_id"]] = event["metadata"]
                     else:
                         raise ValueError(f"unknown event {kind!r}")
+                    data["complete_bytes"] += len(raw)
             if not data["state"]:
                 raise ValueError("no complete saved session state")
             data["message_count"] = len(data["messages"])
@@ -652,11 +663,65 @@ class SessionJournal:
     def restore(self, agent: Agent, data: dict[str, Any], *, fork: bool = False) -> None:
         if agent.running:
             raise SessionError("Resume is available only while the agent is idle.")
+        # Stage resource owners without touching the live owners or their temporary
+        # directories. A corrupt sidecar must not erase the open conversation.
+        identifier = uuid.uuid4().hex if fork else data["id"]
+        prepared = []
+        turns = None
+        try:
+            for name, suffix in (("artifact_store", "-artifacts"), ("file_checkpoints", "-checkpoints"),
+                                 ("request_diagnostics", "-requests"), ("command_archive", "-logs")):
+                owner = agent.registry.services.get(name)
+                if owner is None and name == "file_checkpoints" and agent.registry.resources.workspace is not None:
+                    from .checkpoints import FileCheckpoints
+                    owner = FileCheckpoints(agent.registry.resources.workspace)
+                if owner is None:
+                    continue
+                candidate = copy.copy(owner)
+                directory = self.directory / (identifier + suffix)
+                if name in {"artifact_store", "file_checkpoints"}:
+                    candidate.use_directory(directory, source=self.directory / (data["id"] + suffix) if fork else None)
+                elif name == "request_diagnostics":
+                    candidate.temporary = None
+                    candidate.use_directory(directory)
+                    if candidate.error:
+                        raise OSError(candidate.error)
+                else:
+                    _private_directory(directory)
+                    candidate.logs = {}
+                    candidate.used_bytes = 0
+                    candidate._temporary = None
+                    candidate.use_directory(directory, self.log)
+                prepared.append((name, owner, candidate))
+            from .turnstore import TurnStore
+            turns = TurnStore(self.directory / (identifier + "-turns"))
+            for step in data["history"].steps:
+                if isinstance(step, CompletedStep):
+                    turns.archive(step, data["messages"])
+            path = self.directory / (identifier + ".jsonl")
+            if fork:
+                staged = copy.copy(self)
+                staged.session_id, staged.path, staged.failed = identifier, path, False
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                os.close(fd)
+                _sync_directory(self.directory)
+                staged._append("header", version=1, project=self.project, session_id=identifier,
+                               parent=data["id"], created=datetime.now(timezone.utc).isoformat(), title=data["title"])
+            elif data["torn"]:
+                with path.open("r+b") as journal_file:
+                    journal_file.truncate(data["complete_bytes"])
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            if turns is not None:
+                turns.close()
+            raise SessionError(f"Cannot prepare saved session: {exc}. The open session was preserved.") from exc
         agent.reset(new_session=False)
+        for name, owner, candidate in prepared:
+            owner.__dict__.update(candidate.__dict__)
+            agent.registry.services[name] = owner
         # Refresh the operating/project instructions from this launch. Archived
         # instructions remain preserved in the parent journal for inspection.
         prefix = [message for message in agent.messages if message.role == "system"]
-        messages = data["messages"]
+        messages = list(data["messages"])
         if prefix and messages and messages[0].role == "system":
             messages[0] = prefix[0]
         agent.messages = messages
@@ -665,6 +730,8 @@ class SessionJournal:
         agent.history.cursor = loaded.cursor
         agent.history._request = loaded._request
         agent.history.task = loaded.task
+        agent.history.store = turns
+        agent.registry.resources.turns = turns
         agent.pending = list(data["state"]["pending"])
         # Journals from before the cap existed keep this launch's setting.
         if "context_tokens" in data["state"]:
@@ -674,35 +741,17 @@ class SessionJournal:
         agent.queued_messages.update({index: messages[index].content or ""
                                       for index in data["state"].get("queued_message_indices", [])})
         agent.usage = data["usage"]
-        if fork:
-            self.begin(agent, parent=data["id"], title=data["title"])
-        else:
-            self.session_id = data["id"]
-            self.path = self.directory / (self.session_id + ".jsonl")
-            if data["torn"]:
-                # Remove only the incomplete final event before appending.
-                with self.path.open("r+b") as journal_file:
-                    payload = journal_file.read()
-                    journal_file.truncate(payload.rfind(b"\n") + 1)
-            self.cursor = data["message_count"]
-            self.step_count = len(data["steps"])
-            self.last_message = None
-            self.system = None
-            self.state = None
-            self.failed = False
-            self._title = data["title"]
-            agent.session_id = self.session_id
-            self._artifact_directory(agent)
-            self._checkpoint_directory(agent)
-            diagnostics = agent.registry.services.get("request_diagnostics")
-            if diagnostics is not None:
-                diagnostics.use_directory(self.directory / (self.session_id + "-requests"))
-            archive = agent.registry.services.get("command_archive")
-            if archive is not None:
-                directory = self.directory / (self.session_id + "-logs")
-                _private_directory(directory)
-                archive.use_directory(directory, self.log)
-            self.record(agent)
+        self.session_id, self.path = identifier, path
+        self.cursor = 0 if fork else data["message_count"]
+        self.step_count = 0 if fork else len(data["steps"])
+        self.last_message, self.system, self.state = None, None, None
+        self.failed = False
+        self._title = data["title"]
+        agent.session_id = identifier
+        checkpoints = agent._checkpoints()
+        if checkpoints is not None and any(batch["rewound"] for batch in checkpoints.batches):
+            agent.registry.context_notes["file_rewind"] = load_prompt('file-rewind.md', notice=load_prompt('session-rewind.md').strip())
+        self.record(agent)
         agent._archive_history()
         archive = agent.registry.services.get("command_archive")
         if archive is not None:

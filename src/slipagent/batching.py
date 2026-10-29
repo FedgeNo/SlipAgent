@@ -40,8 +40,14 @@ async def run_batch(
             await asyncio.gather(*tasks)
             while committed < end:
                 index = committed
+                try:
+                    commit(calls[index], results[index])
+                except Exception as exc:
+                    results[index] = ToolResult.error(
+                        f"Tool ran; recording its result failed: {type(exc).__name__}: {exc}. "
+                        "Effects may have occurred; inspect before retrying.")
+                    raise
                 committed += 1
-                commit(calls[index], results[index])
     except BaseException:
         async def drain() -> None:
             for task in tasks:
@@ -58,5 +64,10 @@ async def run_batch(
                 detail = ("Tool interrupted; effects may be partial." if index in started else
                           "Tool was not run because the step was interrupted.")
                 result = ToolResult.error(detail)
-            commit(calls[index], result)
+            try:
+                commit(calls[index], result)
+            except Exception:
+                # Continue pairing the rest of the batch before propagating
+                # the original failure; publication may already have happened.
+                continue
         raise

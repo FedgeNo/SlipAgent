@@ -18,6 +18,8 @@ class RequestProfile:
     def __init__(self, *, parameters: set[str], context_length: int,
                  max_prompt_tokens: int | None = None, max_completion_tokens: int | None = None,
                  format: str | None = None) -> None:
+        if type(context_length) is not int or context_length <= 0:
+            raise ValueError("context_length must be a positive integer")
         self.parameters = parameters
         self.context_length = context_length
         self.max_prompt_tokens = max_prompt_tokens

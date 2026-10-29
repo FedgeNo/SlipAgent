@@ -285,6 +285,7 @@ class MCPClient:
         self._process: asyncio.subprocess.Process | None = None
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._stdout_error: str | None = None
+        self._reader_failure: str | None = None
         self._stdout_closed = False
         self._stderr_tail: list[str] = []
         self._pump: asyncio.Task[None] | None = None
@@ -297,7 +298,7 @@ class MCPClient:
 
     @property
     def connected(self) -> bool:
-        return self._process is not None and self._process.returncode is None
+        return self._process is not None and self._process.returncode is None and not self._stdout_closed
 
     async def connect(self) -> None:
         """Launch the server and negotiate a protocol version."""
@@ -306,7 +307,11 @@ class MCPClient:
             self._disconnect_task = None
         if self.connected:
             return
+        if self._process is not None:
+            await self.disconnect()
+            self._disconnect_task = None
         self._stdout_error = None
+        self._reader_failure = None
         self._stdout_closed = False
         self._stderr_tail.clear()
         self.protocol_version = None
@@ -396,6 +401,7 @@ class MCPClient:
                         f"server sent a line longer than the {MAX_LINE_BYTES} byte limit"
                     ) from None
                 if not line:
+                    self._read_failure("server closed stdout")
                     break
                 text = line.decode("utf-8", errors="replace").strip()
                 if not text:
@@ -403,7 +409,11 @@ class MCPClient:
                 try:
                     message = json.loads(text)
                 except json.JSONDecodeError:
-                    self._read_failure(f"server wrote non-JSON to stdout: {text[:200]}")
+                    excerpt = text[:200] + ("…" if len(text) > 200 else "")
+                    warning = f"Protocol warning: non-JSON stdout ignored: {excerpt}"
+                    if warning not in self._stderr_tail:
+                        self._stderr_tail.append(warning)
+                        self._stderr_tail[:] = self._stderr_tail[-STDERR_TAIL_LINES:]
                     continue
                 if not isinstance(message, dict):
                     continue
@@ -423,12 +433,15 @@ class MCPClient:
             self._read_failure(f"lost the connection to '{self.spec.name}': {exc}" + self._stderr_hint())
         finally:
             self._close_stdout()
+            if self._process is process and process is not None and process.returncode is None and self._disconnect_task is None:
+                self._disconnect_task = asyncio.create_task(self._disconnect())
 
     def _read_failure(self, error: str) -> None:
+        self._reader_failure = error
         delivered = False
         for future in self._pending.values():
             if not future.done():
-                future.set_result({"__slipagent_error__": error})
+                future.set_result({"__slipagent_error__": error + ". The operation may have partial effects; inspect its state before retrying."})
                 delivered = True
         # Keep one undelivered error for the next request, including errors
         # received while idle, without accumulating malformed server output.
@@ -600,6 +613,8 @@ class MCPClient:
         """Send one request and wait for the response with the matching id."""
         process = self._process
         if process is None or process.stdin is None:
+            if self._reader_failure is not None:
+                raise self._closed_error(method)
             raise MCPError(f"'{self.spec.name}' is not running")
         if self._stdout_error is not None:
             error, self._stdout_error = self._stdout_error, None
@@ -672,6 +687,9 @@ class MCPClient:
         return message
 
     def _closed_error(self, method: str) -> MCPError:
+        if self._reader_failure is not None:
+            return MCPError(f"Stopped reading '{self.spec.name}' before answering {method}: {self._reader_failure}. "
+                            "The operation may have partial effects; inspect its state before retrying.")
         return MCPError(
             f"'{self.spec.name}' exited before answering {method}"
             f"{self._stderr_hint()}. MCP servers receive a minimal environment; "

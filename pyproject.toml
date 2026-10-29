@@ -55,6 +55,7 @@ include = [
     "/docs",
     "/benchmarks/semantic",
     "/README.md",
+    "/AGENTS.md",
     "/CONTRIBUTING.md",
     "/pyproject.toml",
     "/install.py",

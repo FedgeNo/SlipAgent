@@ -8,11 +8,13 @@ import os
 import shlex
 import shutil
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Any
 
 from .tools.base import ToolRegistry, ToolResult
 from .tools.files import EditFileTool, WriteFileTool
 from .tools.hashline import EditHashlinesTool
+from .tools.paths import MovePathTool, DeletePathTool
 from .tools.shell import capture_process, _subprocess_env, _truncate
 from .types import ToolCall
 
@@ -110,26 +112,56 @@ def validate_checks(options: dict[str, Any]) -> None:
             raise ValueError("check timeout must be between 0.1 and 120 seconds")
 
 
+@dataclass(frozen=True)
+class BatchCheckReport:
+    text: str
+    call_id: str | None = None
+
+
 async def check_edit_batch(registry: ToolRegistry, batch: list[tuple[ToolCall, ToolResult]], step_id: int) -> str:
+    return (await check_edit_batch_report(registry, batch, step_id)).text
+
+
+async def check_edit_batch_report(registry: ToolRegistry, batch: list[tuple[ToolCall, ToolResult]], step_id: int) -> BatchCheckReport:
     from .environment import load_project_options
 
     environment = registry.services.get("project_environment")
     if environment is None:
-        return ""
+        return BatchCheckReport("")
     paths: set[str] = set()
-    for call, result in batch:
-        tool = registry.get(call.name)
-        if not result.is_error and isinstance(tool, EDIT_TOOLS):
-            paths.add(str(environment.workspace.resolve(call.arguments["path"])))
-    if not paths:
-        return ""
+    call_id = None
+    reports: list[str] = []
     try:
+        for call, result in batch:
+            tool = registry.get(call.name)
+            if not result.is_error and isinstance(tool, EDIT_TOOLS):
+                call_id = call.id
+                paths.add(str(environment.workspace.resolve(call.arguments["path"])))
+            if isinstance(tool, (MovePathTool, DeletePathTool)) and isinstance(result.content, dict):
+                changes = result.content.get("changes", [])
+                for index, change in enumerate(changes):
+                    old = str(environment.workspace.resolve(change["path"]))
+                    if old not in paths:
+                        continue
+                    if change["action"] == "moved_from" and index + 1 < len(changes):
+                        destination = changes[index + 1]
+                        if destination["action"] == "moved_to":
+                            paths.remove(old)
+                            paths.add(str(environment.workspace.resolve(destination["path"])))
+                    elif change["action"] == "deleted":
+                        paths.remove(old)
+                        reports.append(f"Post-edit checks: SKIPPED — deleted file {change['path']}.")
+        for path in list(paths):
+            if not Path(path).is_file():
+                paths.remove(path)
+                reports.append(f"Post-edit checks: SKIPPED — file no longer exists: {path}.")
+        if not paths:
+            return BatchCheckReport("\n\n".join(reports), call_id)
         options = load_project_options(environment.workspace)
         checks = list(options.get("checks", []))
         if options.get("python_syntax", True):
             checks.insert(0, {"name": "Python syntax", "argv": ["{python}", "-I", "-c", SYNTAX_CHECK, "{files}"], "extensions": [".py", ".pyi"]})
         checks.extend(_automatic_checks(paths, environment.workspace.root))
-        reports: list[str] = []
         for check in checks:
             if "skip" in check:
                 reports.append(f"{check['name']}: SKIPPED — {check['skip']}.")
@@ -162,8 +194,8 @@ async def check_edit_batch(registry: ToolRegistry, batch: list[tuple[ToolCall, T
             stderr, _ = _truncate(stderr, archived=log is not None)
             output = (stdout + "\n" + stderr).strip()
             reports.append(f"{check['name']}: {status}\n\n{output}" + ("\n\n" + log.notice() if log is not None else ""))
-        return "\n\n".join(reports)
+        return BatchCheckReport("\n\n".join(reports), call_id)
     except Exception as exc:
         # Files have already changed; preserve their results even if settings or
         # check infrastructure fails. Cancellation still propagates to the loop.
-        return f"Step-batch checks unavailable: {type(exc).__name__}: {exc}"
+        return BatchCheckReport(f"Step-batch checks unavailable: {type(exc).__name__}: {exc}", call_id)

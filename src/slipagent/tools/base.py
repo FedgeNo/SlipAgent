@@ -12,6 +12,7 @@ from __future__ import annotations
 import inspect
 import json
 import math
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -175,8 +176,8 @@ def _binds_arguments(run: Callable[..., Any], arguments: dict[str, Any]) -> str 
 def validate_schema_shape(schema: Any, path: str = "inputSchema") -> None:
     """Check schema structure before our argument validator consumes it.
 
-    Remote servers remain responsible for full JSON Schema semantics ($ref,
-    combinators, and extensions). Accept boolean subschemas and validate the
+    Remote servers remain responsible for full JSON Schema semantics ($ref
+    and extensions). Accept boolean subschemas and validate the
     standard nested shapes instead of silently replacing broken metadata.
     """
     if isinstance(schema, bool):
@@ -216,23 +217,50 @@ def validate_schema_shape(schema: Any, path: str = "inputSchema") -> None:
 def validate_arguments(
     schema: dict[str, Any], arguments: dict[str, Any], *, allow_unknown: bool = False
 ) -> str | None:
-    """Return a human-readable problem with `arguments`, or None if valid."""
-    properties: dict[str, Any] = schema.get("properties") or {}
+    """Validate types, required/properties, enum, bounds, sizes, patterns, items,
+    and allOf/anyOf/oneOf; normalize integral floats before Python binding.
+
+    This is a local preflight, not a complete JSON Schema implementation. Remote
+    servers remain responsible for references and unsupported schema keywords.
+    """
+    problem = _check_value("", schema, arguments, allow_unknown=allow_unknown)
+    if problem is None:
+        normalized = _normalize_value(schema, arguments)
+        arguments.clear()
+        arguments.update(normalized)
+    return problem
+
+
+def _properties(schema: dict[str, Any] | bool) -> dict[str, Any]:
+    if isinstance(schema, bool):
+        return {}
+    properties = dict(schema.get("properties") or {})
+    for keyword in ("allOf", "anyOf", "oneOf"):
+        for branch in schema.get(keyword, []):
+            properties.update(_properties(branch))
+    return properties
+
+
+def _check_object(schema: dict[str, Any], arguments: dict[str, Any], *, allow_unknown: bool) -> str | None:
+    properties = schema.get("properties") or {}
+    allowed_properties = _properties(schema)
     required: list[str] = schema.get("required") or []
 
     missing = [key for key in required if key not in arguments]
     if missing:
         return f"missing required argument(s): {', '.join(sorted(missing))}"
 
-    unknown = [key for key in arguments if key not in properties]
+    unknown = [key for key in arguments if key not in allowed_properties]
     additional = schema.get("additionalProperties", allow_unknown)
     if unknown and additional is False:
-        allowed = ", ".join(sorted(properties)) or "(none)"
+        allowed = ", ".join(sorted(allowed_properties)) or "(none)"
         return f"unexpected argument(s): {', '.join(sorted(unknown))}. Allowed: {allowed}"
 
     for key, value in arguments.items():
+        if key not in properties and key in allowed_properties:
+            continue  # The matching composition branches validated this property.
         value_schema = properties.get(key, additional)
-        if not isinstance(value_schema, dict):
+        if not isinstance(value_schema, (dict, bool)):
             continue
         problem = _check_value(key, value_schema, value)
         if problem is not None:
@@ -240,10 +268,21 @@ def validate_arguments(
     return None
 
 
-def _check_value(key: str, schema: dict[str, Any], value: Any) -> str | None:
+def _check_value(key: str, schema: dict[str, Any] | bool, value: Any, *, allow_unknown: bool = True) -> str | None:
+    if isinstance(schema, bool):
+        return None if schema else f"'{key or 'arguments'}' is forbidden by its schema"
+    for keyword in ("allOf", "anyOf", "oneOf"):
+        branches = schema.get(keyword)
+        if branches is not None:
+            problems = [_check_value(key, branch, value) for branch in branches]
+            matches = sum(problem is None for problem in problems)
+            if keyword == "allOf" and matches != len(branches):
+                return next(problem for problem in problems if problem is not None)
+            if keyword == "anyOf" and matches == 0 or keyword == "oneOf" and matches != 1:
+                return f"'{key or 'arguments'}' must satisfy {keyword}: " + "; ".join(problem for problem in problems if problem)
     expected = schema.get("type")
     if isinstance(expected, list):
-        if all(_check_value(key, {**schema, "type": option}, value) is not None for option in expected):
+        if all(_check_value(key, {**schema, "type": option}, value, allow_unknown=allow_unknown) is not None for option in expected):
             return f"'{key}' must satisfy one of the types: {', '.join(expected)}"
         return None
     if isinstance(expected, str) and expected in _PYTHON_TYPES:
@@ -251,7 +290,8 @@ def _check_value(key: str, schema: dict[str, Any], value: Any) -> str | None:
         # bool is a subclass of int; never let it satisfy an int/number schema.
         if expected in {"integer", "number"} and isinstance(value, bool):
             return f"'{key}' must be {expected}, got boolean"
-        if not isinstance(value, python_type):
+        integral = expected == "integer" and isinstance(value, float) and math.isfinite(value) and value.is_integer()
+        if not isinstance(value, python_type) and not integral:
             return f"'{key}' must be {expected}, got {type(value).__name__}"
 
     if isinstance(value, float) and not math.isfinite(value):
@@ -273,18 +313,65 @@ def _check_value(key: str, schema: dict[str, Any], value: Any) -> str | None:
             return f"'{key}' must be <= {maximum}, got {value}"
 
     if isinstance(value, dict):
-        problem = validate_arguments(schema, value, allow_unknown=True)
+        problem = _check_object(schema, value, allow_unknown=allow_unknown)
         if problem is not None:
-            return f"'{key}': {problem}"
+            return f"'{key}': {problem}" if key else problem
 
-    if schema.get("type") == "array" and isinstance(value, list):
+    if isinstance(value, str):
+        for keyword, lower in (("minLength", True), ("maxLength", False)):
+            limit = schema.get(keyword)
+            if isinstance(limit, int) and (len(value) < limit if lower else len(value) > limit):
+                return f"'{key}' violates {keyword}={limit}"
+        pattern = schema.get("pattern")
+        if isinstance(pattern, str):
+            try:
+                if re.search(pattern, value) is None:
+                    return f"'{key}' must match pattern {pattern!r}"
+            except re.error:
+                return f"'{key}' has an invalid schema pattern"
+
+    if isinstance(value, list):
+        for keyword, lower in (("minItems", True), ("maxItems", False)):
+            limit = schema.get(keyword)
+            if isinstance(limit, int) and (len(value) < limit if lower else len(value) > limit):
+                return f"'{key}' violates {keyword}={limit}"
         item_schema = schema.get("items")
-        if isinstance(item_schema, dict):
-            for index, item in enumerate(value):
+        prefixes = schema.get("prefixItems", item_schema if isinstance(item_schema, list) else [])
+        for index, item in enumerate(value):
+            if index < len(prefixes):
+                problem = _check_value(f"{key}[{index}]", prefixes[index], item)
+            elif isinstance(item_schema, (dict, bool)):
                 problem = _check_value(f"{key}[{index}]", item_schema, item)
-                if problem is not None:
-                    return problem
+            else:
+                problem = None
+            if problem is not None:
+                return problem
     return None
+
+
+def _normalize_value(schema: dict[str, Any] | bool, value: Any) -> Any:
+    if isinstance(schema, bool):
+        return value
+    expected = schema.get("type")
+    if (expected == "integer" or isinstance(expected, list) and "integer" in expected) and isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if isinstance(value, dict):
+        properties = schema.get("properties", {})
+        additional = schema.get("additionalProperties", {})
+        value = {key: _normalize_value(properties.get(key, additional), item)
+                 if isinstance(properties.get(key, additional), dict) else item for key, item in value.items()}
+    elif isinstance(value, list):
+        item_schema = schema.get("items")
+        prefixes = schema.get("prefixItems", item_schema if isinstance(item_schema, list) else [])
+        value = [_normalize_value(prefixes[index] if index < len(prefixes) else item_schema, item)
+                 if index < len(prefixes) or isinstance(item_schema, dict) else item for index, item in enumerate(value)]
+    for keyword in ("allOf", "anyOf", "oneOf"):
+        for branch in schema.get(keyword, []):
+            if _check_value("", branch, value) is None:
+                value = _normalize_value(branch, value)
+                if keyword != "allOf":
+                    break
+    return value
 
 
 class ToolRegistry:

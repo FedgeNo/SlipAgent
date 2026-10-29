@@ -164,10 +164,9 @@ class ContextBuilder:
             if ready:
                 sections.add("monitor_results", "Command Monitor Results", load_prompt("monitor-results.md",
                              monitors=render_data(ready)), 49)
-        state_notes = {key: value for key, value in self.registry.context_notes.items() if key != "user_edits"}
+        state_notes = {key: value for key, value in self.registry.context_notes.items() if key not in {"user_edits", "progress"}}
         if state_notes:
             sections.add("state", "Current Harness State", load_prompt('harness-state.md', state=render_data(state_notes)), 50)
-        sections.add("repair", "Response Correction", repair.strip(), 60)
         extra_instructions = sections.render()
         budget = copy.copy(self.budget) if preview else self.budget
         token_scale = budget.select(self.settings.model, capabilities)

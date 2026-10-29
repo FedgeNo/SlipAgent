@@ -252,6 +252,12 @@ class FileCheckpoints:
         selected = self._selected(checkpoint_id)
         originals: dict[Path, FileState] = {}
         planned: dict[Path, FileState] = {}
+        final: dict[Path, FileState] = {}
+        for batch in selected:
+            for entry in batch["files"]:
+                if entry["status"] != "failed":
+                    final.setdefault(Path(entry["path"]), (entry["before"], entry["mode"]))
+        restored: set[Path] = set()
         for batch in reversed(selected):
             for entry in reversed(batch["files"]):
                 if entry["status"] == "failed":
@@ -266,9 +272,13 @@ class FileCheckpoints:
                 if target not in originals:
                     originals[target] = _file_state(target)
                     planned[target] = originals[target]
+                    if originals[target] == final[target]:
+                        restored.add(target)
+                if target in restored:
+                    continue
                 actual, mode = planned[target]
-                if entry["status"] == "pending" and actual == entry["before"]:
-                    continue  # A journaled write did not publish before interruption.
+                if actual == entry["before"] and mode == entry["mode"]:
+                    continue  # Unpublished writes and already-restored entries need no write.
                 expected_mode = entry.get("after_mode", entry["mode"])
                 if actual != entry["after"] or expected_mode is not None and mode != expected_mode:
                     raise CheckpointError(f"File changed since the edit: {target}. No files restored.")

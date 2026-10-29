@@ -149,6 +149,28 @@ class GitTool(Tool):
             result.append(relative)
         return result
 
+    async def _worktree_files(self, repository: GitRepository, paths: list[str], timeout: float) -> list[str]:
+        listing = await self._execute(repository,
+            ["ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", *paths], timeout)
+        return list(dict.fromkeys(path for path in self._complete(listing).rstrip("\0").split("\0") if path))
+
+    async def _filter_problem(self, repository: GitRepository, files: list[str], timeout: float) -> ToolResult | None:
+        if not files:
+            return None
+        attributes = await self._execute(repository, ["check-attr", "-z", "--stdin", "filter"], timeout,
+            stdin=b"".join(path.encode("utf-8") + b"\0" for path in files))
+        fields = self._complete(attributes).rstrip("\0").split("\0")
+        for driver in set(fields[2::3]):
+            for kind in ("clean", "process"):
+                config = await self._execute(repository, ["config", "--get", f"filter.{driver}.{kind}"], timeout)
+                if config.code not in (0, 1):
+                    return config.result()
+                if config.stdout.strip():
+                    return ToolResult.error(
+                        f"Cannot inspect or stage files using filter {driver!r}: its {kind} helper "
+                        "can access paths outside the workspace.")
+        return None
+
     async def _execute(
         self, repository: GitRepository, args: list[str], timeout: float, *, stdin: bytes | None = None,
     ) -> GitOutput:
@@ -246,6 +268,9 @@ class GitStatusTool(GitTool):
 
     async def run(self, repo: str = ".", timeout: float = DEFAULT_TIMEOUT) -> ToolResult:
         repository = await run_blocking(self._repository, repo)
+        problem = await self._filter_problem(repository, await self._worktree_files(repository, ["."], timeout), timeout)
+        if problem is not None:
+            return problem
         output = await self._execute(
             repository, ["status", "--short", "--branch", "--ignore-submodules=all"], timeout,
         )
@@ -272,11 +297,17 @@ class GitDiffTool(GitTool):
     ) -> ToolResult:
         repository = await run_blocking(self._repository, repo)
         args = ["diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all"]
+        relative = self._paths(repository, paths) if paths is not None else []
+        if not staged:
+            problem = await self._filter_problem(repository,
+                await self._worktree_files(repository, relative or ["."], timeout), timeout)
+            if problem is not None:
+                return problem
         if staged:
             args.append("--cached")
         args.append("--")
         if paths is not None:
-            args.extend(self._paths(repository, paths))
+            args.extend(relative)
         return (await self._execute(repository, args, timeout)).result()
 
 
@@ -319,36 +350,14 @@ class GitAddTool(GitTool):
     async def run(self, paths: list[str], repo: str = ".", timeout: float = DEFAULT_TIMEOUT) -> ToolResult:
         repository = await run_blocking(self._repository, repo)
         relative = self._paths(repository, paths)
-        listing = await self._execute(
-            repository,
-            ["ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", *relative],
-            timeout,
-        )
-        files = list(dict.fromkeys(self._complete(listing).rstrip("\0").split("\0")))
-        files = [path for path in files if path]
+        files = await self._worktree_files(repository, relative, timeout)
         for path in files:
             candidate = self.workspace.resolve(repository.root / path)
             if candidate.is_dir() and (candidate / ".git").exists():
                 await run_blocking(self._repository, str(candidate))
-        if files:
-            # Paths travel on stdin: a large tree would exceed the argument-length limit.
-            attributes = await self._execute(
-                repository, ["check-attr", "-z", "--stdin", "filter"], timeout,
-                stdin=b"".join(path.encode("utf-8") + b"\0" for path in files),
-            )
-            fields = self._complete(attributes).rstrip("\0").split("\0")
-            for driver in set(fields[2::3]):
-                for kind in ("clean", "process"):
-                    config = await self._execute(
-                        repository, ["config", "--get", f"filter.{driver}.{kind}"], timeout,
-                    )
-                    if config.code not in (0, 1):
-                        return config.result()
-                    if config.stdout.strip():
-                        return ToolResult.error(
-                            f"Cannot stage files using filter {driver!r}: its {kind} helper "
-                            "can access paths outside the workspace."
-                        )
+        problem = await self._filter_problem(repository, files, timeout)
+        if problem is not None:
+            return problem
         return (await self._execute(repository, ["add", "--", *relative], timeout)).result()
 
 

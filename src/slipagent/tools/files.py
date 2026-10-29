@@ -13,6 +13,7 @@ import stat
 import tempfile
 import uuid
 from collections.abc import Callable
+from contextvars import ContextVar
 from pathlib import Path
 from typing import BinaryIO, TYPE_CHECKING
 
@@ -20,6 +21,8 @@ if TYPE_CHECKING:
     from ..artifacts import ArtifactStore
 
 from ..workspace import Workspace, WorkspaceError
+
+_created_directories: ContextVar[list[Path] | None] = ContextVar("created_directories", default=None)
 from ..fileio import read_regular
 from .base import Tool, ToolResult
 from .blocking import run_blocking
@@ -80,7 +83,19 @@ def _atomic_write_stream(workspace: Workspace, target: Path, write: Callable[[Bi
         anchor = Path(target.anchor)
     relative = target.relative_to(anchor)
     if os.name != "posix":
-        target.parent.mkdir(parents=True, exist_ok=True)
+        missing = []
+        parent = target.parent
+        while not parent.exists():
+            missing.append(parent)
+            parent = parent.parent
+        for parent in reversed(missing):
+            try:
+                parent.mkdir()
+            except FileExistsError:
+                continue
+            created = _created_directories.get()
+            if created is not None:
+                created.append(parent)
         workspace.resolve(target)
         fd, temporary = tempfile.mkstemp(dir=target.parent)
         try:
@@ -104,10 +119,15 @@ def _atomic_write_stream(workspace: Workspace, target: Path, write: Callable[[Bi
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     directory = os.open(anchor, flags)
     temporary_name: str | None = None
+    parent = anchor
     try:
         for part in relative.parts[:-1]:
+            parent = parent / part
             try:
                 os.mkdir(part, dir_fd=directory)
+                created = _created_directories.get()
+                if created is not None:
+                    created.append(parent)
             except FileExistsError:
                 pass
             child = os.open(part, flags, dir_fd=directory)
@@ -279,10 +299,16 @@ class WriteFileTool(Tool):
                 before = None
             except OSError as exc:
                 return ToolResult.error(f"Could not read existing file: {exc}")
+        created: list[Path] = []
+        token = _created_directories.set(created)
         try:
             _atomic_write(self.workspace, target, content)
         except (OSError, UnicodeError) as exc:
-            return ToolResult.error(f"Could not write file: {exc}")
+            effects = (" Created directories: " + ", ".join(self.workspace.relative(path) for path in created)
+                       if created else "")
+            return ToolResult.error(f"Could not write file: {exc}" + effects)
+        finally:
+            _created_directories.reset(token)
 
         verb = "Updated" if existed else "Created"
         artifact_notice = ""

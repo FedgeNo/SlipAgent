@@ -464,6 +464,7 @@ class ConversationHistory:
     _request: str = ""
     task: TaskMemory = field(default_factory=TaskMemory)
     store: Any = None
+    compact_through: int = 0
 
     def clear(self) -> None:
         if self.store is not None:
@@ -475,6 +476,7 @@ class ConversationHistory:
         self.digest_through = 0
         self._request = ""
         self.task = TaskMemory()
+        self.compact_through = 0
 
     def sync(self, messages: list[Message]) -> None:
         """Archive complete batches and register the user sources they belong to.
@@ -597,6 +599,8 @@ class ConversationHistory:
             )
         if recovery and not has_new_user_input:
             tail_sections.append(load_prompt('request-retry.md'))
+        if self.compact_through:
+            tail_sections.append(load_prompt('manual-compaction.md', step_id=self.compact_through))
         pinned_sources = [message for message in messages if message.role == "system"]
         leading = pinned_sources[:-1]
         pinned_base = (pinned_sources[-1].content or "").rstrip() + "\n" if pinned_sources else "\n"
@@ -621,6 +625,8 @@ class ConversationHistory:
         runs = run_numbers(self.steps)
         metadata: dict[str, Any] = {"step_id": len(self.steps) + 1, "run": next_run(self.steps, runs, has_new_user_input),
                                     "is_tool_result_response": has_results}
+        if self.compact_through:
+            metadata["compact_through"] = self.compact_through
         if recovery:
             metadata["request_retry"] = recovery
         edit_guidance = load_prompt('user-edits.md') if user_edits or any(getattr(step, 'user_edits', None) for step in self.steps) else ''
@@ -691,6 +697,8 @@ class ConversationHistory:
                 filtered = getattr(step, "reasoning_summary", None) if filtered_thoughts else None
                 if filtered is not None:
                     reasoning = filtered
+                elif compressed and step.id <= self.compact_through:
+                    reasoning = None
                 if reasoning:
                     record = dict(part[0].content)
                     record["reasoning"] = reasoning
@@ -723,7 +731,8 @@ class ConversationHistory:
             disk = step.__dict__.get("_disk") if isinstance(step, CompletedStep) else None
             attached = overthinking and index >= len(self.steps) - reasoning_history_steps
             key = (*form, runs[index], attached, filtered_thoughts, step.summary, getattr(step, "reasoning_summary", None),
-                   getattr(step, "compaction_status", None), getattr(step, "compaction_error", None))
+                   getattr(step, "compaction_status", None), getattr(step, "compaction_error", None),
+                   step.id <= self.compact_through)
             cache: dict[Any, tuple[Any, int]] | None = (
                 step.__dict__.setdefault("_sent_bytes", {}) if disk is not None else None)
             entry = cache.get(key) if cache is not None else None
@@ -750,8 +759,9 @@ class ConversationHistory:
         def supplied(index: int, compressed: bool) -> tuple[list[Message], int]:
             key = (index, compressed)
             if key not in parts:
-                original = context_part(index)
-                chosen, cost = original, part_cost(index, (False, True), original)
+                include_summary = not (compressed and self.steps[index].id <= self.compact_through)
+                original = context_part(index, include_summary=include_summary)
+                chosen, cost = original, part_cost(index, (False, include_summary), original)
                 # An unavailable summary is not memory. Retain the original
                 # rather than replacing evidence with a failure notice.
                 if compressed and self.steps[index].summary is not None:
@@ -777,7 +787,10 @@ class ConversationHistory:
         total = sum(unit_costs) + tail_tokens
 
         def compressible(index: int) -> bool:
-            return index != unseen_results and not (pending and index == count - 1)
+            step = self.steps[index]
+            unseen = (step.id <= self.compact_through and step.has_results
+                      and isinstance(step, CompletedStep) and not step.observed)
+            return not unseen and index != unseen_results and not (pending and index == count - 1)
 
         def summarize_step(index: int) -> bool:
             nonlocal total
@@ -860,6 +873,17 @@ class ConversationHistory:
                         entries.append((record["step_id"], [record_message(record)]))
             entries.sort(key=lambda entry: entry[0])
             return [message for _, part in entries for message in part]
+
+        # A manual boundary chooses economical compressed forms even when the
+        # full history fits. Later steps still follow normal budget selection.
+        boundary = min(self.compact_through, count)
+        for index in range(boundary):
+            summarize_step(index)
+        if boundary:
+            for record in historical_records(self.steps):
+                merge_into(record, NARRATIVE, "_narrative_bytes", boundary)
+            for record in era_records(self.steps):
+                merge_into(record, ERA, "_era_bytes", boundary)
 
         for _ in chain([None], reductions()):
             if total <= available:

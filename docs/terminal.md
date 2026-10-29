@@ -56,6 +56,7 @@ In the REPL:
 | `/key <key>` | Detect the provider, install its key for this session, and offer to save it |
 | `/key <provider> <key>` | Install a key with an explicit provider when its format is ambiguous |
 | `/cost` | Working-model token usage, and spend when all recorded usage has cost data; free compaction is excluded |
+| `/compact` | Set a persistent boundary through the latest completed step; prefer smaller compressed history on the next request. During work, queues at a complete tool-batch boundary. |
 | `/task` | Show retained original user prompts and their source steps |
 | `/queue` | Inspect pending user messages and choose one to view or discard |
 | `/queue <number>` | View a pending message in full |

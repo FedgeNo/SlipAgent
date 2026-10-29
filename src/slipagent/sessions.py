@@ -313,6 +313,7 @@ class SessionJournal:
                  "queued_message_indices": list(agent.queued_messages),
                  "model": agent.model, "temperature": agent.temperature,
                  "context_tokens": agent.context_tokens,
+                 "compact_through": agent.history.compact_through,
                  "user_edits": agent.registry.context_notes.get("user_edits", {})}
         if state != self.state:
             self._append("state", **state)
@@ -556,6 +557,10 @@ class SessionJournal:
             task = TaskMemory(start_message=data["state"]["task_start"])
             history = ConversationHistory(task=task)
             history.sync(data["messages"])
+            boundary = data["state"].get("compact_through", 0)
+            if type(boundary) is not int or not 0 <= boundary <= len(history.steps):
+                raise ValueError("invalid manual compaction boundary")
+            history.compact_through = boundary
             for step_id, saved in data["steps"].items():
                 if type(step_id) is not int or not 1 <= step_id <= len(history.steps):
                     raise ValueError("invalid saved step ID")
@@ -730,6 +735,7 @@ class SessionJournal:
         agent.history.cursor = loaded.cursor
         agent.history._request = loaded._request
         agent.history.task = loaded.task
+        agent.history.compact_through = loaded.compact_through
         agent.history.store = turns
         agent.registry.resources.turns = turns
         agent.pending = list(data["state"]["pending"])

@@ -17,6 +17,7 @@ from slipagent.commands import command_help
     ("context", "300k", True, False),
     ("context", "reset", True, False),
     ("context", "default", True, False),
+    ("compact", "", True, False),
     ("mcp", "", False, False),
     ("mcp", "remove test", True, False),
     ("danger", "status", False, False),

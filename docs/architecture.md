@@ -193,7 +193,8 @@ Context construction proceeds in this order:
    its original only when smaller. A narrative or era replaces exactly the
    records covering its listed source steps. Representation costs are cached per
    archived step and record, so selection is one pass. Each request starts again
-   from full originals; there is no persistent omission marker.
+   from full originals before applying a persisted manual compaction boundary,
+   if present, and ordinary budget reductions. There is no persistent omission marker.
    `--context-tokens` can cap total working context.
    `records.py` represents saved full steps with `record_type`, `representation`, `user_prompts`,
    `agent_response`, `tool_calls`, and `tool_results`. Prompts remain an array so
@@ -707,6 +708,19 @@ the active agent never requests inline compressed fields, XML memory envelopes,
 or metadata inside tool arguments.
 
 ## Resource Ownership and Project Settings
+
+`ConversationHistory.compact_through` records the manual `/compact` boundary as
+a step number. The command synchronizes completed history, persists and flushes
+the boundary, and returns without inference or waiting for summaries. During
+work, it joins the command FIFO and applies between complete tool batches.
+Selection first applies smaller summaries, narratives, and eras wholly within
+the boundary, then performs normal budget reductions. It protects unseen tool
+results and retains originals when summaries are absent or larger. Manual
+compressed forms do not reinsert raw reasoning; filtered thoughts remain available.
+The model receives the boundary and recall guidance, while command feedback stays
+in the feed. Session state validates the boundary against loaded step IDs,
+preserves it through resume/fork, defaults older journals to zero, and clears it
+on conversation reset. Adding this history dataclass field requires a restart.
 
 `sessionstate.Session` owns the API client, registry, MCP manager, renderer, terminal lifecycle,
 and optional runtime frame. Startup uses `AsyncExitStack` until ownership transfers

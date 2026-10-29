@@ -23,6 +23,10 @@ Startup creates no conversation journal until the first task prompt is entered.
 Help, settings, session listing, and renaming before that prompt do not add an
 empty session. Resume reopens the selected conversation's journal.
 
+`/compact` records its numbered history boundary in the session journal. Resume
+and fork preserve that boundary, while `/new` clears it with the conversation.
+Compaction changes the history served to the model; it preserves archived originals.
+
 Use `/resume` to choose a saved session by title and local date; an unnamed
 session shows the start of its first prompt instead. During work it queues
 until the current response and tool batch finish. Up/Down

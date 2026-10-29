@@ -87,6 +87,7 @@ messages queue and are sent at the next step. **Esc** interrupts immediately;
 | `/rewind` | Undo the agent's file edits back to a chosen point |
 | `/copy`, `/view` | Copy the latest reply; open saved outputs and diffs |
 | `/key`, `/cost` | Manage API keys; show token usage |
+| `/compact` | Prefer compressed history through the current step; retain originals for recall |
 | `/exit` | Quit (Ctrl+D also works) |
 
 | Key | Effect |

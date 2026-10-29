@@ -596,6 +596,38 @@ class ContextCommand(Command):
         return None
 
 
+class CompactCommand(ExclusiveCommand):
+    name = 'compact'
+    banner = '/compact'
+    help = (
+        CommandHelp('/compact', 'prefer compressed history through the current step; queues at a tool-batch boundary', '/compact'),
+    )
+
+    async def run(self, context: CommandContext, argument: str) -> bool | None:
+        agent, style, out = context.session.agent, context.style, context.out
+        if argument:
+            print(style.red("  usage: /compact"), file=out)
+            return None
+        history = agent.history
+        history.sync(agent.messages)
+        if not history.steps:
+            print("  No completed history to compact.", file=out)
+            return None
+        history.compact_through = len(history.steps)
+        agent._persist()
+        journal = agent.registry.resources.journal
+        if journal is not None:
+            await journal.flush()
+        missing = sum(step.summary is None for step in history.steps)
+        print(f"  Fixed compaction boundary: step {history.compact_through}. "
+              "The next request uses compressed history wherever it saves space.", file=out)
+        if missing:
+            print(f"  {missing} step{'s' if missing != 1 else ''} currently "
+                  f"{'lack' if missing != 1 else 'lacks'} individual summaries; "
+                  "compression may be limited.", file=out)
+        return None
+
+
 class KeyCommand(Command):
     name = 'key'
     banner = '/key [list|show|delete <provider>|[provider] key]'
@@ -1373,6 +1405,7 @@ COMMANDS: tuple[Command, ...] = (
     ProviderCommand(),
     TemperatureCommand(),
     ContextCommand(),
+    CompactCommand(),
     KeyCommand(),
     CostCommand(),
     QueueCommand(),

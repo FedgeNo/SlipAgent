@@ -1525,7 +1525,7 @@ class Repl:
             if previous_boundary is not None:
                 await previous_boundary()
             if not session.agent.has_queued_input and not session.agent.stop_requested:
-                # Model changes affect the next request and need no task stop.
+                # Model changes and compaction affect the next request without stopping the task.
                 commands = session.work.deferred_commands or []
                 while commands and CommandRunner(session).at_boundary(commands[0]):
                     await CommandRunner(session).execute(commands.pop(0), at_boundary=True)
@@ -2118,10 +2118,10 @@ class CommandRunner:
         task.add_done_callback(tasks.discard)
 
     def at_boundary(self, line: str) -> bool:
-        """Choosing a model or provider applies between batches without ending the task."""
+        """Model selection and manual compaction apply between complete batches."""
         if isinstance(line, SuggestedPrompt) or submitted_suggestion(line):
             return False
-        return line.split(None, 1)[0].lower() in {"/model", "/models", "/provider"}
+        return line.split(None, 1)[0].lower() in {"/model", "/models", "/provider", "/compact"}
 
     def runs_in_background(self, text: str) -> bool:
         if not text.startswith("/"):

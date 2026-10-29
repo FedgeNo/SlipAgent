@@ -321,6 +321,23 @@ conversation for continuation and exits one-shot mode with status 1.
 
 ### Rolling Conversation Context
 
+`/compact` sets a persistent boundary through the latest completed step. It
+takes effect on the next request, including the continuation after the current
+tool batch, without spending another full-context model turn. History through
+that boundary prefers smaller step summaries, narratives, and eras even when
+the originals fit the budget. History after it follows normal budget selection.
+The command reports the boundary and any missing individual summaries; it makes
+no model request and does not wait for background compression.
+
+Missing or larger summaries retain originals. Tool results remain full for
+their first delivery, with the existing excerpt fallback for oversized results.
+Compressed records within the boundary can include available filtered thoughts
+but do not reinsert original reasoning. Originals remain retrievable through
+`recall_history`. The boundary stays fixed as new turns arrive. Only explicitly
+running `/compact` again sets a new boundary at the current step; `/new` clears it,
+and resume and fork preserve it. Missing summaries that arrive later take effect
+automatically; the command does not change the free-model compression policy.
+
 Each accepted model response forms one numbered step: its active user prompt,
 response, requested tool calls, and complete tool results. Those four originals
 are stored separately, alongside the response's reasoning as one string when
@@ -364,8 +381,9 @@ only as far as needed**, and stops as soon as the request fits:
 5. Only then is history omitted, starting at the very beginning of the
    conversation.
 
-Selection starts fresh on every request, so steps return to full text whenever
-room allows, for example after a large result has moved into summarized history.
+Selection starts fresh on every request. Steps after any manual boundary return
+to full text whenever room allows, for example after a large result has moved
+into summarized history. Steps through the boundary retain economical compressed forms.
 `--context-steps` remains accepted for compatibility but does not control
 selection. Newly returned tool results reach the working model intact, or as
 explicit excerpts if even the latest batch cannot fit. Originals remain

@@ -276,7 +276,7 @@ class APIClient:
         announced: set[str] = set()
         deliver = on_delta
 
-        def on_delta(kind: str, chunk: str) -> None:
+        def announce(kind: str, chunk: str) -> None:
             # The first reasoning or reply text of an attempt names the phase once,
             # which also shows where a stuck request stopped.
             if kind not in announced:
@@ -323,7 +323,7 @@ class APIClient:
                         raise error
                     phase("Waiting for output")
                     if deadline is not None and first_output.when() is not None and not (deadline.held or deadline.skipped or deadline.paused):
-                        first_output.reschedule(asyncio.get_running_loop().time() + first_output_timeout)
+                        first_output.reschedule(asyncio.get_running_loop().time() + deadline.seconds)
                     # Gateways and test servers may return a regular completion.
                     if "application/json" in response.headers.get("content-type", ""):
                         await response.aread()
@@ -337,7 +337,7 @@ class APIClient:
                         wire = raw["choices"][0]["message"]
                         try:
                             if completion.message.reasoning:
-                                on_delta("reasoning", completion.message.reasoning)
+                                announce("reasoning", completion.message.reasoning)
                         except APIResponseError as exc:
                             exc.usage = completion.usage
                             exc.partial_response = json.dumps(wire, ensure_ascii=False)
@@ -347,7 +347,7 @@ class APIClient:
                     identity_mode = profile.get("stream_tool_identity", "delta")
                     if "stream_tool_identity" not in profile and self.provider == "nvidia" and "minimax" in payload["model"].lower():
                         identity_mode = "snapshot"
-                    state = _StreamCompletion(on_delta, identity_mode=identity_mode,
+                    state = _StreamCompletion(announce, identity_mode=identity_mode,
                                               index_mode=profile.get("stream_tool_indices", "index"))
                     async for line in response.aiter_lines():
                         if line.startswith("data:"):

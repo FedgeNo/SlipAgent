@@ -141,15 +141,20 @@ class GrepTool(Tool):
             files_scanned += scanned
             if not batch:
                 continue
+            # Ask for one match beyond the limit, so a search that ends with
+            # exactly max_results matches is not reported as truncated.
             result = await self._worker_request(
-                process, {"sizes": [len(data) for _, data in batch], "budget": max_results - len(matches)},
+                process, {"sizes": [len(data) for _, data in batch],
+                          "budget": max_results - len(matches) + 1},
                 b"".join(data for _, data in batch))
-            matched_files: set[int] = set()
+            found: list[tuple[int, str]] = []
             for index, number, line in result["matches"]:
-                matched_files.add(index)
-                matches.append(f"{self.workspace.relative(batch[index][0])}:{number}: {line}")
-            files_with_matches += len(matched_files)
-            truncated = len(matches) >= max_results
+                found.append((index, f"{self.workspace.relative(batch[index][0])}:{number}: {line}"))
+            if len(matches) + len(found) > max_results:
+                truncated = True
+                found = found[:max_results - len(matches)]
+            matches.extend(text for _, text in found)
+            files_with_matches += len({index for index, _ in found})
 
         if not matches:
             scope = self.workspace.relative(base)

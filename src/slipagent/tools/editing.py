@@ -28,6 +28,11 @@ def split_lines(text: str) -> list[str]:
     return lines
 
 
+def line_at(text: str, offset: int) -> int:
+    """The 1-based line number of an offset, counting CR, CRLF, and LF breaks."""
+    return len(re.findall(r"\r\n|\r|\n", text[:offset])) + 1
+
+
 def edit_pattern(old: str) -> re.Pattern[str]:
     pattern = re.escape(old)
     if "\r" not in old:
@@ -40,7 +45,7 @@ def missing_match_details(text: str, old: str, replacement: str) -> str:
     notes = []
     existing = edit_pattern(replacement).search(text) if replacement else None
     if existing is not None:
-        line_number = text.count("\n", 0, existing.start()) + 1
+        line_number = line_at(text, existing.start())
         notes.append(f"Replacement text already exists at line {line_number}; inspect before retrying.")
     lines = split_lines(text)
     anchor = max(split_lines(old), key=len, default="")[:300].strip()
@@ -77,7 +82,7 @@ def apply_edits(text: str, edits: Sequence[tuple[str, str, bool]]) -> tuple[str,
         if not matches:
             raise ValueError(label + "No match for old_string.\n" + missing_match_details(text, old, new))
         if len(matches) > 1 and not replace_all:
-            locations = ", ".join(str(text.count("\n", 0, match.start()) + 1) for match in matches[:5])
+            locations = ", ".join(str(line_at(text, match.start())) for match in matches[:5])
             raise ValueError(label + f"old_string matched {len(matches)} times (lines {locations}). "
                              "Add surrounding context to make it unique, or pass replace_all=true for a single edit.")
         for match in matches:

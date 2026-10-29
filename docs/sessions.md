@@ -69,7 +69,7 @@ outside checkpoint coverage. Active background commands stop before restoration.
 A queued rewind leaves the agent idle until the user submits another prompt.
 Use `/rewind list` to inspect available checkpoints without changing files.
 
-Checkpoints cover built-in `write_file` and `edit_file` calls made by the agent.
+Checkpoints cover built-in `write_file`, `edit_file`, and `edit_hashlines` calls made by the agent.
 Copy, move, delete, and directory creation are tracked in the inspection panel
 but are not undone by `/rewind`. These tools use exact paths, reject symlinks,
 and report completed changes even when an operation fails partway through.

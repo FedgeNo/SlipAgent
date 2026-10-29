@@ -259,7 +259,7 @@ async def test_three_invalid_actions_stop_without_spending_the_200_request_budge
     client = StubClient([completion('{"response":"","tool_calls":[{"name":"record","arguments":"["}]}') for _ in range(200)])
     tool = RecordingTool()
     agent = Agent(client, ToolRegistry([tool]), "test")
-    with pytest.raises(ContextError, match="3 consecutive"):
+    with pytest.raises(ContextError, match="3 attempts in this step"):
         await agent.run("work")
     assert len(client.calls) == 3 and tool.seen == []
     assert len(agent.history.steps) == 3

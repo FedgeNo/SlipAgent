@@ -617,15 +617,15 @@ def test_system_prompt_allows_splitting_on_real_dependencies() -> None:
     """Batching must not become a rule that breaks read-then-edit work."""
     prompt = build_system_prompt("/tmp/ws")
 
-    assert "sequence calls with data or side-effect dependencies" in prompt
+    assert "Sequence calls with data or side-effect dependencies" in prompt
     assert "current source before editing" in prompt
 
 
 def test_system_prompt_allows_silent_tool_batches_and_requires_final_output() -> None:
     prompt = build_system_prompt("/tmp/ws")
 
-    assert "Empty text is allowed with tool calls" in load_prompt("native-tools.md")
-    assert "When the request is fulfilled, return a useful, nonblank answer with no tool calls" in prompt
+    assert "Empty text is allowed with tool calls" in load_prompt("response-common.md")
+    assert "When the request is fulfilled, finish with no tool calls" in prompt
 
 
 def test_system_prompt_states_parallel_calls_are_available() -> None:

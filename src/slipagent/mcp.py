@@ -925,9 +925,13 @@ class MCPManager:
             tools = await client.list_tools()
             state.qualified = self._register(name, client, tools, state)
         except BaseException as exc:
-            await self.disconnect(name)
+            cleanup_error = ""
+            try:
+                await self.disconnect(name)
+            except Exception as failure:
+                cleanup_error = f"; cleanup failed: {failure}"
             state.status = "error"
-            state.detail = str(exc)
+            state.detail = str(exc) + cleanup_error
             if isinstance(exc, MCPError):
                 return state
             raise
@@ -950,13 +954,16 @@ class MCPManager:
         if self.registry is None:
             return [tool_alias(name, info.name) for info in tools]
         registered = state.qualified
+        skipped = []
         for info in tools:
             qualified = tool_alias(name, info.name)
             if qualified in self.registry:
-                state.detail = f"skipped '{qualified}': name collides with another tool"
+                skipped.append(qualified)
                 continue
             self.registry.register(MCPTool(client, info, qualified))
             registered.append(qualified)
+        if skipped:
+            state.detail = f"skipped {len(skipped)} colliding tools: " + ", ".join(skipped)
         return registered
 
     async def connect_all(self, *, on_state: Callable[[ServerState], None] | None = None) -> list[ServerState]:
@@ -994,5 +1001,8 @@ class MCPManager:
         await state.client.disconnect()
 
     async def aclose(self) -> None:
-        for name in list(self.servers):
-            await self.disconnect(name)
+        names = list(self.servers)
+        results = await asyncio.gather(*(self.disconnect(name) for name in names), return_exceptions=True)
+        errors = [f"{name}: {result}" for name, result in zip(names, results) if isinstance(result, BaseException)]
+        if errors:
+            raise MCPError("Could not disconnect MCP servers: " + "; ".join(errors))

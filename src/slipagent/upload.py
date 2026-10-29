@@ -33,10 +33,11 @@ class PacedRequestBody(RequestBody):
             for offset in range(0, len(chunk), 4096):
                 part = chunk[offset:offset + 4096]
                 tokens = self.estimate * len(part) / self.size
-                if self.on_wait is None:
+                on_wait = self.on_wait
+                if on_wait is None:
                     await self.pacer.wait(tokens)
                 else:
-                    self.on_wait(f"Pacing upload to the provider's token limit, about {max(1, round(left))}s left")
-                    await self.pacer.wait(tokens, lambda: self.on_wait("Waiting for another upload to finish"))
+                    on_wait(f"Pacing upload to the provider's token limit, about {max(1, round(left))}s left")
+                    await self.pacer.wait(tokens, lambda: on_wait("Waiting for another upload to finish"))
                 left -= tokens * 60 / self.pacer.tokens_per_minute
                 yield part

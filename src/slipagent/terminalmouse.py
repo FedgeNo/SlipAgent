@@ -34,8 +34,10 @@ def limit_mouse_reports(output: object) -> None:
         for mode in ("1000", "1015", "1006", "1002", "1003"):
             output.write_raw(f"\x1b[?{mode}l")
 
-    output.enable_mouse_support = enable
-    output.disable_mouse_support = disable
+    # prompt_toolkit calls these methods; setattr keeps the type checker from
+    # treating them as read-only members.
+    setattr(output, "enable_mouse_support", enable)
+    setattr(output, "disable_mouse_support", disable)
 
 
 def _click_takes_no_input(ui: TerminalUI, app: Application[None]) -> bool:

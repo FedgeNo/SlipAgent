@@ -268,6 +268,8 @@ class RuntimeFrame:
         if self.reloading or self.busy or self.session.agent.running and not boundary:
             return
         self.reloading = True
+        forced = False
+        generation = self.generation
         try:
             try:
                 if sources is None:
@@ -282,14 +284,21 @@ class RuntimeFrame:
                 return
             if signature == self._attempted and not self.force:
                 return
+            forced = self.force
             self.force = False
             self._attempted = signature
-            await self._reload(sources, boundary=boundary)
+            applied = await self._reload(sources, boundary=boundary)
+            if forced and applied is False:
+                self.force = True
         except asyncio.CancelledError:
             self._attempted = self._signature(self._applied)
+            if forced and self.generation == generation:
+                self.force = True
             raise
         except Exception as exc:
-            self._notice(f"Reload rejected; previous code remains active: {type(exc).__name__}: {exc}", error=True)
+            status = (f"Reload applied (generation {self.generation}); reporting failed" if self.generation != generation
+                      else "Reload rejected; previous code remains active")
+            self._notice(f"{status}: {type(exc).__name__}: {exc}", error=True)
         finally:
             self.reloading = False
 
@@ -352,7 +361,7 @@ class RuntimeFrame:
                 raise ReloadError(f"Restart required: state layout changed for {old_class.__name__}")
         return classes, originals, declared
 
-    async def _reload(self, sources: dict[str, bytes], *, boundary: bool = False) -> None:
+    async def _reload(self, sources: dict[str, bytes], *, boundary: bool = False) -> bool:
         prefix = "_slipagent_generation_" + uuid.uuid4().hex
         candidate_registry: ToolRegistry | None = None
         old_tools: list[Tool] = []
@@ -372,7 +381,7 @@ class RuntimeFrame:
             # the session is idle again or paused at its own batch boundary.
             if self.busy or self.session.agent.running and not boundary:
                 self._attempted = self._signature(self._applied)
-                return
+                return False
             required = {
                 "agent": ("Agent", "build_system_prompt"), "context": ("ConversationHistory", "RecallHistoryTool"),
                 "cli": ("Renderer", "Repl", "CommandRunner", "Quota"),
@@ -523,6 +532,7 @@ class RuntimeFrame:
                     _drop_namespace(prefix)
                 if previous_namespace is not None:
                     _drop_namespace(previous_namespace)
+        return committed
 
     def _overlay(self, modules: dict[str, types.ModuleType], sources: dict[str, bytes]) -> list[plugins.PluginReport]:
         files, approvals = plugins.split_sources(sources)

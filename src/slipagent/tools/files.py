@@ -29,6 +29,12 @@ from .editing import MAX_DIFF_CHARS, apply_edits, edit_diff, split_lines
 MAX_READ_BYTES = 32_000_000
 
 
+def _read_limit_error(size: int) -> str:
+    """The message both file tools give when a file is too large to read."""
+    return (f"File exceeds the read memory limit ({size} bytes > {MAX_READ_BYTES}). "
+            "Select the needed content with run_command.")
+
+
 def _atomic_write(workspace: Workspace, target: Path, content: str) -> None:
     from ..checkpoints import current_checkpoint
 
@@ -192,10 +198,7 @@ class ReadFileTool(Tool):
                 data = read_regular(target, MAX_READ_BYTES)
                 size = len(data)
             if size > MAX_READ_BYTES:
-                return ToolResult.error(
-                    f"File exceeds the read_file memory limit ({size} bytes > {MAX_READ_BYTES}). "
-                    "Select the needed content with run_command."
-                )
+                return ToolResult.error(_read_limit_error(size))
             text = data.decode("utf-8")
         except UnicodeDecodeError:
             return ToolResult.error(
@@ -370,6 +373,12 @@ class EditFileTool(Tool):
         if target.is_dir():
             return ToolResult.error(f"{self.workspace.relative(target)} is a directory.")
 
+        try:
+            size = target.stat().st_size
+        except OSError as exc:
+            return ToolResult.error(f"Could not read file: {exc}")
+        if size > MAX_READ_BYTES:
+            return ToolResult.error(_read_limit_error(size))
         try:
             text = read_regular(target, MAX_READ_BYTES).decode("utf-8")
         except UnicodeDecodeError:

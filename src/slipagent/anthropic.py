@@ -81,5 +81,5 @@ class AnthropicClient(APIClient):
     def prepare_payload(self, payload: dict[str, Any], profile: RequestProfile | None) -> None:
         for name in ("session_id", "temperature", "top_p", "response_format", "reasoning_effort"):
             payload.pop(name, None)
-        # Anthropic requires an output budget; match the harness's usual reserve.
-        payload.setdefault("max_tokens", min(8192, profile.max_completion_tokens or 8192) if profile else 8192)
+        # Anthropic requires an output budget; use the model's advertised limit.
+        payload.setdefault("max_tokens", (profile.max_completion_tokens or 8192) if profile else 8192)

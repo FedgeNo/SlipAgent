@@ -147,7 +147,7 @@ async def test_rejected_tool_arguments_become_failed_turns_without_executing_the
         }}]}, "tool_calls"))
     async with client_for(handle) as client:
         agent = Agent(client, ToolRegistry([tool]), "test")
-        with pytest.raises(ContextError, match="3 consecutive"):
+        with pytest.raises(ContextError, match="3 attempts in this step"):
             await agent.run("Record it")
         assert len(agent.history.steps) == 3 and not tool.seen
         assert all(step.request_failure["outcome"] == "rejected" for step in agent.history.steps)

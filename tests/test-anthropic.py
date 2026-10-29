@@ -133,7 +133,7 @@ async def test_streamed_tools_and_nonstreaming_tool_results_use_shared_transport
             await client.chat(model=MODEL, messages=messages, tool_choice="required")
     body = json.loads(requests[1].content)
     assert body == snapshots[0]
-    assert body["max_tokens"] == 8192 and body["tools"][0]["function"]["name"] == "inspect"
+    assert body["max_tokens"] == 64000 and body["tools"][0]["function"]["name"] == "inspect"
     assert not {"session_id", "temperature", "response_format", "top_p"}.intersection(body)
     assert requests[-1].url.path == "/v1/chat/completions"
     final_body = json.loads(requests[-1].content)

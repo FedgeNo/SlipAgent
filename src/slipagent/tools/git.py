@@ -46,13 +46,14 @@ class GitRepository:
 @dataclass(slots=True)
 class GitOutput:
     command: list[str]
-    code: int
+    code: int | None
     stdout: str
     stderr: str
     log: CommandLog | None = None
 
     def result(self) -> ToolResult:
-        parts = [f"$ {shlex.join(self.command)}", f"exit code: {self.code}"]
+        status = str(self.code) if self.code is not None else "unknown (process not reaped)"
+        parts = [f"$ {shlex.join(self.command)}", f"exit code: {status}"]
         for label, value in (("stdout", self.stdout), ("stderr", self.stderr)):
             if value.strip():
                 if len(value) > MAX_OUTPUT_CHARS:
@@ -63,7 +64,7 @@ class GitOutput:
         content = "\n".join(parts)
         if self.log is not None:
             content += "\n" + self.log.notice()
-        return ToolResult.error(content) if self.code else ToolResult.ok(content)
+        return ToolResult.error(content) if self.code != 0 else ToolResult.ok(content)
 
 
 class GitTool(Tool):
@@ -216,7 +217,7 @@ class GitTool(Tool):
             if feeder is not None:
                 feeder.cancel()
                 await asyncio.gather(feeder, return_exceptions=True)
-        output = GitOutput(["git", *args], process.returncode or 0, stdout, stderr, log)
+        output = GitOutput(["git", *args], process.returncode, stdout, stderr, log)
         if timed_out:
             raise WorkspaceError(
                 f"Git timed out after {limit:g}s. Effects may be partial. "
@@ -226,7 +227,7 @@ class GitTool(Tool):
 
     @staticmethod
     def _complete(output: GitOutput) -> str:
-        if output.code:
+        if output.code != 0:
             raise WorkspaceError(output.result().content)
         if len(output.stdout) > MAX_OUTPUT_CHARS:
             raise WorkspaceError("Git validation output is too large; select fewer paths.")

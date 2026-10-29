@@ -281,14 +281,22 @@ class RequestDriver:
             self.hooks.persist()
             step_usage = step_usage + completion.usage
             try:
-                if completion.response_error:
-                    raise ResponseFormatError(completion.response_error, excerpt=completion.response_excerpt)
-                record = parse_agent_response(completion.text, completion.tool_calls, tools=specs,
-                                              xml_tool_calls=xml_tool_calls)
-                record.text = _visible_response(record.text)
-                if not record.calls and not record.text.strip():
-                    raise ResponseFormatError(load_prompt("response-bookkeeping-error.md"))
-                if record.calls and completion.finish_reason == "length":
+                truncated = completion.finish_reason == "length"
+                try:
+                    if completion.response_error:
+                        raise ResponseFormatError(completion.response_error, excerpt=completion.response_excerpt)
+                    record = parse_agent_response(completion.text, completion.tool_calls, tools=specs,
+                                                  xml_tool_calls=xml_tool_calls)
+                    record.text = _visible_response(record.text)
+                    if not record.calls and not record.text.strip():
+                        raise ResponseFormatError(load_prompt("response-bookkeeping-error.md"))
+                except ResponseFormatError as exc:
+                    # A reply cut off by the output limit looks malformed or empty;
+                    # name the actual cause so the model can shorten its output.
+                    if not truncated:
+                        raise
+                    raise ResponseFormatError(load_prompt("response-truncated-error.md"), excerpt=exc.excerpt) from exc
+                if record.calls and truncated:
                     raise ResponseFormatError(load_prompt("response-truncated-error.md"))
                 # Check decoded reply text too: a JSON response envelope is
                 # structured output, but the prose inside it can still loop.
@@ -296,11 +304,12 @@ class RequestDriver:
                 response_guard.feed("content", record.text)
                 response_guard.finish()
             except StreamLoopError as exc:
+                response = json.dumps(completion.message.to_api(), ensure_ascii=False)
                 finish_attempt("loop_stopped", detail=str(exc),
-                               response=json.dumps(completion.message.to_api(), ensure_ascii=False), usage=completion.usage)
+                               response=response, usage=completion.usage)
                 end_preview(failed=True)
                 self.hooks.emit(AgentEvent(kind="warning", step=step, text=str(exc)))
-                record_failure("loop_stopped", str(exc), exc.partial_response, completion.usage)
+                record_failure("loop_stopped", str(exc), response, completion.usage)
                 return RequestStopped(str(exc), loop_stopped=True)
             except ResponseFormatError as exc:
                 finish_attempt("rejected", detail=str(exc), response=completion.response_excerpt or json.dumps(completion.message.to_api(), ensure_ascii=False), usage=completion.usage)
@@ -327,7 +336,7 @@ class RequestDriver:
             if self.hooks.exhausted():
                 raise ContextStepLimit
             if attempts >= MAX_MEMORY_ATTEMPTS:
-                raise ContextError(f"The model returned invalid structured output in 3 consecutive responses: {rejection} No tools from these responses were executed; accepted history is preserved.")
+                raise ContextError(f"The model returned invalid structured output in {MAX_MEMORY_ATTEMPTS} attempts in this step: {rejection} No tools from these responses were executed; accepted history is preserved.")
             self.hooks.emit(AgentEvent(kind="retry", step=step, text=(
                 f"Response rejected: {rejection} "
                 f"Retrying from the start (retry {attempts}/{MAX_MEMORY_ATTEMPTS - 1})."

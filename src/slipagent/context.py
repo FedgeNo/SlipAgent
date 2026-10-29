@@ -941,7 +941,7 @@ class RecallHistoryTool(Tool):
             return ToolResult.error("call_id requires step_id; call IDs are unique only within a batch.")
         structured: Any = None
         if step_id is not None:
-            if step_id > len(self.history.steps):
+            if step_id < 1 or step_id > len(self.history.steps):
                 return ToolResult.error(f"No history step {step_id}. Available steps: 1–{len(self.history.steps)}.")
             step = self.history.steps[step_id - 1]
             if section == "all" and sections is None and call_id is None:

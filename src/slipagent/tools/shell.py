@@ -111,7 +111,7 @@ class RunCommandTool(Tool):
         finally:
             if progress is not None:
                 progress.close()
-        result = CommandOutput()._render(command, process.returncode or 0, stdout, stderr, archived=log is not None)
+        result = CommandOutput()._render(command, process.returncode, stdout, stderr, archived=log is not None)
         if log is not None:
             result.content += "\n" + log.notice()
         if timed_out:
@@ -290,11 +290,12 @@ class CommandOutput:
         return (text[:head] + f"\n{notice} (beginning and end; {retention})\n"
                 + text[-(limit - head):]), True
 
-    def _render(self, command: str, returncode: int, stdout: str, stderr: str, *, archived: bool = False) -> ToolResult:
+    def _render(self, command: str, returncode: int | None, stdout: str, stderr: str, *, archived: bool = False) -> ToolResult:
         stdout, stdout_cut = self._truncate(stdout, archived=archived)
         stderr, stderr_cut = self._truncate(stderr, archived=archived)
 
-        parts = [f"$ {command}", f"exit code: {returncode}"]
+        status = str(returncode) if returncode is not None else "unknown (process not reaped)"
+        parts = [f"$ {command}", f"exit code: {status}"]
         if stdout.strip():
             parts.append("--- stdout ---\n" + stdout.rstrip())
         if stderr.strip():

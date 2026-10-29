@@ -54,6 +54,15 @@ def session_title(name: str) -> str:
     return f"{_validate_title(name)} | SlipAgent"
 
 
+def _sync_directory(path: Path) -> None:
+    if os.name == "posix":
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
 def _private_directory(path: Path) -> None:
     missing = []
     cursor = path
@@ -62,6 +71,7 @@ def _private_directory(path: Path) -> None:
         cursor = cursor.parent
     for directory in reversed(missing):
         directory.mkdir(mode=0o700, exist_ok=True)
+        _sync_directory(directory.parent)
 
 
 class SessionJournal:
@@ -125,8 +135,11 @@ class SessionJournal:
 
     def _sync(self) -> None:
         # Syncing any descriptor of the file covers every earlier write to it.
+        path = self.path
+        if path is None:
+            raise SessionError("Session journal is unavailable; no further actions can be recorded.")
         try:
-            descriptor = os.open(self.path, os.O_RDONLY)
+            descriptor = os.open(path, os.O_RDONLY)
             try:
                 os.fsync(descriptor)
             finally:
@@ -215,7 +228,9 @@ class SessionJournal:
         try:
             fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             os.close(fd)
+            _sync_directory(self.directory)
         except OSError as exc:
+            self.failed = True
             raise SessionError(f"Cannot create session journal: {exc}") from exc
         self._append("header", version=1, project=self.project, session_id=self.session_id,
                      parent=parent, created=datetime.now(timezone.utc).isoformat(), title=title)
@@ -290,7 +305,7 @@ class SessionJournal:
                 self._append("message", message=self._message(message))
             else:
                 self._append("message", message=self._message(message),
-                             request_failure={"id": step.id, "failure": step.request_failure})
+                             request_failure={"id": step.id, "failure": getattr(step, "request_failure", None)})
             self.cursor += 1
         self.last_message = copy.deepcopy(self._message(agent.messages[-1])) if agent.messages else None
         state = {"task_start": agent.history.task.start_message,
@@ -305,7 +320,7 @@ class SessionJournal:
         for step in agent.history.steps[self.step_count:]:
             self.step(step)
         for step in failed.values():
-            self._append("request_failure", id=step.id, failure=step.request_failure)
+            self._append("request_failure", id=step.id, failure=getattr(step, "request_failure", None))
         self.step_count = len(agent.history.steps)
 
     def discard_input(self, agent: Agent, index: int | None, pending_index: int | None) -> None:

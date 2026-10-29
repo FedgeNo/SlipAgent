@@ -130,7 +130,7 @@ def blocks(steps: list[HistoryStep], runs: list[int]) -> list[tuple[int, int]]:
     return result
 
 
-def _covers(record: Any, steps: list[HistoryStep], first: int, last: int) -> bool:
+def _covers(record: Any, steps: list[HistoryStep], first: int, last: int) -> TypeGuard[dict[str, Any]]:
     """Whether a stored record summarizes this block, gaps aside."""
     return (isinstance(record, dict) and record.get("step_id") == steps[last].id
             and bool(record.get("step_ids")) and record["step_ids"][0] >= steps[first].id)

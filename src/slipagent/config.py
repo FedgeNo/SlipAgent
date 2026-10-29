@@ -162,7 +162,9 @@ def context_tokens_preference() -> int | None:
 
 def user_blacklist() -> frozenset[str]:
     """Models the user hid in preferences: a bare ID on every provider, or provider::id on one."""
-    return frozenset(str(entry).strip() for entry in _read_preferences().get("blacklist", []))
+    hidden = _read_preferences().get("blacklist", [])
+    entries = hidden if isinstance(hidden, list) else []
+    return frozenset(str(entry).strip() for entry in entries)
 
 
 def save_model_choice(model: str, provider: str = "openrouter") -> None:

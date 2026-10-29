@@ -553,19 +553,19 @@ class Agent:
         if prompt:
             self.messages.append(Message.user(prompt))
         self._persist()
-        for step in range(self._requests + 1, self.max_steps + 1):
+        for run_step in range(self._requests + 1, self.max_steps + 1):
             if self.on_boundary is not None:
                 await self.on_boundary()
             if self.stop_requested:
-                return self._stop_notice(step)
+                return self._stop_notice(len(self.history.steps) + 1)
             try:
-                answer = await self._step(step)
+                answer = await self._step(run_step)
             except ContextStepLimit:
                 break
             if answer is not None:
                 return answer
 
-        self._emit(AgentEvent(kind="warning", step=self.max_steps, text=STEP_LIMIT_NOTICE))
+        self._emit(AgentEvent(kind="warning", step=len(self.history.steps) + 1, text=STEP_LIMIT_NOTICE))
         return STEP_LIMIT_NOTICE
 
     def set_planning(self, enabled: bool) -> None:

@@ -154,8 +154,10 @@ class Agent:
             self.history.store.summarized(step)
 
     def _compaction_usage(self, usage: Usage) -> None:
-        self.usage = self.usage + usage
-        self._persist()
+        """Free background compression is excluded from session accounting.
+
+        Keep this callback for existing compactor owners across behavior reloads.
+        """
 
     def _loop_guard(self) -> LoopGuard:
         guard = self.registry.resources.loop_guard

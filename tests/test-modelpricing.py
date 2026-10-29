@@ -40,6 +40,20 @@ def test_empty_usage_does_not_hide_a_reported_zero_cost():
     assert "cost=$0.000000" in usage.summary()
 
 
+@pytest.mark.parametrize("cost", [None, .02])
+def test_free_compaction_does_not_contribute_to_session_accounting(cost):
+    from slipagent.agent import Agent
+    from slipagent.tools.base import ToolRegistry
+    from test_agent import StubClient
+
+    agent = Agent(StubClient([]), ToolRegistry(), "test")
+    working = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15, cost=cost)
+    agent.usage = working
+    agent._compactor().on_usage(Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150, cost=0))
+    assert agent.usage == working
+    assert agent.usage.summary() == working.summary()
+
+
 @pytest.mark.parametrize("width", [20, 80])
 def test_model_prices_are_hidden_when_unavailable(width):
     session = SimpleNamespace(renderer=SimpleNamespace(terminal=SimpleNamespace(

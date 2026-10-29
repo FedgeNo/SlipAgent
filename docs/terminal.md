@@ -55,7 +55,7 @@ In the REPL:
 | `/key delete <provider>` | Delete that provider's key from the saved `.env`, this process, and this session; the provider in use is refused |
 | `/key <key>` | Detect the provider, install its key for this session, and offer to save it |
 | `/key <provider> <key>` | Install a key with an explicit provider when its format is ambiguous |
-| `/cost` | Session token usage and spend |
+| `/cost` | Session token usage, and spend when all recorded token usage has cost data |
 | `/task` | Show retained original user prompts and their source steps |
 | `/queue` | Inspect pending user messages and choose one to view or discard |
 | `/queue <number>` | View a pending message in full |

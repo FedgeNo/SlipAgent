@@ -46,7 +46,7 @@ async def test_catalog_pagination_limits_and_paid_eligibility():
         assert [model.id for model in models] == [MODEL, "claude-other"]
         assert all(model.provider == "anthropic" and model.context_length == 200000 for model in models)
         assert not any(eligible_free(model) for model in models)
-        assert all(cli._price_cell(model.pricing) == "-" for model in models)
+        assert all(cli._price_cell(model.pricing) == "" for model in models)
         assert client.catalog_context_length(MODEL) == 200000
         profile = await client.model_capabilities(MODEL)
         assert profile.native_tools and profile.format is None

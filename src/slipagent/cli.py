@@ -2403,7 +2403,8 @@ class KeyEntry:
 
 def _price_cell(pricing: dict[str, Any]) -> str:
     """Render prompt/completion pricing as $/Mtok, or 'free'."""
-    return price_label(pricing)
+    label = price_label(pricing)
+    return "" if label == "-" else label
 
 
 # `/model` subcommands, shown as `[name] description` in its menu.
@@ -2552,7 +2553,8 @@ class ModelPicker:
         except (OSError, ConfigError) as exc:
             print(style.red(f"  could not remember model choice: {exc}"), file=out)
         price = _price_cell(entry.pricing)
-        print(f"  switched to {style.cyan(entry.selector)}  {price}{'/Mtok' if price.startswith('$') else ''}",
+        suffix = f"  {price}{'/Mtok' if price.startswith('$') else ''}" if price else ""
+        print(f"  switched to {style.cyan(entry.selector)}{suffix}",
               file=out)
         if entry.provider == "openrouter" and _price_cell(entry.pricing) == "free":
             print(style.dim("  note: free models still work with a $0-limit key"), file=out)
@@ -2628,21 +2630,24 @@ class ModelPicker:
         rows = [[f"{model.provider}::\n{model.id}" + (f"\nEst. coding score: {model.score:.1f}/100" if model.score is not None else ""),
                  f"{model.context_length:,}" if model.context_length else "-", _price_cell(model.pricing)] for model in models]
         headers = ["Model", "Context", "In/Out $/Mtok"]
+        if not any(row[2] for row in rows):
+            headers.pop()
+            rows = [row[:2] for row in rows]
         context_width = max(len(headers[1]), *(len(row[1]) for row in rows))
-        price_width = max(len(headers[2]), *(len(row[2]) for row in rows))
-        # Grid borders and cell padding occupy ten columns; output is indented by two.
-        model_width = columns - context_width - price_width - 12
+        price_width = max(len(headers[2]), *(len(row[2]) for row in rows)) if len(headers) == 3 else 0
+        model_width = columns - context_width - price_width - (3 * len(headers) + 3)
         while model_width >= len(headers[0]):
             table = tabulate(rows, headers=headers, tablefmt="outline", disable_numparse=True,
-                             colalign=("left", "right", "right"), maxcolwidths=[model_width, None, None])
+                             colalign=("left", *["right"] * (len(headers) - 1)),
+                             maxcolwidths=[model_width, *[None] * (len(headers) - 1)])
             # Tabulate also reserves header alignment space; measure the final grid.
             excess = max(len(line) for line in table.splitlines()) + 2 - columns
             if excess <= 0:
                 break
             model_width -= excess
         else:
-            # Stack fields inside each row when three columns would exceed the screen.
-            cells = [[f"Model: {row[0]}\nContext: {row[1]}\nIn/Out $/Mtok: {row[2]}"] for row in rows]
+            # Stack available fields when columns would exceed the screen.
+            cells = [["\n".join(f"{header}: {value}" for header, value in zip(headers, row) if value)] for row in rows]
             table = tabulate(cells, tablefmt="outline", disable_numparse=True,
                              maxcolwidths=[max(1, columns - 6)])
         return literal("\n".join("  " + line for line in table.splitlines()))
@@ -2652,14 +2657,16 @@ class ModelPicker:
         price = _price_cell(model.pricing)
         if price.startswith("$"):
             price += "/Mtok"
+        price = f"  {price}" if price else ""
         context = f"{model.context_length:,}" if model.context_length else "unknown"
         score = f"  estimated coding score: {model.score:.1f}/100" if model.score is not None else ""
-        return f"{model.selector}{name}  {price}  context: {context}{score}"
+        return f"{model.selector}{name}{price}  context: {context}{score}"
 
     def describe(self, model: ModelInfo) -> str:
         context = f"{model.context_length // 1000}k" if model.context_length else "-"
         price = _price_cell(model.pricing)
-        return f"  {model.id:<44} {context:>8}  {price:>15}"
+        suffix = f"  {price:>15}" if price else ""
+        return f"  {model.id:<44} {context:>8}{suffix}"
 
 
 class PluginMenu:

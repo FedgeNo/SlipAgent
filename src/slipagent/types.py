@@ -199,9 +199,13 @@ class Usage:
         )
 
     def __add__(self, other: Usage) -> Usage:
-        total = _optional_float(self.cost)
-        if other.cost is not None:
-            total = (total or 0.0) + other.cost
+        # Empty counters are neutral; unpriced token usage makes a session
+        # total incomplete even when other requests have known (or zero) cost.
+        missing = any(usage.cost is None and any((usage.prompt_tokens, usage.completion_tokens, usage.total_tokens))
+                      for usage in (self, other))
+        total = None if missing else (self.cost or 0.0) + (other.cost or 0.0)
+        if self.cost is None and other.cost is None:
+            total = None
         return Usage(
             prompt_tokens=self.prompt_tokens + other.prompt_tokens,
             completion_tokens=self.completion_tokens + other.completion_tokens,

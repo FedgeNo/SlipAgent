@@ -12,7 +12,7 @@ from prompt_toolkit.input import create_pipe_input
 from slipagent.cli import ModelPicker, Style
 from slipagent.modelpricing import free_label, price_label
 from slipagent.terminal import TerminalUI
-from slipagent.types import ModelInfo
+from slipagent.types import ModelInfo, Usage
 
 
 @pytest.mark.parametrize("pricing,label", [({}, "-"), ({"prompt": "unknown"}, "-"),
@@ -21,6 +21,48 @@ from slipagent.types import ModelInfo
     ({"prompt": ".000001", "completion": ".000002"}, "$1.00/$2.00")])
 def test_price_labels(pricing, label):
     assert price_label(pricing) == label
+
+
+@pytest.mark.parametrize("known_cost", [0, .02])
+@pytest.mark.parametrize("unknown_first", [False, True])
+def test_session_cost_is_hidden_when_any_token_usage_is_unpriced(known_cost, unknown_first):
+    unknown = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    known = Usage(prompt_tokens=2, total_tokens=2, cost=known_cost)
+    total = unknown + known if unknown_first else known + unknown
+    total = total + Usage(cost=0)
+    assert total.cost is None
+    assert total.summary() == "in=12 out=5"
+
+
+def test_empty_usage_does_not_hide_a_reported_zero_cost():
+    usage = Usage() + Usage(prompt_tokens=10, cost=0)
+    assert usage.cost == 0
+    assert "cost=$0.000000" in usage.summary()
+
+
+@pytest.mark.parametrize("width", [20, 80])
+def test_model_prices_are_hidden_when_unavailable(width):
+    session = SimpleNamespace(renderer=SimpleNamespace(terminal=SimpleNamespace(
+        output=SimpleNamespace(get_size=lambda: SimpleNamespace(columns=width)))))
+    picker = ModelPicker(session, Style(False), io.StringIO())
+    model = ModelInfo("claude-test", provider="anthropic", context_length=200000,
+                      pricing={"prompt": "unknown", "completion": "unknown"})
+    table = picker.table([model])
+    assert "$/Mtok" not in table
+    assert "$" not in picker.label(model)
+    assert "  -  " not in picker.label(model)
+    assert picker.describe(model).endswith("200k")
+    assert all(len(line) <= width for line in table.splitlines())
+
+
+def test_mixed_catalog_preserves_available_prices():
+    session = SimpleNamespace(renderer=SimpleNamespace(terminal=None))
+    picker = ModelPicker(session, Style(False), io.StringIO())
+    models = [ModelInfo("unknown"), ModelInfo("paid", pricing={"prompt": ".000001", "completion": ".000002"})]
+    table = picker.table(models)
+    assert "In/Out $/Mtok" in table
+    assert "$1.00/$2.00" in table
+    assert "$1.00/$2.00/Mtok" in picker.label(models[1])
 
 
 @pytest.mark.parametrize("query", ["", "free"])

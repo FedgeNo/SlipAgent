@@ -789,6 +789,9 @@ class Renderer:
             else:
                 self.emit(self.style.dim(f"  Saved {reference['kind']} record {reference['record_id']}."), block=self._model_block, tool=True)
 
+        elif event.kind == "error":
+            self.emit(self.style.red(f"  Error: {event.text}"), block=self._model_block)
+
         elif event.kind == "warning":
             if event.text == STOP_NOTICE and getattr(self, '_queued_settings_pause', False):
                 self.emit(self.style.dim("  Current step finished; applying queued commands."))
@@ -1060,6 +1063,14 @@ class Launcher:
                     renderer.emit(literal(f"  model check failed: {exc} Select another model with /models or /model <slug>."))
             if cached_start:
                 Repl(session).start_background_task(Repl(session).refresh_model_metadata())
+            compactor = agent._compactor()
+            if compactor.routing is not None:
+                from .compressionproviders import COMPRESSION_UNAVAILABLE
+                try:
+                    if not await compactor.routing.background():
+                        compactor.report_unavailable(COMPRESSION_UNAVAILABLE)
+                except APIError as exc:
+                    compactor.report_unavailable(f"Could not verify free compression models: {exc}")
             if not getattr(args, "no_reload", False):
                 frame = await run_blocking(RuntimeFrame, session, sys.modules[__name__])
                 session.reloader = frame

@@ -25,10 +25,10 @@ from .capabilities import RequestProfile, model_context_limit
 from .context import SUMMARY_MAX_CHARS, CompletedStep, HistoryStep, message_tokens
 from .api import APIClient, APIResponseError, APITransportError, RETRYABLE_STATUS
 from .types import Completion, Message, Usage
-from .compressionproviders import CompressionProviders, CompressionUnavailableError
+from .compressionproviders import COMPRESSION_UNAVAILABLE, CompressionProviders, CompressionUnavailableError
 from .lifecycle import finish_cleanup
 from .prompts import load_prompt
-from .modelrouting import transient_error
+from .modelrouting import eligible_free, transient_error
 
 T = TypeVar("T")
 
@@ -147,6 +147,11 @@ class StepCompactor:
             # Selection reports why routing is unavailable on the job itself.
             return 1
 
+    def report_unavailable(self, error: str) -> None:
+        if self.__dict__.get("_routing_error") != error:
+            self.__dict__["_routing_error"] = error
+            self.on_error(f"Compression unavailable: {error}")
+
     def _next_job(self, active: set[Any], generation: int) -> tuple[Any, Coroutine[Any, Any, None]] | None:
         queue = self.__dict__.setdefault("_ready", deque())
         while True:
@@ -233,9 +238,7 @@ class StepCompactor:
             step.compaction_status = "failed"
             step.compaction_error = f"{type(exc).__name__}: {exc}"
             if isinstance(exc, CompressionUnavailableError):
-                if self.__dict__.get("_routing_error") != str(exc):
-                    self.__dict__["_routing_error"] = str(exc)
-                    self.on_error(f"Compression unavailable: {exc}. Original turns remain available through recall_history.")
+                self.report_unavailable(str(exc))
             else:
                 self.on_error(f"Could not summarize step {step.id}: {exc}. Its full original remains available through recall_history.")
             if self.on_step is not None:
@@ -251,6 +254,8 @@ class StepCompactor:
                       client: APIClient, model: str, capabilities: RequestProfile | None,
                       max_tokens: int | None, generation: int) -> T | None:
         """Run turn/group compression through the same selection and retry loop."""
+        if self.routing is None and isinstance(client, APIClient):
+            raise CompressionUnavailableError(COMPRESSION_UNAVAILABLE)
         attempt = 0
         repairs = 0
         excluded: set[str] = set()
@@ -277,6 +282,8 @@ class StepCompactor:
                         client, selected = await routing.select(excluded, failed_provider=failed_provider,
                                                                 revision=revision, busy=busy)
                         held.append((routing, selected.provider))
+                        if not eligible_free(selected):
+                            raise CompressionUnavailableError(COMPRESSION_UNAVAILABLE)
                         if revision != routing.models.revision:
                             repairs = 0
                         revision = routing.models.revision

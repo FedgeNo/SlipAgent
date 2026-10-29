@@ -161,8 +161,56 @@ async def test_single_provider_serves_coding_only_and_keeps_originals(routing):
         assert first.summary is None and first.compaction_status == "failed"
         assert "Original answer" in first.full_text()
         assert len(errors) == 1 and "Compression unavailable" in errors[0]
-        assert len(router.models.session.notices) == 1
-        assert "serves coding requests only" in router.models.session.notices[0]
+        assert not router.models.session.notices
+        assert "Compression will not work until a provider with free models is added" in errors[0]
+        assert "OpenRouter or NVIDIA" in errors[0]
+    finally:
+        await owner.aclose()
+
+
+async def test_unrouted_primary_api_is_never_used_for_compression():
+    import io
+    from slipagent.agent import Agent
+    from slipagent.cli import Renderer, Style
+    from slipagent.tools.base import ToolRegistry
+
+    requests = []
+    transport = httpx.MockTransport(lambda request: requests.append(request) or httpx.Response(500))
+    async with create_client("anthropic", api_key="dummy", transport=transport) as primary:
+        events = []
+        agent = Agent(primary, ToolRegistry(), "claude-test", on_event=events.append)
+        owner = agent._compactor()
+        step = CompletedStep(1, "Inspect", [Message.user("Inspect"), Message.assistant("Original")])
+        try:
+            owner.submit(step, primary, "claude-test", None, None)
+            await owner.wait()
+            assert not requests
+            assert step.summary is None and step.compaction_status == "failed"
+            error = next(event for event in events if event.kind == "error")
+            assert "Compression will not work until a provider with free models is added" in error.text
+            sink = io.StringIO()
+            Renderer(Style(False), sink, False).handle(error)
+            assert "Error:" in sink.getvalue()
+            assert "OpenRouter or NVIDIA" in sink.getvalue()
+        finally:
+            await owner.aclose()
+
+
+async def test_compactor_rejects_a_paid_route_before_requesting_inference(routing, monkeypatch):
+    router, _, _, requests, _ = routing
+    client, _ = await router.select(set())
+    paid = ModelInfo("paid", provider=client.provider, pricing={"prompt": "1", "completion": "1"})
+    monkeypatch.setattr(router, "select", AsyncMock(return_value=(client, paid)))
+    errors = []
+    owner = StepCompactor(lambda usage: None, errors.append)
+    owner.routing = router
+    step = CompletedStep(1, "Inspect", [Message.user("Inspect"), Message.assistant("Original")])
+    try:
+        owner.submit(step, StubClient([]), "working", None, None)
+        await owner.wait()
+        assert not requests
+        assert step.summary is None
+        assert len(errors) == 1 and "OpenRouter or NVIDIA" in errors[0]
     finally:
         await owner.aclose()
 

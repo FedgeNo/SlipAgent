@@ -596,8 +596,12 @@ The selected coding provider is always excluded. `CompressionProviders.slots`
 counts the remaining providers; selection reserves an idle provider and waits for
 a release notification when every eligible alternative is busy. Completion and
 cancellation release the reservation and wake waiting requests. With no eligible
-background provider, a notice asks for another provider's key and summaries are
-marked unavailable. Each attempt uses its destination's own
+background provider, startup and attempted compression show a feed error stating
+that compression will not work until a provider with free models is added,
+recommending OpenRouter or NVIDIA. Repeated unavailable jobs share one error
+until routing recovers. Summaries are marked unavailable; originals remain intact.
+Real API clients without free-model routing cannot fall back to the primary model.
+Each attempt uses its destination's own
 profile; every failure advances rotation, including failures during capability
 lookup, context checking, and response validation. Concurrent jobs also avoid
 their own last failed provider when alternatives remain. The compactor owns
@@ -1552,6 +1556,12 @@ not just helper return values. Preserve user-owned instruction files; maintain
 these explanatory guides separately from local operational conventions.
 
 ## API Provider Modules
+
+Groq's model catalog deliberately omits pricing (or returns null) for free
+models; priced models include per-token rates. Preserve this provider-specific
+contract: missing Groq pricing means free, not unknown. Do not generalize that
+rule to other providers. Compaction uses only eligible free models, contributes
+no session usage or spend, and never falls back to a paid primary model.
 
 `api.py` owns `APIClient`, common errors, HTTP/SSE transport, retries, and completion normalization. `providers.py` maps provider names to implementation classes in separate files and exposes `create_client`. Providers subclass `APIClient`; they supply identity/defaults, capability discovery, optional account metadata, headers, request preparation, and options retained during key replacement. Importing modules does not create connections. `openrouter.py` keeps the previous error aliases for callers using those imports.
 

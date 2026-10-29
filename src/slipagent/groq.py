@@ -36,7 +36,8 @@ class GroqClient(APIClient):
             if not self.chat_capable(properties):
                 continue
             model.context_length = _limit(properties.get("context_window"))
-            # Groq lists per-token prices for billed models and omits the price of free ones.
+            # Groq's catalog contract: omitted/null pricing means free, not unknown.
+            # Other providers do not necessarily use this convention.
             pricing = properties.get("pricing")
             model.pricing = pricing if isinstance(pricing, dict) else {"prompt": "0", "completion": "0"}
             result.append(model)

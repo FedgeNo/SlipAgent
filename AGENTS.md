@@ -9,6 +9,10 @@ Use [docs/architecture.md](docs/architecture.md) to find component owners and
 their contracts, and [docs/source-overview.md](docs/source-overview.md) for the
 source map. Keep audit reports and local work notes in `agents/`.
 
+Provider pricing conventions are documented under [API Provider Modules](docs/architecture.md#api-provider-modules).
+Groq marks free models by omitting pricing; do not classify that as unknown.
+Compaction uses only free models and must never fall back to a paid primary model.
+
 ## Prompt Ownership
 
 [prompts/README.md](prompts/README.md) defines prompt structure, input boundaries,

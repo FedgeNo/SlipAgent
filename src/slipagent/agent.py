@@ -119,7 +119,8 @@ class Agent:
         if result is None:
             result = StepCompactor(
                 self._compaction_usage,
-                lambda text: self._emit(AgentEvent(kind="warning", text=text)),
+                lambda text: self._emit(AgentEvent(
+                    kind="error" if text.startswith("Compression unavailable:") else "warning", text=text)),
             )
             self.registry.resources.compactor = result
         result.on_step = self._persist_step

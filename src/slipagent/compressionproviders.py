@@ -14,6 +14,11 @@ from .modelrouting import ModelRouting
 from .providers import PROVIDERS, create_client
 from .types import ModelInfo
 
+COMPRESSION_UNAVAILABLE = (
+    "No eligible free models are available for compression. Compression will not work "
+    "until a provider with free models is added. Add OpenRouter or NVIDIA."
+)
+
 
 class CompressionUnavailableError(ValueError):
     """No configured free route can accept this compression job."""
@@ -24,7 +29,6 @@ class CompressionProviders:
         self.models = models
         self.last = ""
         self.clients: dict[tuple[str, str, str], APIClient] = {}
-        self.single_provider_notified = False
 
     async def background(self) -> list[ModelInfo]:
         """Ranked compression models on every provider except the coding provider."""
@@ -46,13 +50,7 @@ class CompressionProviders:
                 failed_provider = None
             session = self.models.session
             if not ranked:
-                if self.models.credentials.keys() <= {session.client.provider}:
-                    if not self.single_provider_notified:
-                        self.models.notice("One provider is available, and it serves coding requests only. "
-                                           "Add another provider's API key to enable history summaries.")
-                        self.single_provider_notified = True
-                    raise CompressionUnavailableError("no provider other than the selected coding provider is available")
-                raise CompressionUnavailableError("no eligible ranked free compression models; check provider keys or update SlipAgent")
+                raise CompressionUnavailableError(COMPRESSION_UNAVAILABLE)
             failures = self.models.failed["compression"] | excluded
             healthy = [model for model in ranked if model.selector not in failures]
             available = healthy or ranked

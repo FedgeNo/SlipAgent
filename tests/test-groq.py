@@ -24,6 +24,21 @@ def catalog():
     ]}
 
 
+@pytest.mark.parametrize("omit", [True, False])
+async def test_groq_omitted_or_null_pricing_means_free(omit):
+    raw = catalog()
+    entry = next(entry for entry in raw["data"] if entry["id"] == "allam-2-7b")
+    if omit:
+        entry.pop("pricing")
+    async with GroqClient("dummy", transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json=raw))) as client:
+        models = await client.list_models()
+        free = next(model for model in models if model.id == "allam-2-7b")
+        paid = next(model for model in models if model.id == "openai/gpt-oss-120b")
+        assert eligible_free(free)
+        assert not eligible_free(paid)
+
+
 async def test_catalog_capabilities_and_request():
     requests = []
 

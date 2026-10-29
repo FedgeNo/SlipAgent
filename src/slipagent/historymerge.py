@@ -342,8 +342,12 @@ async def _publish(owner: StepCompactor, anchor: HistoryStep, attribute: str, op
         raise
     except Exception as exc:
         if generation == owner.generation:
-            owner.on_error(f"Could not summarize {label}: {exc}. Individual summaries and originals remain "
-                           "available; another attempt waits at least 20 turns.")
+            from .compressionproviders import CompressionUnavailableError
+            if isinstance(exc, CompressionUnavailableError):
+                owner.report_unavailable(str(exc))
+            else:
+                owner.on_error(f"Could not summarize {label}: {exc}. Individual summaries and originals remain "
+                               "available; another attempt waits at least 20 turns.")
 
 
 async def _merge(owner: StepCompactor, anchor: HistoryStep, batch: list[HistoryStep], source: dict[str, Any],

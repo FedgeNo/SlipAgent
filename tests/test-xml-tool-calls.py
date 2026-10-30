@@ -2,10 +2,12 @@
 
 import json
 from importlib import import_module
+import re
 
 import httpx
 import pytest
 
+from data_text_reader import current_input, request_input
 from slipagent.agent import Agent
 from slipagent.openrouter import OpenRouterClient
 from slipagent.protocol import ResponseFormatError, parse_agent_response
@@ -58,14 +60,17 @@ def test_wrapped_xml_normalizes_and_deduplicates_native_calls(text):
             assert result.calls[0].id == "native"
 
 
-def test_wrapped_xml_keeps_order_repetitions_ids_and_typed_values():
+def test_wrapped_xml_keeps_order_repetitions_and_typed_values():
     spec = ToolSpec("record", "", {"properties": {
         "value": {"type": "string"}, "offset": {"type": "integer"},
     }})
     invoke = '<invoke name="record" id="first"><parameter name="value">  a &lt; b\n</parameter><parameter name="offset">\n121</parameter></invoke>'
     text = '<tool_calls><call>' + invoke + '</call><call>' + INVOKE + '</call><call>' + INVOKE + '</call></tool_calls>'
     result = parse_agent_response(text, [], tools=[spec], xml_tool_calls=True)
-    assert result.calls[0].id == "first"
+    local_ids = [call.id for call in result.calls]
+    assert all(re.fullmatch(r"call_[0-9a-f]{32}", call_id) for call_id in local_ids)
+    assert len(set(local_ids)) == 3
+    assert "first" not in local_ids
     assert [c.arguments for c in result.calls] == [{"value": "  a < b\n", "offset": 121}, {"value": "A"}, {"value": "A"}]
 
 
@@ -143,9 +148,14 @@ async def test_dots_retries_malformed_xml_before_executing_any_calls(model, stre
             await agent.wait_for_compaction()
         assert tool.seen == [{"value": "A"}]
         assert len(router.requests) == 3
-        correction = router.requests[1]["messages"][0]["content"]
-        assert 'Invalid tool-call XML' in correction
-        assert 'No tools were executed. Any streamed text was an unaccepted preview.' in correction
+        retry_messages = router.requests[1]["messages"]
+        retry_input = request_input(retry_messages)
+        assert any('Invalid tool-call XML' in error for error in retry_input["errors"])
+        assert any('No tools were executed. Any streamed text was an unaccepted preview.' in error
+                   for error in retry_input["errors"])
+        assert any('Invalid tool-call XML' in prompt
+                   for prompt in current_input(retry_messages)["user_prompts"])
+        assert 'Invalid tool-call XML' not in retry_messages[0]["content"]
         assert any(e.kind == 'retry' for e in events)
         assert all('<tool_calls>' not in e.text for e in events if e.kind in {'assistant_text', 'assistant_delta'})
     finally:

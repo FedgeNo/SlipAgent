@@ -140,11 +140,12 @@ class StreamLoopGuard:
         return not re.match(r"^(?: {4}|\t|\s*(?:[|#]|[-*+]\s|\d+[.)]\s|[={}\[\]]|`{3,}|~{3,}))", line)
 
     def _complete_line(self) -> None:
-        marker = re.match(r"^\s*(`{3,}|~{3,})", self.line_head)
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", self.line_head)
         if marker:
-            if not self.fence:
+            if not self.fence and (marker[1][0] != "`" or "`" not in marker[2]):
                 self.fence = marker[1]
-            elif marker[1][0] == self.fence[0] and len(marker[1]) >= len(self.fence):
+            elif (self.fence and marker[1][0] == self.fence[0] and len(marker[1]) >= len(self.fence)
+                  and not marker[2].strip()):
                 self.fence = ""
         elif not self.fence and self._prose(self.line_head):
             self.buffers.setdefault("content", _Squashed()).add(self.line.value() + "\n")

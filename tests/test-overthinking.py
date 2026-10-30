@@ -52,7 +52,11 @@ async def test_thoughts_are_budgeted_and_oversized_turn_is_excerpted():
     view = await history.view(messages, [], keep_steps=50, context_length=16000, max_output=1000)
     records = context_records(view)
     assert records[0]["representation"] == "excerpt"
-    assert "reasoning" not in records[0]
+    assert records[0]["reasoning"]["omitted_characters"] > 0
+    assert records[0]["reasoning"]["original"]["section"] == "reasoning"
+    assert records[0]["reasoning"]["original"]["field_path"] == []
+    assert records[0]["agent_response"] == "Answer"
+    assert records[0]["tool_calls"][0]["arguments"] == {}
     assert message_tokens(view) < int(16000 * .85) - 1000
     assert history.steps[0].reasoning == answer.reasoning
 

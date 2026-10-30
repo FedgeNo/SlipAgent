@@ -14,7 +14,7 @@ from .types import Message
 
 def linked_tool_results(record: dict[str, Any]) -> dict[str, Any]:
     """Project each observation under its call without altering saved records."""
-    if record.get("representation") == "excerpt":
+    if record.get("representation") == "excerpt" and "messages" in record:
         projected = {key: value for key, value in record.items() if key != "messages"}
         calls = []
         responses = []
@@ -30,12 +30,14 @@ def linked_tool_results(record: dict[str, Any]) -> dict[str, Any]:
         return record
     projected = {key: value for key, value in record.items() if key != "tool_results"}
     calls = [dict(call) for call in record.get("tool_calls", [])]
-    for result in record["tool_results"]:
+    for index, result in enumerate(record["tool_results"]):
         call = next((call for call in calls if call["call_id"] == result["call_id"]), None)
         if call is None:
             call = {"call_id": result["call_id"], "tool_name": result["tool_name"]}
             calls.append(call)
         key = {"success": "result", "error": "error"}.get(result["status"], "unclassified_result")
+        if any(path[:2] == ["tool_results", index] for path in record.get("excerpted_fields", [])):
+            key += "_excerpt"
         call[key] = result["content"]
         if result.get("artifacts"):
             call["artifacts"] = result["artifacts"]

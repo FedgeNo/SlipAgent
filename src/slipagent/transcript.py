@@ -202,6 +202,7 @@ class WrappedTranscript:
         self._preview: list[StyleAndTextTuples] | None = None
         self._indent = ""
         self._indent_known = False
+        self._command_groups = False
         self._continued = False
         self._consumed_width = 0
         self._space_run = 0
@@ -363,12 +364,24 @@ class WrappedTranscript:
             self._indent = leading if len(leading) < self.columns else ""
             self._indent_known = bool(text.strip(" \t")) or len(leading) >= self.columns
         prefix = self._indent if self._continued else ""
+        if text.startswith("  Commands: "):
+            self._command_groups = True
         if display_width(prefix + text) <= self.columns:
             lines = [prefix + text]
         else:
-            lines = wrap(text, self.columns, initial_indent=prefix,
+            wrapped_text = text
+            if getattr(self, "_command_groups", False):
+                # Protect only groups that fit a complete continuation row.
+                # Restore ordinary spaces before mapping rows to source/copy text.
+                available = self.columns - len(self._indent)
+                wrapped_text = "  ".join(
+                    group.replace(" ", "\u00a0") if group.startswith("/") and display_width(group) <= available else group
+                    for group in text.split("  "))
+            lines = wrap(wrapped_text, self.columns, initial_indent=prefix,
                          subsequent_indent=self._indent, replace_whitespace=False,
                          break_on_hyphens=False, propagate_sgr=False) or [""]
+            if getattr(self, "_command_groups", False):
+                lines = [line.replace("\u00a0", " ") for line in lines]
         rows: list[StyleAndTextTuples] = []
         starts: list[int] = []
         position = 0
@@ -416,6 +429,7 @@ class WrappedTranscript:
             self._pending.clear()
             self._indent = ""
             self._indent_known = False
+            self._command_groups = False
             self._continued = False
             self._consumed_width = 0
             self._space_run = 0

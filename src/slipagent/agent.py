@@ -127,10 +127,22 @@ class Agent:
         return result
 
     def _persist(self) -> None:
+        deliveries = self.registry.services.setdefault("step_background_commands", {})
+        received: set[str] = set()
+        for step in self.history.steps:
+            if step.id in deliveries:
+                completed = deliveries.pop(step.id)
+                setattr(step, "background_commands", completed)
+                received.update(item["job_id"] for item in completed)
         journal = self.registry.resources.journal
         if journal is not None:
             journal.record(self)
         self._archive_history()
+        pending = self.registry.context_notes.get("background_commands")
+        if pending and received:
+            pending["completed"] = [item for item in pending["completed"] if item["job_id"] not in received]
+            if not pending["completed"]:
+                self.registry.context_notes.pop("background_commands", None)
 
     def _archive_history(self) -> None:
         from .turnstore import TurnStore
@@ -246,6 +258,8 @@ class Agent:
         self.registry.context_notes.pop("progress", None)
         self.registry.context_notes.pop("resume", None)
         self.registry.context_notes.pop("background_commands", None)
+        self.registry.services.pop("step_background_commands", None)
+        self.registry.services.pop("background_snapshot", None)
         self.registry.context_notes.pop("request_diagnostics", None)
         self.registry.context_notes.pop("user_edits", None)
         self.registry.services.pop("step_user_edits", None)
@@ -283,14 +297,19 @@ class Agent:
                 self._emit(AgentEvent(kind="artifact", result=ToolResult.ok(monitor["artifact"])))
         completed = jobs.completions()
         if completed:
+            pending = self.registry.context_notes.get("background_commands", {}).get("completed", [])
+            known = {item["job_id"] for item in pending}
+            completed = [item for item in completed if item["job_id"] not in known]
+        if completed:
             self.registry.context_notes["background_commands"] = {
-                "completed": completed, "guidance": load_prompt('background-command-results.md'),
+                "completed": [*pending, *completed], "guidance": load_prompt('background-command-results.md'),
             }
             for job in completed:
                 self._emit(AgentEvent(kind="notice", text=f"Background command {job['job_id']} {job['state']} (exit {job['returncode']})."))
                 for reference in job.get("artifacts", []):
                     self._attach_artifact(reference)
                     self._emit(AgentEvent(kind="artifact", result=ToolResult.ok(reference)))
+            self._persist()
 
     def _attach_artifact(self, reference: dict[str, Any]) -> None:
         step_id = reference.get("step_id")
@@ -505,6 +524,15 @@ class Agent:
         return queued
 
     def _queued_messages_sent(self) -> None:
+        completed = self.registry.services.pop("background_snapshot", [])
+        if completed:
+            self.registry.services.setdefault("step_background_commands", {})[len(self.history.steps) + 1] = completed
+            jobs = self.registry.resources.jobs
+            if jobs is not None:
+                for item in completed:
+                    job = jobs.jobs.get(item["job_id"])
+                    if job is not None:
+                        job.notified = True
         input_queue(self).sent(len(self.queued_messages))
         delivered = list(self.queued_messages.values())
         self.queued_messages.clear()
@@ -674,7 +702,7 @@ class Agent:
             if (self.stop_requested or self._requests >= self.max_steps or fallback is None
                     or not await fallback(failure)):
                 raise failure
-        for delivered in ("background_commands", "resume"):
+        for delivered in ("resume",):
             self.registry.context_notes.pop(delivered, None)
         step = len(self.history.steps) + 1
         if isinstance(outcome, RequestStopped):

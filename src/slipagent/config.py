@@ -2,7 +2,7 @@
 
 Model precedence: explicit CLI flag > real environment variable > saved choice
 > `.env` file > built-in default. `.env` never shadows a variable the shell
-already exports, so `OPENROUTER_MODEL=... slipagent` still wins. Only
+already exports, so `OPENROUTER_MODEL=… slipagent` still wins. Only
 SlipAgent's own `.env` is read; project `.env` files belong to the project.
 """
 

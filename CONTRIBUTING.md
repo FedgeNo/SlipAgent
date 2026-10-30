@@ -229,11 +229,11 @@ valid recovery using disposable package copies when modifying this machinery.
   rebuild context with the failure, and remain interruptible during backoff.
 - Background jobs and optional language servers belong to session services.
   Never install a server implicitly or relaunch an archived job on resume.
-- Normalize alternate response formats before validation. Keep native tool IDs,
-  batch order, exact arguments, and matching observations intact. Duplicate
-  calls mirrored across carriers match one-for-one by ID or exact name/arguments;
-  distinct calls and same-carrier repetitions remain. Conflicting reuse of an ID
-  is rejected.
+- Normalize alternate response formats before validation. Assign harness-owned
+  IDs as incoming calls arrive; ignore IDs supplied by the model or provider.
+  Keep these local IDs, batch order, exact arguments, and matching observations
+  intact. Duplicate calls mirrored across carriers match one-for-one by exact
+  name/arguments; distinct calls and same-carrier repetitions remain.
   Extend parser tests with complete wire responses, streamed fragments, and
   malformed cases before adding another format. Do not infer actions from prose.
 - Fetch protocol capabilities at startup and explicit model selection, cache

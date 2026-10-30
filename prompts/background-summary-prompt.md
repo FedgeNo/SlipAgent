@@ -14,6 +14,7 @@ Compress only the previous turn. Up to 25 earlier completed steps in `history` p
 | `tool_results` | Observations linked by `call_id` |
 | `reasoning` | Thoughts, possibly repetitive, mistaken, or abandoned |
 | `user_edits` | Saved user changes: path, revision, bounded diff prefix, optional artifact reference |
+| `background_commands` | Background command results delivered with this turn, including original job and log references |
 | `history` | Earlier steps, oldest first; summaries where available, otherwise originals |
 | `history_omitted` | Contextual records omitted for budget |
 

@@ -18,6 +18,8 @@ def load_ui_preferences() -> dict[str, Any]:
         raise ConfigError("Editor wrap preference must be a boolean")
     if "tab_width" in value and value["tab_width"] not in (2, 4, 8):
         raise ConfigError("Editor tab width must be 2, 4, or 8")
+    if "tab_width" in value:
+        value = {**value, "tab_width": int(value["tab_width"])}
     if "folder_opener" in value and not isinstance(value["folder_opener"], str):
         raise ConfigError("Folder opener preference must be text")
     return dict(value)

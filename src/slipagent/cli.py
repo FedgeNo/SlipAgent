@@ -87,6 +87,7 @@ Use /help for command details. Ctrl+\\ toggles the context view.
 """.replace("{commands}", banner_commands())
 
 QUOTA_REFRESH_INTERVAL = 15 * 60
+LOADING_CONVERSATION_NOTICE = "Loading conversation, this can take some time…"
 # Seconds without model output before the status line shows the deadline.
 FIRST_OUTPUT_NOTICE_SECONDS = 20
 HOLD_NOTICE = "Staying on this model; press Esc again to cancel the turn"
@@ -249,7 +250,6 @@ class Renderer:
     ) -> None:
         plain = strip_sequences(text)
         self._last_output_blank = not plain.rsplit("\n", 1)[-1].strip()
-        self.__dict__["_writes"] = self.__dict__.get("_writes", 0) + 1
         if self.terminal is not None:
             self.terminal.write(text, continuation_indents=continuation_indents, user_prompt=user_prompt)
             return
@@ -366,7 +366,7 @@ class Renderer:
         self._finish_stream()
         if self.terminal is not None:
             self.terminal.clear_transcript()
-            self.terminal.hold_layout("Loading conversation, this can take some time…")
+            self.terminal.hold_layout(LOADING_CONVERSATION_NOTICE)
         self._active_block = None
         self._model_block = object()
         self._last_output_blank = True
@@ -544,29 +544,31 @@ class Renderer:
         """Show a description that led its call's arguments, before the call runs."""
         label = " ".join(text.split())
         # Searches keep their heading until the result, so concurrent calls cannot split the file list.
-        if not label or call.name == "answer" or (self.terminal is not None and call.name == "grep"):
+        if self.terminal is None or not label or call.name in {"answer", "grep"}:
             return
-        start = self.terminal.record_count() if self.terminal is not None else 0
+        self._finish_stream()
+        spacing = (self._active_block, self._tool_group, self._last_output_blank)
+        start = self.terminal.record_count()
         self.emit(self.style.magenta(f"  ⚙ {label}"), block=self._model_block, tool=True)
         stop = self.terminal.record_count() if self.terminal is not None else 0
         self.__dict__.setdefault("_early_labels", {})[call.id] = {
-            "label": label, "start": start, "stop": stop, "writes": self.__dict__.get("_writes", 0)}
+            "start": start, "stop": stop, "spacing": spacing}
 
     def _drop_early_labels(self) -> None:
-        """An abandoned attempt's descriptions describe calls that will never run."""
+        """Remove provisional descriptions before execution or abandonment."""
         early = self.__dict__.pop("_early_labels", {})
-        if self.terminal is not None:
+        if self.terminal is not None and early:
+            entries = list(early.values())
+            if entries[-1]["stop"] == self.terminal.record_count():
+                spacing = entries[0].get("spacing")
+                if spacing is not None:
+                    self._active_block, self._tool_group, self._last_output_blank = spacing
             for entry in early.values():
                 self.terminal.clear_records(entry["start"], entry["stop"])
 
     def _tool_heading(self, call: ToolCall) -> None:
         from .calllabels import call_label, raw_call
         label = call_label(call)
-        early = self.__dict__.get("_early_labels", {}).pop(call.id, None)
-        # With nothing written since the description, only the exact call remains to show.
-        if early is not None and early["label"] == label and early["writes"] == self.__dict__.get("_writes", 0):
-            self.emit(self.style.thought(f"    {raw_call(call)}"), block=self._model_block, tool=True)
-            return
         if label:
             # The label is for everyone; the exact call stays visible beneath it.
             self.emit(self.style.magenta(f"  ⚙ {label}") + "\n" + self.style.thought(f"    {raw_call(call)}"),
@@ -677,7 +679,7 @@ class Renderer:
 
         elif event.kind == "step_start":
             self._finish_stream()
-            self.__dict__.pop("_early_labels", None)
+            self._drop_early_labels()
             self.__dict__.pop("_waiting_calls", None)
             self.__dict__.pop("_headed_call", None)
             self.__dict__["_reply_preview"] = []
@@ -755,6 +757,8 @@ class Renderer:
             self._drop_early_labels()
 
         elif event.kind == "tool_start" and event.tool_call is not None:
+            # Replace the entire provisional list with ordered execution headings.
+            self._drop_early_labels()
             self._tool_streamed = False
             if self.terminal is not None:
                 self.terminal.track_call(event.tool_call, event.step)
@@ -873,7 +877,8 @@ class Launcher:
                 context_steps=config.context_steps,
                 overthinking=config.overthinking,
                 planning=getattr(args, "planning", True),
-                context_tokens=getattr(args, "context_tokens", None) or context_tokens_preference(),
+                context_tokens=(args.context_tokens if getattr(args, "context_tokens", None) is not None
+                                else context_tokens_preference()),
                 reasoning_history_steps=getattr(args, "reasoning_history_steps", 25),
                 filtered_thoughts=not getattr(args, "raw_reasoning_history", False),
                 exposed_tools=tuple(args.tools.split(',')) if getattr(args, "tools", None) else None,
@@ -963,7 +968,8 @@ class Launcher:
                             session.client.cache_capabilities(config.model, profile)
                             cached_start = True
                             return "Model capabilities: using the saved profile; refreshing it in the background."
-                    if await session.client.model_capabilities(config.model, refresh=True) is None:
+                    await session.catalog()
+                    if await session.client.model_capabilities(config.model) is None:
                         raise APIConfigError("The API did not supply capabilities to verify the configured model's compatibility.")
             except APIError as exc:
                 model_error = exc
@@ -1008,6 +1014,15 @@ class Launcher:
             if registry.resources.environment is not None:
                 await registry.resources.environment.snapshot()
 
+        async def mathematics() -> None:
+            from .environment import ensure_harness_math
+            try:
+                await ensure_harness_math()
+                registry.context_notes.pop("harness_math", None)
+            except (ConfigError, OSError) as exc:
+                registry.context_notes["harness_math"] = str(exc)
+                renderer.emit(renderer.style.warning(f"  Warning: {exc}"), separate=False)
+
         async def quota() -> str:
             await Quota(session).refresh()
             return "Quota: unavailable." if session.free_calls is None else f"Quota: {session.free_calls} free calls remaining."
@@ -1023,6 +1038,7 @@ class Launcher:
                     renderer.emit(f"  Resumed {journal.session_id}; no tools were replayed.")
 
         operations = [
+            ("Checking and installing required harness math packages", mathematics),
             ("Fetching the model catalog and checking model capabilities", metadata),
             ("Connecting to MCP servers and loading their tools", mcp),
             ("Scanning repository files and building the repository map", repository),
@@ -1121,7 +1137,7 @@ class Launcher:
         if failure is not None:
             return 1
 
-        # Rendered to stdout so `slipagent -p "..." | pbcopy` behaves.
+        # Rendered to stdout so `slipagent -p "…" | pbcopy` behaves.
         if session.renderer.output_markdown:
             print(literal(answer))
         elif getattr(session.renderer, "stdout_color", _use_color(sys.stdout, not session.renderer.style.enabled)):
@@ -2545,13 +2561,8 @@ class ModelPicker:
             return
         entry = matches[0]
         if require_free:
-            try:
-                free = all(float(entry.pricing[name]) == 0 for name in ("prompt", "completion"))
-                free = free and all(float(entry.pricing.get(name, 0)) == 0
-                                    for name in ("request", "internal_reasoning"))
-            except (KeyError, TypeError, ValueError):
-                free = False
-            if not free:
+            from .modelrouting import eligible_free
+            if not eligible_free(entry):
                 print(style.red(f"  {entry.selector} is not advertised as free; provider unchanged."), file=out)
                 return
         try:
@@ -2799,7 +2810,7 @@ class PluginMenu:
                       else text if override.state == "on" else style.dim(text), file=out)
 
     async def command(self, argument: str) -> None:
-        """`/plugin copy|diff|restamp ...`."""
+        """`/plugin copy|diff|restamp …`."""
         from .plugintools import PluginToolError, PluginTools
 
         style, out = self.style, self.out
@@ -2970,9 +2981,18 @@ class _RendererStream(io.TextIOBase):
 
 
 def build_parser() -> argparse.ArgumentParser:
+    def context_tokens(value: str) -> int:
+        try:
+            result = int(value)
+        except ValueError:
+            raise argparse.ArgumentTypeError("context tokens must be an integer") from None
+        if result < 4096:
+            raise argparse.ArgumentTypeError("context tokens must be at least 4096")
+        return result
+
     parser = argparse.ArgumentParser(
         prog="slipagent",
-        usage="slipagent [options] [prompt ...]",
+        usage="slipagent [options] [prompt …]",
         description="An agentic coding harness with selectable API providers.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
@@ -3025,7 +3045,7 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Working-model temperature override when supported; omitted by default. Compression always omits it.")
     advanced.add_argument("--max-tokens", type=int, default=None,
                           help="Cap on completion tokens per response.")
-    advanced.add_argument("--context-tokens", type=int, help="Working context cap including output reserve (at least 4096; never expands the endpoint limit).")
+    advanced.add_argument("--context-tokens", type=context_tokens, help="Working context cap including output reserve (at least 4096; never expands the endpoint limit).")
     advanced.add_argument("--reasoning-history-steps", type=int, choices=range(26), default=25,
                           metavar="0..25", help="Recent steps whose archived thoughts may be supplied; 0 keeps outcomes only (default 25).")
     advanced.add_argument("--raw-reasoning-history", action="store_true", help="Compare original thoughts instead of filtered thoughts in Overthinking history.")

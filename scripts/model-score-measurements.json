@@ -1,5 +1,5 @@
 {
- "reviewed": "2026-10-26",
+ "reviewed": "2026-10-29",
  "scales": {
   "MT-Bench coding": {
    "min_score": 1,
@@ -7,6 +7,17 @@
   }
  },
  "models": [
+  {
+   "model": "mistralai/mistral-large-4-1t-a52b",
+   "benchmarks": {
+    "DeepSWE 1.1": 61.7
+   },
+   "sources": [
+    "https://mistral.ai/news/mistral-large-4/",
+    "https://docs.api.nvidia.com/nim/reference/mistralai-mistral-large-4-1t-a52b"
+   ],
+   "notes": "Developer-reported DeepSWE v1.1, reviewed 2026-10-29. NVIDIA identifies this endpoint as Mistral Large 4. Single calibrated coding benchmark; Terminal-Bench 4.0, SWE-Atlas-QnA and Coding Agent Index are not calibrated here and are not substituted for older benchmarks. The hosted NVFP4 deployment has not been independently benchmarked."
+  },
   {
    "model": "deepseek/deepseek-v4.1-flash",
    "benchmarks": {

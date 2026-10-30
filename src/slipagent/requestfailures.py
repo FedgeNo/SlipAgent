@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 FAILURE_OUTCOMES = {"request_error", "context_overflow", "rejected", "loop_stopped", "cancelled"}
 # The stream stopped before the reply finished, and its partial reply and
 # reasoning are kept. Rejected and looping replies did finish.
-INCOMPLETE_OUTCOMES = {"request_error"}
+INCOMPLETE_OUTCOMES = {"request_error", "cancelled"}
 
 
 def retry_state(steps: list[HistoryStep]) -> dict[str, Any] | None:

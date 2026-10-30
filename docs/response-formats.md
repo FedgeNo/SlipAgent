@@ -1,7 +1,8 @@
 # Response Format Compatibility
 
 SlipAgent normalizes complete calls into the same tool validation and execution
-path. Native API calls retain their IDs. Mirrored calls across native and text
+path. The harness assigns every incoming call its own ID and ignores supplied
+identifiers. Mirrored calls across native and text
 formats execute once; intentional repetitions within a batch remain separate.
 
 ## Accepted Calls
@@ -81,10 +82,9 @@ existing tool checks still run again at invocation time.
 
 ## Provider Streaming Modes
 
-The default preserves ordinary streamed identity fragments as deltas. NVIDIA
-direct MiniMax calls use snapshot identity fields, reflecting the provider
-behavior documented in Hermes' accumulator. Empty or null identity fields do
-not erase established identities. Conflicting nonempty snapshot identities
+The default assembles streamed tool-name fragments as deltas. NVIDIA
+direct MiniMax calls use snapshot tool names. Empty or null names do
+not erase established names. Conflicting nonempty snapshot names
 reject the response rather than retargeting the call. Arguments always remain
 ordered deltas.
 A finish event freezes that choice; subsequent usage records are retained,
@@ -95,20 +95,19 @@ Exact model entries in `prompts/model-profiles.json` can override this behavior:
 ```json
 {
     "provider/model-id": {
-        "stream_tool_identity": "snapshot",
-        "stream_tool_indices": "id"
+        "stream_tool_identity": "snapshot"
     }
 }
 ```
 
 `stream_tool_identity` accepts `delta` or `snapshot`; an explicit `delta` also
-overrides the NVIDIA MiniMax default. `stream_tool_indices` accepts `index`
-(default) or `id`. The `id` mode accommodates gateways that reuse one raw index
-for multiple calls: IDs select separate slots, and ID-less continuations use
-the last slot associated with that raw index. It requires complete IDs and
-must not be enabled for fragmented-ID streams. Settings are validated and read
-for each streamed request, including after model selection or prompt edits.
-Integer IDs are represented as strings for subsequent API history.
+overrides the NVIDIA MiniMax default. Fragments are assembled by their stream
+index, or by their position within a delta when indexes are absent. Interleaved
+calls must have distinct indexes or stable positions; supplied IDs are ignored.
+The former `stream_tool_indices: "id"` setting is no longer supported.
+Settings are validated and read for each streamed request, including after model
+selection or prompt edits. Every call receives a harness ID on arrival, used
+unchanged for early labels, execution, history and results.
 
 ## Context Limits for Individual Providers
 

@@ -102,6 +102,7 @@ class RequestDriver:
             diagnostics = self.registry.resources.diagnostics
             xml_tool_calls = model_prompt_profile(self.settings.model).get("xml_tool_calls", False)
             preview = ResponseStream(xml_tool_calls=xml_tool_calls)
+            partial_reasoning: list[str] = []
             received_content = False
             labels_shown = False
             def end_preview(*, failed: bool = False) -> None:
@@ -165,6 +166,7 @@ class RequestDriver:
                     return
                 stream_guard.feed(kind, chunk)
                 if kind == "reasoning" and chunk:
+                    partial_reasoning.append(chunk)
                     self.hooks.emit(AgentEvent(kind="reasoning_delta", step=step, text=chunk))
                 elif kind == "content" and chunk:
                     visible = preview.push(chunk)
@@ -273,7 +275,10 @@ class RequestDriver:
                 finish_attempt("cancelled" if isinstance(exc, asyncio.CancelledError) else "request_error", detail=str(exc))
                 end_preview(failed=True)
                 if isinstance(exc, asyncio.CancelledError):
-                    record_failure("cancelled", "Request cancelled before acceptance.", preview.text, Usage())
+                    usage = getattr(exc, "usage", Usage(complete=False))
+                    self.hooks.account(usage)
+                    record_failure("cancelled", "Request cancelled before acceptance.", preview.text, usage,
+                                   (preview.text, "".join(partial_reasoning)))
                 raise
             attempts += 1
             self.budget.observe_estimate(request_estimate, completion.usage.prompt_tokens)

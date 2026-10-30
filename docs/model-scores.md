@@ -10,11 +10,11 @@ provider availability, context limits, and request failures remain separate
 selection checks. A paid model can help calibrate scores without becoming an
 automatic routing candidate. Visual benchmark results contribute nothing.
 
-## Calibration reviewed October 27, 2026
+## Calibration reviewed October 29, 2026
 
 The scores are computed from raw published results saved in
 [`scripts/model-score-measurements.json`](../scripts/model-score-measurements.json):
-218 results for 112 models, including 45 reference models that are not scored for
+219 results for 113 models, including 45 reference models that are not scored for
 routing. Nine text-coding benchmarks are connected through shared models.
 SWE-bench Verified supplies the reference scale. DeepSWE 1.1, Terminal-Bench 2.0
 and 2.1, LiveCodeBench, HumanEval, BigCodeBench complete, FLTEval (a Lean formal-proof benchmark), and the MT-Bench coding
@@ -43,7 +43,7 @@ The command refuses a benchmark it cannot connect.
 | Benchmark | Offset | Results | Models with another result |
 | --- | ---: | ---: | ---: |
 | SWE Verified | 0.00 | 36 | 36 |
-| DeepSWE 1.1 | +2.25 | 26 | 25 |
+| DeepSWE 1.1 | +2.25 | 27 | 25 |
 | Terminal 2.0 | +1.17 | 12 | 12 |
 | Terminal 2.1 | +0.81 | 40 | 37 |
 | LiveCodeBench | −0.61 | 27 | 23 |
@@ -78,7 +78,7 @@ predicting it, produced:
 | Absolute prediction error | Percentage points |
 | --- | ---: |
 | Mean | 7.0 |
-| Median | 4.9 |
+| Median | 5.0 |
 | 90th percentile | 16.6 |
 | Largest | 27.9 |
 
@@ -123,6 +123,15 @@ SEA-LION v1 7B Instruct remains the one unscored model. Its published linguistic
 evaluations and code-security risk measurements do not establish a comparable
 code-correctness result. Its `None` score keeps manual selection available and
 prevents an unsupported automatic placement.
+
+Mistral Large 4 (`mistralai/mistral-large-4-1t-a52b` on NVIDIA) scores **93.9**
+from Mistral's developer-reported **61.7% DeepSWE 1.1** result in its
+[launch post](https://mistral.ai/news/mistral-large-4/), reviewed October 29.
+This is a single-benchmark estimate. The reported Terminal-Bench 4.0,
+SWE-Atlas-QnA and Coding Agent Index results are not calibrated here and are not
+substituted for earlier benchmark versions. NVIDIA's hosted NVFP4 deployment
+has not been independently measured by this project. Adding the result leaves
+existing model scores unchanged at the stored one-decimal precision.
 
 ## MT-Bench Coding Conversion
 

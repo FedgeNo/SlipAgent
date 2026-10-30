@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from test_agent import summary_response, context_records
+from data_text_reader import request_input
 
 from slipagent.agent import Agent
 from slipagent.cli import Renderer, Session, Style, ModelPicker
@@ -247,7 +248,9 @@ async def test_json_object_retries_before_reply_or_tool_execution():
     assert tool.seen == [{"value": "A"}]
     assert not any(event.text == "REJECTED REPLY" for event in events)
     assert [event.kind for event in events].index("retry") < [event.kind for event in events].index("tool_start")
-    assert "last response was rejected" in requests[1]["messages"][0]["content"]
+    retry_input = request_input(requests[1]["messages"])
+    assert any("last response was rejected" in error for error in retry_input["errors"])
+    assert "last response was rejected" not in requests[1]["messages"][0]["content"]
     actual = next(record for record in context_records(requests[2]["messages"]) if record["step_id"] == 2)
     assert actual["tool_results"][0]["content"] == "actual result"
     assert all(request.get("response_format") == requests[0].get("response_format") for request in requests)

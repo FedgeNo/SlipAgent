@@ -104,6 +104,29 @@ async def test_large_recent_originals_use_the_model_allowance_above_200000_token
     assert 200_000 < message_tokens(view) < 850_000 - 8192
 
 
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("boundary", [0, 8])
+async def test_oversized_unsummarized_step_does_not_displace_older_history_that_still_fits(native, boundary):
+    history, messages = conversation([f"Useful earlier fact {index}. " * 20 for index in range(8)]
+                                     + ["OVERSIZED UNSUMMARIZED RESULT " * 10000]
+                                     + ["Recent fact one.", "Recent fact two."])
+    history.steps[8].summary = None
+    history.compact_through = boundary
+    originals = [step.full_text() for step in history.steps]
+    view = await history.view(messages, [], keep_steps=50, context_length=24000,
+                              max_output=1000, native_tools=native)
+    records = [record for record in context_records(view) if record['record_type'] == 'history_step']
+    assert {record['step_id'] for record in records} == set(range(1, 12))
+    oversized = next(record for record in records if record['step_id'] == 9)
+    assert oversized['representation'] == 'excerpt'
+    assert oversized['excerpted_fields'] == [['agent_response']]
+    assert message_tokens(view) <= 24000 * .85 - 1000
+    assert history.compact_through == boundary
+    if boundary:
+        assert all(record['representation'] == 'compressed' for record in records if record['step_id'] <= boundary)
+    assert [step.full_text() for step in history.steps] == originals
+
+
 async def test_ready_summary_joins_original_in_one_record_without_rewriting_history():
     history = ConversationHistory()
     messages = [Message.user('Inspect'), Message.assistant('Reading', [ToolCall('r', 'read_file', {'path': 'a.py'})]),
@@ -130,11 +153,12 @@ async def test_combined_history_is_budgeted_and_does_not_duplicate_steps():
     view = await history.view(messages, [], keep_steps=50, context_length=20000, max_output=1000)
     records = context_records(view)[:-1]
     assert len({record['step_id'] for record in records}) == len(records)
-    assert len(records) < 12
+    assert len(records) == 12
     assert any(record['representation'] == 'full' for record in records)
     for record in records:
         if record['representation'] == 'full':
-            assert record['compressed_summary'] == history.steps[record['step_id'] - 1].summary
+            if 'compressed_summary' in record:
+                assert record['compressed_summary'] == history.steps[record['step_id'] - 1].summary
             assert record['agent_response'] == 'Original ' * 400
     assert message_tokens(view) <= int(20000 * .85) - 1000
     assert len(history.steps) == 12

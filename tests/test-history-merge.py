@@ -186,7 +186,7 @@ async def test_unsettled_first_passes_hold_a_block_and_failed_ones_are_gaps():
 
 @pytest.mark.parametrize("outcome", ["recover", "reset", "permanent"])
 @pytest.mark.parametrize("status", [429, 503, "timeout", "transport"])
-async def test_history_merge_retries_until_recovery_or_reset(monkeypatch, outcome, status):
+async def test_history_merge_retries_until_recovery_or_reset(monkeypatch, outcome, status, free_compaction):
     import httpx
     from slipagent.openrouter import OpenRouterClient
 
@@ -213,6 +213,7 @@ async def test_history_merge_retries_until_recovery_or_reset(monkeypatch, outcom
     monkeypatch.setattr("slipagent.api.asyncio.sleep", sleep)
     monkeypatch.setattr("slipagent.api.random.uniform", lambda low, high: high)
     async with OpenRouterClient("dummy", transport=httpx.MockTransport(handle)) as client:
+        free_compaction(owner, client)
         schedule(owner, history, client)
         await owner.wait()
     assert len(requests) == (1 if outcome == "permanent" else 10)
@@ -291,7 +292,7 @@ async def test_inflight_merge_cannot_duplicate_or_publish_after_reset():
     assert not historical_records(history.steps) and not usage
 
 
-async def test_grouped_retry_wait_is_cancelled_at_session_grace_deadline(monkeypatch):
+async def test_grouped_retry_wait_is_cancelled_at_session_grace_deadline(monkeypatch, free_compaction):
     import httpx
     from slipagent.openrouter import OpenRouterClient
 
@@ -306,6 +307,7 @@ async def test_grouped_retry_wait_is_cancelled_at_session_grace_deadline(monkeyp
 
     owner = StepCompactor(lambda _: None, errors.append)
     async with OpenRouterClient("dummy", transport=httpx.MockTransport(handle)) as client:
+        free_compaction(owner, client)
         schedule(owner, history, client)
         await asyncio.wait_for(owner.settle(), 1)
     assert len(requests) == 1 and not owner.jobs and not errors

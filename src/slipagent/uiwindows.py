@@ -107,6 +107,11 @@ class TranscriptScrollbar(UIControl):
         # the last row, which a wrapped tail puts past the last line index that
         # fits a viewport of unwrapped lines.
         bottom = window.bottom_origin(info.ui_content, info.window_width, info.window_height)
+        if bottom[0] == 0 and bottom[1]:
+            visible = max(1, info.window_height)
+            thumb = max(1, min(self.height, self.height * visible // (bottom[1] + visible)))
+            top = round((self.height - thumb) * min(window.vertical_scroll_2, bottom[1]) / bottom[1])
+            return top, thumb, bottom
         visible = max(1, len(info.displayed_lines))
         thumb = max(1, min(self.height, self.height * visible // max(1, info.content_height)))
         top = round((self.height - thumb) * min(info.vertical_scroll, bottom[0]) / bottom[0]) if bottom[0] else 0
@@ -116,7 +121,7 @@ class TranscriptScrollbar(UIControl):
         self.height = height
         top, thumb, bottom = self.geometry()
         return UIContent(
-            get_line=lambda row: [("class:scroll-track", "┃" if bottom[0] and top <= row < top + thumb else " ")],
+            get_line=lambda row: [("class:scroll-track", "┃" if bottom != (0, 0) and top <= row < top + thumb else " ")],
             line_count=height, show_cursor=False,
         )
 
@@ -128,7 +133,8 @@ class TranscriptScrollbar(UIControl):
         if window is None:
             return None
         top, thumb, bottom = self.geometry()
-        maximum = bottom[0]
+        wrapped = bottom[0] == 0 and bottom[1] > 0
+        maximum = bottom[1] if wrapped else bottom[0]
         if mouse_event.event_type == MouseEventType.MOUSE_UP:
             self.drag_offset = None
             return None
@@ -136,7 +142,8 @@ class TranscriptScrollbar(UIControl):
             if top <= row < top + thumb:
                 # The painted thumb is cell-rounded; anchor dragging to the
                 # actual position so grabbing it does not quantize the viewport.
-                origin = (self.height - thumb) * min(window.vertical_scroll, maximum) / maximum if maximum else 0
+                current = window.vertical_scroll_2 if wrapped else window.vertical_scroll
+                origin = (self.height - thumb) * min(current, maximum) / maximum if maximum else 0
                 self.drag_offset = row - origin
                 return None
             self.drag_offset = thumb // 2
@@ -153,7 +160,7 @@ class TranscriptScrollbar(UIControl):
         elif row < 1 or round(position) <= 0:
             position = 0
         line = round(maximum * position / travel) if travel else 0
-        window.vertical_scroll, window.vertical_scroll_2 = bottom if line >= maximum else (line, 0)
+        window.vertical_scroll, window.vertical_scroll_2 = bottom if line >= maximum else ((0, line) if wrapped else (line, 0))
         window._pending_scroll = 0
         window._following = line >= maximum
         get_app().invalidate()

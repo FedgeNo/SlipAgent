@@ -118,9 +118,8 @@ class ResponseFormats:
                 "type": "array", "description": descriptions["tool_calls"],
                 "items": {
                     "type": "object", "additionalProperties": False,
-                    "required": ["id", "name", "arguments"],
+                    "required": ["name", "arguments"],
                     "properties": {
-                        "id": {"type": "string", "minLength": 1, "description": descriptions["call_id"]},
                         "name": {"type": "string", "minLength": 1, "description": descriptions["tool_name"]},
                         "arguments": {"type": "string", "description": descriptions["arguments"]},
                     },
@@ -183,9 +182,10 @@ class ResponseParser:
                 arguments = schema_arguments(call.arguments, available[name].parameters) if name in available else call.arguments
                 converted.append(ToolCall(call.id, name, arguments))
             return converted
-        combined = self.combine_calls(compatible(self.normalize_calls([call.to_record() for call in native_calls])), compatible(result.calls))
+        combined = self.combine_calls(compatible(self.normalize_calls([call.to_record() for call in native_calls],
+                                        local_ids=[call.id for call in native_calls])), compatible(result.calls))
         # Name and schema conversion can change values; validate the final batch once.
-        result.calls = self.normalize_calls([call.to_record() for call in combined])
+        result.calls = self.normalize_calls([call.to_record() for call in combined], local_ids=[call.id for call in combined])
         if not isinstance(result.text, str):
             raise ResponseFormatError("response must be a string.")
         if not result.text.strip() and not result.calls:
@@ -195,9 +195,9 @@ class ResponseParser:
     def combine_calls(self, *sources: list[ToolCall]) -> list[ToolCall]:
         """Combine carriers in order, preserving repeated calls within each carrier.
 
-        Mirrored calls match by ID or by name and exact JSON arguments. Multiplicity
+        Mirrored calls match by name and exact JSON arguments. Multiplicity
         is preserved, so two intentional equal calls in a batch still execute twice.
-        Sources are already normalized; only IDs need to stay unique across them.
+        Sources already carry harness-assigned identities.
         """
         result: list[ToolCall] = []
         def signature(call: ToolCall) -> tuple[str, str]:
@@ -206,25 +206,13 @@ class ResponseParser:
             unmatched = list(result)
             additions = []
             for call in source:
-                same_id = next((prior for prior in result if prior.id == call.id), None)
-                if same_id is not None and signature(same_id) != signature(call):
-                    raise ResponseFormatError("Conflicting tool calls share the same ID.")
-                prior = next((prior for prior in unmatched if prior.id == call.id), None)
-                if prior is None:
-                    prior = next((prior for prior in unmatched if signature(prior) == signature(call)), None)
+                prior = next((prior for prior in unmatched if signature(prior) == signature(call)), None)
                 if prior is not None:
                     unmatched.remove(prior)
                 else:
                     additions.append(call)
             result.extend(additions)
-        unique: list[ToolCall] = []
-        ids: set[str] = set()
-        for call in result:
-            if call.id in ids:
-                call = ToolCall("call_" + uuid.uuid4().hex, call.name, call.arguments)
-            ids.add(call.id)
-            unique.append(call)
-        return unique
+        return result
 
     def _detect_response(self, text: str, tools: list[ToolSpec], *, xml_tool_calls: bool = False) -> AgentResponse:
         text = text.removeprefix("\ufeff")
@@ -729,7 +717,7 @@ class ResponseParser:
                 raise
             raise ResponseFormatError("Expected complete valid JSON.") from exc
 
-    def normalize_calls(self, raw: Any) -> list[ToolCall]:
+    def normalize_calls(self, raw: Any, *, local_ids: list[str] | None = None) -> list[ToolCall]:
         """Normalize explicit calls, never infer actions from natural-language text.
 
         Native OpenAI calls, the historical flat envelope, and tool_use blocks share
@@ -743,7 +731,6 @@ class ResponseParser:
         if not isinstance(raw, list):
             raise ResponseFormatError("tool_calls must be an array of calls.")
         calls = []
-        ids: set[str] = set()
         for index, item in enumerate(raw):
             if not isinstance(item, dict):
                 raise ResponseFormatError(f"tool_calls[{index}] must be an object.")
@@ -771,13 +758,9 @@ class ResponseParser:
                 self._decode(json.dumps(arguments, ensure_ascii=True))
             except ResponseFormatError as exc:
                 raise ResponseFormatError(f"tool_calls[{index}].arguments: {exc}", excerpt=exc.excerpt) from exc
-            call_id = item.get("id")
-            if type(call_id) is int:
-                call_id = str(call_id)
-            if not isinstance(call_id, str) or not call_id.strip() or call_id in ids:
-                call_id = "call_" + uuid.uuid4().hex
-            self._decode(json.dumps(call_id, ensure_ascii=True))
-            ids.add(call_id)
+            # Incoming identifiers never name harness calls. Only an internal
+            # caller can retain identities already assigned before this pass.
+            call_id = local_ids[index] if local_ids is not None else "call_" + uuid.uuid4().hex
             calls.append(ToolCall(call_id, name, arguments))
         return calls
 
@@ -901,7 +884,7 @@ class ResponseParser:
         if sum(len(value[field]) for field in COMPRESSED_FIELDS) > RECORD_MAX_CHARS:
             raise ResponseFormatError(f"Keep the three compressed fields within {RECORD_MAX_CHARS} characters in total.")
         calls = self.merge_call_sources(
-            self.normalize_calls([call.to_record() for call in native_calls]),
+            self.normalize_calls([call.to_record() for call in native_calls], local_ids=[call.id for call in native_calls]),
             self.normalize_calls(value.get("tool_calls")), self.normalize_calls(value.get("function_call")), tagged_calls,
         )
         if not calls and not value["response"].strip():
@@ -922,8 +905,8 @@ def combine_calls(*sources: list[ToolCall]) -> list[ToolCall]:
     return ResponseParser().combine_calls(*sources)
 
 
-def normalize_calls(raw: Any) -> list[ToolCall]:
-    return ResponseParser().normalize_calls(raw)
+def normalize_calls(raw: Any, *, local_ids: list[str] | None = None) -> list[ToolCall]:
+    return ResponseParser().normalize_calls(raw, local_ids=local_ids)
 
 
 def parse_response(text: str, has_previous_results: bool, *, native_calls: list[ToolCall] | None = None) -> ResponseRecord:

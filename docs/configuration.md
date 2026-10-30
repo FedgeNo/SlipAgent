@@ -14,7 +14,7 @@ The selected provider requires its own API key. In addition to `.env`,
 you can supply it through the process environment:
 
 ```bash
-export OPENROUTER_API_KEY="sk-or-..."
+export OPENROUTER_API_KEY="sk-or-…"
 ```
 
 | Variable | Default | Purpose |

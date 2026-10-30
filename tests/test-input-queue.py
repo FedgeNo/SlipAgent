@@ -73,9 +73,12 @@ async def test_discard_unsent_input_in_recorded_failure_keeps_step_metadata(tmp_
     assert failed.parts()['prompt'] == 'Accepted request'
     assert 'Discard this unsent correction' not in content_text(failed.context_messages()[0].content)
     raw = json.loads((agent.history.store.directory / '00000002.raw.json').read_text())
-    assert raw['request'] == raw['parts']['prompt'] == 'Accepted request'
-    assert raw['model']['user_prompts'] == []
-    assert all(message['role'] != 'user' for message in raw['messages'])
+    assert raw['request'] == 'Discard this unsent correction'  # Immutable original remains archived.
+    assert failed._disk['request'] == failed._disk['parts']['prompt'] == 'Accepted request'
+    assert failed._disk['model']['user_prompts'] == []
+    assert all(message['role'] != 'user' for message in failed._disk['messages'])
+    overlay = json.loads((agent.history.store.directory / '00000002.metadata.json').read_text())
+    assert overlay['input'] == {'request': 'Accepted request', 'user_prompts': []}
     assert 'Discard this unsent correction' not in str(agent.history.task.sources)
     data = journal.load(journal.session_id)
     assert len(data['history'].steps) == 2

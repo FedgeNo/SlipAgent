@@ -88,6 +88,7 @@ class LanguageServer:
         self.sequence = 0
         self.capabilities: dict[str, Any] = {}
         self.initialized = False
+        self.failure: str | None = None
         self.encoding = "utf-16"
         self.stderr = ""
         self.write_lock = asyncio.Lock()
@@ -136,6 +137,8 @@ class LanguageServer:
         await self.notify("workspace/didChangeConfiguration", {"settings": self.config.get("settings", {})})
 
     async def _send(self, payload: dict[str, Any]) -> None:
+        if getattr(self, "failure", None) is not None:
+            raise LSPError(self.failure)
         if self.process is None or self.process.stdin is None or self.process.returncode is not None:
             raise LSPError("Language server is not running")
         raw = json.dumps({"jsonrpc": "2.0", **payload}, ensure_ascii=False).encode("utf-8")
@@ -196,9 +199,12 @@ class LanguageServer:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            self.failure = f"Language server connection failed: {exc}; stderr: {self.stderr}"
             for future in self.pending.values():
                 if not future.done():
-                    future.set_exception(LSPError(f"Language server connection failed: {exc}; stderr: {self.stderr}"))
+                    future.set_exception(LSPError(self.failure))
+            if self.closing is None:
+                self.closing = asyncio.create_task(self._close())
 
     async def _answer(self, message: dict[str, Any]) -> None:
         method = message["method"]
@@ -329,7 +335,8 @@ class LanguageServers:
                 return ToolResult.error("line and column must be 1-based positions within the file; columns count Unicode characters")
             await self._sync_files()
             client = self.clients.get(name)
-            if client is not None and (client.config != config or client.process is None or client.process.returncode is not None):
+            if client is not None and (client.config != config or client.process is None
+                                       or client.process.returncode is not None or getattr(client, "failure", None) is not None):
                 await client.aclose()
                 del self.clients[name]
                 client = None

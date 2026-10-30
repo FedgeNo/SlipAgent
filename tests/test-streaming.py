@@ -82,7 +82,9 @@ async def test_stream_reassembles_unicode_indexed_tools_reasoning_and_final_usag
     assert captured[0]["reasoning"] == {"enabled": True, "exclude": False}
     assert chunks == [("reasoning", "Inspect λ"), ("content", "Hello "), ("content", "λ.")]
     assert result.text == "Hello λ."
-    assert [(call.id, call.arguments) for call in result.tool_calls] == [("one", {"value": "A"}), ("two", {"value": "B"})]
+    assert [call.arguments for call in result.tool_calls] == [{"value": "A"}, {"value": "B"}]
+    assert len({call.id for call in result.tool_calls}) == 2
+    assert all(call.id.startswith("call_") for call in result.tool_calls)
     assert result.usage.total_tokens == 15 and result.usage.cost == .01
 
 
@@ -363,6 +365,60 @@ async def test_interrupted_response_preview_is_marked_and_retry_is_not_duplicate
     assert [event.text for event in events if event.kind == "assistant_text"] == ["Same reply."]
 
 
+@pytest.mark.parametrize("reported_usage", [None, {"prompt_tokens": 20, "completion_tokens": 7,
+                                                "total_tokens": 27, "cost": 0.025}])
+async def test_cancelled_stream_retains_partial_reply_and_reasoning_in_next_request(reported_usage):
+    from slipagent.types import Usage
+    ready = asyncio.Event()
+    requests = []
+
+    class Interrupted(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield packet(frame({"reasoning": "Partial reasoning retained."}))
+            yield packet(frame({"content": "Partial response retained."}))
+            if reported_usage is not None:
+                yield packet({"choices": [], "usage": reported_usage})
+            ready.set()
+            await asyncio.Event().wait()
+
+    def handle(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"data": [{"id": "test"}]})
+        summary = summary_response(json.loads(request.content))
+        if summary is not None:
+            return httpx.Response(200, json=summary)
+        requests.append(json.loads(request.content))
+        if len(requests) == 1:
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Interrupted())
+        return streamed([frame({"content": "Continued."}, "stop"), "[DONE]"])
+
+    registry = ToolRegistry()
+    try:
+        async with OpenRouterClient("test", transport=httpx.MockTransport(handle)) as client:
+            agent = Agent(client, registry, "test")
+            agent.usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15, cost=0.1)
+            task = asyncio.create_task(agent.run("Start work"))
+            await asyncio.wait_for(ready.wait(), 5)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert agent.history.steps[-1].request_failure["outcome"] == "cancelled"
+            assert agent.usage.complete is (reported_usage is not None)
+            if reported_usage is None:
+                assert agent.total_cost is None
+                assert agent.usage.prompt_tokens == 10
+            else:
+                assert agent.total_cost == pytest.approx(0.125)
+                assert agent.usage.prompt_tokens == 30
+            await agent.run("Continue the work")
+        delivered = json.dumps(requests[-1])
+        assert "Partial reasoning retained." in delivered
+        assert "Partial response retained." in delivered
+        assert "incomplete" in delivered
+    finally:
+        await registry.aclose()
+
+
 async def test_streamed_literal_metadata_example_stays_in_one_output_block():
     sink = io.StringIO()
     renderer = Renderer(Style(False), sink, False)
@@ -377,7 +433,9 @@ async def test_streamed_literal_metadata_example_stays_in_one_output_block():
     async with OpenRouterClient("test", transport=httpx.MockTransport(handle)) as client:
         agent = Agent(client, ToolRegistry(), "test", on_event=renderer.handle)
         assert await agent.run("show a literal example") == text
-    assert sink.getvalue() == "\n" + text + "\n"
+    assert sink.getvalue().startswith("\n" + text + "\n")
+    assert sink.getvalue().count(text) == 1
+    assert "Compression unavailable" in sink.getvalue()
 
 
 def test_reserved_metadata_never_flashes_when_markers_are_split_into_characters():

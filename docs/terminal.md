@@ -413,6 +413,8 @@ model must discover applicable instructions before using them to change files.
 
 The startup screen lists the available commands and basic usage. Startup reports
 OpenRouter's free-call count when it is available.
+Each command stays with its options when the entry fits on a continuation line;
+longer entries wrap normally. Resizing recomputes the layout.
 
 ### Command Menu
 

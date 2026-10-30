@@ -40,7 +40,7 @@ async def test_saved_edits_include_guidance_and_survive_into_selected_history():
     assert request[-1].content.data["history"][0]["user_edits"]
 
 
-async def test_omitted_old_edits_do_not_trigger_current_request_notice():
+async def test_retained_partial_old_turn_keeps_edits_historical_without_new_notifications():
     history = ConversationHistory()
     messages = [Message.user("Old task"), Message.assistant("Old details " * 20_000)]
     history.sync(messages)
@@ -48,6 +48,9 @@ async def test_omitted_old_edits_do_not_trigger_current_request_notice():
     for number in range(12):
         messages.extend([Message.user(f"Task {number}"), Message.assistant("Done")])
     request = await view(history, messages)
-    assert all(not record.get("user_edits") for record in request[-1].content.data["history"])
-    assert "Saved User File Changes" not in system_text(request)
-    assert "user_edits" not in system_text(request)
+    payload = request[-1].content.data
+    assert payload['history'][0]['step_id'] == 1
+    assert payload['history'][0]['representation'] == 'excerpt'
+    assert payload['history'][0]['user_edits'][0]['path'] == 'old.py'
+    assert 'user_edits' not in payload
+    assert "Saved User File Changes" in system_text(request)

@@ -19,7 +19,7 @@ import re
 from collections import Counter, deque
 from itertools import chain
 from collections.abc import Awaitable, Callable, Coroutine
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from .capabilities import RequestProfile, model_context_limit
 from .context import SUMMARY_MAX_CHARS, CompletedStep, HistoryStep, message_tokens
@@ -29,6 +29,7 @@ from .compressionproviders import COMPRESSION_UNAVAILABLE, CompressionProviders,
 from .lifecycle import finish_cleanup
 from .prompts import load_prompt
 from .modelrouting import eligible_free, transient_error
+from .tools.blocking import run_blocking
 
 T = TypeVar("T")
 
@@ -36,6 +37,7 @@ COMPACTION_TIMEOUT = 20 * 60
 COMPACTION_RETRIES = 5
 COMPACTION_QUEUE_SIZE = 32
 COMPACTION_GRACE_PERIOD = 120
+LEGACY_OVERSIZED_ERROR = "CompactionBudgetError: the complete step exceeds the selected model's compaction context budget"
 
 
 class CompactionBudgetError(ValueError):
@@ -60,6 +62,20 @@ def decode_summary(completion: Completion) -> Any:
         preview = json.dumps(text[:80], ensure_ascii=True)
         raise ValueError(f"the compactor returned invalid JSON at line {exc.lineno}, column {exc.colno}; "
                          f"answer starts with {preview}") from exc
+
+
+def summary_fields(completion: Completion) -> tuple[str, str]:
+    value = decode_summary(completion)
+    if not isinstance(value, dict) or set(value) != {'summary', 'reasoning_summary'}:
+        raise ValueError('the compactor must return summary and reasoning_summary as separate JSON fields')
+    summary, thoughts = value['summary'], value['reasoning_summary']
+    if not isinstance(summary, str) or not summary.strip() or len(summary) > SUMMARY_MAX_CHARS:
+        raise ValueError("the compactor returned an empty or oversized summary")
+    if not isinstance(thoughts, str) or len(thoughts) > SUMMARY_MAX_CHARS:
+        raise ValueError('the compactor returned invalid or oversized filtered thoughts')
+    summary.encode("utf-8")
+    thoughts.encode('utf-8')
+    return summary.strip(), thoughts.strip()
 
 
 def _frozen_step(step: HistoryStep) -> HistoryStep:
@@ -101,7 +117,9 @@ class StepCompactor:
             # or interrupted by a restart, are requested again with this route.
             for index, earlier in enumerate(conversation):
                 if (earlier is not step and isinstance(earlier, CompletedStep) and earlier.summary is None
-                        and getattr(earlier, "compaction_status", None) in {"cancelled", "interrupted"}
+                        and (getattr(earlier, "compaction_status", None) in {"cancelled", "interrupted"}
+                             or (getattr(earlier, "compaction_status", None) == "failed"
+                                 and earlier.compaction_error == LEGACY_OVERSIZED_ERROR))
                         and earlier.__dict__.get("_compaction_request") is None):
                     earlier.__dict__["_compaction_request"] = (
                         client, model, capabilities, max_tokens,
@@ -254,7 +272,7 @@ class StepCompactor:
                       client: APIClient, model: str, capabilities: RequestProfile | None,
                       max_tokens: int | None, generation: int) -> T | None:
         """Run turn/group compression through the same selection and retry loop."""
-        if self.routing is None and isinstance(client, APIClient):
+        if self.routing is None and isinstance(cast(object, client), APIClient):
             raise CompressionUnavailableError(COMPRESSION_UNAVAILABLE)
         attempt = 0
         repairs = 0
@@ -354,53 +372,113 @@ class StepCompactor:
                     reserve = min(reserve, max(256, context_limit // 8))
                 reserve = min(reserve, capabilities.max_completion_tokens or reserve)
                 budget = int(context_limit * .85) - reserve
-                total = message_tokens(messages)
+                total = await run_blocking(message_tokens, messages)
                 while source['history'] and total > budget:
                     # Drop by each entry's estimated share, then measure exactly once more.
                     while source['history'] and total > budget:
-                        total -= message_tokens([Message.user(source['history'].pop(0))]) - 32
+                        total -= await run_blocking(message_tokens, [Message.user(source['history'].pop(0))]) - 32
                         source['history_omitted'] += 1
-                    total = message_tokens(messages)
+                    total = await run_blocking(message_tokens, messages)
                 if total > budget:
-                    raise CompactionBudgetError("the complete step exceeds the selected model's compaction context budget")
-            options: dict[str, Any] = {}
-            if isinstance(client, APIClient):
-                options["request_profile"] = capabilities
-                options["disable_timeout"] = True
-                options["single_attempt"] = True
-            async with asyncio.timeout(COMPACTION_TIMEOUT):
-                completion = await client.chat(
-                    model=model, messages=messages, tools=None,
-                    max_tokens=reserve if capabilities is not None and "max_tokens" in capabilities.parameters else None,
-                    extra_body={},
-                    **options,
-                )
-            if generation != self.generation:
-                return
-            self.on_usage(completion.usage)
-            value = decode_summary(completion)
-            if not isinstance(value, dict) or set(value) != {'summary', 'reasoning_summary'}:
-                raise ValueError('the compactor must return summary and reasoning_summary as separate JSON fields')
-            summary = value['summary']
-            thoughts = value['reasoning_summary']
-            if not isinstance(summary, str) or not summary.strip() or len(summary) > SUMMARY_MAX_CHARS:
-                raise ValueError("the compactor returned an empty or oversized summary")
-            if not isinstance(thoughts, str) or len(thoughts) > SUMMARY_MAX_CHARS:
-                raise ValueError('the compactor returned invalid or oversized filtered thoughts')
-            summary.encode("utf-8")
-            thoughts.encode('utf-8')
-            # Publish both fields together after validation. Empty means filtering
-            # found nothing useful; None means filtering has not completed.
-            step.summary = summary.strip()
-            step.reasoning_summary = thoughts.strip() if source['reasoning'] else ''
-            step.results_summarized = True
-            step.compaction_status = "complete"
-            callback = getattr(self, "on_step", None)
-            if callback is not None:
-                callback(step)
+                    summary, thoughts = await self._chunked_summary(
+                        step.id, source, client, model, capabilities, reserve, budget, generation)
+                    self._publish_summary(step, summary, thoughts if source['reasoning'] else '')
+                    return
+            summary, thoughts = await self._summary_request(messages, client, model, capabilities, reserve, generation)
+            self._publish_summary(step, summary, thoughts if source['reasoning'] else '')
         except asyncio.CancelledError:
             step.compaction_status = "cancelled"
             raise
+
+    def _publish_summary(self, step: CompletedStep, summary: str, thoughts: str) -> None:
+        # No partial chunk or boundary result is published as complete memory.
+        step.summary = summary
+        step.reasoning_summary = thoughts
+        step.results_summarized = True
+        step.compaction_status = "complete"
+        step.compaction_error = None
+        callback = getattr(self, "on_step", None)
+        if callback is not None:
+            callback(step)
+
+    async def _summary_request(self, messages: list[Message], client: APIClient, model: str,
+                               capabilities: RequestProfile | None, reserve: int, generation: int) -> tuple[str, str]:
+        if generation != self.generation:
+            raise asyncio.CancelledError
+        options: dict[str, Any] = {}
+        if isinstance(client, APIClient):
+            options["request_profile"] = capabilities
+            options["disable_timeout"] = True
+            options["single_attempt"] = True
+        async with asyncio.timeout(COMPACTION_TIMEOUT):
+            completion = await client.chat(
+                model=model, messages=messages, tools=None,
+                max_tokens=reserve if capabilities is not None and "max_tokens" in capabilities.parameters else None,
+                extra_body={},
+                **options,
+            )
+        if generation != self.generation:
+            raise asyncio.CancelledError
+        self.on_usage(completion.usage)
+        return summary_fields(completion)
+
+    async def _chunked_summary(self, step_id: int, source: dict[str, Any], client: APIClient, model: str,
+                               capabilities: RequestProfile, reserve: int, budget: int,
+                               generation: int) -> tuple[str, str]:
+        from .compactionchunks import chunk_messages, edge, plan_chunks
+
+        try:
+            plan = await run_blocking(plan_chunks, step_id, source, budget)
+        except ValueError as exc:
+            raise CompactionBudgetError(str(exc)) from exc
+        notes: list[dict[str, Any]] = []
+
+        async def ask(messages: list[Message]) -> tuple[str, str]:
+            if await run_blocking(message_tokens, messages) > budget:
+                raise CompactionBudgetError(f"Chunked compaction exceeds {model}'s {budget:,}-token input budget")
+            return await self._summary_request(messages, client, model, capabilities, reserve, generation)
+
+        def merge_messages(items: list[dict[str, Any]]) -> list[Message]:
+            return [Message.system(load_prompt("background-summary-prompt.md") + load_prompt("compaction-merge.md")),
+                    Message.user({"phase": "merge", "shared_context": plan.shared, "notes": items})]
+
+        try:
+            count = len(plan.chunks)
+            for index, chunk in enumerate(plan.chunks, 1):
+                summary, thoughts = await ask(chunk_messages(plan.shared, chunk["records"], index, count))
+                notes.append({"source_chunks": [index, index], "summary": summary, "reasoning_summary": thoughts})
+            # Original text on both sides is reviewed, not just summary overlap.
+            for index in range(1, count):
+                left = await run_blocking(edge, plan.chunks[index - 1]["records"], last=True)
+                right = await run_blocking(edge, plan.chunks[index]["records"], last=False)
+                messages = [Message.system(load_prompt("compaction-boundary.md")), Message.user({
+                    "phase": "boundary_review", "shared_context": plan.shared,
+                    "boundary": [index, index + 1], "left_tail": left, "right_head": right,
+                    "left_summary": notes[index - 1], "right_summary": notes[index]})]
+                summary, thoughts = await ask(messages)
+                notes.append({"source_chunks": [index, index + 1], "boundary_review": True,
+                              "summary": summary, "reasoning_summary": thoughts})
+            while await run_blocking(message_tokens, merge_messages(notes)) > budget:
+                groups: list[list[dict[str, Any]]] = []
+                for note in notes:
+                    if not groups or await run_blocking(message_tokens, merge_messages([*groups[-1], note])) > budget:
+                        groups.append([])
+                    groups[-1].append(note)
+                if len(groups) >= len(notes):
+                    raise CompactionBudgetError("The compaction model cannot fit two intermediate summaries for merging")
+                reduced = []
+                for group in groups:
+                    if len(group) == 1:
+                        reduced.append(group[0])
+                        continue
+                    summary, thoughts = await ask(merge_messages(group))
+                    reduced.append({"source_chunks": [min(note["source_chunks"][0] for note in group),
+                                                       max(note["source_chunks"][1] for note in group)],
+                                    "summary": summary, "reasoning_summary": thoughts})
+                notes = reduced
+            return await ask(merge_messages(notes))
+        finally:
+            await run_blocking(plan.close)
 
     def reset(self) -> None:
         self.generation += 1

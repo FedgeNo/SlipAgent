@@ -1,4 +1,4 @@
-"""Estimated text-coding scores; higher is better (2026-10-27).
+"""Estimated text-coding scores; higher is better (2026-10-29).
 
 Only the final scores belong in runtime metadata. See docs/model-scores.md
 for benchmark calibration, validation, and uncertainty.
@@ -13,6 +13,7 @@ SCORES: dict[str, float | None] = {
     "deepseek/deepseek-v4.1-flash": 96.1,
     "google/gemini-3.8-flash": 95.7,
     "z-ai/glm-5.3": 94.7,
+    "mistralai/mistral-large-4-1t-a52b": 93.9,
     "z-ai/glm-5.3-flash": 93.4,
     "stepfun/step-5-preview": 92.7,
     "google/gemini-3.6-flash": 89.5,

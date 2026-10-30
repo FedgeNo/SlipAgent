@@ -212,7 +212,7 @@ cases, the accompanying native `message.tool_calls` value can be:
 When native calls are unavailable, requests ask for a JSON object containing
 `response` and `tool_calls`. Response parsing independently detects plain replies,
 JSON envelopes (including complete JSON code fences), legacy summary envelopes,
-tagged JSON calls, and Qwen3-Coder's `<tool_call><function=...><parameter=...>`
+tagged JSON calls, and Qwen3-Coder's `<tool_call><function=…><parameter=…>`
 format, plus `<tool_call><answer>text</answer></tool_call>`. Complete tagged JSON
 may omit its outer closing tag. Answer carriers also tolerate omitted trailing
 tags; executable Qwen calls require their parameter and function closing tags.
@@ -519,15 +519,17 @@ with SQLite keyword matches and filename context; scores are relative rankings,
 not confidence estimates. Use ordinary search when results are weak, and read
 current source before editing an indexed excerpt.
 
-Semantic search starts only on its first call. It reuses locally cached model
-assets or downloads missing assets, builds a persistent index under the private
+Semantic search starts only on its first call. It uses the bundled local model
+assets and reports an error if they are missing, builds a persistent index under the private
 user-data directory's `semantic/` folder, and watches changes for the rest of the
 session. Source and queries stay local. Updates coalesce save events, hash affected
 files, and reconcile metadata every 30 seconds; queued changes flush before a
 lookup. Reopening a session reuses unchanged vectors. Dependencies, hidden paths,
 symlinks, Git-ignored files, and the harness's data directory are excluded.
 The first build can take time on large projects. CPU inference uses one chunk
-per call and the physical core count, with a two-thread fallback. No model or
+per call and half the physical core count clamped to available CPU affinity,
+with a minimum of one thread. When physical core detection fails, the starting
+count is two before affinity clamping and halving. No model or
 indexing worker is loaded just to display the tool catalog.
 
 Source files are hashed into one temporary snapshot beside the index, then read

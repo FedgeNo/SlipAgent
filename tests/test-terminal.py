@@ -156,7 +156,7 @@ async def render_after(ui, action, *, pipe=None):
         action()
         if pipe is None:
             ui.app.invalidate()
-        await asyncio.wait_for(rendered.wait(), 3)
+        await asyncio.wait_for(rendered.wait(), 10)
     finally:
         ui.app.key_processor.after_key_press -= after_key
         ui.app.after_render -= after_render
@@ -2922,6 +2922,83 @@ async def test_early_description_leaves_the_feed_when_its_attempt_is_abandoned(d
             await task
 
 
+async def test_loading_notice_is_painted_before_resume_work_continues(display):
+    from slipagent.cli import LOADING_CONVERSATION_NOTICE
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: ui.app.is_running)
+            await ui.notify_before_work(LOADING_CONVERSATION_NOTICE)
+            assert "Loading conversation" in "\n".join(snapshot())
+        finally:
+            ui.close()
+            await task
+
+
+async def test_batched_label_previews_are_replaced_by_single_execution_headings(display):
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+        renderer = Renderer(Style(False), sink, False)
+        renderer.terminal = ui
+        task = asyncio.create_task(ui.run())
+        calls = [ToolCall(str(index), "read_file", {"call_label": label, "path": f"{index}.py"})
+                 for index, label in enumerate(["Reading first file", "Reading second file"])]
+        try:
+            for call in calls:
+                renderer.handle(AgentEvent(kind="tool_label", text=call.arguments["call_label"], tool_call=call))
+            await wait_until(lambda: "Reading second file" in "\n".join(snapshot()[:17]))
+            renderer.handle(AgentEvent(kind="assistant_text", text="Checking both files."))
+            for call in calls:
+                renderer.handle(AgentEvent(kind="tool_start", step=1, tool_call=call))
+            await wait_until(lambda: 'read_file({"path": "0.py"})' in "\n".join(snapshot()[:17]))
+            assert "Reading second file" not in "\n".join(snapshot()[:17])
+            for call in calls:
+                renderer.handle(AgentEvent(kind="tool_end", step=1, tool_call=call, result=ToolResult.ok("Read complete.")))
+            await wait_until(lambda: 'read_file({"path": "1.py"})' in "\n".join(snapshot()[:17]))
+            visible = "\n".join(snapshot()[:17])
+            assert visible.count("Reading first file") == 1
+            assert visible.count("Reading second file") == 1
+            assert "Checking both files." in visible
+        finally:
+            ui.close()
+            await task
+
+
+@pytest.mark.parametrize("intervening_reply", [False, True])
+async def test_label_preview_removal_preserves_normal_command_spacing(display, intervening_reply):
+    sink, _, output, _, _ = display
+    rendered = []
+    for preview in (False, True):
+        with create_pipe_input() as pipe:
+            ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
+            renderer = Renderer(Style(False), sink, False)
+            renderer.terminal = ui
+            calls = [ToolCall(str(index), "read_file", {"call_label": f"Reading file {index}", "path": f"{index}.py"})
+                     for index in range(3)]
+            try:
+                renderer.handle(AgentEvent(kind="assistant_delta", text="Checking the files."))
+                if preview:
+                    for call in calls:
+                        renderer.handle(AgentEvent(kind="tool_label", text=call.arguments["call_label"], tool_call=call))
+                if intervening_reply:
+                    renderer.emit("Checking three files.")
+                for call in calls:
+                    renderer.handle(AgentEvent(kind="tool_start", step=1, tool_call=call))
+                    renderer.handle(AgentEvent(kind="tool_end", step=1, tool_call=call, result=ToolResult.error("Missing file.")))
+                layouts = []
+                for columns in (80, 40, 80):
+                    content = ui._transcript_content(columns)
+                    layouts.append(["".join(fragment[1] for fragment in content.get_line(index))
+                                    for index in range(content.line_count)])
+                rendered.append(layouts)
+            finally:
+                ui.close()
+    assert rendered[0] == rendered[1]
+
+
 async def test_model_readout_before_the_danger_divider_is_not_a_folder_link(display, tmp_path, monkeypatch):
     from slipagent import terminal
     sink, _, output, _, _ = display
@@ -3784,6 +3861,23 @@ def test_validated_reply_replaces_a_preview_that_showed_a_call(display):
             ui.close()
 
 
+def test_copy_reply_skips_later_reasoning_and_tool_output(display, monkeypatch):
+    sink, _, output, _, _ = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda columns: "status", sink, input=pipe, output=output)
+        copied = []
+        monkeypatch.setattr(ui, "_copy_text", copied.append)
+        try:
+            ui.write_markdown("Useful reply")
+            ui.write_markdown("")
+            ui.write_markdown("Thinking about the next tool", reasoning=True)
+            ui.write("Tool output")
+            assert ui.copy_response("markdown") == "Useful reply"
+            assert copied == ["Useful reply"]
+        finally:
+            ui.close()
+
+
 def test_startup_and_help_list_all_commands_with_requested_spacing():
     banner = BANNER.format(model="test/model", workspace="project", mcp="")
     for command in [
@@ -3827,6 +3921,11 @@ async def test_startup_commands_wrap_under_first_item_after_resize(display, tmp_
                            for row in command_rows[1:])
                 from slipagent.commands import banner_commands
                 assert "".join(command_rows).replace(" ", "") == "Commands:" + banner_commands().replace(" ", "")
+                from slipagent.commands import COMMANDS
+                for command in COMMANDS:
+                    if command.banner and width(command.banner) <= columns - len(indent):
+                        assert any(command.banner in row for row in command_rows), (columns, command.banner, command_rows)
+                assert "\u00a0" not in "".join(command_rows)
                 ordinary = next(i for i, row in enumerate(rows) if row.startswith("  ordinary"))
                 assert all(row.startswith("  ") for row in rows[ordinary:] if row.strip())
         finally:

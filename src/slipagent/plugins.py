@@ -2,7 +2,7 @@
 
 A plugin file marks a stand-in class with `@replaces("module.Class")`; every
 member it defines replaces or adds to that class, and everything else stays the
-application's. `original(self, ...)` calls the implementation an override
+application's. `original(self, …)` calls the implementation an override
 replaced. Plugin code resolves names from its own file, then the target module,
 then builtins, so methods copied out of SlipAgent run without new imports.
 
@@ -183,15 +183,22 @@ def _method_node(source: bytes | str, class_name: str, method_name: str) -> ast.
 
 def fingerprint(source: bytes | str, class_name: str, method_name: str) -> str | None:
     """Hash of a method's code, ignoring comments, formatting, and its docstring."""
-    node = _method_node(source, class_name, method_name)
-    if node is None:
+    tree = ast.parse(source)
+    nodes = [member for owner in tree.body if isinstance(owner, ast.ClassDef) and owner.name == class_name
+             for member in owner.body if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
+             and member.name == method_name]
+    if not nodes:
         return None
-    assert isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    body = node.body
-    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
-            and isinstance(body[0].value.value, str):
-        node = type(node)(**{**{name: getattr(node, name) for name in node._fields}, "body": body[1:] or [ast.Pass()]})
-    dump = ast.dump(node, include_attributes=False)
+    dumps = []
+    for node in nodes:
+        body = node.body
+        if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
+                and isinstance(body[0].value.value, str):
+            node = type(node)(**{**{name: getattr(node, name) for name in node._fields}, "body": body[1:] or [ast.Pass()]})
+        dumps.append(ast.dump(node, include_attributes=False))
+    # Single-definition stamps keep their existing format; properties include
+    # every accessor and correctly require review of their old getter-only stamp.
+    dump = "\n".join(dumps)
     return hashlib.sha256(dump.encode()).hexdigest()[:FINGERPRINT_LENGTH]
 
 

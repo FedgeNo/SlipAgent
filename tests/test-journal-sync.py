@@ -24,7 +24,7 @@ async def test_records_do_not_sync_on_the_event_loop(workspace, tmp_path, monkey
     real = os.fsync
     monkeypatch.setattr(os, "fsync", lambda descriptor: (syncing.append(threading.get_ident()), real(descriptor)))
     agent = Agent(StubClient([completion("Done")]), ToolRegistry(), "test")
-    journal = attach(agent, workspace, tmp_path)
+    journal = await asyncio.to_thread(attach, agent, workspace, tmp_path)
     await agent.run("Write records")
     assert loop_thread not in syncing
     await journal.flush()

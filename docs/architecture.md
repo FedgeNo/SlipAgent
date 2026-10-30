@@ -234,6 +234,18 @@ Context construction proceeds in this order:
    `error_excerpt`, or `unclassified_result_excerpt`; other bounded messages
    occupy `response_excerpts`. Request assembly does not append its JSON envelope,
    tool definitions, or system guidance to archived turns.
+   Before omitting any turn, field-level excerpts preserve its identity and
+   fitting fields. `historyexcerpts.py` shortens the largest tool-result content
+   first, preserving smaller results, arguments, reply text, and reasoning when
+   they fit. Only after result reductions prove insufficient may it shorten
+   reasoning/reply text, delivered edit/background metadata, arguments, or
+   historical user messages. Newly returned observations are considered after
+   older reductions. `excerpted_fields` lists the changed source fields; the
+   prefix/suffix or first/last array items have explicit omission counts. Each
+   marker's `original` reference supplies valid recall arguments plus a path
+   within the retrieved content, accounting for archived observation wrappers.
+   Full and excerpted outcomes may coexist in the same turn. Original records
+   remain unchanged and summaries are never substituted for unseen observations.
 5. `TaskMemory` retains original requests independently of compression. Request
    assembly supplies the active source messages in `retained_user_prompts`,
    with their source step ID in system task metadata. Retained input counts
@@ -246,6 +258,15 @@ and a 15% estimation margin before fitting history. Text estimates use UTF-8
 size, not a model tokenizer. History uses the remaining model allowance;
 `--context-steps` is retained as a deprecated compatibility option; the newest
 third of retained individual posts determines the full-call target.
+Selection restarts from original history on every request. It tries economical
+summaries/narratives/eras, then field excerpts, before dropping whole turns whose
+remaining metadata still cannot fit. If dropping an oversized unit creates
+spare capacity, other dropped units that fit are restored, recent first; one
+unfittable unit cannot block the rest. Aggregated records restore their complete
+source-step coverage and are emitted once. The final assembled request is checked
+again against the same calibrated allowance. These decisions neither invoke
+`/compact` nor advance its fixed boundary, and they are not saved back as a
+progressively smaller history view.
 Selection preflight uses a copy of history/task selection state so an incompatible
 model cannot mutate the active conversation merely by being considered. Editable
 system-prompt refresh stays local to the preview. Candidate previews require the
@@ -386,7 +407,7 @@ JSON calls, and Qwen3-Coder calls share one normalization boundary. The API adap
 accepts native `tool_calls`, legacy `function_call`, and `tool_use` content blocks.
 Separate calls and calls embedded in reply text can coexist. API carriers precede
 text calls; identical alternate representations are deduplicated by multiplicity,
-while distinct calls are combined. Conflicting shared IDs reject the batch.
+while distinct calls are combined. Incoming IDs do not identify harness calls.
 Qwen argument conversion uses tool parameter schemas, preserving string whitespace
 and entities. No model-specific response-format memory is used. Requests retain
 their preferred output instructions and API capability profiles.
@@ -395,8 +416,16 @@ name and object arguments; arguments may arrive as JSON text or an object, and
 omitted arguments default to an empty object. Extra metadata and optional type
 labels do not reject calls. Nested function fields take precedence over flat
 fields; argument aliases are read in order: `arguments`, `input`, `parameters`.
-Usable IDs are preserved, while missing, invalid, or repeated IDs receive unique
-local IDs. Streams use supplied indexes, otherwise call IDs or delta positions.
+Each incoming call receives a fresh harness ID. Provider/model IDs are ignored.
+Streams use supplied indexes, otherwise positions within each delta, to assemble
+fragments; the harness ID is assigned on the first fragment and stays fixed.
+The embedded JSON request schema and instructions ask only for tool names and
+arguments. The harness assigns an ID to each such call during normalization,
+so the model does not have to generate unique identifiers or copy historical
+ones. Older responses containing IDs remain readable, but their incoming IDs
+are ignored too. Execution, early labels, archived calls and their results all
+use the harness-assigned IDs. Saved history retains its existing identities on
+resume; restoring an archived call never names a new invocation.
 Malformed or truncated argument JSON still rejects the response. Explanatory
 code examples and reasoning are never scanned for actions.
 An empty reply is valid only when accompanied by tool calls.
@@ -415,8 +444,8 @@ The budgeter measures serialized records; recall retains originals, and the
 current prompt is retained independently of compression. Legacy archive readers
 remain separate from active response acceptance.
 
-Duplicate JSON keys, malformed arguments, invalid Unicode, non-finite numbers,
-and duplicate call IDs are rejected. Output-token truncation rejects tool batches
+Duplicate JSON keys, malformed arguments, invalid Unicode, and non-finite numbers
+are rejected. Output-token truncation rejects tool batches
 before execution. No `tool_choice` is forced. Native prose and quoted examples
 remain text and cannot execute tools.
 
@@ -622,6 +651,30 @@ field and otherwise uses raw thoughts. Originals remain immutable and recallable
 Both fields persist in the journal; old journals fall back to original thoughts.
 The frozen endpoint budget is checked before sending. Oldest contextual records
 are omitted first with an explicit count; the current step is never truncated.
+If the current step still exceeds that budget, `compactionchunks.py` plans
+structural chunks in an owned worker. Calls and their results remain together
+when they fit. Larger objects/lists split by their original paths; oversized
+strings split preferentially at paragraph/line boundaries, with exact character
+ranges and 1,024 original characters of overlap on either side. The shared
+request excerpt is limited to 2,048 characters and explicitly marked when
+truncated; the complete request remains among the core source records. Empty
+containers and scalar types are retained. Chunk records are spooled under the
+private data directory and removed on success, error, or cancellation, keeping
+large source text out of the retained in-memory plan.
+
+The same reserved eligible free route summarizes each chunk sequentially,
+reviews every adjacent boundary using original JSON record excerpts plus the
+two summaries, and merges all notes. Merge inputs that exceed the route budget
+are reduced hierarchically; a reduction must combine at least two notes. Every
+chunk/review/merge is budget-checked and uses the ordinary 20-minute request
+timeout, output validation, and tool-free API path. A failure returns to the
+existing route rotation/retry owner; no paid-primary fallback is introduced.
+Only a fully validated final merge publishes `summary` and `reasoning_summary`.
+Chunk prompts preserve exact important values/equations, attribution, source
+references, and unresolved dependencies; overlap reduces boundary loss but does
+not make summarization lossless. Original history and manual compaction
+boundaries are unchanged. Legacy failures with the old whole-step budget error
+are rescheduled when a later step is submitted; success clears their old error.
 A context overflow or bad summary leaves the originals intact and
 marks the summary failed with a visible warning and a recall reference. Each
 summary attempt has a 20-minute timeout. Retry waits and later attempts can
@@ -794,6 +847,75 @@ and pytest commands are null. No discovery probe installs anything. The log quot
 is a startup setting retained by the session service;
 reloading code does not reset its consumed bytes or change its configured quota.
 
+`environment.harness_python_environment` separately reports the running harness's
+exact interpreter, Python version, prefixes, and installed math-library versions.
+`ContextBuilder` supplies this section even with a custom/absent base system prompt
+or no selected project Python. Metadata lookup runs in an owned worker, checks
+module discovery and distribution metadata on each request, and does not import
+heavy math libraries into the terminal process. Missing packages are reported as
+unavailable. The command uses isolated Python (`-I`) for standalone calculations;
+project code and dependency management keep their selected project interpreter.
+
+`environment.session_environment` supplies the local OS account, hostname,
+platform/release/architecture, process ID, working directory, shell, and current
+local time with UTC offset. Context assembly adds the working model and saved
+session ID when available. This section also reaches custom or absent base
+system prompts; it collects no credentials or general environment-variable dump.
+The process working directory is distinguished from the selected workspace and
+the default command directory. If the separate launch directory disappears,
+metadata reports that process directory as unavailable with its collection error;
+the selected workspace remains unchanged. Math verification and dependency setup
+use the running Python environment prefix as their explicit subprocess cwd.
+Default tools/project operations use the selected workspace, and configuration,
+journals, plugins, and caches use the user data directory. A missing selected
+workspace or a user-configured path within the deleted directory remains a real
+failure; the harness does not silently substitute a new project root.
+
+Cancelled streaming requests retain received visible reply text and reasoning
+as incomplete failed turns, just like interrupted transport requests. These
+records do not authorize or replay unfinished tool calls. Subsequent requests
+include retained history subject to normal context budgeting, compaction, and
+reasoning-history settings; original text remains in saved history. A hard
+process kill cannot guarantee persistence of chunks received since the last save.
+
+Cancelled working requests also preserve provider usage received before
+cancellation. A sent request without final provider token counts marks the
+session's accounting incomplete; known counters remain available, total cost is
+hidden, and `Usage.summary()` labels the accounting incomplete. The completeness
+flag survives journaling and resume; older journals default to their prior
+complete-accounting interpretation. No cost or token counts are invented, and
+free background compression remains outside working-model accounting.
+
+The scientific stack (NumPy, SciPy, SymPy, mpmath, NumExpr, Numba, Matplotlib,
+pandas, NetworkX, statsmodels, scikit-learn, seaborn, Pint, CVXPY, gmpy2,
+SymEngine, and Cython) comprises ordinary installation dependencies in
+`pyproject.toml`, including managed installs and updates. CLI startup calls
+`environment.ensure_harness_math` before allowing the first request. Missing
+libraries are installed automatically into the running harness venv, using
+constraints from installed SlipAgent dependency metadata. It uses that exact
+interpreter's pip, or uv targeting that interpreter, or bootstraps pip with
+ensurepip. It never substitutes global Python or the project environment.
+Each installation subprocess has a 600-second timeout and uses the existing
+cancellation/drain machinery. Installation failures appear as startup warnings;
+unavailable libraries remain explicitly unavailable in model metadata. A ready
+environment does no installation. JAX is excluded from required dependencies
+because its CPU wheels require AVX, unavailable on some hosts. Compiling Cython
+extensions still requires a system compiler.
+
+Startup checks installed versions against the declared requirements before
+deciding that no installation is needed. After dependencies satisfy their
+constraints, imports are verified in an isolated subprocess with a 120-second
+timeout. Successful checks are cached under the shared private data directory;
+the key includes Python identity, installed distribution versions/metadata and
+native-library timestamps, and math module origins/directory timestamps.
+Environment changes invalidate the cache. Failures reach both the feed and
+model-facing harness state, and failed probes never populate the success cache.
+`prompts/harness-python.md` describes library roles; the shared
+`response-common.md` instructs every working model to execute challenging math in
+Python and verify results instead of mentally calculating them. NumExpr compiles
+array expressions, Numba compiles numerical functions, and SymPy provides symbolic
+equations and conversion to numerical functions.
+
 `CreatePythonEnvironmentTool` borrows the session's `ProjectEnvironment` owner
 and is exclusive. It returns an existing selection unchanged, refuses ambiguous
 discovery, and creates a missing target directory exclusively before running
@@ -897,6 +1019,13 @@ Four jobs can run at once and 128 handles are retained, evicting only completed
 handles while preserving archived output. Execution keeps the normal timeout
 limits. Completed jobs are announced once while idle or at an agent boundary, in both a user
 notice and model-visible state, without scheduling another model call.
+Separate idle completions accumulate in a pending queue instead of replacing
+earlier notices. Context previews do not acknowledge results. Submission of the
+exact context snapshot acknowledges those jobs for handle eviction and attaches
+their metadata to that request's history turn, including a failed turn. Pending
+results and delivered turn metadata survive journaling/resume; compressed and
+excerpt history retain delivery metadata as well. Pending results are retired
+only after their history record is saved, so a torn save favors redelivery.
 `/stop` preserves running jobs. CLI reset/resume drains jobs before clearing the
 archive; direct `Agent.reset` rejects an active job. Shutdown also drains them.
 Resume restores logs but never reconnects or relaunches a process; its recovery
@@ -1036,6 +1165,14 @@ an unsavable tool-start marker stops dispatch.
 Complete originals are never rewritten by compression.
 
 Resume reads and validates the journal before changing the active conversation.
+Interactive resume announces loading immediately after selection (also for an
+explicit ID or the saved-session action menu), before waiting for compaction,
+reading the journal, stopping jobs, or restoring state. `notify_before_work`
+lets an active terminal paint one frame first, waiting at most 250 milliseconds
+and removing its render listener on completion/cancellation. Before transcript
+rendering takes ownership of the loading notice, failures or cancellation clear
+that notice without replacing a newer notification. Transcript restoration keeps
+its existing loading notice until background layout finishes.
 Only an unterminated final entry is ignored, with a recovery note; malformed
 complete records fail. The loader records the last complete byte offset so tail
 truncation does not load the whole journal. Resource sidecars and file-backed
@@ -1444,6 +1581,21 @@ to the model along with the active generation number.
   process only new chunks. Explicit continuation indents are indexed by chunk
   and source line, and replayed on resize. The startup tool and command lists use
   this to align wrapped rows beneath their first item without changing ordinary output.
+  Startup command entries wrap as a command-plus-options group when that group
+  fits the available continuation width. Wider entries retain ordinary word
+  wrapping. Grouping uses temporary nonbreaking spaces during layout only;
+  stored source, displayed rows, and copy text retain ordinary spaces. Resize
+  recomputes grouping from the new width.
+  Streamed tool labels are provisional terminal records. The first accepted
+  tool-start event removes the provisional batch, then each execution heading
+  shows its label once with the exact call and its result. Rejected attempts
+  remove their provisional records as well. Plain output cannot retract records,
+  so it shows labels only with execution headings. Structured label events and
+  harness-owned call identities are unchanged.
+  Retracted records retain their source indices but are skipped during layout,
+  including resize replay, rather than rendered as empty blocks. Preview-only
+  spacing state is restored when no other output followed the preview; ordinary
+  separators and intervening output are preserved.
   During append/reflow, `WrappedTranscript` indexes source lines whose first
   character is `>` with a recognized historical green foreground or the current
   white-on-green prompt style. Binary search selects
@@ -1581,9 +1733,18 @@ no session usage or spend, and never falls back to a paid primary model.
 
 The agent and compactor use the common `RequestProfile` contract, not a provider class or routing format. `ModelCapabilities` selects OpenRouter routes from live metadata. NVIDIA's explicit profiles describe verified hosted models; unsupported catalog entries stay visible without invented capabilities. Compression profiles come from the background destination rather than the working model. Provider request preparation runs before diagnostics so the inspector sees the final body.
 
+NVIDIA's `mistralai/mistral-large-4-1t-a52b` profile uses the hosted playground's
+262,144-token context rather than the vendor model card's 1M context. Its
+[inference reference](https://docs.api.nvidia.com/nim/reference/mistralai-mistral-large-4-1t-a52b-infer)
+advertises native tools and a maximum output setting of 262,144 tokens; prompt
+and output still share the context budget. Requests explicitly send
+`reasoning_effort: high` by default, or `none` when selected, because omission
+serves non-reasoning mode. The endpoint does not accept the NVIDIA Ultra model's
+`medium` reasoning setting or its thinking-template controls.
+
 `ModelInfo.selector` is `provider::model-id`. Search combines catalogs only for providers with a nonblank environment or session key, preserves duplicate IDs, and reports partial failures. Missing-key providers are not queried or listed. Changes to the active provider set refresh the catalog cache. `Session.select_model` preflights capabilities and context. Independent routed summaries continue across working-provider changes; embedded summaries borrowing the working client cancel and drain before it closes. Originals survive cancellation. Preflight failures close candidate resources and preserve active state. Credentials, URLs, and remembered models are provider-specific.
 
-`providers.key_provider` identifies prefixes and Kilo JWT metadata locally; it does not authenticate credentials. `/key` asks for an explicit provider for unknown formats and rejects conflicts with a detected provider. `Session.use_api_key(..., verify=True)` verifies through account metadata or an authenticated catalog before changing credentials. Providers without either defer authentication to inference. Accepted keys cancel and drain pending compression, clear the catalog and that provider's routing failures, and update session `provider_options`. The active provider also replaces its connection and clears quota state; adding another provider preserves the working model and client. Catalogs, model selection, and compression consume the remembered provider credentials and endpoint. Saving changes only the chosen provider's dotenv entry after confirmation.
+`providers.key_provider` identifies prefixes and Kilo JWT metadata locally; it does not authenticate credentials. `/key` asks for an explicit provider for unknown formats and rejects conflicts with a detected provider. `Session.use_api_key(…, verify=True)` verifies through account metadata or an authenticated catalog before changing credentials. Providers without either defer authentication to inference. Accepted keys cancel and drain pending compression, clear the catalog and that provider's routing failures, and update session `provider_options`. The active provider also replaces its connection and clears quota state; adding another provider preserves the working model and client. Catalogs, model selection, and compression consume the remembered provider credentials and endpoint. Saving changes only the chosen provider's dotenv entry after confirmation.
 
 Provider behavior files participate in the existing reload transaction. Shared state contracts in `types.py`, configuration, package exports, and changes to class inheritance require restart. Adding a provider requires a module, registry entry, documented configuration, and offline wire/selection tests.
 

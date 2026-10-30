@@ -109,9 +109,12 @@ def test_namespaces_do_not_override_an_exact_registered_name():
     assert result.calls[0].name == 'functions.record'
 
 
-def test_native_numeric_call_ids_round_trip_as_strings():
-    result = parse_agent_response('', [ToolCall(7, 'record', {'value': 'A'})], tools=[SPEC])
-    assert result.calls[0].id == '7'
+def test_native_numeric_call_ids_are_ignored():
+    from slipagent.api import _parse_completion
+    result = _parse_completion({'choices': [{'message': {'tool_calls': [
+        {'id': 7, 'function': {'name': 'record', 'arguments': '{"value":"A"}'}}
+    ]}}]})
+    assert result.tool_calls[0].id.startswith('call_')
 
 
 def test_control_markers_inside_kimi_arguments_remain_literal_and_repetitions_survive():
@@ -187,18 +190,21 @@ def test_stream_identity_policy_preserves_fragmented_and_repeated_names(mode):
         stream.add(json.dumps({'choices': [{'delta': {'tool_calls': [{'index': 0, 'id': 'one', 'function': {'name': name, 'arguments': args}}]}}]}))
     stream.add(json.dumps({'choices': [{'finish_reason': 'tool_calls'}]}))
     result = stream.completion()
-    assert [(c.id, c.name, c.arguments) for c in result.tool_calls] == [('one', 'record', {'value': 'A'})]
+    assert [(c.name, c.arguments) for c in result.tool_calls] == [('record', {'value': 'A'})]
+    assert result.tool_calls[0].id.startswith('call_')
 
 
-def test_id_index_mode_keeps_parallel_calls_when_a_gateway_reuses_index_zero():
-    stream = _StreamCompletion(lambda *_: None, index_mode='id')
-    for identifier, args in [('one', '{"value":'), ('two', '{"value":'), ('one', '"A"}'), ('two', '"B"}')]:
-        stream.add(json.dumps({'choices': [{'delta': {'tool_calls': [{'index': 0, 'id': identifier, 'function': {'name': 'record' if args.startswith('{') else None, 'arguments': args}}]}}]}))
+def test_stream_indexes_keep_parallel_calls_with_the_same_incoming_id():
+    stream = _StreamCompletion(lambda *_: None)
+    for index, args in [(0, '{"value":'), (1, '{"value":'), (0, '"A"}'), (1, '"B"}')]:
+        stream.add(json.dumps({'choices': [{'delta': {'tool_calls': [{'index': index, 'id': 'same', 'function': {'name': 'record' if args.startswith('{') else None, 'arguments': args}}]}}]}))
     stream.add(json.dumps({'choices': [{'finish_reason': 'tool_calls'}]}))
-    assert [(c.id, c.arguments) for c in stream.completion().tool_calls] == [('one', {'value': 'A'}), ('two', {'value': 'B'})]
+    calls = stream.completion().tool_calls
+    assert [c.arguments for c in calls] == [{'value': 'A'}, {'value': 'B'}]
+    assert len({c.id for c in calls}) == 2 and all(c.id.startswith('call_') for c in calls)
 
 
-@pytest.mark.parametrize('conflict', [{'id': 'two'}, {'function': {'name': 'other'}}])
+@pytest.mark.parametrize('conflict', [{'function': {'name': 'other'}}])
 def test_snapshot_stream_conflicts_are_errors_instead_of_retargeting_calls(conflict):
     from slipagent.api import APIResponseError
     stream = _StreamCompletion(lambda *_: None, identity_mode='snapshot')
@@ -212,7 +218,9 @@ def test_snapshot_stream_empty_identity_continuations_do_not_erase_the_call():
     for identifier, name, args in [('one', 'record', '{"value":'), ('', None, '"A"'), (None, '', '}')]:
         stream.add(json.dumps({'choices': [{'delta': {'tool_calls': [{'index': 0, 'id': identifier, 'function': {'name': name, 'arguments': args}}]}}]}))
     stream.add(json.dumps({'choices': [{'finish_reason': 'tool_calls'}]}))
-    assert [(c.id, c.name, c.arguments) for c in stream.completion().tool_calls] == [('one', 'record', {'value': 'A'})]
+    result = stream.completion()
+    assert [(c.name, c.arguments) for c in result.tool_calls] == [('record', {'value': 'A'})]
+    assert result.tool_calls[0].id.startswith('call_')
 
 
 def test_finished_stream_choices_cannot_be_reopened_by_late_tool_deltas():
@@ -234,7 +242,8 @@ async def test_nvidia_minimax_uses_the_provider_specific_snapshot_policy():
     response = ''.join('data: ' + json.dumps(f) + '\n\n' for f in frames) + 'data: [DONE]\n\n'
     async with NvidiaClient('dummy', transport=httpx.MockTransport(lambda _: httpx.Response(200, headers={'content-type': 'text/event-stream'}, text=response))) as client:
         result = await client.chat(model='minimaxai/minimax-m3', messages=[Message.user('work')], on_delta=lambda *_: None)
-    assert [(c.id, c.name, c.arguments) for c in result.tool_calls] == [('one', 'record', {'value': 'A'})]
+    assert [(c.name, c.arguments) for c in result.tool_calls] == [('record', {'value': 'A'})]
+    assert result.tool_calls[0].id.startswith('call_')
 
 
 async def test_stream_profile_applies_to_transport_and_can_change_without_restart(tmp_path, monkeypatch):
@@ -256,7 +265,7 @@ async def test_stream_profile_applies_to_transport_and_can_change_without_restar
             assert result.tool_calls[0].name == name
 
 
-@pytest.mark.parametrize('field,value', [('stream_tool_identity', 'guess'), ('stream_tool_indices', 'guess'),
+@pytest.mark.parametrize('field,value', [('stream_tool_identity', 'guess'), ('stream_tool_indices', 'guess'), ('stream_tool_indices', 'id'),
                                         ('stream_tool_identity', True), ('stream_tool_indices', None)])
 def test_invalid_stream_profiles_are_reported(tmp_path, monkeypatch, field, value):
     import shutil

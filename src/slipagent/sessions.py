@@ -314,7 +314,8 @@ class SessionJournal:
                  "model": agent.model, "temperature": agent.temperature,
                  "context_tokens": agent.context_tokens,
                  "compact_through": agent.history.compact_through,
-                 "user_edits": agent.registry.context_notes.get("user_edits", {})}
+                 "user_edits": agent.registry.context_notes.get("user_edits", {}),
+                 "background_commands": agent.registry.context_notes.get("background_commands")}
         if state != self.state:
             self._append("state", **state)
             self.state = copy.deepcopy(state)
@@ -342,7 +343,8 @@ class SessionJournal:
                      reasoning_summary=getattr(step, 'reasoning_summary', None),
                      compaction_status=getattr(step, "compaction_status", "pending"),
                      compaction_error=getattr(step, "compaction_error", None),
-                     user_edits=getattr(step, "user_edits", None))
+                     user_edits=getattr(step, "user_edits", None),
+                     background_commands=getattr(step, "background_commands", None))
         if (getattr(step, "historical_summary", None) is not None or getattr(step, "history_merge_attempt", 0) > 0
                 or getattr(step, "era_summary", None) is not None or getattr(step, "era_attempt", 0) > 0):
             self._append("history_merge", id=step.id,
@@ -531,9 +533,18 @@ class SessionJournal:
             if cap is not None and (type(cap) is not int or cap < MIN_CONTEXT_TOKENS):
                 raise ValueError("invalid context cap")
             usage = state["usage"]
+            pending_jobs = state.get("background_commands")
+            if pending_jobs is not None and (not isinstance(pending_jobs, dict)
+                    or not isinstance(pending_jobs.get("completed"), list)
+                    or not isinstance(pending_jobs.get("guidance"), str)
+                    or any(not isinstance(item, dict) or not isinstance(item.get("job_id"), str)
+                           for item in pending_jobs["completed"])):
+                raise ValueError("invalid pending background command results")
             if not isinstance(usage, dict) or any(type(usage.get(name)) is not int or usage[name] < 0 for name in ("prompt_tokens", "completion_tokens", "total_tokens")):
                 raise ValueError("invalid token accounting")
             cost = usage.get("cost")
+            if type(usage.get("complete", True)) is not bool:
+                raise ValueError("invalid accounting completeness")
             if cost is not None and (type(cost) not in (int, float) or not math.isfinite(cost) or cost < 0):
                 raise ValueError("invalid cost accounting")
             for log_id, metadata in data["logs"].items():
@@ -581,6 +592,13 @@ class SessionJournal:
                     step.observed = step.id < len(history.steps) or not step.has_results
             from .editdelivery import acknowledge, validate_notifications
             delivered_edits = dict(data.get("delivered_user_edits", {}))
+            for step_id, saved in data["steps"].items():
+                completed = saved.get("background_commands")
+                if completed:
+                    if not isinstance(completed, list) or any(not isinstance(item, dict) or
+                            not isinstance(item.get("job_id"), str) for item in completed):
+                        raise ValueError("Invalid background command delivery")
+                    setattr(history.steps[step_id - 1], "background_commands", completed)
             for step_id, saved in data["steps"].items():
                 if saved.get("user_edits") is not None:
                     delivered_edits[step_id] = saved["user_edits"]
@@ -744,6 +762,14 @@ class SessionJournal:
             agent.context_tokens = data["state"]["context_tokens"]
         if data["state"].get("user_edits"):
             agent.registry.context_notes["user_edits"] = data["state"]["user_edits"]
+        pending_jobs = data["state"].get("background_commands")
+        if pending_jobs:
+            delivered = {item["job_id"] for step in loaded.steps
+                         for item in getattr(step, "background_commands", [])}
+            pending_jobs = copy.deepcopy(pending_jobs)
+            pending_jobs["completed"] = [item for item in pending_jobs["completed"] if item["job_id"] not in delivered]
+            if pending_jobs["completed"]:
+                agent.registry.context_notes["background_commands"] = pending_jobs
         agent.queued_messages.update({index: messages[index].content or ""
                                       for index in data["state"].get("queued_message_indices", [])})
         agent.usage = data["usage"]

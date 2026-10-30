@@ -48,8 +48,10 @@ edits first; ongoing external edits can still arrive after that snapshot.
 The default query returns five excerpts; `limit` accepts 1–10. The encoder uses
 quantized BGE, masked mean pooling, L2 normalization, plain queries, a 512-token
 budget, and one document per inference call. Chunk headers consume input budget;
-source text is never silently truncated. Worker count defaults to physical cores,
-clamped to available CPU affinity, with a fallback of two.
+source text is never silently truncated. Background indexing uses half the
+physical core count clamped to available CPU affinity, with a minimum of one
+thread. If the physical core count is unavailable, its starting count is two
+before affinity clamping and halving.
 
 Ranking blends normalized cosine (75%) and BM25 (25%). Independent semantic and
 keyword shortlists allow exact word matches to enter without a cosine cutoff.

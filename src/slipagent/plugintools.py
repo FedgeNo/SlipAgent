@@ -285,7 +285,22 @@ class PluginTools:
                 assert node.end_lineno is not None
                 lines.insert(node.end_lineno, f"from slipagent.plugins import {name}")
                 return "\n".join(lines) + "\n"
-        return f"from slipagent.plugins import {name}\n" + source
+        if tree.body:
+            first = tree.body[0]
+            position = min([first.lineno, *(item.lineno for item in getattr(first, "decorator_list", []))]) - 1
+            for index, node in enumerate(tree.body):
+                if (index == 0 and isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
+                        and isinstance(node.value.value, str)) or isinstance(node, ast.ImportFrom) and node.module == "__future__":
+                    assert node.end_lineno is not None
+                    position = node.end_lineno
+                else:
+                    break
+        else:
+            position = len(lines)
+        lines.insert(position, f"from slipagent.plugins import {name}")
+        result = "\n".join(lines) + "\n"
+        compile(result, "<plugin>", "exec")
+        return result
 
     def diff(self, file_name: str = "") -> list[str]:
         """Unified diffs from each changed method's saved baseline to the current application method."""

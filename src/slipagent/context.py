@@ -13,8 +13,7 @@ from .prompts import load_prompt
 
 import json
 import math
-from collections.abc import Awaitable, Callable, Iterator
-from itertools import chain
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -44,7 +43,7 @@ from .data_text import JSONInput, MessageSections, render_data
 from .sources import FileText, materialize
 
 DEFAULT_CONTEXT_LENGTH = 1_000_000
-HISTORY_PART_NAMES = ("prompt", "response", "reasoning", "tool_calls", "tool_results", "user_edits")
+HISTORY_PART_NAMES = ("prompt", "response", "reasoning", "tool_calls", "tool_results", "user_edits", "background_commands")
 
 
 def _response_instructions(filename: str, *, existing: str = "") -> str:
@@ -312,6 +311,7 @@ class CompletedStep(HistoryStep):
     """
 
     user_edits: list[dict[str, Any]]
+    background_commands: list[dict[str, Any]]
     _disk: dict[str, Any]
     _disk_summary: dict[str, Any]
     _disk_summary_state: Any
@@ -370,6 +370,8 @@ class CompletedStep(HistoryStep):
                 parts["incomplete"] = True
         if getattr(self, "user_edits", None):
             parts["user_edits"] = self.user_edits
+        if getattr(self, "background_commands", None):
+            parts["background_commands"] = self.background_commands
         return parts
 
     def compaction_input(self) -> dict[str, Any]:
@@ -379,6 +381,8 @@ class CompletedStep(HistoryStep):
                 "tool_results": parts["tool_results"], "reasoning": parts["reasoning"]}
         if "user_edits" in parts:
             source["user_edits"] = parts["user_edits"]
+        if "background_commands" in parts:
+            source["background_commands"] = parts["background_commands"]
         return source
 
     def record(self) -> dict[str, Any]:
@@ -399,7 +403,7 @@ class CompletedStep(HistoryStep):
                 return [record_message(dict(self._disk_summary["model"]))]
             record: dict[str, Any] = {"record_type": "history_step", "representation": "compressed",
                       "step_id": self.id, "compressed_summary": self.compressed_text()}
-            for name in ("artifacts", "user_edits", "request_failure", "incomplete"):
+            for name in ("artifacts", "user_edits", "background_commands", "request_failure", "incomplete"):
                 if name in original:
                     record[name] = original[name]
             if "user_edits" in record:
@@ -410,6 +414,8 @@ class CompletedStep(HistoryStep):
                                              if key != "response_excerpt"}
             return [record_message(record)]
         part = super().context_messages(compressed=compressed)
+        if getattr(self, "background_commands", None):
+            part = [record_message({**part[0].content, "background_commands": self.background_commands})]
         edits = getattr(self, "user_edits", None)
         if edits:
             record = dict(part[0].content)
@@ -430,6 +436,8 @@ class CompletedStep(HistoryStep):
 
     def excerpt_context_messages(self, budget: int) -> list[Message] | None:
         metadata: dict[str, Any] = {}
+        if getattr(self, "background_commands", None):
+            metadata["background_commands"] = self.background_commands
         edits = getattr(self, "user_edits", None)
         if edits:
             metadata["user_edits"] = [{key: value for key, value in edit.items() if key != "diff"}
@@ -779,11 +787,13 @@ class ConversationHistory:
         # then eras of five narratives, then newer step summaries, then dropping the oldest
         # history. keep_steps remains accepted for older callers.
         count = len(self.steps)
-        FULL, STEP, NARRATIVE, ERA, DROPPED = range(5)
+        FULL, STEP, NARRATIVE, ERA, PARTIAL, DROPPED = range(6)
         level = [FULL] * count
         unit_records: dict[int, dict[str, Any]] = {}
         unit_costs = [supplied(index, False)[1] for index in range(count)]
         record_costs: dict[int, int] = {}
+        partials: dict[int, list[Message]] = {}
+        removed: list[tuple[list[int], int, int]] = []
         total = sum(unit_costs) + tail_tokens
 
         def compressible(index: int) -> bool:
@@ -835,15 +845,42 @@ class ConversationHistory:
                 record = unit_records[index]
                 members = [member for member in range(count)
                            if level[member] == level[index] and unit_records.get(member) is record]
-                total -= record_costs[id(record)]
+                cost = record_costs[id(record)]
             else:
                 members = [index]
-                total -= unit_costs[index]
+                cost = unit_costs[index]
+            removed.append((members, level[index], cost))
+            total -= cost
             for member in members:
                 level[member] = DROPPED
             return True
 
-        def reductions() -> Iterator[None]:
+        async def excerpt_step(index: int, *, results_only: bool) -> bool:
+            nonlocal total
+            if level[index] != FULL and not (level[index] == PARTIAL and not results_only):
+                return False
+            from .historyexcerpts import excerpt_fields
+            from .tools.blocking import run_blocking
+            # A partial observation must not inherit an optional whole-turn
+            # summary, particularly before the model has seen the actual result.
+            original = context_part(index, include_summary=False)[0].content
+            target = max(0, unit_costs[index] - max(1, total - available))
+            def measure(record: dict[str, Any]) -> int:
+                return math.ceil((TokenEstimates().history_bytes([record]) - empty_history) / 3 * token_scale)
+            clipped = await run_blocking(excerpt_fields, original, target, measure, results_only=results_only)
+            if clipped is None:
+                if measure(original) >= unit_costs[index]:
+                    return False
+                clipped = original
+            cost = measure(clipped)
+            if cost >= unit_costs[index]:
+                return False
+            total -= unit_costs[index] - cost
+            level[index], unit_costs[index] = PARTIAL, cost
+            partials[index] = [record_message(clipped)]
+            return True
+
+        async def reductions() -> AsyncIterator[None]:
             cap = 2 * count // 3
             for index in range(cap):
                 if summarize_step(index):
@@ -857,6 +894,17 @@ class ConversationHistory:
             for index in range(cap, count):
                 if summarize_step(index):
                     yield
+            # Retain the turn's identity and all fitting fields before removing
+            # any turn. New observations remain original until older reductions
+            # have been tried; a partial result is explicit, never a fake summary.
+            for results_only in (True, False):
+                # A unit larger than the entire remaining allowance must be
+                # clipped regardless; do that before damaging fitting results.
+                indices = sorted(range(count), key=lambda index: (
+                    unit_costs[index] <= available - tail_tokens, not compressible(index), index))
+                for index in indices:
+                    if await excerpt_step(index, results_only=results_only):
+                        yield
             while drop_oldest():
                 yield
 
@@ -866,6 +914,8 @@ class ConversationHistory:
             for index in range(count):
                 if level[index] in (FULL, STEP):
                     entries.append((self.steps[index].id, supplied(index, level[index] == STEP)[0]))
+                elif level[index] == PARTIAL:
+                    entries.append((self.steps[index].id, partials[index]))
                 elif level[index] in (NARRATIVE, ERA):
                     record = unit_records[index]
                     if record["step_id"] not in emitted:
@@ -873,6 +923,28 @@ class ConversationHistory:
                         entries.append((record["step_id"], [record_message(record)]))
             entries.sort(key=lambda entry: entry[0])
             return [message for _, part in entries for message in part]
+
+        def backfill(candidate: list[Message]) -> list[Message]:
+            nonlocal total
+            restored: list[tuple[list[int], int, int]] = []
+            for members, form, cost in reversed(removed):
+                if total + cost <= available:
+                    for member in members:
+                        level[member] = form
+                    total += cost
+                    restored.append((members, form, cost))
+            if not restored:
+                return candidate
+            while True:
+                proposed = assemble(selection())
+                if tokens(proposed) <= rendered_limit:
+                    return proposed
+                if not restored:
+                    return candidate
+                members, _, cost = restored.pop()
+                for member in members:
+                    level[member] = DROPPED
+                total -= cost
 
         # A manual boundary chooses economical compressed forms even when the
         # full history fits. Later steps still follow normal budget selection.
@@ -885,11 +957,15 @@ class ConversationHistory:
             for record in era_records(self.steps):
                 merge_into(record, ERA, "_era_bytes", boundary)
 
-        for _ in chain([None], reductions()):
+        if total <= available:
+            candidate = assemble(selection())
+            if tokens(candidate) <= rendered_limit:
+                return candidate
+        async for _ in reductions():
             if total <= available:
                 candidate = assemble(selection())
                 if tokens(candidate) <= rendered_limit:
-                    return candidate
+                    return backfill(candidate)
         if required_last:
             failure_context: list[Message] = []
             excerpt_index = len(self.steps) - 1
@@ -977,6 +1053,7 @@ class RecallHistoryTool(Tool):
                 original = step if isinstance(step, CompletedStep) else CompletedStep(step.id, step.request, step.messages)
                 parts = original.parts()
                 parts.setdefault("user_edits", [])
+                parts.setdefault("background_commands", [])
                 if call_id is not None:
                     key = "id" if section == "tool_calls" else "call_id"
                     parts[section] = [value for value in parts[section] if value[key] == call_id]

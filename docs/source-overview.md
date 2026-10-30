@@ -21,6 +21,7 @@ src/slipagent/
 ├── jobs.py           session-owned background commands and job controls
 ├── lsp.py            optional configured language-server navigation
 ├── context.py        rolling context, summaries, original-step retrieval
+├── historyexcerpts.py field-level clipping with references to unchanged history
 ├── records.py        structured history and current-input records
 ├── data_text.py      JSON input and instruction-data rendering at the API boundary
 ├── budget.py         measured input-token calibration
@@ -34,6 +35,7 @@ src/slipagent/
 ├── protocol.py       ordinary replies, optional schemas, call normalization
 ├── streaming.py      provisional plain-text and incremental JSON reply decoding
 ├── compaction.py     isolated background summaries of completed steps
+├── compactionchunks.py disk-backed oversized-step chunks and original-text overlap
 ├── task.py           retained original user prompts and source references
 ├── inference.py      capability-filtered sampling defaults
 ├── model_catalog.py  curated non-coding model exclusions

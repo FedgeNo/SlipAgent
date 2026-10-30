@@ -68,7 +68,7 @@ JSON. Missing prompt resources and invalid templates are errors.
 To add a tool:
 
 1. Implement a `Tool` subclass with a stable `name`, argument `parameters`, and an
-   asynchronous `run` returning `ToolResult.ok(...)` or `ToolResult.error(...)`.
+   asynchronous `run` returning `ToolResult.ok(…)` or `ToolResult.error(…)`.
    Ordinary failures become model-visible errors; cancellation propagates.
 2. Add its documentation under `prompts/tools/`, and set `description_prompt` and
    any `parameter_prompts` mapping on the class. Put the purpose in the first prose

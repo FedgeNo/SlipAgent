@@ -187,6 +187,7 @@ class Usage:
     completion_tokens: int = 0
     total_tokens: int = 0
     cost: float | None = None
+    complete: bool = True
 
     @classmethod
     def from_api(cls, raw: dict[str, Any] | None) -> Self:
@@ -196,12 +197,13 @@ class Usage:
             completion_tokens=int(raw.get("completion_tokens") or 0),
             total_tokens=int(raw.get("total_tokens") or 0),
             cost=_optional_float(raw.get("cost")),
+            complete=raw.get("complete", True) is True,
         )
 
     def __add__(self, other: Usage) -> Usage:
         # Empty counters are neutral; unpriced token usage makes a session
         # total incomplete even when other requests have known (or zero) cost.
-        missing = any(usage.cost is None and any((usage.prompt_tokens, usage.completion_tokens, usage.total_tokens))
+        missing = any(not usage.complete or usage.cost is None and any((usage.prompt_tokens, usage.completion_tokens, usage.total_tokens))
                       for usage in (self, other))
         total = None if missing else (self.cost or 0.0) + (other.cost or 0.0)
         if self.cost is None and other.cost is None:
@@ -211,6 +213,7 @@ class Usage:
             completion_tokens=self.completion_tokens + other.completion_tokens,
             total_tokens=self.total_tokens + other.total_tokens,
             cost=total,
+            complete=self.complete and other.complete,
         )
 
     def summary(self) -> str:
@@ -220,6 +223,8 @@ class Usage:
         ]
         if self.cost is not None:
             parts.append(f"cost=${self.cost:.6f}")
+        if not self.complete:
+            parts.append("usage=incomplete")
         return " ".join(parts)
 
 
@@ -275,12 +280,18 @@ class ModelInfo:
 
     @classmethod
     def from_api(cls, raw: dict[str, Any]) -> Self:
+        model_id = raw.get("id")
+        if not isinstance(model_id, str) or not model_id.strip():
+            raise ValueError("model id must be a nonblank string")
+        pricing = raw.get("pricing")
+        if pricing is not None and not isinstance(pricing, dict):
+            raise ValueError("model pricing must be an object")
         context = raw.get("context_length")
         return cls(
-            id=raw.get("id", ""),
+            id=model_id,
             name=raw.get("name"),
             context_length=int(context) if context else None,
-            pricing=raw.get("pricing") or {},
+            pricing=pricing if pricing is not None else {},
         )
 
 

@@ -35,7 +35,7 @@ def assert_markdown_structure(text):
 
 
 @pytest.mark.parametrize("native", [False, True])
-async def test_working_and_summary_requests_have_markdown_structure(native):
+async def test_working_and_summary_requests_have_markdown_structure(native, free_compaction):
     requests, summaries = [], []
     user = "User paragraph line one\nline two\n\n- first\n- second"
 
@@ -55,6 +55,7 @@ async def test_working_and_summary_requests_have_markdown_structure(native):
     async with OpenRouterClient("dummy", transport=httpx.MockTransport(handle)) as client:
         client.cache_capabilities("test", profile)
         agent = Agent(client, registry, "test", system_prompt=build_system_prompt("/project"))
+        free_compaction(agent, client)
         assert await agent.run(user) == "Done"
         await agent.wait_for_compaction()
     assert len(requests) == len(summaries) == 1
@@ -278,7 +279,7 @@ def test_tool_spec_rereads_description_and_argument_guidance(editable_prompts, w
     assert before.parameters["properties"]["path"]["description"] != "Fresh path guidance."
 
 
-async def test_background_summary_rereads_prompt_at_request_time(editable_prompts):
+async def test_background_summary_rereads_prompt_at_request_time(editable_prompts, free_compaction):
     summaries = []
     def handle(request):
         body = json.loads(request.content)
@@ -292,6 +293,7 @@ async def test_background_summary_rereads_prompt_at_request_time(editable_prompt
         profile = ModelCapabilities({}, [{"tag": "stub", "supported_parameters": ["tools"], "context_length": 1000000}])
         client.cache_capabilities("test", profile)
         agent = Agent(client, registry, "test")
+        free_compaction(agent, client)
         await agent.run("First request")
         await agent.wait_for_compaction()
         path = editable_prompts / "background-summary-prompt.md"

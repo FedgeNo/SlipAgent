@@ -982,7 +982,10 @@ class ResumeCommand(StoredSessionCommand):
         return True
 
     async def execute_saved(self, context: CommandContext, argument: str, journal: SessionJournal) -> bool | None:
+        from .cli import LOADING_CONVERSATION_NOTICE
         session, style, out = context.session, context.style, context.out
+        terminal = session.renderer.terminal
+        announcing, rendering = False, False
         try:
             if not argument:
                 terminal = session.renderer.terminal
@@ -998,18 +1001,26 @@ class ResumeCommand(StoredSessionCommand):
                 if selected is None:
                     return False
                 argument = selected
+            if terminal is not None:
+                announcing = True
+                await terminal.notify_before_work(LOADING_CONVERSATION_NOTICE)
             await session.agent.wait_for_compaction()
             data = await asyncio.to_thread(journal.load, argument)
             jobs = session.registry.resources.jobs
             if jobs is not None:
                 await jobs.stop_all()
             journal.restore(session.agent, data)
+            rendering = True
             await session.renderer.restore_transcript(session.agent.messages, session.agent.pending,
                                                       queued_messages=session.agent.queued_messages,
                                                       failures=failed_steps(session.agent.history.steps))
             print(f"  Restored {journal.session_id}; no tools were replayed. Type a task or continue when ready.", file=out)
         except SessionError as exc:
             print(style.red(f"  {exc}"), file=out)
+        finally:
+            if (announcing and not rendering and terminal is not None
+                    and terminal.status_line.notification == LOADING_CONVERSATION_NOTICE):
+                terminal.notify("")
         return None
 
 
@@ -1043,8 +1054,8 @@ class McpCommand(Command):
     banner = '/mcp [add|save|remove]'
     help = (
         CommandHelp('/mcp', 'show MCP servers and their tools', '/mcp'),
-        CommandHelp('/mcp add <name> <command> [args...]', 'connect an MCP server over stdio for this session', '/mcp add '),
-        CommandHelp('/mcp save <name> <command> [args...]', 'same, but also save it globally for future runs in every project', '/mcp save '),
+        CommandHelp('/mcp add <name> <command> [args…]', 'connect an MCP server over stdio for this session', '/mcp add '),
+        CommandHelp('/mcp save <name> <command> [args…]', 'same, but also save it globally for future runs in every project', '/mcp save '),
         CommandHelp('/mcp remove <name>', 'disconnect a server and forget it', '/mcp remove '),
     )
 
@@ -1092,8 +1103,8 @@ class McpCommand(Command):
 
         if action not in ("add", "save") or spec is None:
             print(
-                style.red(f"  usage: /mcp add <name> <command> [args...]  "
-                          f"(or /mcp save ...)"),
+                style.red(f"  usage: /mcp add <name> <command> [args…]  "
+                          f"(or /mcp save …)"),
                 file=out,
             )
             return None
@@ -1126,7 +1137,7 @@ class McpCommand(Command):
         return None
 
     def split(self, argument: str) -> tuple[str, ServerSpec | None, str | None]:
-        """Parse `add|save|remove <name> <command> [args...]`.
+        """Parse `add|save|remove <name> <command> [args…]`.
 
         Returns the subcommand, the server spec to connect, and the name to remove.
         The command and its arguments are split on the first space after the name,
@@ -1174,7 +1185,7 @@ class McpCommand(Command):
             print(
                 style.dim(
                     f"  no MCP servers configured ({config_path(manager.workspace)}).\n"
-                    f"  add one with: /mcp add <name> <command> [args...]"
+                    f"  add one with: /mcp add <name> <command> [args…]"
                 ),
                 file=out,
             )

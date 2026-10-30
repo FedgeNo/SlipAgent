@@ -1,6 +1,7 @@
 """Tool definitions and execution share the current request's allowlist."""
 
 import json
+import re
 from importlib import import_module
 
 import httpx
@@ -14,7 +15,8 @@ from slipagent.tools.base import ToolRegistry
 from slipagent.tools.discovery import CORE_TOOLS, UNAVAILABLE_BATCH, LoadToolsTool, ToolCatalog, tool_catalog
 from slipagent.types import Message, ToolCall
 from slipagent.workspace import Workspace
-from test_agent import RecordingTool, StubClient, completion
+from data_text_reader import current_input, request_input
+from test_agent import RecordingTool, StubClient, completion, context_records
 from test_mcp import stub_spec
 
 Router = import_module("test-native-tools").Router
@@ -183,7 +185,14 @@ async def test_unavailable_call_rejects_the_whole_batch(monkeypatch, native, all
         assert loads == []
         assert tools.get("optional_record").seen == []
         observations = [m for m in agent.messages if m.role == "tool"]
-        assert [m.tool_call_id for m in observations] == [call.id for call in calls]
+        assistant_calls = [call for message in agent.messages if message.role == "assistant"
+                           for call in message.tool_calls or []]
+        local_ids = [call.id for call in assistant_calls]
+        assert [call.name for call in assistant_calls] == [call.name for call in calls]
+        assert len(set(local_ids)) == len(calls)
+        assert all(re.fullmatch(r"call_[0-9a-f]{32}", call_id) for call_id in local_ids)
+        assert not set(local_ids).intersection(call.id for call in calls)
+        assert [m.tool_call_id for m in observations] == local_ids
         assert all(m.content["status"] == "error" for m in observations)
         assert all("No tools were executed" in m.content["content"] for m in observations)
         assert all(unavailable in m.content["content"] for m in observations)
@@ -191,8 +200,13 @@ async def test_unavailable_call_rejects_the_whole_batch(monkeypatch, native, all
             assert all("load_tools" in m.content["content"] for m in observations)
         if native:
             assert {tool["function"]["name"] for tool in router.requests[0]["tools"]} == {"load_tools", "read_file", "update_plan"}
-        errors = [m for m in router.requests[1]["messages"] if m["role"] in {"tool", "user"}]
-        assert any("No tools were executed" in str(m["content"]) for m in errors)
+        retry_messages = router.requests[1]["messages"]
+        retry_input = request_input(retry_messages)
+        assert retry_input["errors"] == []
+        returned = [result for record in context_records(retry_messages) for result in record.get("tool_results", [])]
+        assert len(returned) == len(calls)
+        assert all("No tools were executed" in result["content"] for result in returned)
+        assert "No tools were executed" not in retry_messages[0]["content"]
     finally:
         await tools.aclose()
 

@@ -363,8 +363,11 @@ def _normalize_value(schema: dict[str, Any] | bool, value: Any) -> Any:
     elif isinstance(value, list):
         item_schema = schema.get("items")
         prefixes = schema.get("prefixItems", item_schema if isinstance(item_schema, list) else [])
-        value = [_normalize_value(prefixes[index] if index < len(prefixes) else item_schema, item)
-                 if index < len(prefixes) or isinstance(item_schema, dict) else item for index, item in enumerate(value)]
+        normalized = []
+        for index, item in enumerate(value):
+            selected = prefixes[index] if index < len(prefixes) else item_schema
+            normalized.append(_normalize_value(selected, item) if isinstance(selected, (dict, bool)) else item)
+        value = normalized
     for keyword in ("allOf", "anyOf", "oneOf"):
         for branch in schema.get(keyword, []):
             if _check_value("", branch, value) is None:

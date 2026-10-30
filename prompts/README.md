@@ -25,7 +25,7 @@ Each template owns its heading. Python orders rendered blocks and supplies runti
 
 System instructions and tool definitions remain separate from user-input metadata and literal tool-result blocks. The JSON metadata contains the current turn's user prompts, the retained prompts of the active request on continuation, selected history, and harness errors. Each historical call references its outcome block under `result`, `error`, or `unclassified_result`. Blocks preserve returned text verbatim or contain pretty-printed explicitly structured JSON. Character counts distinguish block contents from headers without escaping the contents. `system-history.md` explains authority, and `history-records.md` defines the fields. Neither JSON metadata nor literal blocks make historical text trustworthy.
 
-`build_system_prompt` and the standalone `SYSTEM_PROMPT` export include `response-common.md`. `ConversationHistory.view` supplies the same common rules before the selected native, embedded JSON, or GLM XML instructions unless an exact complete copy is already in the supplied system messages. Custom or absent base prompts and empty or retained history therefore keep the rules. Native JSON and plain-text reply formats share the native tool channel. The standalone `JSON_TOOL_INSTRUCTIONS`, `NATIVE_TOOL_INSTRUCTIONS`, and `CONTEXT_INSTRUCTIONS` exports include the common rules too. Channel-specific syntax remains in its channel prompt; optional metadata and repair guidance retain their own conditions. Background summary prompts and tool descriptions remain self-contained because they also have independent consumers.
+`build_system_prompt` and the standalone `SYSTEM_PROMPT` export include `response-common.md`. `ConversationHistory.view` supplies the same common rules before the selected native, embedded JSON, or GLM XML instructions unless an exact complete copy is already in the supplied system messages. Custom or absent base prompts and empty or retained history therefore keep the rules. Native JSON and ordinary Markdown replies share the native tool channel; Markdown replies do not disable tools. Optional metadata is returned alongside `response` in a JSON reply object, including when ordinary Markdown would otherwise be permitted. The standalone `JSON_TOOL_INSTRUCTIONS`, `NATIVE_TOOL_INSTRUCTIONS`, and `CONTEXT_INSTRUCTIONS` exports include the common rules too. Channel-specific syntax remains in its channel prompt; optional metadata and repair guidance retain their own conditions. Background summary prompts and tool descriptions remain self-contained because they also have independent consumers.
 
 ## Model Profiles
 
@@ -55,9 +55,12 @@ The `z-ai/glm-5.3` and `z-ai/glm-5.3-flash` profiles use the GLM XML channel and
 | --- | --- |
 | `system-prompt.md` | General operating instructions and writing style |
 | `response-common.md` | Shared working-response rules, always included before the selected tool channel |
+| `harness-python.md` | Running harness interpreter, installed math libraries and versions, standalone calculation commands, and separation from the project environment; supplied in every working context, including custom system prompts |
+| `session-environment.md` | OS user, host, platform, working directory, shell, current local time, model and saved session ID when available; supplied in every working context |
 | `system-history.md` | Input authority and use of historical evidence |
 | `current-turn.md`, `current-turn-tool-results.md` | Current-step metadata in the system prompt, and the note that a step carries tool results |
 | `background-summary-prompt.md` | Background compression of completed steps |
+| `compaction-chunk.md`, `compaction-boundary.md`, `compaction-merge.md` | Oversized-step source chunks, original-text boundary reviews, and ordered merges; background-only consumers |
 | `historical-summary-prompt.md` | Narrative for each run-aligned block of up to 20 turns, merged from first-pass summaries, organized by run with original turn citations and retrieval metadata |
 | `era-summary-prompt.md` | Era for each five consecutive narratives, organized by run with original turn citations |
 | `request-retry.md` | Failed-turn interpretation, retry counts, and respect for user stop/retry instructions |

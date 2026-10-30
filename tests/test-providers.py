@@ -104,6 +104,48 @@ async def test_unknown_nvidia_capabilities_are_not_invented():
             await client.model_capabilities("unknown/model")
 
 
+@pytest.mark.parametrize("effort", ["high", "none"])
+async def test_nvidia_mistral_large_four_uses_hosted_limits_and_native_tools(effort):
+    from slipagent.nvidia import MISTRAL_LARGE_4_MODEL
+
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json={"data": [{"id": MISTRAL_LARGE_4_MODEL}]})
+        return httpx.Response(200, json=completion())
+
+    async with NvidiaClient("dummy", reasoning_effort=effort, transport=httpx.MockTransport(handle)) as client:
+        models = await client.list_models()
+        profile = await client.model_capabilities(MISTRAL_LARGE_4_MODEL)
+        assert models[0].score == 93.9
+        assert models[0].context_length == profile.context_length == 262_144
+        assert profile.max_completion_tokens == 262_144
+        assert profile.native_tools and profile.format is None
+        await client.chat(model=MISTRAL_LARGE_4_MODEL, messages=[Message.user("Inspect")],
+                          tools=[ToolSpec("probe", "Probe", {})], tool_choice="auto", max_tokens=8192)
+        with pytest.raises(APIConfigError, match="output limit"):
+            await client.chat(model=MISTRAL_LARGE_4_MODEL, messages=[Message.user("Inspect")], max_tokens=262_145)
+    body = json.loads(next(request.content for request in requests if request.method == "POST"))
+    assert body["reasoning_effort"] == effort
+    assert body["max_tokens"] == 8192
+    assert body["tools"][0]["function"]["name"] == "probe"
+    assert body["tool_choice"] == "auto"
+    assert not {"chat_template_kwargs", "reasoning_budget", "response_format", "provider"}.intersection(body)
+
+
+async def test_nvidia_mistral_large_four_rejects_unsupported_medium_effort():
+    from slipagent.nvidia import MISTRAL_LARGE_4_MODEL
+    from slipagent.nvidiaprofiles import builtin_profile
+
+    async with NvidiaClient("dummy", reasoning_effort="medium", transport=httpx.MockTransport(
+            lambda _: pytest.fail("Unsupported settings must fail before inference"))) as client:
+        client.cache_capabilities(MISTRAL_LARGE_4_MODEL, builtin_profile(MISTRAL_LARGE_4_MODEL))
+        with pytest.raises(APIConfigError, match="none or high"):
+            await client.chat(model=MISTRAL_LARGE_4_MODEL, messages=[Message.user("Inspect")])
+
+
 async def test_streamed_overload_is_retried_before_tool_call_is_delivered():
     attempts = []
     def handle(request):

@@ -22,15 +22,21 @@ async def connection():
     async def drain():
         pass
 
-    stdin = SimpleNamespace(write=lambda raw: outgoing.put_nowait(json.loads(raw)), drain=drain)
+    stdin = SimpleNamespace(write=lambda raw: outgoing.put_nowait(json.loads(raw)), drain=drain, close=lambda: None)
     client = MCPClient(ServerSpec("local", "unused"), timeout=1)
-    client._process = SimpleNamespace(stdin=stdin, stdout=stdout, returncode=None)
+    process = SimpleNamespace(stdin=stdin, stdout=stdout, returncode=None)
+
+    async def wait():
+        process.returncode = 0
+        return 0
+
+    process.wait = wait
+    client._process = process
     client._pump = asyncio.create_task(client._read_stdout())
     try:
         yield client, stdout, outgoing
     finally:
-        client._pump.cancel()
-        await asyncio.gather(client._pump, return_exceptions=True)
+        await client.disconnect()
 
 
 @pytest.mark.parametrize("traffic", ["notifications/message", "notifications/progress", "response", "invalid"])
@@ -81,7 +87,7 @@ async def test_reply_survives_notifications_server_requests_duplicates_and_eof(c
         response = await asyncio.wait_for(task, .5)
         assert response["result"] == {"tools": []}
         assert (await outgoing.get())["error"]["code"] == -32601
-        with pytest.raises(MCPError, match="exited before answering tools/list"):
+        with pytest.raises(MCPError, match="server closed stdout"):
             await client._request("tools/list", {}, None)
         assert outgoing.empty()
     finally:
@@ -123,7 +129,7 @@ async def test_reader_failures_reach_pending_or_next_request(connection, idle, f
     try:
         if not idle:
             task = asyncio.create_task(client._request("tools/list", {}, None))
-            await outgoing.get()
+            request = await outgoing.get()
         if failure == "json":
             stdout.feed_data(b"bad json\n")
             expected = "server wrote non-JSON"
@@ -135,22 +141,23 @@ async def test_reader_failures_reach_pending_or_next_request(connection, idle, f
             expected = "broken pipe reader"
         else:
             stdout.feed_eof()
-            expected = "exited before answering tools/list"
+            expected = "server closed stdout"
         await asyncio.sleep(0)
         if idle:
             task = asyncio.create_task(client._request("tools/list", {}, None))
+        if failure == "json":
+            if idle:
+                request = await outgoing.get()
+            send(stdout, {"id": request["id"], "result": {"tools": []}})
+            assert (await asyncio.wait_for(task, .5))["result"] == {"tools": []}
+            assert client.connected
+            return
         with pytest.raises(MCPError, match=expected):
             await asyncio.wait_for(task, .5)
         if idle:
             assert outgoing.empty()
-        if failure == "json":
-            task = asyncio.create_task(client._request("tools/list", {}, None))
-            request = await outgoing.get()
-            send(stdout, {"id": request["id"], "result": {"tools": []}})
-            assert (await task)["result"] == {"tools": []}
-        else:
-            with pytest.raises(MCPError, match="exited before answering tools/list"):
-                await client._request("tools/list", {}, None)
+        with pytest.raises(MCPError, match=expected):
+            await client._request("tools/list", {}, None)
     finally:
         if task is not None:
             task.cancel()
@@ -171,10 +178,11 @@ async def test_server_request_reply_has_a_write_deadline(connection, monkeypatch
             task = asyncio.create_task(client._request("tools/list", {}, None, timeout=1))
             await outgoing.get()
         monkeypatch.setattr(client._process.stdin, "drain", blocked)
+        reader = client._pump
         send(stdout, {"jsonrpc": "2.0", "id": "server-request", "method": "sampling/createMessage"})
-        done, _ = await asyncio.wait({client._pump}, timeout=.5)
+        done, _ = await asyncio.wait({reader}, timeout=.5)
         assert done
-        client._pump.result()
+        reader.result()
         assert (await outgoing.get())["id"] == "server-request"
         if idle:
             task = asyncio.create_task(client._request("tools/list", {}, None))

@@ -5,7 +5,7 @@ from slipagent.types import content_text
 import asyncio
 import io
 import json
-from data_text_reader import read_data
+from data_text_reader import read_data, request_input
 import os
 import shlex
 import subprocess
@@ -104,13 +104,14 @@ async def test_repeated_batches_get_recovery_context_before_stopping():
     answer = await agent.run("inspect")
     assert "unchanged results again" in answer
     assert len(client.calls) == 4 and len(agent.history.steps) == 4
-    assert "Change the approach" in content_text(client.calls[3]["messages"][0].content)
-    delivered = content_text(client.calls[3]["messages"][0].content)
+    payload = request_input(client.calls[3]["messages"])
+    assert any("Change the approach" in correction for correction in payload["errors"])
+    assert "Change the approach" not in content_text(client.calls[3]["messages"][0].content)
+    delivered = "\n".join(payload["errors"])
     assert 'value: text (4 characters):' in delivered and 'same' in delivered
     assert not any(event.kind == "warning" and "Change the approach" in event.text for event in events)
     assert any(event.kind == "warning" and "unchanged results again" in event.text for event in events)
     current = context_records(client.calls[3]["messages"])[-1]
-    assert any("Change the approach" in prompt for prompt in current["user_prompts"])
     assert current["is_tool_result_response"] is True
     assert [message.content for message in agent.messages if message.role == "user"] == ["inspect"]
     assert agent.stopped
@@ -170,6 +171,13 @@ def test_stream_guard_preserves_code_tables_lists_and_short_repetition():
         guard = StreamLoopGuard()
         for chunk in text:
             guard.feed("content", chunk)
+        guard.finish()
+
+
+def test_indented_fence_text_does_not_hide_repeated_prose():
+    guard = StreamLoopGuard()
+    with pytest.raises(StreamLoopError, match="sustained repetition"):
+        guard.feed("content", "    ```\n" + PROSE * 12)
         guard.finish()
 
 

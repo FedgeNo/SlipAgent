@@ -14,6 +14,7 @@ import random
 import re
 import copy
 import math
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -347,8 +348,7 @@ class APIClient:
                     identity_mode = profile.get("stream_tool_identity", "delta")
                     if "stream_tool_identity" not in profile and self.provider == "nvidia" and "minimax" in payload["model"].lower():
                         identity_mode = "snapshot"
-                    state = _StreamCompletion(announce, identity_mode=identity_mode,
-                                              index_mode=profile.get("stream_tool_indices", "index"))
+                    state = _StreamCompletion(announce, identity_mode=identity_mode)
                     async for line in response.aiter_lines():
                         if line.startswith("data:"):
                             data.append(line[5:].lstrip(" "))
@@ -381,6 +381,16 @@ class APIClient:
                             observed = True
                             state.add(event)
                     return state.completion()
+            except asyncio.CancelledError as exc:
+                usage = Usage(complete=False)
+                if state is not None:
+                    try:
+                        usage = Usage.from_api(state.usage)
+                        usage.complete = state.usage is not None and all(name in state.usage for name in ("prompt_tokens", "completion_tokens"))
+                    except (ValueError, TypeError, AttributeError, OverflowError):
+                        usage = Usage(complete=False)
+                setattr(exc, "usage", usage)
+                raise
             except TimeoutError as exc:
                 if deadline is None or not first_output.expired():
                     raise
@@ -797,16 +807,13 @@ class ResponseReader:
                 raise ResponseFormatError("Unsupported assistant content block; expected text or tool_use.")
         return "".join(texts), calls
 
-    def _parse_completion(self, raw: dict[str, Any]) -> Completion:
+    def _parse_completion(self, raw: dict[str, Any], *, local_ids: list[str] | None = None) -> Completion:
         if raw.get("error") and self._is_context_overflow(str(raw["error"])):
             raise APIContextError(f"API provider context limit exceeded: {raw['error']}")
         choices = raw.get("choices") or []
-        if not choices:
-            raise APIResponseError(
-                f"API provider response contained no choices: {str(raw)[:500]}"
-            )
-
         try:
+            if not choices:
+                raise ValueError("response contained no choices")
             if not isinstance(choices, list) or not isinstance(choices[0], dict):
                 raise ValueError("choices must contain objects")
             first = choices[0]
@@ -819,7 +826,7 @@ class ResponseReader:
             response_excerpt = ""
             try:
                 content, blocks = self._content_parts(wire.get("content"))
-                calls = combine_calls(normalize_calls(wire.get("tool_calls")),
+                calls = combine_calls(normalize_calls(wire.get("tool_calls"), local_ids=local_ids),
                                       normalize_calls(wire.get("function_call")), normalize_calls(blocks))
             except ResponseFormatError as exc:
                 response_error = str(exc)
@@ -848,7 +855,13 @@ class ResponseReader:
                 response_error=response_error, response_excerpt=response_excerpt,
             )
         except (ValueError, TypeError, AttributeError, OverflowError) as exc:
-            raise APIResponseError(f"API provider returned a malformed completion: {exc}") from exc
+            error = APIResponseError(f"API provider returned a malformed completion: {exc}")
+            error.partial_response = json.dumps(raw, ensure_ascii=True)[:1500]
+            try:
+                error.usage = Usage.from_api(raw.get("usage"))
+            except (ValueError, TypeError, AttributeError, OverflowError):
+                pass
+            raise error from exc
 
 
 # Entry points for other modules; plugins override the methods above.
@@ -864,8 +877,8 @@ def _merge_events(events: list[str]) -> dict[str, Any]:
     return ResponseReader()._merge_events(events)
 
 
-def _parse_completion(raw: dict[str, Any]) -> Completion:
-    return ResponseReader()._parse_completion(raw)
+def _parse_completion(raw: dict[str, Any], *, local_ids: list[str] | None = None) -> Completion:
+    return ResponseReader()._parse_completion(raw, local_ids=local_ids)
 
 
 class FirstOutputDeadline:
@@ -977,11 +990,9 @@ _LEADING_LABEL = re.compile(r'\s*\{\s*"call_label"\s*:\s*("(?:[^"\\]|\\.)*")')
 class _StreamCompletion:
     """Assemble text, indexed tool fragments, and final usage from SSE events."""
 
-    def __init__(self, on_delta: Callable[[str, str], None], *, identity_mode: str = "delta", index_mode: str = "index") -> None:
+    def __init__(self, on_delta: Callable[[str, str], None], *, identity_mode: str = "delta") -> None:
         self.on_delta = on_delta
         self.identity_mode = identity_mode
-        self.index_mode = index_mode
-        self.active_slots: dict[int, int] = {}
         # Streamed text is forwarded as it arrives and joined once at the end.
         self.content_parts: list[str] = []
         self.thoughts = ThoughtStream(self._text_delta)
@@ -1115,33 +1126,13 @@ class _StreamCompletion:
                 if isinstance(fragments, dict):
                     fragments = [fragments]
                 for position, fragment in enumerate(fragments):
-                    if type(fragment.get("id")) is int:
-                        fragment = {**fragment, "id": str(fragment["id"])}
                     index = fragment.get("index")
-                    if self.index_mode == "id":
-                        raw_index = index if type(index) is int and index >= 0 else position
-                        identifier = fragment.get("id")
-                        if identifier:
-                            matching = next((i for i, c in self.calls.items() if c["id"] == identifier), None)
-                            slot = matching if matching is not None else max(self.calls, default=-1) + 1
-                            self.active_slots[raw_index] = slot
-                        index = self.active_slots.get(raw_index, raw_index)
                     if type(index) is not int or index < 0:
-                        # IDs identify interleaved calls; otherwise use their
-                        # position in the delta, including single-call streams.
-                        identifier = fragment.get("id")
-                        matching = next((i for i, c in self.calls.items()
-                                         if identifier and c["id"] == identifier), None)
-                        index = matching if matching is not None else position
-                        if (matching is None and identifier and index in self.calls
-                                and self.calls[index]["id"] not in ("", identifier)):
-                            index = max(self.calls) + 1
-                    call = self.calls.setdefault(index, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
-                    identifier = fragment.get("id")
-                    if isinstance(identifier, str) and identifier and identifier != call["id"]:
-                        if call["id"] and self.identity_mode == "snapshot":
-                            raise ValueError("Conflicting streamed tool-call IDs at one index")
-                        call["id"] = identifier if self.identity_mode == "snapshot" or self.index_mode == "id" else call["id"] + identifier
+                        index = position
+                    if index not in self.calls:
+                        self.calls[index] = {"id": "call_" + uuid.uuid4().hex, "type": "function",
+                                             "function": {"name": "", "arguments": ""}}
+                    call = self.calls[index]
                     function = fragment.get("function")
                     if not isinstance(function, dict):
                         function = fragment
@@ -1204,7 +1195,7 @@ class _StreamCompletion:
                 "reasoning_details": self.reasoning_details or None,
                 "reasoning": "".join(self.reasoning),
             }}],
-        })
+        }, local_ids=[calls[index]["id"] for index in sorted(calls)])
 
 
 class _TextParts:

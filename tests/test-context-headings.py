@@ -71,9 +71,11 @@ async def test_excerpt_omissions_are_fields_instead_of_text_inserted_in_the_outp
     assert excerpt["representation"] == "excerpt"
     assert excerpt["step_id"] == 1
     assert current["step_id"] == 2
-    result = excerpt["messages"][-1]["content_excerpt"]
-    assert source.startswith(result["beginning"]) and source.endswith(result["ending"])
-    assert result["omitted_characters"] == len(source) - len(result["beginning"]) - len(result["ending"])
+    result = excerpt["tool_results"][-1]["content"]
+    assert source.startswith(result["prefix"]) and source.endswith(result["suffix"])
+    assert result["omitted_characters"] == len(source) - len(result["prefix"]) - len(result["suffix"])
+    assert excerpt["agent_response"] == "Reading"
+    assert excerpt["tool_calls"][0]["arguments"] == {"path": "x"}
     assert current["is_tool_result_response"] is True
     assert view[-1].role == "user"
     assert request_input(view)['user_prompts'] == []

@@ -182,9 +182,8 @@ async def test_empty_tool_arguments_default_to_an_object() -> None:
     await client.aclose()
 
     assert completion.response_error is None
-    assert [(call.id, call.name, call.arguments) for call in completion.tool_calls] == [
-        ("call_1", "read_file", {}),
-    ]
+    assert [(call.name, call.arguments) for call in completion.tool_calls] == [("read_file", {})]
+    assert completion.tool_calls[0].id.startswith("call_") and completion.tool_calls[0].id != "call_1"
 
 
 async def test_response_without_choices_is_an_error() -> None:

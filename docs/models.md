@@ -266,4 +266,4 @@ async with create_client(config.provider, api_key=config.api_key,
                               max_tokens=4096)
 ```
 
-Pass that client to `Agent` to use the normal coding loop. `NvidiaClient(profiles={model_id: RequestProfile(...)})` supports additional explicitly verified models. Its Ultra reasoning options are `none`, `medium`, and `high` (default); `reasoning_budget` accepts -1 or 0–32,768 tokens. See [the provider contract](architecture.md#api-provider-modules) for extending the registry. Restart existing SlipAgent processes after changing the shared provider/state contracts.
+Pass that client to `Agent` to use the normal coding loop. `NvidiaClient(profiles={model_id: RequestProfile(…)})` supports additional explicitly verified models. Its Ultra reasoning options are `none`, `medium`, and `high` (default); `reasoning_budget` accepts -1 or 0–32,768 tokens. See [the provider contract](architecture.md#api-provider-modules) for extending the registry. Restart existing SlipAgent processes after changing the shared provider/state contracts.

@@ -74,7 +74,7 @@ async def test_json_response_executes_tools_and_archives_original_parts():
     assert requests[0]["response_format"] == {"type": "json_object"}
     for step, expected in zip(agent.history.steps, [first, second]):
         assert step.agent_response == expected["response"]
-        assert step.summary
+        assert step.summary is None  # No eligible free compression route was configured.
         assert "_slipagent_context" not in step.full_text()
         assert "agent_response_compressed" not in step.full_text()
     assert [event.text for event in events if event.kind == "assistant_text"] == ["Reading.", "Done."]

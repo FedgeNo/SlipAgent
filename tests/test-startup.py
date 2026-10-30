@@ -16,12 +16,24 @@ from slipagent.nvidia import ULTRA_MODEL
 from slipagent.providers import create_client
 
 
+def dummy_client(*, model_capabilities, key_info):
+    """Minimal OpenRouter-shaped client for startup doubles."""
+    from unittest.mock import AsyncMock
+
+    return SimpleNamespace(
+        provider="openrouter", api_key="dummy", base_url="https://openrouter.ai/api/v1",
+        transport=None, replacement_options=lambda: {},
+        list_models=AsyncMock(return_value=[]), aclose=AsyncMock(),
+        model_capabilities=model_capabilities, key_info=key_info,
+    )
+
+
 @pytest.mark.parametrize("mcp_status", ["connected", "error"])
 async def test_startup_reports_failed_metadata_and_mcp_outcomes(tmp_path, monkeypatch, mcp_status):
     import io
     from unittest.mock import AsyncMock
-    client = SimpleNamespace(aclose=AsyncMock(), model_capabilities=AsyncMock(return_value=None),
-                             key_info=AsyncMock(return_value=None))
+    client = dummy_client(model_capabilities=AsyncMock(return_value=None),
+                          key_info=AsyncMock(return_value=None))
     monkeypatch.setattr(cli, "create_client", lambda *args, **kwargs: client)
     monkeypatch.setattr(ProjectEnvironment, "snapshot", AsyncMock(return_value={}))
     monkeypatch.setattr(RepositoryMap, "snapshot", AsyncMock(return_value=""))
@@ -97,10 +109,7 @@ async def test_deferred_startup_overlaps_services_before_context(tmp_path, monke
         context.append(True)
         return []
 
-    async def close():
-        pass
-
-    client = SimpleNamespace(model_capabilities=metadata, key_info=quota, aclose=close)
+    client = dummy_client(model_capabilities=metadata, key_info=quota)
     monkeypatch.setattr(cli, "create_client", lambda *args, **kwargs: client)
     monkeypatch.setattr(ProjectEnvironment, "snapshot", environment)
     monkeypatch.setattr(RepositoryMap, "snapshot", repository)

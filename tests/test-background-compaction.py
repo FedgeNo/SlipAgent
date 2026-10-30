@@ -14,7 +14,7 @@ from test_agent import unpack_context, context_records
 
 from slipagent.agent import Agent
 from slipagent.context import ConversationHistory, RecallHistoryTool
-from slipagent.capabilities import ModelCapabilities
+from slipagent.capabilities import ModelCapabilities, RequestProfile
 from slipagent.openrouter import OpenRouterClient, RetryPolicy
 from slipagent.protocol import parse_agent_response, agent_response_format, ResponseFormatError
 from slipagent.tools.base import ToolRegistry
@@ -89,7 +89,7 @@ def test_summary_failures_describe_the_actual_answer(text, expected):
 
 @pytest.mark.parametrize("recover", [True, False])
 @pytest.mark.parametrize("failure", ["overload", "bad-gzip", "rate-limit", "timeout"])
-async def test_summary_retries_transient_failures_until_recovery_or_reset(monkeypatch, recover, failure):
+async def test_summary_retries_transient_failures_until_recovery_or_reset(monkeypatch, recover, failure, free_compaction):
     from slipagent.compaction import StepCompactor
     attempts, delays, errors = [], [], []
     def handle(request):
@@ -108,6 +108,7 @@ async def test_summary_retries_transient_failures_until_recovery_or_reset(monkey
     compactor = StepCompactor(lambda usage: None, errors.append)
     real_sleep = asyncio.sleep
     async with OpenRouterClient("test", transport=httpx.MockTransport(handle), retry=RetryPolicy(extended=True)) as client:
+        free_compaction(compactor, client)
         async def sleep(delay):
             delays.append(delay)
             assert errors == []
@@ -191,7 +192,7 @@ async def test_plain_response_and_native_calls_do_not_require_memory_json():
     assert len(client.main_requests) == 2 and len(client.summary_requests) == 2
     assert "response_format" not in client.main_requests[0]["extra_body"]
     assert all(step.summary for step in agent.history.steps)
-    assert agent.usage.prompt_tokens == 60 and agent.usage.completion_tokens == 30
+    assert agent.usage.prompt_tokens == 40 and agent.usage.completion_tokens == 20
 
 
 async def test_summary_gets_current_turn_and_separate_history_and_runs_in_background():
@@ -353,7 +354,7 @@ async def test_reset_discards_late_summary_and_its_usage_even_if_transport_ignor
     assert old.summary is None
     assert len(agent.history.steps) == 1 and agent.history.steps[0].id == 1
     assert "OLD SUMMARY" not in agent.history.steps[0].summary
-    assert agent.usage.prompt_tokens == 30
+    assert agent.usage.prompt_tokens == 20
 
 
 async def test_close_cancels_pending_summaries_and_releases_jobs():
@@ -417,11 +418,11 @@ def test_small_schema_has_no_memory_or_task_requirement():
         parse_agent_response('{"response":"Bad", "tool_calls":[{"name":"write_file","arguments":"["}]}', [])
 
 
-async def test_summary_uses_frozen_capabilities_and_does_not_overwrite_context_snapshot():
-    old = ModelCapabilities({}, [{"tag": "old", "context_length": 1000000,
-                                 "supported_parameters": ["tools", "temperature", "reasoning"],
-                                 "reasoning": {"supported_efforts": ["high"]}}])
-    new = ModelCapabilities({}, [{"tag": "new", "context_length": 1000000, "supported_parameters": ["tools"]}])
+async def test_summary_uses_frozen_capabilities_and_does_not_overwrite_context_snapshot(free_compaction):
+    old = RequestProfile(parameters={"tools", "temperature", "max_tokens"},
+                         context_length=1_000_000, max_completion_tokens=128)
+    new = RequestProfile(parameters={"tools", "max_tokens"},
+                         context_length=1_000_000, max_completion_tokens=64)
     requests, snapshots = [], []
     def transport(request):
         body = json.loads(request.content)
@@ -432,10 +433,11 @@ async def test_summary_uses_frozen_capabilities_and_does_not_overwrite_context_s
         history = ConversationHistory()
         history.sync([Message.user("Request"), Message.assistant("Response")])
         agent = Agent(client, ToolRegistry(), "test", on_event=snapshots.append)
+        free_compaction(agent, client, profile=old)
         agent._compactor().submit(history.steps[0], client, "test", old, None)
         await agent.wait_for_compaction()
-    assert requests[0]["reasoning"]["effort"] == "high"
-    assert requests[0]["provider"]["only"] == ["old"]
+    assert requests[0]["max_tokens"] == 128
+    assert "provider" not in requests[0]  # The separate free route is NVIDIA, not OpenRouter.
     assert "temperature" not in requests[0]
     assert not snapshots
     assert len(requests[0]["messages"]) == 2
@@ -448,7 +450,7 @@ async def test_plain_reply_filters_reserved_metadata_without_hiding_examples():
     assert agent.history.steps[0].agent_response == "Done."
 
 
-async def test_compaction_disables_transport_timeout_without_changing_normal_requests():
+async def test_compaction_disables_transport_timeout_without_changing_normal_requests(free_compaction):
     timeouts = []
 
     def transport(request):
@@ -460,6 +462,7 @@ async def test_compaction_disables_transport_timeout_without_changing_normal_req
         history.sync([Message.user("Request"), Message.assistant("Response")])
         registry = ToolRegistry()
         agent = Agent(client, registry, "test")
+        free_compaction(agent, client)
         await client.chat(model="test", messages=[Message.user("Before")])
         agent._compactor().submit(history.steps[0], client, "test", None, None)
         await agent.wait_for_compaction()

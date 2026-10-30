@@ -63,7 +63,7 @@ class Renderer:
   real class rather than your stand-in.
 - Every method and attribute your class defines replaces, or is added to, the target
   class. The rest of the target class is untouched.
-- `original(self, ...)` calls the implementation your method replaced. Calling it
+- `original(self, …)` calls the implementation your method replaced. Calling it
   makes your override a filter; not calling it makes it a full replacement. It works
   from closures and lambdas inside the method too.
 - `@overrides("<fingerprint>")` records which version of the method you wrote against.
@@ -93,7 +93,7 @@ Calling `original()` for an accessor the replaced property lacks raises an
   module. Use two files for that.
 - **Layout:** the same limits as a live reload. Leave out base classes or repeat the
   target's exactly; don't add `__slots__` or dataclass fields. Keep new instance
-  state in `self.__dict__.setdefault(...)`. An overridden `__init__` affects objects
+  state in `self.__dict__.setdefault(…)`. An overridden `__init__` affects objects
   created afterwards.
 
 ## Approval
@@ -160,6 +160,9 @@ when a method you override actually changed.
 
 A fingerprint is the first 12 hex digits of a SHA-256 hash of the method's syntax
 tree. Comments, formatting, and docstrings don't change it; code changes do.
+For a property, the fingerprint includes its getter, setter, and deleter.
+Existing getter-only property stamps require review and restamping once; ordinary
+single-method stamps keep their format.
 
 | Situation | Result |
 | --- | --- |

@@ -113,7 +113,6 @@ class CommandJobs:
         for job in self.jobs.values():
             if job.state != "running" and not job.notified:
                 completed.append(job.metadata())
-                job.notified = True
         return completed
 
     async def aclose(self) -> None:

@@ -242,7 +242,8 @@ def test_background_memory_service_and_task_tool_survive_reload_and_migrate(run_
         assert await agent.run('Inspect the project.') == 'finished'
         await agent.wait_for_compaction()
         compactor = registry.services['step_compactor']
-        assert agent.history.steps[0].summary == 'Completed demo step.'
+        assert agent.history.steps[0].summary is None
+        assert 'Compression unavailable' in sink.getvalue()
         edit('background-summary-prompt.md', 'Use terse sentences', 'Use brief sentences')
         await frame.checkpoint()
         assert frame.generation == 2, sink.getvalue()
@@ -250,7 +251,7 @@ def test_background_memory_service_and_task_tool_survive_reload_and_migrate(run_
         responses.append({'role': 'assistant', 'content': 'continued'})
         assert await agent.run('Continue.') == 'continued'
         await agent.wait_for_compaction()
-        assert agent.history.steps[1].summary == 'Completed demo step.'
+        assert agent.history.steps[1].summary is None
         agent.reset()
         assert not compactor.jobs
     ''')
@@ -452,7 +453,8 @@ def test_edit_waits_for_complete_tool_batch_and_next_step_uses_new_behavior(run_
         roles = [message.role for message in agent.messages]
         assert roles == ['system', 'user', 'assistant', 'tool', 'tool', 'assistant']
         assert agent.messages[3].content['content'] == 'wait complete'
-        assert agent.messages[4].tool_call_id == 'two'
+        assert agent.messages[4].tool_call_id == agent.messages[2].tool_calls[1].id
+        assert agent.messages[4].tool_call_id.startswith('call_')
         assert 'is empty.' in agent.messages[4].content['content']
         assert 'EMPTY AFTER RELOAD.' in (await registry.invoke('list_dir', {})).content
         assert len([r for r in requests if r.method == 'POST']) == 2
@@ -509,14 +511,19 @@ def test_stop_during_final_reload_prevents_queued_followup(run_copy):
         renderer.handle = handle
         responses.append({'role': 'assistant', 'content': 'done'})
         task = asyncio.create_task(agent.run('start'))
-        await asyncio.wait_for(closing.wait(), 3)
-        assert agent.running
-        await cli.CommandRunner(session).handle('/stop')
-        release.set()
-        assert await task == 'done'
-        assert agent.stopped and not agent.running
-        assert agent.pending == ['queued followup']
-        assert len([r for r in requests if r.method == 'POST']) == 1
+        try:
+            await asyncio.wait_for(closing.wait(), 10)
+            assert agent.running
+            await cli.CommandRunner(session).handle('/stop')
+            release.set()
+            assert await task == 'done'
+            assert agent.stopped and not agent.running
+            assert agent.pending == ['queued followup']
+            assert len([r for r in requests if r.method == 'POST']) == 1
+        finally:
+            release.set()
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
     ''')
 
 

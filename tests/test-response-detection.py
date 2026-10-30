@@ -79,6 +79,41 @@ def test_missing_arguments_and_repeated_ids_are_normalized():
     assert len({c.id for c in completion.tool_calls}) == 2
 
 
+@pytest.mark.parametrize("values", [("A", "B"), ("A", "A")])
+async def test_embedded_calls_receive_distinct_harness_ids_and_matching_results(values):
+    from slipagent.protocol import agent_response_format
+
+    router = Router({"test/embedded": ["structured_outputs"]}, [
+        {"role": "assistant", "content": json.dumps({"response": "Reading.", "tool_calls": [
+            {"name": "record", "arguments": json.dumps({"value": value})} for value in values
+        ]})},
+        wire(),
+    ])
+    tool = RecordingTool("actual result")
+    registry = ToolRegistry([tool])
+    try:
+        async with OpenRouterClient("test", transport=httpx.MockTransport(router.handle)) as client:
+            agent = Agent(client, registry, "test/embedded")
+            assert await agent.run("Inspect") == "Done."
+            await agent.wait_for_compaction()
+        assert tool.seen == [{"value": value} for value in values]
+        messages = unpack_api_context(router.requests[1]["messages"])
+        calls = [call for message in messages if message["role"] == "assistant"
+                 for call in message.get("tool_calls", [])]
+        results = [message for message in messages if message["role"] == "tool"]
+        assert len(calls) == len(results) == 2
+        assert len({call["id"] for call in calls}) == 2
+        assert [result["tool_call_id"] for result in results] == [call["id"] for call in calls]
+        expected = agent_response_format(native_tools=False)
+        assert router.requests[0]["response_format"] == expected
+        assert any("do not invent or copy call IDs from history" in message.get("content", "")
+                   for message in router.requests[0]["messages"] if message["role"] == "system")
+        item = expected["json_schema"]["schema"]["properties"]["tool_calls"]["items"]
+        assert set(item["properties"]) == set(item["required"]) == {"name", "arguments"}
+    finally:
+        await registry.aclose()
+
+
 def test_stream_without_indexes_preserves_fragmented_arguments():
     stream = _StreamCompletion(lambda *args: None)
     for fragment in [
@@ -89,22 +124,26 @@ def test_stream_without_indexes_preserves_fragmented_arguments():
     stream.add(json.dumps({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}))
     completion = stream.completion()
     assert completion.response_error is None
-    assert [(c.id, c.arguments) for c in completion.tool_calls] == [("one", {"value": "A"})]
+    assert [c.arguments for c in completion.tool_calls] == [{"value": "A"}]
+    assert completion.tool_calls[0].id.startswith("call_")
+    assert completion.tool_calls[0].id != "one"
 
 
-def test_stream_uses_available_ids_to_link_interleaved_calls():
+def test_stream_uses_indexes_to_link_interleaved_calls_and_ignores_supplied_ids():
     stream = _StreamCompletion(lambda *args: None)
     for fragment in [
-        {"id": "one", "function": {"name": "record", "arguments": '{"value":'}},
-        {"id": "two", "function": {"name": "record", "arguments": '{"value":'}},
-        {"id": "two", "function": {"arguments": '"B"}'}},
-        {"id": "one", "function": {"arguments": '"A"}'}},
+        {"index": 0, "id": "same", "function": {"name": "record", "arguments": '{"value":'}},
+        {"index": 1, "id": "same", "function": {"name": "record", "arguments": '{"value":'}},
+        {"index": 1, "id": "changed", "function": {"arguments": '"B"}'}},
+        {"index": 0, "id": "changed", "function": {"arguments": '"A"}'}},
     ]:
         stream.add(json.dumps({"choices": [{"delta": {"tool_calls": [fragment]}}]}))
     stream.add(json.dumps({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}))
     completion = stream.completion()
     assert completion.response_error is None
-    assert [(c.id, c.arguments) for c in completion.tool_calls] == [("one", {"value": "A"}), ("two", {"value": "B"})]
+    assert [c.arguments for c in completion.tool_calls] == [{"value": "A"}, {"value": "B"}]
+    assert len({c.id for c in completion.tool_calls}) == 2
+    assert all(c.id.startswith("call_") for c in completion.tool_calls)
 
 
 def test_native_call_uses_flat_arguments_when_nested_arguments_are_absent():
@@ -112,7 +151,8 @@ def test_native_call_uses_flat_arguments_when_nested_arguments_are_absent():
         "id": "keep-me", "function": {"name": "record"}, "input": {"value": "A"},
     }}}]})
     assert completion.response_error is None
-    assert [(c.id, c.name, c.arguments) for c in completion.tool_calls] == [("keep-me", "record", {"value": "A"})]
+    assert [(c.name, c.arguments) for c in completion.tool_calls] == [("record", {"value": "A"})]
+    assert completion.tool_calls[0].id != "keep-me"
 
 
 @pytest.mark.parametrize("native_tools,json_response", [(True, False), (True, True), (False, False)])
@@ -146,9 +186,10 @@ def test_mixed_distinct_calls_and_intentional_repetitions():
     assert len(parse_agent_response(XML + '\n' + XML, [], tools=[SPEC]).calls) == 2
 
 
-def test_conflicting_ids_reject_entire_batch():
-    with pytest.raises(ResponseFormatError, match="Conflicting"):
-        parse_agent_response(json.dumps({"tool_calls": [FLAT]}), [ToolCall("one", "record", {"value": "B"})])
+def test_incoming_ids_do_not_conflate_distinct_calls():
+    result = parse_agent_response(json.dumps({"tool_calls": [FLAT]}), [ToolCall("one", "record", {"value": "B"})])
+    assert [call.arguments for call in result.calls] == [{"value": "B"}, {"value": "A"}]
+    assert len({call.id for call in result.calls}) == 2
 
 
 def test_qwen_parameters_use_tool_schema_and_preserve_code():
@@ -202,7 +243,8 @@ async def test_mixed_native_and_xml_round_trip(stream, parameters):
     messages = unpack_api_context(router.requests[1]["messages"])
     results = [message for message in messages if message['role'] == 'tool']
     assert len(results) == 2
-    assert results[0]['tool_call_id'] == 'read-1'
+    assert results[0]['tool_call_id'].startswith('call_')
+    assert results[0]['tool_call_id'] != 'read-1'
     await registry.aclose()
 
 

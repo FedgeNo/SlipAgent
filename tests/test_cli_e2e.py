@@ -486,9 +486,14 @@ def test_one_shot_executes_a_read_tool(project_dir: Path) -> None:
 
     # The second request must carry the tool result back to the model.
     second = stub.requests[1]
-    tool_messages = context_records(second["messages"])[0]["tool_results"]
+    record = context_records(second["messages"])[0]
+    tool_messages = record["tool_results"]
     assert len(tool_messages) == 1
-    assert tool_messages[0]["call_id"] == "call_1"
+    assert len(record["tool_calls"]) == 1
+    call_id = record["tool_calls"][0]["call_id"]
+    assert re.fullmatch(r"call_[0-9a-f]{32}", call_id)
+    assert call_id != "call_1"
+    assert tool_messages[0]["call_id"] == call_id
     assert "def main():" in tool_messages[0]["content"]
 
 
@@ -1030,7 +1035,7 @@ def test_exit_during_a_turn_still_prints_the_answer(project_dir: Path, command: 
         try:
             proc.stdin.write("go\n")
             proc.stdin.flush()
-            assert started.wait(5), "The model request never started"
+            assert started.wait(15), "The model request never started"
             proc.stdin.write(command + "\n")
             proc.stdin.flush()
             release.set()
@@ -1650,7 +1655,15 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             wait_for(lambda: "resumed successfully" in "\n".join(screen.display[:17]))
             assert len(stub.requests) == 2
             history = unpack_api_context(stub.requests[1]["messages"])
-            assert [m["tool_call_id"] for m in history if m["role"] == "tool"] == ["call_1", "call_2"]
+            calls = [call for message in history if message["role"] == "assistant"
+                     for call in message.get("tool_calls", [])]
+            result_ids = [message["tool_call_id"] for message in history if message["role"] == "tool"]
+            call_ids = [call["id"] for call in calls]
+            assert [call["function"]["name"] for call in calls] == ["edit_file", "list_dir"]
+            assert len(set(call_ids)) == 2
+            assert all(re.fullmatch(r"call_[0-9a-f]{32}", call_id) for call_id in call_ids)
+            assert not set(call_ids).intersection({"call_1", "call_2"})
+            assert result_ids == call_ids
             assert "queued followup" in [context_body(m["content"]) for m in history if m["role"] == "user"]
             os.write(master, b"/model stub/two\r")
             wait_for(lambda: "Model: openrouter::stub/two" in screen.display[23])

@@ -164,6 +164,9 @@ RESTORE_CHUNK_RECORDS = 16
 
 
 def _append_record(flow: WrappedTranscript, record: tuple[Any, ...]) -> None:
+    # Cleared records retain their identities but contribute no text or rows.
+    if record[0] is None:
+        return
     if record[0]:
         _, text, first, final, reasoning = record
         flow.append_markdown(text, first=first, final=final, reasoning=reasoning)
@@ -199,6 +202,7 @@ class TerminalUI:
     during refresh, and isolate secret prompts from those ordinary buffers.
     """
     _selection_start: Point | None
+    _cleared_records: set[int]
     _selection_end: Point | None
     _scrollbar: TranscriptScrollbar
     context_window: TranscriptWindow
@@ -801,6 +805,23 @@ class TerminalUI:
         """Show a notice for 30 seconds, until replaced, or until cleared."""
         self.status_line.notify(text)
         self.app.invalidate()
+
+    async def notify_before_work(self, text: str) -> None:
+        """Let an active terminal paint a notice before potentially costly work."""
+        painted = asyncio.Event()
+        def after_render(app: Any) -> None:
+            painted.set()
+        self.app.after_render += after_render
+        try:
+            self.notify(text)
+            if self.app.is_running:
+                try:
+                    async with asyncio.timeout(.25):
+                        await painted.wait()
+                except TimeoutError:
+                    pass
+        finally:
+            self.app.after_render -= after_render
 
     @property
     def status_line(self) -> StatusLine:
@@ -1421,6 +1442,7 @@ class TerminalUI:
         self._close_transcript()
         self._raw_output = archive
         self._block_starts.clear()
+        self._cleared_records.clear()
         self.__dict__.setdefault("_directory_links", {}).clear()
         self.__dict__.setdefault("_file_links", {}).clear()
         self.__dict__.setdefault("_artifact_links", {}).clear()
@@ -1516,10 +1538,11 @@ class TerminalUI:
         return True
 
     def clear_records(self, start: int, stop: int) -> None:
-        """Empty the records of an abandoned block, keeping every other record's index."""
+        """Retract records without leaving blank rows or shifting other indices."""
         self._ensure_transcript()
         for index in range(start, min(stop, len(self._raw_output))):
             self._raw_output.clear_record(index)
+            self._cleared_records.add(index)
         self._wrapped_columns = 0
         self.app.invalidate()
 
@@ -1582,13 +1605,17 @@ class TerminalUI:
 
     def last_markdown(self) -> str:
         self._ensure_transcript()
-        if not self._markdown_chunks:
-            return ""
-        end = max(self._markdown_chunks)
-        start = end
-        while start not in self._block_starts and start > 0 and start - 1 in self._markdown_chunks:
-            start -= 1
-        return "".join(self._raw_output[i] for i in range(start, end + 1))
+        replies = self._markdown_chunks - self._reasoning_chunks
+        while replies:
+            end = max(replies)
+            start = end
+            while start not in self._block_starts and start > 0 and start - 1 in replies:
+                start -= 1
+            text = "".join(self._raw_output[i] for i in range(start, end + 1))
+            if text.strip():
+                return text
+            replies.difference_update(range(start, end + 1))
+        return ""
 
     def copy_response(self, mode: str = "auto", number: int = 1) -> str:
         source = self.last_markdown()
@@ -1819,6 +1846,7 @@ class TerminalUI:
         """Migrate pre-file-buffer sessions once, without rebuilding the frame."""
         # Older running sessions have no explicit wrap alignment metadata.
         self.__dict__.setdefault("_continuation_indents", {})
+        self.__dict__.setdefault("_cleared_records", set())
         # Existing highlighted selections are inactive after adopting this fix.
         self.__dict__.setdefault("_selection_dragging", False)
         # Explicit migration adds Markdown metadata without treating historical ANSI as Markdown.
@@ -1989,6 +2017,8 @@ class TerminalUI:
 
     def _transcript_record(self, index: int) -> tuple[Any, ...]:
         """Everything needed to lay out one record, readable off the event loop."""
+        if index in self._cleared_records:
+            return (None,)
         if index in self._markdown_chunks:
             return (True, self._raw_output[index], index in self._block_starts,
                     index in self._markdown_finals, index in self._reasoning_chunks)

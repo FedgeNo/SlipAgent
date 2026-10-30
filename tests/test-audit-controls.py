@@ -49,13 +49,15 @@ async def test_stopped_one_shot_returns_failure(monkeypatch):
     assert await cli.Launcher(argparse.Namespace()).run_one_shot(SimpleNamespace(agent=agent, renderer=renderer), "task") == 1
 
 
-async def test_queued_command_pause_is_labelled_a_pause_not_a_stop(tmp_path):
+async def test_queued_command_pause_is_labelled_a_pause_not_a_stop(tmp_path, monkeypatch):
     from types import SimpleNamespace
     session, started, release = session_with_paused_request(tmp_path)
+    queue = asyncio.Queue()
+    monkeypatch.setattr(cli.Repl, "read_line", lambda *args: queue.get())
     labels = []
     task = asyncio.create_task(cli.Repl(session).run_request("go", session.renderer.style))
     try:
-        await started.wait()
+        await asyncio.wait_for(started.wait(), 3)
         session.renderer.terminal = SimpleNamespace(set_working=lambda working, **flags: labels.append(flags))
         # A queued setting halts the run only to apply it, then work continues.
         cli.CommandRunner(session).queue("/plugins", "plugins")

@@ -8,8 +8,8 @@ Use `tool_calls: []` for a final answer without tools.
 
 ## Call Arguments
 
-Each call contains exactly `id`, `name`, and `arguments`. Use a nonempty ID unique within the batch and the exact advertised tool name. Serialize the schema-valid argument object as a JSON string in `arguments`; use `"{}"` for no arguments.
+Each call contains exactly `name` and `arguments`. Use the exact advertised tool name. The harness assigns a separate ID to each call; do not invent or copy call IDs from history. Serialize the schema-valid argument object as a JSON string in `arguments`; use `"{}"` for no arguments.
 
 ```json
-{"response":"Reading the file.","tool_calls":[{"id":"read-1","name":"read_file","arguments":"{\"path\":\"README.md\"}"}]}
+{"response":"Reading the file.","tool_calls":[{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}]}
 ```

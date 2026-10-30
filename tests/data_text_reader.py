@@ -134,7 +134,7 @@ def system_tool_definitions(system):
 def history_records(payload):
     """Restore the archived shape for existing behavioral assertions."""
     for original in payload['history']:
-        if original['representation'] == 'excerpt':
+        if original['representation'] == 'excerpt' and 'response_excerpts' in original:
             record = {key: value for key, value in original.items() if key not in ('tool_calls', 'response_excerpts')}
             entries = list(original['response_excerpts'])
             for call in original['tool_calls']:
@@ -144,14 +144,15 @@ def history_records(payload):
             record['messages'] = entries
             yield record
             continue
-        if original['representation'] != 'full':
+        if original['representation'] not in ('full', 'excerpt'):
             yield original
             continue
         record = dict(original)
         calls, results = [], []
         for source in original['tool_calls']:
             call = dict(source)
-            for key, status in [('result', 'success'), ('error', 'error'), ('unclassified_result', 'unknown')]:
+            for key, status in [('result', 'success'), ('error', 'error'), ('unclassified_result', 'unknown'),
+                                ('result_excerpt', 'success'), ('error_excerpt', 'error'), ('unclassified_result_excerpt', 'unknown')]:
                 if key in call:
                     results.append({'call_id': call['call_id'], 'tool_name': call['tool_name'], 'status': status, 'content': call.pop(key)})
             calls.append(call)

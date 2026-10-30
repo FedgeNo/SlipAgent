@@ -12,6 +12,7 @@ from .nvidiaprofiles import USER_INSTRUCTIONS, builtin_profile
 from .types import ModelInfo
 
 ULTRA_MODEL = "nvidia/nemotron-3-ultra-550b-a55b"
+MISTRAL_LARGE_4_MODEL = "mistralai/mistral-large-4-1t-a52b"
 
 
 class NvidiaClient(APIClient):
@@ -72,7 +73,7 @@ class NvidiaClient(APIClient):
             profile = builtin_profile(model)
         if profile is None:
             raise APIConfigError(f"No verified NVIDIA capability profile for {model!r}. "
-                                 "Supply a RequestProfile through NvidiaClient(profiles=...).")
+                                 "Supply a RequestProfile through NvidiaClient(profiles=…).")
         profile = copy.deepcopy(profile)
         if store:
             self.cache_capabilities(model, profile)
@@ -80,6 +81,11 @@ class NvidiaClient(APIClient):
 
     def prepare_payload(self, payload: dict[str, Any], profile: RequestProfile | None) -> None:
         payload.pop("session_id", None)
+        if payload.get("model") == MISTRAL_LARGE_4_MODEL:
+            if self.reasoning_effort not in {"none", "high"}:
+                raise APIConfigError("NVIDIA Mistral Large 4 reasoning_effort must be none or high.")
+            # Omitting this field serves non-reasoning mode on this endpoint.
+            payload.setdefault("reasoning_effort", self.reasoning_effort)
         if payload.get("model") in USER_INSTRUCTIONS:
             messages: list[dict[str, Any]] = []
             for message in payload["messages"]:

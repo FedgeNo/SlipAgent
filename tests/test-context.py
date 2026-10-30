@@ -381,7 +381,7 @@ async def test_missing_archived_summary_preserves_original_without_a_repair_call
     assert "HUGE TOOL OUTPUT" in history.steps[0].full_text()
 
 
-async def test_large_old_user_requests_reduce_the_recent_window_without_compression_calls():
+async def test_large_old_user_request_is_excerpted_without_losing_the_turn_or_compression_calls():
     history = ConversationHistory()
     first, second = "FIRST USER REQUEST " * 1000, "SECOND USER REQUEST " * 100
     messages = [Message.user(first), Message.assistant("first answer"),
@@ -390,7 +390,13 @@ async def test_large_old_user_requests_reduce_the_recent_window_without_compress
         pytest.fail("compressing responses cannot make the user requests fit")
     view = await history.view(messages, [], keep_steps=50,
                               context_length=10000, max_output=1000, summarize=unused)
-    assert [context_body(message.content) for message in unpack_context(view) if message.role == "user"] == [second]
+    records = context_records(view)[:-1]
+    assert [record['step_id'] for record in records] == [1, 2]
+    older = records[0]['user_prompts'][0]
+    assert first.startswith(older['prefix']) and first.endswith(older['suffix'])
+    assert older['omitted_characters'] > 0
+    assert records[0]['agent_response'] == 'first answer'
+    assert records[1]['user_prompts'] == [second]
     assert any(context_body(message.content) == "second answer" for message in unpack_context(view))
     assert history.steps[0].messages[0].content == first
     assert history.steps[1].messages[0].content == second
@@ -416,13 +422,16 @@ async def test_reduced_history_keeps_active_request_and_complete_latest_tool_bat
     view = await history.view(messages, [], keep_steps=50,
                               context_length=9000, max_output=1000)
     # The active request arrives retained as its original separate messages.
-    assert [context_body(message.content) for message in unpack_context(view) if message.role == "user"] == [request, correction]
+    records = context_records(view)[:-1]
+    assert records[0]['step_id'] == 1
+    assert records[0]['user_prompts'][0]['omitted_characters'] > 0
+    assert [prompt for record in records[1:] for prompt in record.get('user_prompts', [])] == [request, correction]
     assert [(message.tool_call_id, context_body(message.content)) for message in unpack_context(view) if message.role == "tool"] == [
         ("a", "EXACT FIRST RESULT"), ("b", "EXACT SECOND RESULT"),
     ]
     assert [call.id for message in unpack_context(view) for call in message.tool_calls or []] == ["a", "b"]
     wire = "\n".join(content_text(message.content) for message in view)
-    assert "OLD USER REQUEST" not in wire
+    assert "OLD USER REQUEST " * 1000 not in wire
     assert "USER SUMMARY MUST NOT DUPLICATE THE ACTIVE REQUEST" not in wire
     assert [step.full_text() for step in history.steps] == originals
 
@@ -957,7 +966,7 @@ async def test_catalog_context_length_limits_full_history_and_is_cached():
     assert len(requests) == 2
     wire = "\n".join(message.get("content") or "" for message in requests[-1]["messages"])
     assert not any(context_body(m.get("content")) == original for m in requests[-1]["messages"])
-    assert agent.history.steps[0].summary in wire
+    assert agent.history.steps[0].summary is None  # No eligible free route was configured.
     assert "UNCOMPRESSED ORIGINAL" in agent.history.steps[0].full_text()
 
 

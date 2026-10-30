@@ -2,6 +2,7 @@
 
 import io
 import json
+import re
 
 from slipagent.api import _StreamCompletion
 from slipagent.cli import Renderer, Style
@@ -20,25 +21,32 @@ def stream(*arguments, index=0, identity=True):
     for position, fragment in enumerate(arguments):
         entry = first if position == 0 else {"index": index, "function": {"arguments": fragment}}
         state.add(json.dumps({"choices": [{"delta": {"tool_calls": [entry]}}]}))
-    return announced
+    return announced, state
 
 
 def test_leading_description_is_announced_as_soon_as_its_string_closes():
-    assert stream('{"call_label": "Reading the con', 'fig", "path": "a.py"}') == [
-        ("tool_label", {"id": "call-1", "name": "read_file", "label": "Reading the config"})]
-    early = stream('{"call_label": "Reading', ' it"')
+    announced, state = stream('{"call_label": "Reading the con', 'fig", "path": "a.py"}')
+    event = announced[0][1]
+    assert (event["name"], event["label"]) == ("read_file", "Reading the config")
+    assert re.fullmatch(r"call_[0-9a-f]{32}", event["id"])
+    assert event["id"] != "call-1"
+    assert event["id"] == state.calls[0]["id"]
+    state.finish_reason = "tool_calls"
+    assert state.completion().message.tool_calls[0].id == event["id"]
+
+    early, _ = stream('{"call_label": "Reading', ' it"')
     assert early[0][1]["label"] == "Reading it"
 
 
 def test_description_after_other_arguments_or_missing_is_not_announced():
-    assert stream('{"path": "a.py", "call_label": "Reading it"}') == []
-    assert stream('{"path": "a.py"}') == []
-    assert stream('{"call_label": ""}') == []
-    assert stream('{"call_label": "  "}') == []
+    assert stream('{"path": "a.py", "call_label": "Reading it"}')[0] == []
+    assert stream('{"path": "a.py"}')[0] == []
+    assert stream('{"call_label": ""}')[0] == []
+    assert stream('{"call_label": "  "}')[0] == []
 
 
 def test_description_is_announced_once_and_unicode_escapes_are_decoded():
-    announced = stream('{"call_label": "Checking \\u00e9"', ', "path": "a.py"', '}')
+    announced, _ = stream('{"call_label": "Checking \\u00e9"', ', "path": "a.py"', '}')
     assert [item[1]["label"] for item in announced] == ["Checking é"]
 
 
@@ -66,7 +74,7 @@ def call(label=True, **arguments):
 def test_early_description_is_not_repeated_when_the_call_starts():
     shown, out = renderer()
     shown.handle(AgentEvent(kind="tool_label", text="Reading the config", tool_call=ToolCall("call-1", "read_file")))
-    assert out.getvalue().count("Reading the config") == 1
+    assert out.getvalue() == ""
     shown.handle(AgentEvent(kind="tool_start", step=1, tool_call=call()))
     text = out.getvalue()
     assert text.count("Reading the config") == 1
@@ -83,14 +91,19 @@ def test_call_without_an_early_description_is_displayed_as_before():
     assert "Reading the config" in plain_out.getvalue() and 'read_file({"path": "a.py"})' in plain_out.getvalue()
 
 
-def test_description_with_other_output_after_it_is_shown_in_full_with_its_call():
+def test_batched_descriptions_are_shown_once_with_each_call_in_plain_output():
+    from slipagent.tools.base import ToolResult
     shown, out = renderer()
     shown.handle(AgentEvent(kind="tool_label", text="First", tool_call=ToolCall("one", "read_file")))
     shown.handle(AgentEvent(kind="tool_label", text="Second", tool_call=ToolCall("two", "read_file")))
     shown.handle(AgentEvent(kind="tool_start", step=1, tool_call=ToolCall("one", "read_file", {"call_label": "First", "path": "a"})))
+    shown.handle(AgentEvent(kind="tool_start", step=1, tool_call=ToolCall("two", "read_file", {"call_label": "Second", "path": "b"})))
     text = out.getvalue()
-    assert text.count("First") == 2 and text.count("Second") == 1
-    assert text.rindex("First") < text.index("read_file(")
+    assert text.count("First") == 1 and text.count("Second") == 0
+    shown.handle(AgentEvent(kind="tool_end", step=1, tool_call=ToolCall("one", "read_file"), result=ToolResult.error("first result")))
+    text = out.getvalue()
+    assert text.count("First") == 1 and text.count("Second") == 1
+    assert text.index("First") < text.index('read_file({"path": "a"})') < text.index("first result") < text.index("Second")
 
 
 def test_answer_and_changed_descriptions_are_not_taken_from_the_early_label():
@@ -108,7 +121,7 @@ def test_reset_forgets_descriptions_of_an_abandoned_attempt():
     shown.handle(AgentEvent(kind="tool_label_reset"))
     shown.handle(AgentEvent(kind="tool_start", step=1, tool_call=call()))
     # The call's own heading is complete again, so nothing refers to the abandoned display.
-    assert out.getvalue().count("Reading the config") == 2
+    assert out.getvalue().count("Reading the config") == 1
 
 
 def batch(count=3):

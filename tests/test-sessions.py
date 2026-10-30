@@ -328,8 +328,9 @@ def test_invalid_title_metadata_is_reported(workspace, tmp_path, contents):
     (journal.directory / (journal.session_id + ".title.json")).write_text(contents)
     with pytest.raises(SessionError):
         journal.load(journal.session_id)
-    with pytest.raises(SessionError):
-        journal.listing()
+    damaged = next(item for item in journal.listing() if item["id"] == journal.session_id)
+    assert "damaged" in damaged
+    assert damaged["title"] == f"Damaged session {journal.session_id}"
 
 
 async def test_legacy_post_journal_restores_as_steps(workspace, tmp_path):
@@ -546,9 +547,19 @@ async def test_corrupt_inspection_index_is_reported_as_a_session_error(workspace
     data = journal.load(journal.session_id)
     (journal.directory / (journal.session_id + "-artifacts")).mkdir(exist_ok=True)
     (journal.directory / (journal.session_id + "-artifacts") / "index.json").write_text("{not json")
-    restored = Agent(StubClient([]), ToolRegistry(services={"artifact_store": ArtifactStore(1_000_000)}), "test")
-    with pytest.raises(SessionError, match="Cannot restore inspection records"):
+    restored = Agent(StubClient([completion("Open answer")]), ToolRegistry(services={"artifact_store": ArtifactStore(1_000_000)}), "test")
+    await restored.run("Open request")
+    await restored.wait_for_compaction()
+    before_messages = list(restored.messages)
+    before_steps = list(restored.history.steps)
+    before_session_id = restored.session_id
+    before_artifact_store = restored.registry.services["artifact_store"]
+    with pytest.raises(SessionError, match="Cannot prepare saved session:.*open session was preserved"):
         journal.restore(restored, data)
+    assert restored.messages == before_messages
+    assert restored.history.steps == before_steps
+    assert restored.session_id == before_session_id
+    assert restored.registry.services["artifact_store"] is before_artifact_store
 
 
 async def test_sessions_menu_renames_and_deletes_other_sessions_then_returns_to_the_list(tmp_path, metadata_server):

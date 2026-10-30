@@ -59,10 +59,11 @@ def session_for(client, tmp_path, model="adjustable"):
                    "test", client.base_url, None, "test")
 
 
-async def test_default_and_command_change_actual_requests(tmp_path):
+async def test_default_and_command_change_actual_requests(tmp_path, free_compaction):
     requests, summaries = [], []
     async with OpenRouterClient("test", transport=transport(requests, summary_requests=summaries)) as client:
         session = session_for(client, tmp_path)
+        free_compaction(session.agent, client, model="adjustable")
         await session.agent.run("First task")
         await CommandRunner(session).handle("/temperature")
         assert "temperature: provider default" in session.renderer.stream.getvalue()

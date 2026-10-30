@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import asyncio
 import compileall
 import os
 import shutil
@@ -32,18 +33,21 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
 
 @pytest.fixture(autouse=True)
-def isolated_session_storage(tmp_path: Path, system_temp_root: Path, monkeypatch):
+def isolated_session_storage(tmp_path: Path, system_temp_root: Path, verified_math_cache: str, monkeypatch):
     """Tests and children use dummy credentials, guarded networking and scratch state."""
     for name in tuple(os.environ):
         if name.startswith(("OPENROUTER_", "NVIDIA_", "KILO_", "MISTRAL_", "GEMINI_", "ANTHROPIC_", "SLIPAGENT_", "EXA_")):
             monkeypatch.delenv(name)
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setenv("SLIPAGENT_NO_DOTENV", "1")
-    monkeypatch.setenv("SLIPAGENT_STATE_DIR", str(tmp_path / "session-state"))
     # tmp_path already has a unique name. Avoid rescanning every earlier test's
     # numbered temp directories, while keeping system temp outside its workspace.
     system_temp = system_temp_root / tmp_path.name
     system_temp.mkdir()
+    state = system_temp_root / f"{tmp_path.name}-state"
+    state.mkdir()
+    monkeypatch.setenv("SLIPAGENT_STATE_DIR", str(state))
+    (state / "math-environment-cache.json").write_text(verified_math_cache, encoding="utf-8")
     for name in ("TMPDIR", "TEMP", "TMP"):
         monkeypatch.setenv(name, str(system_temp))
     monkeypatch.setattr(tempfile, "tempdir", str(system_temp))
@@ -52,6 +56,21 @@ def isolated_session_storage(tmp_path: Path, system_temp_root: Path, monkeypatch
     # MCP servers inherit a minimal environment; test servers keep the offline guard.
     from slipagent import mcp
     monkeypatch.setattr(mcp, "INHERITED_ENV", (*mcp.INHERITED_ENV, "PYTHONPATH"))
+
+
+@pytest.fixture(scope="session")
+def verified_math_cache(tmp_path_factory):
+    """Probe the real scientific stack once; give each test its own warm cache."""
+    from slipagent.environment import verify_harness_math
+
+    state = tmp_path_factory.mktemp("verified-math")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("SLIPAGENT_STATE_DIR", str(state))
+        patch.setenv("MPLCONFIGDIR", str(state / "matplotlib"))
+        paths = [GUARD_DIRECTORY, *os.environ.get("PYTHONPATH", "").split(os.pathsep)]
+        patch.setenv("PYTHONPATH", os.pathsep.join(path for path in paths if path))
+        asyncio.run(verify_harness_math())
+    return (state / "math-environment-cache.json").read_text(encoding="utf-8")
 
 
 @pytest.fixture(scope="session")
@@ -79,6 +98,46 @@ def reload_source(tmp_path_factory):
 def workspace(tmp_path: Path) -> Workspace:
     """An empty sandbox rooted in a fresh temp directory."""
     return Workspace(tmp_path)
+
+
+@pytest.fixture
+async def free_compaction():
+    """Advertise an offline free NVIDIA route with its own client and profile."""
+    import copy
+    from types import SimpleNamespace
+    from slipagent.capabilities import RequestProfile
+    from slipagent.compressionproviders import CompressionProviders
+    from slipagent.modelrouting import ModelRouting
+    from slipagent.nvidia import NvidiaClient
+    from slipagent.types import ModelInfo
+
+    routes = []
+
+    def configure(owner, working, model="test", profile=None):
+        if hasattr(owner, "_compactor"):
+            owner = owner._compactor()
+        profile = copy.deepcopy(profile or working._capabilities.get(model) or RequestProfile(
+            parameters={"max_tokens"}, context_length=1_000_000, max_completion_tokens=8192))
+        free = NvidiaClient("offline-free-key", transport=working._client._transport,
+                            timeout=working._client.timeout, retry=working.retry)
+        free.cache_capabilities(model, profile)
+        entry = ModelInfo(model, provider="nvidia", score=1, pricing={"prompt": "0", "completion": "0"})
+
+        async def catalog(refresh=False):
+            return [entry]
+
+        session = SimpleNamespace(client=working, catalog=catalog,
+            compression_options=lambda: {"nvidia": {"api_key": free.api_key, "base_url": free.base_url}},
+            renderer=SimpleNamespace(emit=lambda *_: None))
+        route = CompressionProviders(ModelRouting(session))
+        route.clients[("nvidia", free.api_key, free.base_url)] = free
+        owner.routing = route
+        routes.append(route)
+        return route
+
+    yield configure
+    for route in routes:
+        await route.aclose()
 
 
 @pytest.fixture()

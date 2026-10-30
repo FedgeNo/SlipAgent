@@ -90,8 +90,8 @@ def model_prompt_profile(model: str) -> dict[str, Any]:
         raise PromptError(f"structured_output for {model} must be a boolean")
     if profile.get("stream_tool_identity", "delta") not in ("delta", "snapshot"):
         raise PromptError(f"stream_tool_identity for {model} must be delta or snapshot")
-    if profile.get("stream_tool_indices", "index") not in ("index", "id"):
-        raise PromptError(f"stream_tool_indices for {model} must be index or id")
+    if profile.get("stream_tool_indices", "index") != "index":
+        raise PromptError(f"stream_tool_indices for {model} must be index; provider IDs are ignored")
     limits = profile.get("provider_context_limits", {})
     if not isinstance(limits, dict) or any(
             not isinstance(provider, str) or not provider.strip()

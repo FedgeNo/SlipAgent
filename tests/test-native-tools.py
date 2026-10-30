@@ -94,7 +94,8 @@ async def test_native_calls_execute_once_and_results_round_trip_with_ids():
         assert len(agent.history.steps) == 2
         await agent.wait_for_compaction()
         assert agent.history.steps[0].agent_response == "Reading."
-        assert "actual result" in agent.history.steps[0].summary
+        assert agent.history.steps[0].summary is None
+        assert router.summary_requests == []  # No eligible free compression route is configured.
     assert tool.seen == [{"value": "A"}, {"value": "B"}]
     assert len(router.requests) == 2 and len(router.gets) == 2
     request = router.requests[0]
@@ -104,8 +105,10 @@ async def test_native_calls_execute_once_and_results_round_trip_with_ids():
     second = unpack_api_context(router.requests[1]["messages"])
     assert router.requests[1]["response_format"] == request["response_format"]
     calls = next(message["tool_calls"] for message in second if message.get("tool_calls"))
-    assert [call["id"] for call in calls] == ["read-1", "read-2"]
-    assert [message["tool_call_id"] for message in second if message["role"] == "tool"] == ["read-1", "read-2"]
+    ids = [call["id"] for call in calls]
+    assert len(set(ids)) == 2 and all(identifier.startswith("call_") for identifier in ids)
+    assert not set(ids).intersection({"read-1", "read-2"})
+    assert [message["tool_call_id"] for message in second if message["role"] == "tool"] == ids
     assert [event.text for event in events if event.kind == "assistant_text"] == ["Reading.", "Done."]
 
 
@@ -471,6 +474,6 @@ def test_native_file_operation_through_real_cli(tmp_path):
     assert len(stub.requests) == 2
     calls = [message["tool_calls"] for message in unpack_api_context(stub.requests[1]["messages"]) if message.get("tool_calls")]
     assert len(calls) == 1 and len(calls[0]) == 1
-    assert calls[0][0]["id"] == "read-1"
+    assert calls[0][0]["id"].startswith("call_") and calls[0][0]["id"] != "read-1"
     results = [message for message in unpack_api_context(stub.requests[1]["messages"]) if message["role"] == "tool"]
-    assert len(results) == 1 and results[0]["tool_call_id"] == "read-1"
+    assert len(results) == 1 and results[0]["tool_call_id"] == calls[0][0]["id"]

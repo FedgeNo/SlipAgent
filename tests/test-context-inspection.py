@@ -2,7 +2,7 @@
 
 import io
 import json
-from data_text_reader import read_data, current_input
+from data_text_reader import read_data, current_input, request_input
 
 import httpx
 import pytest
@@ -70,10 +70,14 @@ async def test_agent_snapshots_include_retry_prompt_and_matching_tool_results():
         assert await agent.run("Inspect.") == "Done."
     snapshots = [event.request_body.read() for event in events if event.kind == "context"]
     assert snapshots == requests
-    assert "last response was rejected" in snapshots[1]["messages"][0]["content"]
-    assert "last response was rejected" not in snapshots[2]["messages"][0]["content"]
+    retry_input = request_input(snapshots[1]["messages"])
+    assert any("last response was rejected" in error for error in retry_input["errors"])
+    assert "last response was rejected" not in snapshots[1]["messages"][0]["content"]
+    assert request_input(snapshots[2]["messages"])["errors"] == []
     record = context_records(snapshots[2]["messages"])[-2]
-    assert record["tool_results"] == [{"call_id": "call-1", "tool_name": "record", "status": "success", "content": "EXACT TOOL RESULT"}]
+    call_id = record["tool_calls"][0]["call_id"]
+    assert call_id.startswith("call_") and call_id != "call-1"
+    assert record["tool_results"] == [{"call_id": call_id, "tool_name": "record", "status": "success", "content": "EXACT TOOL RESULT"}]
     assert current_input(snapshots[2]["messages"])["record_type"] == "current_step"
     renderer = Renderer(Style(False), io.StringIO(), False)
     for event in events:
@@ -82,9 +86,10 @@ async def test_agent_snapshots_include_retry_prompt_and_matching_tool_results():
     assert renderer.stream.getvalue() == ""
 
 
-async def test_snapshot_uses_selected_compacted_context_and_stays_immutable():
+async def test_snapshot_uses_selected_context_without_free_summary_and_stays_immutable():
     requests, events = [], []
-    # Larger than the model's context, so it must be summarized once it is history.
+    # No other free provider is configured, so the old original can be omitted
+    # from the request budget without a summary while remaining in the archive.
     original = " ".join(f"OLD ORIGINAL RESPONSE item {index}." for index in range(100_000))
     def transport(request):
         if request.method == "GET":
@@ -102,6 +107,7 @@ async def test_snapshot_uses_selected_compacted_context_and_stays_immutable():
         snapshots = [event.request_body.read() for event in events if event.kind == "context"]
         assert snapshots == requests
         assert original not in json.dumps(snapshots[-1])
-        assert agent.history.steps[0].summary == context_records(snapshots[-1]["messages"])[0]["compressed_summary"]
+        assert agent.history.steps[0].summary is None
+        assert agent.history.steps[0].agent_response == original
         agent.reset()
         assert snapshots[-1] == requests[-1]

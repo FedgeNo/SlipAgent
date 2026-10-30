@@ -15,16 +15,57 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
+import importlib
+import importlib.metadata
+import importlib.util
+import getpass
+import platform
+import socket
+import hashlib
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import ConfigError, command_environment
+from .config import ConfigError, command_environment, data_directory, save_private_text
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+from packaging.version import InvalidVersion
 from .fileio import open_regular
 from .workspace import Workspace
 
 DEFAULT_LOG_QUOTA_BYTES = 1024 * 1024 * 1024
 PROJECT_SETTINGS_PATH = ".slipagent/project.json"
+
+
+def session_environment() -> dict[str, Any]:
+    """Describe the local execution identity without collecting credentials."""
+    try:
+        user = getpass.getuser()
+    except (OSError, KeyError):
+        user = None
+    directory_error = None
+    try:
+        directory = os.getcwd()
+    except OSError as exc:
+        directory = None
+        directory_error = str(exc)
+    return {"user": user, "machine": socket.gethostname(),
+            "operating_system": platform.system(), "os_release": platform.release(),
+            "architecture": platform.machine(), "process_id": os.getpid(),
+            "process_working_directory": directory,
+            "process_working_directory_error": directory_error,
+            "local_time": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "shell": os.environ.get("SHELL") or os.environ.get("COMSPEC")}
+
+
+MATH_PACKAGES = {
+    name: name for name in (
+        "numpy", "scipy", "sympy", "mpmath", "numexpr", "numba", "matplotlib", "pandas",
+        "networkx", "statsmodels", "seaborn", "pint", "cvxpy", "gmpy2", "symengine",
+    )
+} | {"scikit-learn": "sklearn", "Cython": "Cython"}
 PROBE = (
     "import json,sys,importlib.util; print(json.dumps({"
     "'executable':sys.executable,'prefix':sys.prefix,'base_prefix':sys.base_prefix,"
@@ -34,6 +75,162 @@ PROBE = (
     "'ensurepip_available':importlib.util.find_spec('ensurepip') is not None,"
     "'module_search_paths':sys.path}))"
 )
+
+
+def harness_python_environment() -> dict[str, Any]:
+    """Report this process's environment without importing heavy math libraries."""
+    importlib.invalidate_caches()
+    libraries = {}
+    for name, module in MATH_PACKAGES.items():
+        try:
+            version = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            version = None
+        try:
+            available = version is not None and importlib.util.find_spec(module) is not None
+        except (ImportError, ValueError):
+            available = False
+        libraries[name] = {"available": available, "version": version}
+    quote = shlex.join if os.name != "nt" else subprocess.list2cmdline
+    return {"interpreter": sys.executable, "version": sys.version.split()[0],
+            "prefix": sys.prefix, "base_prefix": sys.base_prefix,
+            "is_virtual_environment": sys.prefix != sys.base_prefix,
+            "math_command": quote([sys.executable, "-I"]), "libraries": libraries}
+
+
+def math_requirements() -> dict[str, Requirement]:
+    names = {canonicalize_name(name) for name in MATH_PACKAGES}
+    requirements: dict[str, Requirement] = {canonicalize_name(item.name): item
+                    for raw in importlib.metadata.requires("slipagent") or []
+                    if canonicalize_name((item := Requirement(raw)).name) in names
+                    and (item.marker is None or item.marker.evaluate())}
+    if requirements.keys() != names:
+        raise ConfigError("Math dependency metadata is incomplete; refresh the SlipAgent installation.")
+    return requirements
+
+
+def math_verification_key() -> str:
+    """Invalidate successful import checks when Python or installed packages change."""
+    stamps: list[Any] = [sys.executable, sys.version, sys.prefix, platform.platform(), MATH_PACKAGES]
+    for distribution in importlib.metadata.distributions():
+        stamps.append((distribution.metadata["Name"], distribution.version))
+        for entry in distribution.files or []:
+            if entry.name not in ("METADATA", "RECORD") and entry.suffix not in (".so", ".pyd", ".dll"):
+                continue
+            path = Path(str(distribution.locate_file(entry)))
+            try:
+                stat = path.stat()
+                stamps.append((str(path), stat.st_mtime_ns, stat.st_size))
+            except OSError:
+                stamps.append((str(path), None))
+    for module in MATH_PACKAGES.values():
+        spec = importlib.util.find_spec(module)
+        if spec is not None and spec.origin:
+            path = Path(spec.origin)
+            for location in (path, path.parent):
+                try:
+                    stat = location.stat()
+                    stamps.append((str(location), stat.st_mtime_ns, stat.st_size))
+                except OSError:
+                    stamps.append((str(location), None))
+    return hashlib.sha256(json.dumps(stamps, sort_keys=True).encode()).hexdigest()
+
+
+async def verify_harness_math() -> None:
+    from .tools.blocking import run_blocking
+    from .tools.shell import capture_process
+
+    key = await run_blocking(math_verification_key)
+    cache = data_directory() / "math-environment-cache.json"
+    try:
+        if await run_blocking(cache.read_text, encoding="utf-8") == key:
+            return
+    except OSError:
+        pass
+    script = "import importlib; " + "; ".join(f"importlib.import_module({module!r})" for module in MATH_PACKAGES.values())
+    # Shield process creation as well as capture, so cancellation cannot abandon
+    # a process that has spawned but whose handle has not yet reached this task.
+    from .lifecycle import finish_cleanup
+    from .tools.shell import kill_and_drain
+    spawn = asyncio.create_task(asyncio.create_subprocess_exec(
+        sys.executable, "-I", "-c", script, cwd=sys.prefix, env=command_environment(),
+        stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE, start_new_session=os.name == "posix"))
+    try:
+        process = await asyncio.shield(spawn)
+    except asyncio.CancelledError:
+        async def reap() -> None:
+            await kill_and_drain(await spawn)
+        await finish_cleanup(asyncio.create_task(reap()))
+        raise
+    stdout, stderr, timed_out = await capture_process(process, 120)
+    if timed_out or process.returncode:
+        detail = "timed out after 120 seconds" if timed_out else (stderr or stdout)[-2000:]
+        raise ConfigError(f"Harness math import verification failed: {detail}")
+    try:
+        await run_blocking(save_private_text, cache, key)
+    except OSError:
+        # Cache availability must not turn a successful verification into failure.
+        pass
+
+
+async def ensure_harness_math() -> None:
+    """Install missing required libraries into the running harness environment."""
+    from .tools.blocking import run_blocking
+    from .tools.shell import capture_process
+
+    info = await run_blocking(harness_python_environment)
+    requirements = await run_blocking(math_requirements)
+    missing = set()
+    for name, data in info["libraries"].items():
+        try:
+            compatible = data["available"] and data.get("version") in requirements[canonicalize_name(name)].specifier
+        except (InvalidVersion, TypeError):
+            compatible = False
+        if not compatible:
+            missing.add(name)
+    if not missing:
+        await verify_harness_math()
+        return
+    if sys.prefix == sys.base_prefix:
+        raise ConfigError("Math setup requires running SlipAgent in its own virtual environment.")
+    # Read constraints from installed package metadata so startup and the installer
+    # use the same dependency contract, including when running an editable checkout.
+    selected = [str(requirements[canonicalize_name(name)]) for name in sorted(missing)]
+
+    async def install(arguments: list[str]) -> None:
+        process = await asyncio.create_subprocess_exec(
+            *arguments, cwd=sys.prefix, env=command_environment(), stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            start_new_session=os.name == "posix",
+        )
+        stdout, stderr, timed_out = await capture_process(process, 600)
+        if timed_out or process.returncode:
+            detail = "timed out after 600 seconds" if timed_out else (stderr or stdout)[-2000:]
+            raise ConfigError(f"Automatic harness math installation failed: {detail}")
+
+    if importlib.util.find_spec("pip") is not None:
+        command = [sys.executable, "-I", "-m", "pip", "install"]
+    elif uv := shutil.which("uv"):
+        command = [uv, "pip", "install", "--python", sys.executable]
+    elif importlib.util.find_spec("ensurepip") is not None:
+        await install([sys.executable, "-I", "-m", "ensurepip", "--upgrade"])
+        command = [sys.executable, "-I", "-m", "pip", "install"]
+    else:
+        raise ConfigError("Cannot install harness math packages: pip, uv, and ensurepip are unavailable.")
+    await install([*command, *selected])
+    remaining = await run_blocking(harness_python_environment)
+    unavailable = [name for name, data in remaining["libraries"].items() if not data["available"]]
+    if unavailable:
+        raise ConfigError(f"Harness math packages remain unavailable: {', '.join(unavailable)}")
+    for name, data in remaining["libraries"].items():
+        try:
+            if data["version"] in requirements[canonicalize_name(name)].specifier:
+                continue
+        except (InvalidVersion, TypeError):
+            pass
+        raise ConfigError(f"Harness math package {name} remains incompatible: {data['version']}")
+    await verify_harness_math()
 
 
 @dataclass(frozen=True, slots=True)

@@ -4,6 +4,6 @@ Combine five supplied narratives, each covering consecutive turns of one or more
 
 Keep what later work may depend on: user goals, constraints, corrections, permissions, decisions and their reasons, rejected approaches, completed work, verification, and work left unresolved. Distinguish user requests, tool observations, agent claims, and plans. Preserve chronology where it affects meaning, and treat missing facts as unknown.
 
-Keep the account organized by run, introducing each run with its number and turn range. Cite the original `step_id` numbers where each fact, decision, finding, and unresolved item occurred, for retrieval with `recall_history(step_id=...)`. Preserve paths, identifiers, `call_id` values, and artifact IDs exactly where the narratives give them.
+Keep the account organized by run, introducing each run with its number and turn range. Cite the original `step_id` numbers where each fact, decision, finding, and unresolved item occurred, for retrieval with `recall_history(step_id=…)`. Preserve paths, identifiers, `call_id` values, and artifact IDs exactly where the narratives give them.
 
 Return only a JSON object with one string field, `summary`. Keep the account within ${max_characters} characters and substantially shorter than its inputs.

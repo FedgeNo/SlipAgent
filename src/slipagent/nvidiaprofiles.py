@@ -6,6 +6,9 @@ from .capabilities import RequestProfile
 # tool parameters come from docs.api.nvidia.com/nim/reference/<model>-infer.
 # A missing output cap means the reference leaves it unspecified.
 MODEL_LIMITS: dict[str, tuple[int, int | None]] = {
+    # Hosted playground: 262K context; inference reference: max_tokens <= 262144.
+    # The vendor's 1M model-card context does not describe this hosted limit.
+    "mistralai/mistral-large-4-1t-a52b": (262_144, 262_144),
     "deepseek-ai/deepseek-v4.1-flash": (1_000_000, 1_048_576),
     "stepfun-ai/step-5-preview": (1_000_000, 1_048_576),
     "z-ai/glm-5.3": (1_000_000, None),
@@ -30,6 +33,7 @@ MODEL_LIMITS: dict[str, tuple[int, int | None]] = {
 }
 
 NATIVE_TOOLS = {
+    "mistralai/mistral-large-4-1t-a52b",
     "stepfun-ai/step-5-preview", "moonshotai/kimi-k2.6", "meta/muse-glimmer-30b",
     "nvidia/nemotron-3.5-super-vl-120b-a12b", "nvidia/nemotron-3-ultra-550b-a55b",
     "openai/gpt-oss-20b", "minimaxai/minimax-m3.1-flash", "nvidia/nemotron-3.5-bolt-e4b",
@@ -46,4 +50,6 @@ def builtin_profile(model: str) -> RequestProfile | None:
     parameters = {"temperature", "max_tokens"}
     if model in NATIVE_TOOLS:
         parameters.update({"tools", "tool_choice"})
+    if model == "mistralai/mistral-large-4-1t-a52b":
+        parameters.add("reasoning_effort")
     return RequestProfile(parameters=parameters, context_length=limits[0], max_completion_tokens=limits[1])

@@ -13,11 +13,13 @@ from .capabilities import RequestProfile, model_context_limit
 from .context import ContextError, ConversationHistory, tool_history_as_text
 from .data_text import render_data
 from .diffcomments import current_references
+from .environment import harness_python_environment, session_environment
 from .mcp import MCPTool
 from .prompts import PromptSections, load_prompt, model_prompt_profile
 from .protocol import model_response_format
 from .repomap import RepositoryMap
 from .tools.base import ToolRegistry
+from .tools.blocking import run_blocking
 from .sources import materialize
 from .tools.discovery import CORE_TOOLS
 from .turnstore import resident_content
@@ -88,6 +90,19 @@ class ContextBuilder:
             if not preview:
                 self.registry.services["instruction_snapshot"] = snapshot
         environment = self.registry.resources.environment
+        session_info = await run_blocking(session_environment)
+        session_info["model"] = self.settings.model
+        if workspace is not None:
+            session_info["workspace"] = str(workspace.root)
+            session_info["command_working_directory"] = str(workspace.root)
+        journal = self.registry.resources.journal
+        if journal is not None:
+            session_info["session_id"] = journal.session_id
+        sections.add("session", "Session Environment", load_prompt(
+            "session-environment.md", environment=render_data(session_info)), 28, owner="environment")
+        sections.add("harness_python", "Harness Python and Mathematics",
+                     load_prompt("harness-python.md", environment=render_data(
+                         await run_blocking(harness_python_environment))), 29, owner="environment")
         if environment is not None:
             sections.add("environment", "Project Python Environment", load_prompt('environment-snapshot.md', environment=render_data(await environment.snapshot())), 30, owner="environment")
         response_format = model_response_format(self.settings.model, capabilities, native_tools=native_tools)
@@ -165,6 +180,9 @@ class ContextBuilder:
                 sections.add("monitor_results", "Command Monitor Results", load_prompt("monitor-results.md",
                              monitors=render_data(ready)), 49)
         state_notes = {key: value for key, value in self.registry.context_notes.items() if key not in {"user_edits", "progress"}}
+        if not preview:
+            self.registry.services["background_snapshot"] = copy.deepcopy(
+                state_notes.get("background_commands", {}).get("completed", []))
         if state_notes:
             sections.add("state", "Current Harness State", load_prompt('harness-state.md', state=render_data(state_notes)), 50)
         extra_instructions = sections.render()

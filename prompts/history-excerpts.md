@@ -1,3 +1,7 @@
 `representation="excerpt"` marks bounded text and omissions. Treat missing text as unknown.
 
 Excerpted calls use `result_excerpt`, `error_excerpt`, or `unclassified_result_excerpt` for bounded observations. `response_excerpts` contains bounded message text and call descriptions. Call arguments may be omitted; retrieve originals when exact arguments matter.
+
+Field excerpts retain the turn and its normal fields, with `excerpted_fields` listing paths into the original history record. Only listed fields are shortened; other call arguments, replies, reasoning, metadata, and smaller results remain unchanged. A clipped text value has `prefix`, `suffix`, `original_characters`, and `omitted_characters`. A clipped array has `prefix_items`, `suffix_items`, `original_items`, and `omitted_items`. Missing middle content is unknown. A result carrying any field excerpt uses an excerpt outcome key; other results in the same turn retain their full outcome keys.
+
+The `original` reference supplies `step_id`, `section`, optional `call_id`, and `field_path`. Call `recall_history` with the step, section, and call ID when present, then locate the field within the returned `content` by its path. `field_path` is location metadata, not a tool argument; it accounts for wrappers in the archived original. Prefer the full original when exact omitted text, arguments, or values are needed. An excerpt is not a completed summary and does not erase earlier conversation.

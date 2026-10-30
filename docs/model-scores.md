@@ -10,15 +10,16 @@ provider availability, context limits, and request failures remain separate
 selection checks. A paid model can help calibrate scores without becoming an
 automatic routing candidate. Visual benchmark results contribute nothing.
 
-## Calibration reviewed October 29, 2026
+## Calibration reviewed October 30, 2026
 
 The scores are computed from raw published results saved in
 [`scripts/model-score-measurements.json`](../scripts/model-score-measurements.json):
-219 results for 113 models, including 45 reference models that are not scored for
-routing. Nine text-coding benchmarks are connected through shared models.
+255 results for 114 models, including 45 reference models that are not scored for
+routing. Eleven text-coding benchmarks are connected through shared models.
 SWE-bench Verified supplies the reference scale. DeepSWE 1.1, Terminal-Bench 2.0
-and 2.1, LiveCodeBench, HumanEval, BigCodeBench complete, FLTEval (a Lean formal-proof benchmark), and the MT-Bench coding
-rating supply the rest.
+and 2.1, Artificial Analysis Terminal-Bench 4.0 and SciCode subproblems,
+LiveCodeBench, HumanEval, BigCodeBench complete, FLTEval (a Lean formal-proof
+benchmark), and the MT-Bench coding rating supply the rest.
 
 For a measured percentage `p`, convert it to log-odds:
 
@@ -27,7 +28,7 @@ logit(p / 100) = model_ability - benchmark_offset
 estimated_coding_score = 100 / (1 + exp(-model_ability))
 ```
 
-`scripts/update-model-scores.py --fit` fits every model ability and every benchmark
+`scripts/update-model-scores.py` fits every model ability and every benchmark
 offset jointly, fixing the SWE Verified offset at zero. Huber loss with a 0.75
 log-odds threshold reduces the influence of conflicting results. It keeps every
 observation. Probabilities are clipped to 0.005–0.995 to handle published
@@ -43,16 +44,18 @@ The command refuses a benchmark it cannot connect.
 | Benchmark | Offset | Results | Models with another result |
 | --- | ---: | ---: | ---: |
 | SWE Verified | 0.00 | 36 | 36 |
-| DeepSWE 1.1 | +2.25 | 27 | 25 |
-| Terminal 2.0 | +1.17 | 12 | 12 |
-| Terminal 2.1 | +0.81 | 40 | 37 |
-| LiveCodeBench | −0.61 | 27 | 23 |
+| DeepSWE 1.1 | +2.25 | 27 | 26 |
+| Terminal 2.0 | +1.16 | 12 | 12 |
+| Terminal 2.1 | +0.81 | 40 | 38 |
+| Terminal 4.0 (AA) | +5.18 | 18 | 18 |
+| SciCode subproblems (AA) | +1.62 | 18 | 18 |
+| LiveCodeBench | −0.62 | 27 | 23 |
 | BigCodeBench complete | −1.30 | 30 | 24 |
 | HumanEval | −2.60 | 35 | 23 |
 | FLTEval pass@1 | +2.25 | 5 | 4 |
-| MT-Bench coding | −2.30 | 7 | 6 |
+| MT-Bench coding | −2.31 | 7 | 6 |
 
-The agentic benchmarks agree with the previous review, which used a different, partly
+The October 29 review agreed with the earlier agentic benchmarks, which used a different, partly
 unrecorded set of results: the DeepSWE and Terminal-Bench offsets moved by 0.3 log-odds or
 less, and the scores of the new-generation models moved by one to three points. The
 HumanEval, BigCodeBench, and MT-Bench offsets moved by 0.6 to 0.7 toward harder. Small
@@ -64,7 +67,8 @@ therefore fell by up to 30 points: Gemma 3 12B 47.3 to 21.7, Mistral Large 2 63.
 
 Primary sources are the models' own cards and technical reports, the
 [EvalPlus](https://evalplus.github.io/results.json) and
-[BigCodeBench](https://bigcode-bench.github.io/results.json) result files, and
+[BigCodeBench](https://bigcode-bench.github.io/results.json) result files,
+[Artificial Analysis](https://artificialanalysis.ai/methodology/intelligence-benchmarking), and
 Google's, Moonshot's, Poolside's, and Alibaba's comparison tables for reference
 models. Every record keeps its source links. Several 2026 results are developer-reported
 and not independently reproduced. Four are third-party quotations rather than a
@@ -72,15 +76,15 @@ developer page: Step 5 Preview (BenchLM), dots-3 note preview (BenchLM), MiniMax
 Flash (a reading of MiniMax's launch table image), and Muse Glimmer (Qubrid). Their
 records say so.
 
-Leaving out each of 190 results from models with several results, then refitting and
+Leaving out each of 228 results from models with several results, then refitting and
 predicting it, produced:
 
 | Absolute prediction error | Percentage points |
 | --- | ---: |
-| Mean | 7.0 |
-| Median | 5.0 |
-| 90th percentile | 16.6 |
-| Largest | 27.9 |
+| Mean | 8.2 |
+| Median | 5.3 |
+| 90th percentile | 19.4 |
+| Largest | 38.4 |
 
 These are errors predicting held-out benchmark results, not confidence intervals for
 the final scores. Several withheld results belong to the same model, so they are not
@@ -88,13 +92,13 @@ independent. Models with a single available benchmark cannot be validated this w
 This check measures internal consistency, not performance in SlipAgent.
 
 Harnesses, reasoning budgets, quantization, and benchmark dates vary between
-sources. LiveCodeBench releases are pooled; Terminal-Bench 2.0 and 2.1 have separate
+sources. LiveCodeBench releases are pooled; Terminal-Bench 2.0, 2.1, and 4.0 have separate
 offsets. Models whose evidence is a single old benchmark, specialist models, and
 single-benchmark extrapolations carry greater uncertainty. Scores separated by a few
 points should be treated as close estimates. Where benchmarks disagree about a model
-the fit settles between them. gpt-oss-120b and 20b score 52 and 53 rather than their SWE
-Verified 62.4 and 60.7, because their Terminal-Bench 2.0 and LiveCodeBench results
-are much lower than those SWE Verified results imply.
+the fit settles between them. gpt-oss-120b and 20b score 56.5 and 57.5 rather than
+their SWE Verified 62.4 and 60.7. Their scores also reflect Terminal-Bench,
+LiveCodeBench, and SciCode results, which disagree about their relative strength.
 
 No score is carried over from an earlier review: every score in the table has recorded
 results, and the update command refuses a scored entry that has none. A model with no usable
@@ -117,7 +121,7 @@ Leanstral 1.5 is scored from one FLTEval result (28.9), calibrated on Claude Hai
 previous 79.5–79.7. It is a Lean proof specialist, and a proof result may overestimate broad
 software ability; the score is a proof-engineering placement, not evidence of general coding
 strength. Gemini 3 Flash combines Google's 78% SWE Verified with Terminal-Bench 2.0 (47.6%)
-and 2.1 (58.0%), and scores 76.1.
+and 2.1 (58.0%), and scores 76.0.
 
 SEA-LION v1 7B Instruct remains the one unscored model. Its published linguistic
 evaluations and code-security risk measurements do not establish a comparable
@@ -127,11 +131,29 @@ prevents an unsupported automatic placement.
 Mistral Large 4 (`mistralai/mistral-large-4-1t-a52b` on NVIDIA) scores **93.9**
 from Mistral's developer-reported **61.7% DeepSWE 1.1** result in its
 [launch post](https://mistral.ai/news/mistral-large-4/), reviewed October 29.
-This is a single-benchmark estimate. The reported Terminal-Bench 4.0,
-SWE-Atlas-QnA and Coding Agent Index results are not calibrated here and are not
+This is a single-benchmark estimate. Its reported Terminal-Bench 4.0,
+SWE-Atlas-QnA and Coding Agent Index results are not used for this model and are not
 substituted for earlier benchmark versions. NVIDIA's hosted NVFP4 deployment
-has not been independently measured by this project. Adding the result leaves
+has not been independently measured by this project. The October 29 addition left
 existing model scores unchanged at the stored one-decimal precision.
+
+Ling 3.1 Flash 1019 (`inclusionai/ling-3.1-flash-1019`) scores **93.5** from
+Artificial Analysis' independent **32.8% Terminal-Bench 4.0** and **56.8% SciCode**
+results for the [exact reasoning checkpoint](https://artificialanalysis.ai/models/ling-3-1-flash-1019).
+Kilo's `inclusionai/ling-3.1-flash-1019-free` is an exact alias; the older
+Ling 3.1 Flash checkpoint does not inherit this score. Both benchmarks are
+calibrated using the same 17 existing models with published results. The joint
+refit also updates those models and the connected scale rather than freezing
+their previous estimates.
+
+[Terminal-Bench 4.0](https://artificialanalysis.ai/evaluations/terminalbench-4-0)
+uses mini-swe-agent and pass@1 averaged across three attempts per task.
+[SciCode](https://artificialanalysis.ai/evaluations/scicode) uses test-subproblem
+success, not whole-problem success; Artificial Analysis marks its dataset under
+review following an independent audit. These are separate benchmark metrics
+with separate fitted offsets. The resulting score remains an uncertain
+cross-benchmark estimate, not a 93.5% task completion rate. Kilo's live pricing
+continues to determine free eligibility, including after its temporary promotion.
 
 ## MT-Bench Coding Conversion
 
@@ -143,7 +165,7 @@ The measurements file pairs the rating with existing results for six models: Lla
 Gemma 7B IT, and Llama 3.2 1B/3B Instruct. Their HumanEval and BigCodeBench
 results sit next to their rating, and the rating is fitted
 as one more benchmark with a 1–10 scale (declared under `scales`). Its offset is
-**−2.30**. The rating calibration covers 1.0–6.3; higher ratings require extrapolation.
+**−2.31**. The rating calibration covers 1.0–6.3; higher ratings require extrapolation.
 Five ratings come from one report and three models are related Llamas, so the sample
 provides limited independent evidence.
 

@@ -1,5 +1,5 @@
 {
- "reviewed": "2026-10-29",
+ "reviewed": "2026-10-30",
  "scales": {
   "MT-Bench coding": {
    "min_score": 1,
@@ -7,6 +7,23 @@
   }
  },
  "models": [
+  {
+   "model": "inclusionai/ling-3.1-flash-1019",
+   "benchmarks": {
+    "Terminal 4.0 (AA)": 32.8,
+    "SciCode subproblems (AA)": 56.8
+   },
+   "sources": [
+    "https://huggingface.co/inclusionAI/Ling-3.1-flash-1019",
+    "https://artificialanalysis.ai/models/ling-3-1-flash-1019",
+    "https://artificialanalysis.ai/evaluations/terminalbench-4-0",
+    "https://api.kilo.ai/api/gateway/models"
+   ],
+   "aliases": [
+    "inclusionai/ling-3.1-flash-1019-free"
+   ],
+   "notes": "Independent Artificial Analysis Terminal-Bench 4.0 result for the 1019 reasoning checkpoint; mini-swe-agent, pass@1 averaged over three repeats per task, reviewed 2026-10-30. This is not the earlier Ling-3.1-flash checkpoint and no earlier checkpoint results are reused. Kilo advertises the exact free suffix endpoint with zero prompt/completion pricing, native tools, 1,000,000 context tokens and 262,144 maximum completion tokens. Catalog describes the Novita promotion as ending November 3, 2026; runtime eligibility must continue to follow live pricing. SciCode uses the AA test-subproblem metric, not full-problem success; AA currently marks the dataset under review after an independent audit."
+  },
   {
    "model": "mistralai/mistral-large-4-1t-a52b",
    "benchmarks": {
@@ -22,50 +39,62 @@
    "model": "deepseek/deepseek-v4.1-flash",
    "benchmarks": {
     "DeepSWE 1.1": 74.2,
-    "Terminal 2.1": 90.6
+    "Terminal 2.1": 90.6,
+    "Terminal 4.0 (AA)": 26.8,
+    "SciCode subproblems (AA)": 51.9
    },
    "sources": [
-    "https://arxiv.org/pdf/2609.19969"
+    "https://arxiv.org/pdf/2609.19969",
+    "https://artificialanalysis.ai/models/deepseek-v4-1-flash"
    ],
    "aliases": [
     "deepseek-ai/deepseek-v4.1-flash"
    ],
-   "notes": "Developer-reported; mini-SWE harness for DeepSWE."
+   "notes": "Developer-reported; mini-SWE harness for DeepSWE. Terminal-Bench 4.0: independently measured by Artificial Analysis with mini-swe-agent, pass@1 averaged over three repeats per task; reviewed 2026-10-30. Exact release and reasoning variant from the AA model page. SciCode uses the AA test-subproblem metric, not full-problem success; AA currently marks the dataset under review after an independent audit."
   },
   {
    "model": "google/gemini-3.8-flash",
    "benchmarks": {
     "DeepSWE 1.1": 73.7,
-    "Terminal 2.1": 89.4
+    "Terminal 2.1": 89.4,
+    "Terminal 4.0 (AA)": 19.7,
+    "SciCode subproblems (AA)": 56.6
    },
    "sources": [
-    "https://deepmind.google/models/model-cards/gemini-3-8-flash/"
+    "https://deepmind.google/models/model-cards/gemini-3-8-flash/",
+    "https://artificialanalysis.ai/models/gemini-3-8-flash"
    ],
-   "notes": "Developer-reported."
+   "notes": "Developer-reported. Terminal-Bench 4.0: independently measured by Artificial Analysis with mini-swe-agent, pass@1 averaged over three repeats per task; reviewed 2026-10-30. Exact release and reasoning variant from the AA model page. SciCode uses the AA test-subproblem metric, not full-problem success; AA currently marks the dataset under review after an independent audit."
   },
   {
    "model": "minimax/minimax-m3.1-flash",
    "benchmarks": {
-    "DeepSWE 1.1": 73.7
+    "DeepSWE 1.1": 73.7,
+    "Terminal 4.0 (AA)": 25.8,
+    "SciCode subproblems (AA)": 53.4
    },
    "sources": [
-    "https://aimlapi.com/blog/minimax-m3-1-flash-review"
+    "https://aimlapi.com/blog/minimax-m3-1-flash-review",
+    "https://artificialanalysis.ai/models/minimax-m3-1-flash"
    ],
    "aliases": [
     "minimaxai/minimax-m3.1-flash"
    ],
-   "notes": "From MiniMax's launch table image as reported by a third party; not independently reproduced."
+   "notes": "From MiniMax's launch table image as reported by a third party; not independently reproduced. Terminal-Bench 4.0: independently measured by Artificial Analysis with mini-swe-agent, pass@1 averaged over three repeats per task; reviewed 2026-10-30. Exact release and reasoning variant from the AA model page. SciCode uses the AA test-subproblem metric, not full-problem success; AA currently marks the dataset under review after an independent audit."
   },
   {
    "model": "z-ai/glm-5.3",
    "benchmarks": {
     "Terminal 2.1": 88.2,
-    "DeepSWE 1.1": 66.9
+    "DeepSWE 1.1": 66.9,
+    "Terminal 4.0 (AA)": 41.9,
+    "SciCode subproblems (AA)": 59.0
    },
    "sources": [
-    "https://huggingface.co/zai-org/glm-5.3"
+    "https://huggingface.co/zai-org/glm-5.3",
+    "https://artificialanalysis.ai/models/glm-5-3"
    ],
-   "notes": "Developer-reported; Claude Code and mini-swe-agent harnesses."
+   "notes": "Developer-reported; Claude Code and mini-swe-agent harnesses. Terminal-Bench 4.0: independently measured by Artificial Analysis with mini-swe-agent, pass@1 averaged over three repeats per task; reviewed 2026-10-30. Exact release and reasoning variant from the AA model page. SciCode uses the AA test-subproblem metric, not full-problem success; AA currently marks the dataset under review after an independent audit."
   },
   {
    "model": "stepfun/step-5-preview",
@@ -85,24 +114,30 @@
    "model": "z-ai/glm-5.3-flash",
    "benchmarks": {
     "Terminal 2.1": 84.3,
-    "DeepSWE 1.1": 63.4
+    "DeepSWE 1.1": 63.4,
+    "Terminal 4.0 (AA)": 32.8,
+    "SciCode subproblems (AA)": 51.6
    },
    "sources": [
     "https://huggingface.co/zai-org/GLM-5.3-Flash",
-    "https://www.qubrid.com/blog-news/glm-53-flash-benchmarks-official-and-independent-results"
+    "https://www.qubrid.com/blog-news/glm-53-flash-benchmarks-official-and-independent-results",
+    "https://artificialanalysis.ai/models/glm-5-3-flash"
    ],
-   "notes": "Terminal 2.1 from the model card; DeepSWE from a third party quoting the card."
+   "notes": "Terminal 2.1 from the model card; DeepSWE from a third party quoting the card. Terminal-Bench 4.0: independently measured by Artificial Analysis with mini-swe-agent, pass@1 averaged over three repeats per task; reviewed 2026-10-30. Exact release and reasoning variant from the AA model page. SciCode uses the AA test-subproblem metric, not full-problem success; AA currently marks the dataset under review after an independent audit."
   },
   {
    "model": "google/gemini-3.6-flash",
    "benchmarks": {
     "DeepSWE 1.1": 49.0,
-    "Terminal 2.1": 78.0
+    "Terminal 2.1": 78.0,
+    "Terminal 4.0 (AA)": 7.1,
+    "SciCode subproblems (AA)": 53.4
    },
    "sources": [
-    "https://deepmind.google/models/model-cards/gemini-3-6-flash/"
+    "https://deepmind.google/models/model-cards/gemini-3-6-flash/",
+    "https://artificialanalysis.ai/models/gemini-3-6-flash"
    ],
-   "notes": "Developer-reported; Terminal 2.1 uses Terminus-2."
+   "notes": "Developer-reported; Terminal 2.1 uses Terminus-2. Terminal-Bench 4.0: independently measured by Artificial Analysis with mini-swe-agent, pass@1 averaged over three repeats per task; reviewed 2026-10-30. Exact release and reasoning variant from the AA model page. SciCode uses the AA test-subproblem metric, not full-problem success; AA currently marks the dataset under review after an independent audit."
   },
   {
    "model": "reflection/beam",
@@ -125,12 +160,15 @@
    "benchmarks": {
     "LiveCodeBench": 90.3,
     "Terminal 2.1": 73.0,
-    "DeepSWE 1.1": 42.2
+    "DeepSWE 1.1": 42.2,
+    "Terminal 4.0 (AA)": 5.6,
+    "SciCode subproblems (AA)": 46.6
    },
    "sources": [
-    "https://huggingface.co/Qwen/Qwen3.8-27B"
+    "https://huggingface.co/Qwen/Qwen3.8-27B",
+    "https://artificialanalysis.ai/models/qwen3-8-27b"
    ],
-   "notes": "Alibaba self-reported; DeepSWE with the Claude Code harness."
+   "notes": "Alibaba self-reported; DeepSWE with the Claude Code harness. Terminal-Bench 4.0: independently measured by Artificial Analysis with mini-swe-agent, pass@1 averaged over three repeats per task; reviewed 2026-10-30. Exact release and reasoning variant from the AA model page. SciCode uses the AA test-subproblem metric, not full-problem success; AA currently marks the dataset under review after an independent audit."
   },
   {
    "model": "poolside/laguna-s-2.1",
@@ -159,36 +197,45 @@
    "benchmarks": {
     "SWE Verified": 80.2,
     "Terminal 2.0": 66.7,
-    "LiveCodeBench": 89.6
+    "LiveCodeBench": 89.6,
+    "Terminal 4.0 (AA)": 0.5,
+    "SciCode subproblems (AA)": 51.5
    },
    "sources": [
-    "https://huggingface.co/moonshotai/Kimi-K2.6"
+    "https://huggingface.co/moonshotai/Kimi-K2.6",
+    "https://artificialanalysis.ai/models/kimi-k2-6"
    ],
-   "notes": "Developer-reported; Terminus-2 for Terminal 2.0."
+   "notes": "Developer-reported; Terminus-2 for Terminal 2.0. Terminal-Bench 4.0: independently measured by Artificial Analysis with mini-swe-agent, pass@1 averaged over three repeats per task; reviewed 2026-10-30. Exact release and reasoning variant from the AA model page. SciCode uses the AA test-subproblem metric, not full-problem success; AA currently marks the dataset under review after an independent audit."
   },
   {
    "model": "thinkingmachines/inkling-small",
    "benchmarks": {
     "SWE Verified": 80.2,
     "Terminal 2.1": 64.7,
-    "LiveCodeBench": 85.9
+    "LiveCodeBench": 85.9,
+    "Terminal 4.0 (AA)": 1.0,
+    "SciCode subproblems (AA)": 49.7
    },
    "sources": [
     "https://www.together.ai/models/inkling-small",
-    "https://benchmarklist.com/models/thinking-machines-inkling-small/"
+    "https://benchmarklist.com/models/thinking-machines-inkling-small/",
+    "https://artificialanalysis.ai/models/inkling-small"
    ],
-   "notes": "SWE and Terminal from the developer via Together; LiveCodeBench is a Vals run."
+   "notes": "SWE and Terminal from the developer via Together; LiveCodeBench is a Vals run. Terminal-Bench 4.0: independently measured by Artificial Analysis with mini-swe-agent, pass@1 averaged over three repeats per task; reviewed 2026-10-30. Exact release and reasoning variant from the AA model page. SciCode uses the AA test-subproblem metric, not full-problem success; AA currently marks the dataset under review after an independent audit."
   },
   {
    "model": "thinkingmachines/inkling",
    "benchmarks": {
     "SWE Verified": 77.6,
-    "Terminal 2.1": 63.8
+    "Terminal 2.1": 63.8,
+    "Terminal 4.0 (AA)": 1.0,
+    "SciCode subproblems (AA)": 47.0
    },
    "sources": [
-    "https://capitalandcompute.net/blog/inkling-thinking-machines-launch/"
+    "https://capitalandcompute.net/blog/inkling-thinking-machines-launch/",
+    "https://artificialanalysis.ai/models/inkling"
    ],
-   "notes": "Developer-reported; bash-only harness."
+   "notes": "Developer-reported; bash-only harness. Terminal-Bench 4.0: independently measured by Artificial Analysis with mini-swe-agent, pass@1 averaged over three repeats per task; reviewed 2026-10-30. Exact release and reasoning variant from the AA model page. SciCode uses the AA test-subproblem metric, not full-problem success; AA currently marks the dataset under review after an independent audit."
   },
   {
    "model": "xingchen-agi/xing4.0-29b-a4b",
@@ -250,12 +297,15 @@
    "model": "cohere/north-mini-code",
    "benchmarks": {
     "SWE Verified": 67.6,
-    "Terminal 2.0": 36.0
+    "Terminal 2.0": 36.0,
+    "Terminal 4.0 (AA)": 0.5,
+    "SciCode subproblems (AA)": 38.8
    },
    "sources": [
-    "https://huggingface.co/poolside/Laguna-XS-2.1"
+    "https://huggingface.co/poolside/Laguna-XS-2.1",
+    "https://artificialanalysis.ai/models/north-mini-code"
    ],
-   "notes": "Taken from Poolside's comparison table; Cohere's own card was not read."
+   "notes": "Taken from Poolside's comparison table; Cohere's own card was not read. Terminal-Bench 4.0: independently measured by Artificial Analysis with mini-swe-agent, pass@1 averaged over three repeats per task; reviewed 2026-10-30. Exact release and reasoning variant from the AA model page. SciCode uses the AA test-subproblem metric, not full-problem success; AA currently marks the dataset under review after an independent audit."
   },
   {
    "model": "google/gemma-4-31b-it",
@@ -284,25 +334,31 @@
    "model": "openai/gpt-oss-120b",
    "benchmarks": {
     "SWE Verified": 62.4,
-    "Terminal 2.0": 18.7
+    "Terminal 2.0": 18.7,
+    "Terminal 4.0 (AA)": 0,
+    "SciCode subproblems (AA)": 34.0
    },
    "sources": [
     "https://arxiv.org/abs/2508.10925",
-    "https://huggingface.co/poolside/Laguna-XS-2.1"
+    "https://huggingface.co/poolside/Laguna-XS-2.1",
+    "https://artificialanalysis.ai/models/gpt-oss-120b"
    ],
-   "notes": "SWE from the model card (high reasoning with the exec tool); Terminal 2.0 from the official leaderboard as cited by Poolside."
+   "notes": "SWE from the model card (high reasoning with the exec tool); Terminal 2.0 from the official leaderboard as cited by Poolside. Terminal-Bench 4.0: independently measured by Artificial Analysis with mini-swe-agent, pass@1 averaged over three repeats per task; reviewed 2026-10-30. Exact release and reasoning variant from the AA model page. SciCode uses the AA test-subproblem metric, not full-problem success; AA currently marks the dataset under review after an independent audit."
   },
   {
    "model": "openai/gpt-oss-20b",
    "benchmarks": {
     "SWE Verified": 60.7,
-    "LiveCodeBench": 61.0
+    "LiveCodeBench": 61.0,
+    "Terminal 4.0 (AA)": 0,
+    "SciCode subproblems (AA)": 38.9
    },
    "sources": [
     "https://arxiv.org/abs/2508.10925",
-    "https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-3-nano-30b-a3b"
+    "https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-3-nano-30b-a3b",
+    "https://artificialanalysis.ai/models/gpt-oss-20b"
    ],
-   "notes": "SWE from the model card; LiveCodeBench v6 from NVIDIA's Nemotron 3 Nano table."
+   "notes": "SWE from the model card; LiveCodeBench v6 from NVIDIA's Nemotron 3 Nano table. Terminal-Bench 4.0: independently measured by Artificial Analysis with mini-swe-agent, pass@1 averaged over three repeats per task; reviewed 2026-10-30. Exact release and reasoning variant from the AA model page. SciCode uses the AA test-subproblem metric, not full-problem success; AA currently marks the dataset under review after an independent audit."
   },
   {
    "model": "nvidia/nemotron-3-super-120b-a12b",
@@ -332,12 +388,15 @@
   {
    "model": "google/gemini-3.5-flash-lite",
    "benchmarks": {
-    "Terminal 2.1": 54.0
+    "Terminal 2.1": 54.0,
+    "Terminal 4.0 (AA)": 1.0,
+    "SciCode subproblems (AA)": 41.3
    },
    "sources": [
-    "https://deepmind.google/models/model-cards/gemini-3-5-flash-lite/"
+    "https://deepmind.google/models/model-cards/gemini-3-5-flash-lite/",
+    "https://artificialanalysis.ai/models/gemini-3-5-flash-lite"
    ],
-   "notes": "Developer-reported; Terminus-2."
+   "notes": "Developer-reported; Terminus-2. Terminal-Bench 4.0: independently measured by Artificial Analysis with mini-swe-agent, pass@1 averaged over three repeats per task; reviewed 2026-10-30. Exact release and reasoning variant from the AA model page. SciCode uses the AA test-subproblem metric, not full-problem success; AA currently marks the dataset under review after an independent audit."
   },
   {
    "model": "google/gemini-3.1-flash-lite",
@@ -353,12 +412,15 @@
    "model": "google/gemini-2.5-pro",
    "benchmarks": {
     "SWE Verified": 59.6,
-    "LiveCodeBench": 74.2
+    "LiveCodeBench": 74.2,
+    "Terminal 4.0 (AA)": 0,
+    "SciCode subproblems (AA)": 46.3
    },
    "sources": [
-    "https://arxiv.org/pdf/2507.06261"
+    "https://arxiv.org/pdf/2507.06261",
+    "https://artificialanalysis.ai/models/gemini-2-5-pro"
    ],
-   "notes": "Single-attempt SWE-bench Verified and LiveCodeBench v5 from the Gemini 2.5 report."
+   "notes": "Single-attempt SWE-bench Verified and LiveCodeBench v5 from the Gemini 2.5 report. Terminal-Bench 4.0: independently measured by Artificial Analysis with mini-swe-agent, pass@1 averaged over three repeats per task; reviewed 2026-10-30. Exact release and reasoning variant from the AA model page. SciCode uses the AA test-subproblem metric, not full-problem success; AA currently marks the dataset under review after an independent audit."
   },
   {
    "model": "mistralai/codestral-22b-instruct-v0.1",
@@ -1242,29 +1304,35 @@
    "benchmarks": {
     "LiveCodeBench": 88.22,
     "SWE Verified": 71.1,
-    "Terminal 2.1": 60.67
+    "Terminal 2.1": 60.67,
+    "Terminal 4.0 (AA)": 0,
+    "SciCode subproblems (AA)": 47.8
    },
    "sources": [
-    "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16"
+    "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16",
+    "https://artificialanalysis.ai/models/nemotron-3-5-super-vl"
    ],
    "aliases": [
     "nvidia/nemotron-3.5-super-vl-120b-a12b"
    ],
-   "notes": "BF16 model card; the NVIDIA harness."
+   "notes": "BF16 model card; the NVIDIA harness. Terminal-Bench 4.0: independently measured by Artificial Analysis with mini-swe-agent, pass@1 averaged over three repeats per task; reviewed 2026-10-30. Exact release and reasoning variant from the AA model page. SciCode uses the AA test-subproblem metric, not full-problem success; AA currently marks the dataset under review after an independent audit."
   },
   {
    "model": "nvidia/nemotron-3.5-lightning",
    "benchmarks": {
     "SWE Verified": 51.56,
-    "Terminal 2.1": 24.6
+    "Terminal 2.1": 24.6,
+    "Terminal 4.0 (AA)": 0.5,
+    "SciCode subproblems (AA)": 32.1
    },
    "sources": [
-    "https://interfaze.ai/models/nvidianvidia-nemotron-35-lightning-30b-a3b-bf16"
+    "https://interfaze.ai/models/nvidianvidia-nemotron-35-lightning-30b-a3b-bf16",
+    "https://artificialanalysis.ai/models/nemotron-3-5-lightning"
    ],
    "aliases": [
     "nvidia/nemotron-3.5-lightning-30b-a3b"
    ],
-   "notes": "Mirror of the BF16 model card, not NVIDIA's own page."
+   "notes": "Mirror of the BF16 model card, not NVIDIA's own page. Terminal-Bench 4.0: independently measured by Artificial Analysis with mini-swe-agent, pass@1 averaged over three repeats per task; reviewed 2026-10-30. Exact release and reasoning variant from the AA model page. SciCode uses the AA test-subproblem metric, not full-problem success; AA currently marks the dataset under review after an independent audit."
   },
   {
    "model": "nvidia/llama-3.1-nemotron-ultra-253b-v1",

@@ -10,14 +10,16 @@
     "LiveCodeBench releases and date windows are pooled; harness and reasoning budgets differ.",
     "Single-benchmark, specialist-proof, and old-model extrapolations are less reliable.",
     "MT-Bench uses coding-category judge ratings on a 1-10 scale; chart readings and shared model families limit precision.",
-    "Calibration includes paid reference models; runtime eligibility still requires a free endpoint."
+    "Calibration includes paid reference models; runtime eligibility still requires a free endpoint.",
+    "Terminal-Bench 4.0 (AA) uses mini-swe-agent and pass@1 averaged over three repeats; it is fitted separately from Terminal-Bench 2.x.",
+    "SciCode (AA) measures test-subproblem success, not whole-problem success; Artificial Analysis marks the dataset under review after an independent audit."
   ],
-  "reviewed": "2026-10-29",
-  "model_count": 113,
+  "reviewed": "2026-10-30",
+  "model_count": 114,
   "reference_model_count": 45,
   "benchmarks": {
     "BigCodeBench complete": {
-      "offset": -1.2985269479105372,
+      "offset": -1.3004524401271087,
       "observations": 30,
       "overlap_models": 24,
       "observed_percent_range": [
@@ -26,16 +28,16 @@
       ]
     },
     "DeepSWE 1.1": {
-      "offset": 2.25339146838382,
+      "offset": 2.254415036558756,
       "observations": 27,
-      "overlap_models": 25,
+      "overlap_models": 26,
       "observed_percent_range": [
         12.0,
         74.2
       ]
     },
     "FLTEval pass1": {
-      "offset": 2.25432506117249,
+      "offset": 2.250132297097624,
       "observations": 5,
       "overlap_models": 4,
       "observed_percent_range": [
@@ -44,7 +46,7 @@
       ]
     },
     "HumanEval": {
-      "offset": -2.599128222798133,
+      "offset": -2.6013120334746276,
       "observations": 35,
       "overlap_models": 23,
       "observed_percent_range": [
@@ -53,7 +55,7 @@
       ]
     },
     "LiveCodeBench": {
-      "offset": -0.6136046597564359,
+      "offset": -0.6190837302464518,
       "observations": 27,
       "overlap_models": 23,
       "observed_percent_range": [
@@ -62,7 +64,7 @@
       ]
     },
     "MT-Bench coding": {
-      "offset": -2.304357559262594,
+      "offset": -2.306391817147621,
       "min_score": 1,
       "max_score": 10,
       "observations": 7,
@@ -81,8 +83,17 @@
         81.6
       ]
     },
+    "SciCode subproblems (AA)": {
+      "offset": 1.6247654675601562,
+      "observations": 18,
+      "overlap_models": 18,
+      "observed_percent_range": [
+        32.1,
+        59.0
+      ]
+    },
     "Terminal 2.0": {
-      "offset": 1.1724644562786573,
+      "offset": 1.1617572124467357,
       "observations": 12,
       "overlap_models": 12,
       "observed_percent_range": [
@@ -91,20 +102,29 @@
       ]
     },
     "Terminal 2.1": {
-      "offset": 0.8102267577464286,
+      "offset": 0.8075396593379575,
       "observations": 40,
-      "overlap_models": 37,
+      "overlap_models": 38,
       "observed_percent_range": [
         24.6,
         90.6
       ]
+    },
+    "Terminal 4.0 (AA)": {
+      "offset": 5.184988943404632,
+      "observations": 18,
+      "overlap_models": 18,
+      "observed_percent_range": [
+        0,
+        41.9
+      ]
     }
   },
   "validation": {
-    "count": 190,
-    "mean_absolute_error": 6.971731346707539,
-    "median_absolute_error": 4.9754621217753865,
-    "p90_absolute_error": 16.56821582503559,
-    "maximum_absolute_error": 27.89020523375938
+    "count": 228,
+    "mean_absolute_error": 8.168001645872875,
+    "median_absolute_error": 5.254231264947931,
+    "p90_absolute_error": 19.4425346675561,
+    "maximum_absolute_error": 38.44453673045918
   }
 }

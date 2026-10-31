@@ -15,7 +15,7 @@ def folder_opener() -> tuple[str, ...] | None:
     if sys.platform == "darwin":
         command = shutil.which("open")
         return (command,) if command else None
-    if sys.platform.startswith("linux") and (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+    if sys.platform.startswith("linux"):
         command = shutil.which("xdg-open")
         if command:
             return (command,)

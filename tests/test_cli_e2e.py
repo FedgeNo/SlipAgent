@@ -894,7 +894,7 @@ def test_status_bar_shows_cwd_and_provider_model(project_dir: Path) -> None:
         proc = run_repl_commands(project_dir, ["go"], "--base-url", stub.base_url)
 
     assert proc.returncode == 0, proc.stderr
-    assert "Model: openrouter::" in proc.stderr
+    assert "openrouter::" in proc.stderr
     assert "Free: " not in proc.stderr
     assert "│" in proc.stderr
 
@@ -907,7 +907,7 @@ def test_status_bar_is_separated_from_the_prompt(project_dir: Path) -> None:
     lines = proc.stderr.splitlines()
     prompt = next(i for i, line in enumerate(lines) if line.strip() == ">")
     assert lines[prompt + 1] == ""
-    assert "Model: " in lines[prompt + 2]
+    assert "openrouter::" in lines[prompt + 2]
     assert ">" not in lines[prompt + 2]
     submitted = lines.index("> go")
     assert lines[submitted - 1] == ""
@@ -924,7 +924,7 @@ def test_status_bar_names_the_working_directory(project_dir: Path) -> None:
         proc = run_repl_commands(project_dir, ["go"], "--base-url", stub.base_url)
 
     assert proc.returncode == 0, proc.stderr
-    line = next(line for line in proc.stderr.splitlines() if "│  Model: " in line)
+    line = next(line for line in proc.stderr.splitlines() if "│  openrouter::" in line)
     cwd, _, _ = line.partition("│")
     cwd = cwd.strip()
     assert cwd, proc.stderr
@@ -969,7 +969,7 @@ def test_status_bar_elides_the_cwd_when_the_terminal_is_tight(
         )
 
     assert proc.returncode == 0, proc.stderr
-    line = next(line for line in proc.stderr.splitlines() if "Model: openrouter::" in line)
+    line = next(line for line in proc.stderr.splitlines() if "openrouter::" in line)
     assert len(line) <= 30
     assert any(line.strip() == ">" for line in proc.stderr.splitlines())
 
@@ -988,7 +988,7 @@ def test_prompt_and_status_never_share_a_line_with_output(project_dir: Path) -> 
         if re.search(r"(?:^|\s)>(?:\s|$)", line) is None:
             continue
         # A prompt or queued-input echo starts at its own marker.
-        assert line.lstrip().startswith(">") or "Model: " in line, line
+        assert line.lstrip().startswith(">") or "openrouter::" in line, line
 
 
 def test_mid_turn_input_reaches_model_without_queue_label(project_dir: Path) -> None:
@@ -1601,7 +1601,7 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
                 assert proc.poll() is None, "CLI exited before the expected state"
             pytest.fail("terminal state timed out: " + repr(screen.display))
         try:
-            wait_for(lambda: "Model: openrouter::stub/one" in screen.display[23] and "Working" in screen.display[17])
+            wait_for(lambda: "openrouter::stub/one" in screen.display[23] and "Working" in screen.display[17])
             assert screen.title.endswith(f"{project_dir} | SlipAgent")
             wait_for(lambda: "/quit" in "\n".join(screen.display[:17]))
             startup = "\n".join(screen.display[:17])
@@ -1616,7 +1616,7 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             os.write(master, b"/danger on\r")
             wait_for(lambda: "  │  Danger Mode" in screen.display[23])
             pipe_column = screen.display[23].index("  │  Danger Mode") + 2
-            assert screen.buffer[23][pipe_column].fg == screen.buffer[23][screen.display[23].index("Model:")].fg
+            assert screen.buffer[23][pipe_column].fg == screen.buffer[23][screen.display[23].index("openrouter::")].fg
             start = screen.display[23].index("Danger Mode")
             assert all(screen.buffer[23][column].fg == "ff929b" for column in range(start, start + len("Danger Mode")))
             os.write(master, b"/danger off\r")
@@ -1667,7 +1667,7 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             assert result_ids == call_ids
             assert "queued followup" in [context_body(m["content"]) for m in history if m["role"] == "user"]
             os.write(master, b"/model stub/two\r")
-            wait_for(lambda: "Model: openrouter::stub/two" in screen.display[23])
+            wait_for(lambda: "openrouter::stub/two" in screen.display[23])
             assert screen.title.endswith("Work in progress | SlipAgent")
             os.write(master, b"/reset\r")
             wait_for(lambda: screen.title == f"{project_dir} | SlipAgent")

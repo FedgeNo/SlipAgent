@@ -961,9 +961,13 @@ class TerminalUI:
 
     def _status_fragments(self) -> StyleAndTextTuples:
         fragments = to_formatted_text(ANSI(self._status(self._readout_width())))
-        if self.__dict__.get("_folder_opener") is None:
+        if self.__dict__.get("_project_directory") is None:
             return fragments
         text = fragment_list_to_text(fragments)
+        callback = getattr(self, "_status_suffix", None)
+        suffix = fragment_list_to_text(to_formatted_text(ANSI(callback()))) if callback is not None else ""
+        if suffix and text.endswith(suffix):
+            text = text[:-len(suffix)]
         cwd, separator, _ = text.partition("  │  ")
         if not separator or cwd.lower().startswith("model:"):
             return fragments
@@ -992,11 +996,14 @@ class TerminalUI:
     async def _explore_project(self) -> None:
         directory = self.__dict__.get("_project_directory")
         if directory is not None:
+            if self.__dict__.get("_folder_opener") is None:
+                self._folder_opener = folder_opener()
             await self._explore_directory(directory)
 
     async def _explore_directory(self, directory: Path) -> None:
         opener = self.__dict__.get("_folder_opener")
         if opener is None:
+            self.notify("No system folder opener is available.")
             return
         self.notify("Opening file manager")
         notification_started = self.status_line.changed_at

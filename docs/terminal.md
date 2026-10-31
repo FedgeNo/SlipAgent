@@ -150,7 +150,7 @@ when entering prompts, command arguments, configuration values, or file edits.
 
 On an interactive terminal, seven fixed rows sit at the bottom of the screen:
 a pulsing activity indicator, five rows for wrapping input,
-and the readout `<cwd>  │  Model: <provider>::<model>`, with ` (Optimal)` after the
+and the readout `<cwd>  │  <provider>::<model>`, with ` (Optimal)` after the
 model while optimal selection is on. Background colors distinguish this area from the scrolling transcript. Output and redraws preserve
 partially typed input. The controls have a dark blue background, menus use
 dark purple, and the prompt retains its dark green background. Input and output wrap at word boundaries to the
@@ -160,6 +160,12 @@ the transcript over the output area, preserving
 your draft and prompt history. Scrolling back pauses automatic scrolling until you
 return to the bottom. The CWD is the workspace where tools run; long paths
 and model names shorten to fit narrow terminals.
+
+Click the workspace path at the bottom left to open it with the folder opener
+selected in Options, or the system default when no custom opener is configured.
+Linux delegates to `xdg-open` or `gio open` without requiring display environment
+variables. A missing or failed opener reports an error; clicking the workspace
+never opens settings.
 
 The terminal is asked for clicks, drags, and the wheel only, not every pointer
 movement, so links do not highlight on hover and slow connections stay responsive.

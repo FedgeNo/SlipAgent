@@ -1807,7 +1807,6 @@ class StatusLine:
         model = session.agent.model
         if isinstance(getattr(session, "client", None), APIClient):
             model = f"{session.client.provider}::{model}"
-        model = f"Model: {model}"
         # Read existing routing rather than calling model_routing(), which registers services on every redraw.
         routing = getattr(session, "extensions", {}).get("model_routing")
         if routing is not None and routing.enabled:

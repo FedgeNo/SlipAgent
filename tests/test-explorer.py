@@ -9,14 +9,15 @@ from slipagent import explorer
 
 
 @pytest.mark.parametrize("platform,desktop,installed,expected", [
-    ("linux", False, {"xdg-open"}, None),
+    ("linux", False, {"xdg-open"}, ("/bin/xdg-open",)),
+    ("linux", False, {"gio"}, ("/bin/gio", "open")),
     ("linux", True, set(), None),
     ("linux", True, {"xdg-open", "gio"}, ("/bin/xdg-open",)),
     ("linux", True, {"gio"}, ("/bin/gio", "open")),
     ("darwin", False, {"open"}, ("/bin/open",)),
     ("freebsd", True, {"xdg-open"}, None),
 ])
-def test_folder_opener_requires_supported_desktop(monkeypatch, platform, desktop, installed, expected):
+def test_folder_opener_uses_system_default_without_requiring_display_variables(monkeypatch, platform, desktop, installed, expected):
     monkeypatch.setattr(explorer.sys, "platform", platform)
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)

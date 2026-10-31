@@ -2827,12 +2827,16 @@ async def test_menu_blank_rows_do_not_hover_or_select_the_last_item(display):
             await task
 
 
-@pytest.mark.parametrize("available", [True, False])
-async def test_project_directory_link_requires_opener_and_disables_after_failure(display, tmp_path, monkeypatch, available):
-    from slipagent import terminal
-    from unittest.mock import Mock
+@pytest.mark.parametrize("available, configured", [(True, False), (False, False), (False, True)])
+async def test_project_directory_link_uses_configured_or_system_opener_without_opening_options(display, tmp_path, monkeypatch, available, configured):
+    from slipagent import terminal, options
+    from unittest.mock import AsyncMock, Mock
     sink, _, output, screen, snapshot = display
     monkeypatch.setattr(terminal, "folder_opener", lambda: ("test-opener",) if available else None)
+    monkeypatch.setattr(options, "load_ui_preferences", lambda: {"folder_opener": "configured-opener"} if configured else {})
+    monkeypatch.setattr(options, "configured_folder_opener", lambda command: ("configured-opener",) if command else None)
+    settings = AsyncMock()
+    monkeypatch.setattr(options.OptionsPanel, "show", settings)
     launch = Mock(return_value=False)
     monkeypatch.setattr(terminal, "open_folder", launch)
     with create_pipe_input() as pipe:
@@ -2841,18 +2845,21 @@ async def test_project_directory_link_requires_opener_and_disables_after_failure
         task = asyncio.create_task(ui.run())
         try:
             await wait_until(lambda: "project" in snapshot()[23])
-            assert screen.buffer[23][0].underscore is available
+            assert screen.buffer[23][0].underscore
             assert not screen.buffer[23][11].underscore
-            if available:
+            if available or configured:
                 pipe.send_text("\x1b[<35;2;24M")
                 await wait_until(lambda: snapshot() and screen.buffer[23][0].reverse)
             await send_keys(ui, pipe, "\x1b[<0;2;24M\x1b[<0;2;24m")
-            if available:
+            if available or configured:
                 await wait_until(lambda: "Could not open" in "\n".join(snapshot()))
-                launch.assert_called_once_with(tmp_path, ("test-opener",))
-                assert not screen.buffer[23][0].underscore
+                launch.assert_called_once_with(tmp_path, ("configured-opener",) if configured else ("test-opener",))
+                assert screen.buffer[23][0].underscore
+                settings.assert_not_awaited()
             else:
+                await wait_until(lambda: "No system folder opener is available." in snapshot()[17])
                 launch.assert_not_called()
+            settings.assert_not_awaited()
             assert ui._lines.empty()
         finally:
             ui.close()
@@ -3004,8 +3011,8 @@ async def test_model_readout_before_the_danger_divider_is_not_a_folder_link(disp
     sink, _, output, _, _ = display
     monkeypatch.setattr(terminal, "folder_opener", lambda: ("test-opener",))
     with create_pipe_input() as pipe:
-        ui = TerminalUI(lambda width: "Model: stub/model  \u2502  Danger Mode", sink, input=pipe, output=output,
-                        project_directory=tmp_path)
+        ui = TerminalUI(lambda width: "stub/model  \u2502  Danger Mode", sink, input=pipe, output=output,
+                        project_directory=tmp_path, status_suffix=lambda: "  \u2502  Danger Mode")
         try:
             assert not any("clickable" in fragment[0] for fragment in ui._status_fragments())
         finally:
@@ -3068,9 +3075,9 @@ def test_status_line_marks_model_when_optimal_is_on(tmp_path):
     routing = SimpleNamespace(enabled=True)
     session = SimpleNamespace(workspace=Workspace(tmp_path), agent=SimpleNamespace(model="stub/model"),
                               extensions={"model_routing": routing})
-    assert StatusLine(session, Style(False)).text(columns=120).endswith("Model: stub/model (Optimal)")
+    assert StatusLine(session, Style(False)).text(columns=120).endswith("stub/model (Optimal)")
     routing.enabled = False
-    assert StatusLine(session, Style(False)).text(columns=120).endswith("Model: stub/model")
+    assert StatusLine(session, Style(False)).text(columns=120).endswith("stub/model")
 
 
 async def test_danger_status_suffix_is_red_last_and_survives_resize(display, tmp_path):
@@ -3083,14 +3090,14 @@ async def test_danger_status_suffix_is_red_last_and_survives_resize(display, tmp
                         input=pipe, output=output, status_suffix=lambda: StatusLine(session, Style(True)).danger_suffix())
         task = asyncio.create_task(ui.run())
         try:
-            await wait_until(lambda: "Model: stub/model" in snapshot()[23])
+            await wait_until(lambda: "stub/model" in snapshot()[23])
             assert "Danger Mode" not in snapshot()[23]
             session.workspace.access.danger = True
             ui.app.invalidate()
             await wait_until(lambda: "  │  Danger Mode" in snapshot()[23])
-            assert snapshot()[23].index("Model: stub/model") < snapshot()[23].index("Danger Mode")
+            assert snapshot()[23].index("stub/model") < snapshot()[23].index("Danger Mode")
             pipe_column = snapshot()[23].index("  │  Danger Mode") + 2
-            assert screen.buffer[23][pipe_column].fg == screen.buffer[23][snapshot()[23].index("Model:")].fg
+            assert screen.buffer[23][pipe_column].fg == screen.buffer[23][snapshot()[23].index("stub/model")].fg
             start = snapshot()[23].index("Danger Mode")
             assert all(screen.buffer[23][column].fg == "ff929b" for column in range(start, start + len("Danger Mode")))
             choice = asyncio.create_task(ui.choose("Commands", [("one", "One")]))
@@ -3103,7 +3110,7 @@ async def test_danger_status_suffix_is_red_last_and_survives_resize(display, tmp
             size[0] = Size(rows=24, columns=35)
             screen.resize(lines=24, columns=35)
             ui.app._on_resize()
-            await wait_until(lambda: "  │  Danger Mode" in snapshot()[23] and "Model: stub/model" in snapshot()[23])
+            await wait_until(lambda: "  │  Danger Mode" in snapshot()[23] and "stub/model" in snapshot()[23])
             session.workspace.access.danger = False
             ui.app.invalidate()
             await wait_until(lambda: "Danger Mode" not in snapshot()[23])

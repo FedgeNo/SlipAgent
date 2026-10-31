@@ -14,6 +14,8 @@ if TYPE_CHECKING:
 
 def build_bindings(ui: TerminalUI) -> KeyBindings:
     bindings = KeyBindings()
+    in_search = Condition(lambda: ui._feed_search.active)
+    in_search_results = in_search & Condition(lambda: ui.app.layout.current_window is ui._feed_search.window)
     in_menu = Condition(lambda: ui._menu_future is not None and ui.app.layout.current_window is ui._menu_window)
     in_setting = Condition(lambda: ui.__dict__.get("_options_field_active", False) and ui.app.layout.current_control is ui._options_panel.field.control)
     in_inspection = Condition(ui._inspection_focused) & ~in_menu & ~in_setting
@@ -85,7 +87,25 @@ def build_bindings(ui: TerminalUI) -> KeyBindings:
     def ignore_inspection_text(event: KeyPressEvent) -> None:
         pass
 
-    @bindings.add("f4", filter=~in_menu & ~in_setting)
+    @bindings.add("f3", filter=Condition(lambda: not ui._password), eager=True)
+    def search_feed(event: KeyPressEvent) -> None:
+        ui._feed_search.open()
+
+    @bindings.add("escape", filter=in_search, eager=True)
+    def close_search(event: KeyPressEvent) -> None:
+        ui._feed_search.cancel()
+
+    @bindings.add("up", filter=in_search_results)
+    @bindings.add("down", filter=in_search_results)
+    @bindings.add("pageup", filter=in_search_results)
+    @bindings.add("pagedown", filter=in_search_results)
+    def scroll_search(event: KeyPressEvent) -> None:
+        key = event.key_sequence[-1].key
+        rows = max(1, ui.output.get_size().rows - ui._footer_rows() - 1) if key in {"pageup", "pagedown"} else 1
+        ui._feed_search.window.scroll(-rows if key in {"up", "pageup"} else rows)
+        ui.app.invalidate()
+
+    @bindings.add("f4", filter=~in_menu & ~in_setting & ~in_search)
     def options_screen(event: KeyPressEvent) -> None:
         ui.app.create_background_task(ui._options_panel.show())
 
@@ -199,7 +219,7 @@ def build_bindings(ui: TerminalUI) -> KeyBindings:
     def cancel_menu(event: KeyPressEvent) -> None:
         ui._finish_menu(None)
 
-    @bindings.add("escape", filter=~in_menu & ~in_viewer & ~in_editor & ~in_setting & ~in_inspection & ~in_link & ~in_feed, eager=True)
+    @bindings.add("escape", filter=~in_search & ~in_menu & ~in_viewer & ~in_editor & ~in_setting & ~in_inspection & ~in_link & ~in_feed, eager=True)
     def stop_now(event: KeyPressEvent) -> None:
         # An open viewer owns Esc even when focus has moved to the prompt.
         if ui._viewer_active:
@@ -223,7 +243,7 @@ def build_bindings(ui: TerminalUI) -> KeyBindings:
     def ignore_menu_text(event: KeyPressEvent) -> None:
         pass
 
-    @bindings.add("c-\\", filter=~in_menu & ~in_viewer & ~in_editor & ~in_setting)
+    @bindings.add("c-\\", filter=~in_search & ~in_menu & ~in_viewer & ~in_editor & ~in_setting)
     def toggle_context(event: KeyPressEvent) -> None:
         ui.context_visible = not ui.context_visible
         ui._focus.focus(ui.context_window if ui.context_visible else ui.input)

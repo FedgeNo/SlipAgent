@@ -107,6 +107,7 @@ request pipeline and interactive inspection features:
 | Read-only text and diff viewers | `viewers.py`, `viewerpanels.py` |
 | Reusable lists, links, focus, and layout | `listpanels.py`, `links.py`, `focus.py`, `uiwindows.py`, `mainarea.py`, `menulifecycle.py`, `transcriptlayouts.py` |
 | Inspection configuration and folder opening | `options.py`, `uipreferences.py`, `explorer.py` |
+| Interactive feed search and excerpt navigation | `feedsearch.py` |
 | Inferred shell file references | `shellpaths.py` |
 | Deferred tool definitions | `tools/discovery.py` |
 

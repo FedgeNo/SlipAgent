@@ -138,6 +138,7 @@ when entering prompts, command arguments, configuration values, or file edits.
 | Focus regions and links | Click the region or link | Shift+Tab selects the next UI component; Tab also selects feed links outside the editor |
 | Activate a focused link | Click the link | Enter |
 | Scroll feed output | Mouse wheel | Arrows, Page Up/Down, Home/End with feed focus; Page Up/Down also work from the prompt |
+| Search feed output | Click a result to jump to its location | F3 opens search; Esc closes it |
 | Open a touched item or saved call | Click its list entry | Focus its list, arrows, Enter |
 | Browse a selector | Wheel by one item; click to select | Up/Down, Enter; Esc to cancel |
 | Save or close an editor | Save File or Close Text Editor | Ctrl+S or Esc |
@@ -377,6 +378,15 @@ prompt to the feed and starts a new run, leaving your input draft untouched.
 Suggestions are optional response data, not tools or sidebar call records.
 
 ### Feed Scrolling and Prompt Pinning
+
+Press **F3** to search the feed, including while the agent is working or tools
+are running. The prompt area shows a separate search box and the feed area
+shows results as you type. Matching is literal and ignores case. Each result
+occupies one line, with blank lines between results, the match highlighted near
+the center, and `…` where the excerpt is truncated. Click a result to scroll to
+that place in the feed. Enter refreshes the results, including newly arrived
+output; Esc closes search and restores your draft. Searching never submits a
+prompt, pauses the agent, or changes its history.
 
 The nearest preceding green line starting with `>` pins to the top as you scroll.
 Scrolling up into an older task shows its prompt line; scrolling down restores

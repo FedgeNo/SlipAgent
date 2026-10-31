@@ -1703,6 +1703,12 @@ to the model along with the active generation number.
   `read_artifact` streams validation of the stored JSON while retaining only the
   requested character page. Record listings and command metadata are bounded;
   `next_offset` identifies the next character or record position.
+  `feedsearch.py` owns the F3 search field, disk-backed result excerpts, and
+  navigation to matching transcript rows. It scans bounded windows across
+  wrapped rows, yields during searches, and shares no agent turn/edit gate.
+  Search results precede the feed temporarily; selecting one restores the feed
+  at its match while preserving the draft and any underlying editor/viewer.
+  Resizing re-resolves the selected occurrence against the current layout.
   `options.py` owns the selector and isolated folder-command field;
   `uipreferences.py` preserves unrelated entries in the existing preferences
   file. Folder commands receive literal argument lists without a shell.

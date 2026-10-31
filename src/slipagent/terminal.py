@@ -328,12 +328,17 @@ class TerminalUI:
         if "_focus" not in self.__dict__:
             self._focus = FocusCoordinator(
                 lambda: self.app, self.input,
-                lambda: self._editor_input if self._editor_active and self._menu_future is None and not self._options_field_active else None,
+                lambda: self._editor_input if self._editor_active and self._menu_future is None and not self._options_field_active and not self._feed_search.active else None,
                 self._primary_panel, (self._files_window, self._calls_window),
                 lambda: self._move_inspection(0),
             )
         # Existing focus owners also need the new modal availability predicate.
-        self._focus.editor = lambda: self._editor_input if self._editor_active and self._menu_future is None and not self._options_field_active else None
+        self._focus.editor = lambda: self._editor_input if self._editor_active and self._menu_future is None and not self._options_field_active and not self._feed_search.active else None
+
+    def _ensure_search(self) -> None:
+        if '_feed_search' not in self.__dict__:
+            from .feedsearch import FeedSearch
+            self._feed_search = FeedSearch(self)
 
     def _inspection_selection(self, files: bool) -> Any:
         return self._touched_panel.selection if files else self._calls_panel.selection
@@ -844,6 +849,7 @@ class TerminalUI:
             elif self._viewer_active:
                 tips = ["Scroll to inspect; Esc closes the viewer."]
             tips.insert(1, "Shift+Tab to select UI component.")
+            tips.append("Press F3 to search")
             if not self.working and self._input_label == "> " and self._menu_future is None and not self._viewer_active and not self._editor_active:
                 tips.append("Click Commands to browse commands.")
             if self.__dict__.get("_folder_opener") is not None:
@@ -2106,6 +2112,7 @@ class TerminalUI:
             self._close_transcript()
 
     def _close_transcript(self) -> None:
+        self._feed_search.close()
         panel = self.__dict__.get("_editor_panel")
         if panel is not None:
             panel.dispose()

@@ -40,12 +40,15 @@ class MainArea:
     @property
     def mode(self) -> str:
         ui = self.terminal
+        if ui._feed_search.active:
+            return "search"
         return "editor" if ui._editor_active else "viewer" if ui._viewer_active else "context" if ui.context_visible else "feed"
 
     def focus_target(self) -> FocusTarget:
         ui = self.terminal
         targets: dict[str, FocusTarget] = {"editor": ui._editor_input, "viewer": ui._viewer_window,
-                                          "context": ui.context_window, "feed": ui.transcript}
+                                          "context": ui.context_window, "feed": ui.transcript,
+                                          "search": ui._feed_search.window if ui._feed_search.show_results else ui.transcript}
         return targets[self.mode]
 
     def scroll_target(self) -> TranscriptWindow | None:
@@ -55,4 +58,5 @@ class MainArea:
     def container(self, context: AnyContainer, feed: AnyContainer) -> AnyContainer:
         ui = self.terminal
         return {"editor": ui._editor_container, "viewer": ui._viewer_container,
-                "context": context, "feed": feed}[self.mode]
+                "context": context, "feed": feed,
+                "search": ui._feed_search.container if ui._feed_search.show_results else feed}[self.mode]

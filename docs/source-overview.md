@@ -56,6 +56,7 @@ src/slipagent/
 ├── terminallayout.py layout assembly around retained panels and input
 ├── terminalbindings.py keyboard commands and focus filters
 ├── terminalmouse.py  mouse routing between feed, input, editor, menus, inspector
+├── terminalinput.py  recovery from unexpected POSIX terminal input-mode changes
 ├── statusline.py     status priority, expiring notices, rotating tips
 ├── palette.py        shared terminal colors and ANSI foreground codes
 ├── transcript.py     file-backed transcript and incremental word wrapping

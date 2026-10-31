@@ -170,6 +170,9 @@ never opens settings.
 
 The terminal is asked for clicks, drags, and the wheel only, not every pointer
 movement, so links do not highlight on hover and slow connections stay responsive.
+On POSIX terminals, including SSH sessions, the UI restores raw input mode if
+echo or line buffering is unexpectedly re-enabled. A status notice reports the
+recovery; buffered input and the running task remain intact.
 
 Short notices share the activity area beside **Ready** and remain visible while
 browsing selectors or the context view. Changed event notices flash three times,

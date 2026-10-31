@@ -1321,6 +1321,14 @@ viewer, and context navigation.
 terminal reports clicks, drags, and the wheel but not every pointer movement, which
 keeps a slow link from flooding the input parser.
 
+`terminalinput.TerminalInputMode` captures the input attributes after the UI
+enters raw mode. The existing refresh loop restores those attributes if echo,
+canonical input, signals, or input translation are re-enabled during an active
+POSIX session. It preserves buffered input, repaints the screen to clear kernel
+echo that bypassed the renderer, reports recovery in the status area, and skips
+deliberate `run_in_terminal` suspensions. The application keeps
+ownership of restoring the original shell attributes on exit.
+
 `ContextView` stores the latest request's display blocks and wrapped rows in
 private temporary files. Opening it builds rows once per width; repaint reads
 through a 128-row cache. Replacing the request closes the old snapshot, and

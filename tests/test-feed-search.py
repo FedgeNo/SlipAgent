@@ -118,9 +118,11 @@ async def test_search_keyboard_activation_no_matches_and_escape_preserve_the_tur
             await wait_until(lambda: ui._feed_search.status.startswith('0 results'))
             ui._feed_search.field.text = 'target'
             await wait_until(lambda: ui._feed_search.status.startswith('1 results'))
-            pipe.send_text('\t')
+            await terminal_tests.send_keys(ui, pipe, '\t')
             await wait_until(lambda: ui.app.layout.current_window is ui._feed_search.window)
-            pipe.send_text('\t\r')
+            await terminal_tests.send_keys(ui, pipe, '\t')
+            assert ui._feed_search.window.content.__dict__['_keyboard_key'] == ('feed-search', 0)
+            await terminal_tests.send_keys(ui, pipe, '\r')
             await wait_until(lambda: not ui._feed_search.show_results)
             assert any('alpha target omega' in line for line in snapshot()[:17])
             assert ui._lines.empty()

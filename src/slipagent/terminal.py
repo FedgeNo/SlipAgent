@@ -51,6 +51,7 @@ from .mainarea import MainArea
 from .menulifecycle import MenuLifecycle
 from .terminalbindings import build_bindings
 from .terminalmouse import limit_mouse_reports, route_mouse
+from .terminalinput import TerminalInputMode
 from .terminallayout import build_layout, build_style
 
 FOOTER_ROWS = 7
@@ -2090,17 +2091,26 @@ class TerminalUI:
             deadlines.append(status.tips_started + (now - status.tips_started) // TIP_SECONDS * TIP_SECONDS)
         return any(last < deadline <= now for deadline in deadlines)
 
-    async def _refresh_loop(self) -> None:
+    async def _refresh_loop(self, input_mode: TerminalInputMode) -> None:
         last = time.monotonic()
         while True:
             await asyncio.sleep(REFRESH_INTERVAL)
+            if input_mode.restore():
+                # Kernel echo bypasses the renderer's screen and cursor cache.
+                self.app.renderer.reset(leave_alternate_screen=False)
+                self.output.cursor_goto(0, 0)
+                self.output.erase_screen()
+                self.notify('Terminal input mode restored after it changed.')
+                self.app._redraw()
             now = time.monotonic()
             if self._refresh_needed(last, now):
                 last = now
                 self.app.invalidate()
 
     async def run(self) -> None:
-        refresher = asyncio.create_task(self._refresh_loop())
+        input_mode = TerminalInputMode(self.app)
+        self.app.before_render += input_mode.capture
+        refresher = asyncio.create_task(self._refresh_loop(input_mode))
         try:
             await self.app.run_async()
         except EOFError:
@@ -2108,6 +2118,7 @@ class TerminalUI:
         finally:
             refresher.cancel()
             await asyncio.gather(refresher, return_exceptions=True)
+            self.app.before_render -= input_mode.capture
             self._end_input()
             self._close_transcript()
 

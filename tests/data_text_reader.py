@@ -97,9 +97,18 @@ def request_input(messages):
 
 
 def read_json_input(text):
-    payload, cursor = json.JSONDecoder().raw_decode(text)
+    from slipagent.prompts import load_prompt
+    history_header = load_prompt("input-history.md").strip() + "\n\n"
+    current_header = "\n\n" + load_prompt("input-current-request.md").strip() + "\n\n"
+    cursor = len(history_header) if text.startswith(history_header) else 0
+    if text.startswith(current_header, cursor):
+        return json.loads(text[cursor + len(current_header):])
+    payload, cursor = json.JSONDecoder().raw_decode(text, cursor)
     blocks = {}
     while cursor < len(text):
+        if text.startswith(current_header, cursor):
+            payload.update(json.loads(text[cursor + len(current_header):]))
+            break
         match = re.match(r"\n\nTool Result Block (\d+) \((\d+) characters\):\n", text[cursor:])
         assert match, repr(text[cursor:])
         cursor += match.end()

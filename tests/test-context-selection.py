@@ -3,7 +3,7 @@
 from slipagent.types import content_text
 
 import json
-from data_text_reader import read_data
+from data_text_reader import read_data, read_json_input
 import pytest
 
 from test_agent import unpack_context, context_records
@@ -65,14 +65,13 @@ async def test_new_messages_are_retained_only_after_their_tool_batch():
     history = ConversationHistory()
     messages = [Message.user("Inspect the file"), Message.user("Use the literal path a'b.py")]
     options = dict(keep_steps=50, context_length=100000, max_output=1000)
-    fresh = json.loads((await history.view(messages, [], **options))[-1].to_api()['content'])
+    fresh = read_json_input((await history.view(messages, [], **options))[-1].to_api()['content'])
     assert fresh['user_prompts'] == ["Inspect the file", "Use the literal path a'b.py"]
     assert fresh['retained_user_prompts'] == []
     fresh_system = content_text((await history.view(messages, [], **options))[0].content)
     assert 'later messages supersede conflicting earlier instructions' in fresh_system
     messages.extend([Message.assistant("Reading", [ToolCall('r', 'read_file', {'path': "a'b.py"})]),
                      Message.tool_result('r', 'File contents')])
-    from data_text_reader import read_json_input
     continuation = read_json_input((await history.view(messages, [], **options))[-1].to_api()['content'])
     assert continuation['user_prompts'] == []
     assert continuation['retained_user_prompts'] == fresh['user_prompts']

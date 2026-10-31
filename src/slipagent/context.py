@@ -39,7 +39,7 @@ from .protocol import COMPRESSED_FIELDS, ResponseRecord, response_format
 from .task import TaskMemory
 from .records import linked_tool_results, record_message, step_record
 from .requestfailures import is_incomplete
-from .data_text import JSONInput, MessageSections, render_data
+from .data_text import JSONInput, MessageSections, RenderedJSON, render_data
 from .sources import FileText, materialize
 
 DEFAULT_CONTEXT_LENGTH = 1_000_000
@@ -690,7 +690,7 @@ class ConversationHistory:
             from .editdelivery import bounded_notifications
             edit_budget = min(2048, max(256, int(available * .2)), available - tail_tokens - 256)
             edit_view, edits_omitted = bounded_notifications(user_edits, edit_budget,
-                lambda edits, omitted: tokens([Message.user(JSONInput({"user_edits": edits, "user_edits_omitted": omitted}))]))
+                lambda edits, omitted: tokens([Message.user(RenderedJSON({"user_edits": edits, "user_edits_omitted": omitted}))]))
             tail_tokens = tokens([assemble([])[-1]])
         def context_part(index: int, *, compressed: bool = False,
                          include_summary: bool = True) -> list[Message]:

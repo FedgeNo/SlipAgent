@@ -31,7 +31,7 @@ async def test_routine_context_keeps_post_counters_only_in_system_messages():
     system = "\n".join(content_text(message.content) for message in view if message.role == "system")
     wire = "\n".join(content_text(message.content) for message in view if message.role != "system")
     assert "# Operating Instructions" in system
-    assert not re.search(r"(?m)^#{1,6} ", wire)
+    assert re.findall(r"(?m)^#{1,6} .*$", wire) == ["# Historical Context", "# Current Request"]
     assert not re.search(r"\bPost \d+", wire)
     for key in ("TASK_SOURCE_REVISION:",
                 '"current_prompt_step":', '"origin_step":', '"source_steps":'):

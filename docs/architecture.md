@@ -46,7 +46,9 @@ project guidance comes from this refreshed service rather than a stale suffix.
 Tool-call arguments, structured tool results, observation envelopes, input records,
 and frozen compaction inputs remain dictionaries or lists internally. External JSON
 text is decoded at entry. File contents and command output remain literal string
-fields. Working-model user input serializes one complete, indented JSON object; system data
+fields. Working-model user input serializes labelled Historical Context (an
+indented history JSON object and its literal tool-result blocks), followed by a
+labelled Current Request JSON object at the very end of the message. System data
 sections, compression inputs, and terminal output use labelled literal text.
 Journals and HTTP transport encode JSON only at their destination boundaries.
 Completed turns have three disk representations: `NNNNNNNN.raw.json`, an
@@ -114,6 +116,9 @@ before dispatch if any name is outside that set, returning an error for each cal
 without invoking tools or starting checkpoints. Loading a definition in the same
 batch does not authorize its use. Recorded calls retain their definitions on
 subsequent requests.
+The renderer shows a short unavailable-tool rejection in the feed and Calls view,
+including restored conversations. Detailed loading instructions remain in the
+original tool observations for the model's next request.
 Reset clears discovery state, and saved load results/calls restore it on resume.
 Reload candidates borrow the same catalog through registry services. MCP server
 guidance enters requests when a tool from that server is eligible in the catalog,
@@ -169,7 +174,7 @@ Context construction proceeds in this order:
    separate user-input metadata and result blocks rather than a system-prompt section.
    Prompt paragraphs occupy one physical line, without fixed-width wrapping. Two newlines separate paragraphs, headings, topic groups, task fields, tool guidance, examples, and assembled sections. Single newlines remain for meaningful item boundaries, metadata fields, code, and other structured content.
    Loaded instruction-file contents and original conversation text stay intact.
-   The input uses system instructions followed by JSON user-input metadata and literal tool-result blocks in the same user message. The inspector
+   The input uses system instructions followed by explicitly labelled historical JSON and literal tool-result blocks, then the clearly labelled current request last in the same user message. The inspector
    displays the final body rather than reconstructing it separately.
 3. Economical older records precede the recent full window. Each retained step
    occupies one object. Full records contain originals plus available compressed
@@ -217,9 +222,11 @@ Context construction proceeds in this order:
    not rewritten. This avoids teaching the reply format through artificial
    assistant-message prefixes, including when resuming an older session.
 4. Current-step metadata in the system prompt supplies `step_id` and
-   `is_tool_result_response`. One user-input JSON metadata object contains `user_prompts`
+   `is_tool_result_response`. The final Current Request JSON object contains `user_prompts`
    (new messages in chronological order, or `[]` without new input),
-   `retained_user_prompts`, `history`, and `errors`. Later user messages supersede
+   `retained_user_prompts`, `errors`, and current user-edit notifications. The earlier
+   Historical Context JSON object contains `history`; all its length-labelled
+   tool-result blocks precede the Current Request. Later user messages supersede
    conflicting earlier instructions. Tool errors belong to their
    calls through references to literal result blocks; `errors` holds harness corrections not attached to a call. Keys label
    content without inserting labels into its values. If the supplied results
@@ -1681,7 +1688,9 @@ to the model along with the active generation number.
   this gate. Each changed save archives its full cumulative diff and creates a
   distinct revision, including reversions. `editdelivery.py` projects pending
   revisions into a jointly budgeted `user_edits` input field with bounded diff
-  prefixes and artifact references; deferred observations remain pending.
+  prefixes and artifact references; deferred observations remain pending. Its
+  incremental budget measures notification JSON without counting the existing
+  Current Request instructions again.
   Previews and failed requests do not acknowledge revisions. `requests.py`
   captures the exact projection on acceptance; the agent journals the accepted
   message and delivery receipt before acknowledging matching pending revisions

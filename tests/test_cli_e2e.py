@@ -7,6 +7,7 @@ execution in disposable workspaces, and rendering against stub API responses.
 from __future__ import annotations
 
 from slipagent.types import content_text
+from data_text_reader import read_json_input
 import json
 import os
 import re
@@ -323,7 +324,7 @@ def test_json_events_preserve_tool_objects_and_literal_prompt(project_dir):
     assert records[-1]['answer'] == 'Done.'
     assert records[-1]['exit_code'] == 0
     request = next(record['request'] for record in records if record.get('kind') == 'context')
-    assert json.loads(request['messages'][-1]['content'])['user_prompts'] == [prompt]
+    assert read_json_input(request['messages'][-1]['content'])['user_prompts'] == [prompt]
     call = next(record for record in records if record.get('kind') == 'tool_start')
     observation = next(record for record in records if record.get('kind') == 'tool_end')
     assert call['tool_call']['arguments'] == {'path': 'src/app.py'}
@@ -357,7 +358,7 @@ def test_json_events_accept_stdin_without_remembering_model(project_dir):
     assert not (Path(env['SLIPAGENT_STATE_DIR']) / 'preferences.json').exists()
     records = [json.loads(line) for line in result.stdout.splitlines()]
     request = next(record['request'] for record in records if record.get('kind') == 'context')
-    assert json.loads(request['messages'][-1]['content'])['user_prompts'] == [prompt]
+    assert read_json_input(request['messages'][-1]['content'])['user_prompts'] == [prompt]
 
 
 def test_json_events_include_tool_errors_without_claiming_task_failure(project_dir):

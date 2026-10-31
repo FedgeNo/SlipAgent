@@ -134,7 +134,6 @@ async def test_glm_53_gets_xml_tool_definitions_and_executes_either_call_form(mo
         assert "<tool_call>{function-name}<arg_key>" in system
         assert "Return one JSON object" not in system
         assert "`tool_calls` (an ordered call array)" not in system
-        assert "JSON object" not in system
     await registry.aclose()
 
 

@@ -9,6 +9,7 @@ from typing import Any
 from collections.abc import Iterator
 
 from .sources import FileText, TextSource, json_chunks, text_chunks
+from .prompts import load_prompt
 
 
 @dataclass
@@ -36,7 +37,7 @@ class MessageSections:
 
 @dataclass
 class JSONInput:
-    """Raw user-input fields, encoded together only at the message boundary."""
+    """Raw input fields, with historical context before the current request."""
 
     data: dict[str, Any]
 
@@ -74,10 +75,17 @@ def content_chunks(value: Any) -> Iterator[str]:
                 projected["tool_calls"] = calls
                 history.append(projected)
             payload["history"] = history
-        yield from json_chunks(payload)
+        if "history" in payload:
+            yield load_prompt("input-history.md").strip() + "\n\n"
+            yield from json_chunks({"history": payload.pop("history")})
         for index, (text, characters) in enumerate(blocks, 1):
             yield f"\n\nTool Result Block {index} ({characters} characters):\n"
             yield from text_chunks(text) if isinstance(text, (str, FileText)) else json_chunks(text)
+        if payload:
+            # Keep the actual request after every historical observation, even
+            # when observations stream from disk and contain apparent headings.
+            yield "\n\n" + load_prompt("input-current-request.md").strip() + "\n\n"
+            yield from json_chunks(payload)
     elif isinstance(value, MessageSections):
         for part in value.parts:
             yield from content_chunks(part)

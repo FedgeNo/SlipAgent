@@ -89,7 +89,7 @@ async def test_model_change_pause_resumes_and_preserves_submitted_input(tmp_path
 @pytest.mark.parametrize("phase", ["request", "tools"])
 @pytest.mark.parametrize("queued", [False, True])
 async def test_interrupt_preserves_results_and_runs_only_queued_input(tmp_path, monkeypatch, metadata_server, phase, queued):
-    session = await cli.Launcher(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)])).build_session()
+    session = await cli.Launcher(cli.build_parser().parse_args(["--no-mcp", "--model", "stub/model", "-w", str(tmp_path)])).build_session()
     session.renderer.stream = io.StringIO()
     entered = asyncio.Event()
     cancelled = asyncio.Event()
@@ -136,7 +136,8 @@ async def test_interrupt_preserves_results_and_runs_only_queued_input(tmp_path, 
     monkeypatch.setattr(cli.Repl, "read_line", read)
     step = asyncio.create_task(cli.Repl(session).run_request("Inspect", session.renderer.style))
     try:
-        await asyncio.wait_for(entered.wait(), 2)
+        # Startup imports and checks compete with the other suite workers.
+        await asyncio.wait_for(entered.wait(), 10)
         if queued:
             session.agent.enqueue("Queued follow-up")
         await cli.CommandRunner(session).handle("/danger on")

@@ -25,7 +25,7 @@ wait_until = import_module("test-terminal").wait_until
 @pytest.mark.parametrize("removal", [None, "command", "prompt", "limited"])
 async def test_mixed_input_obeys_submission_order(tmp_path, monkeypatch, metadata_server, initial_queued, removal):
     session = await cli.Launcher(cli.build_parser().parse_args([
-        "--no-mcp", "--no-reload", "-w", str(tmp_path),
+        "--no-mcp", "--no-reload", "--model", "stub/model", "-w", str(tmp_path),
     ])).build_session()
     session.renderer.stream = io.StringIO()
     entered, release = asyncio.Event(), asyncio.Event()

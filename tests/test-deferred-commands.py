@@ -24,7 +24,7 @@ async def test_commands_wait_for_tools_and_preserve_stop_and_request_budget(
     tmp_path, monkeypatch, metadata_server, commands, stop, max_steps, expected_danger, expected_calls,
 ):
     session = await cli.Launcher(cli.build_parser().parse_args([
-        "--no-mcp", "-w", str(tmp_path), "--max-steps", str(max_steps),
+        "--no-mcp", "--model", "stub/model", "-w", str(tmp_path), "--max-steps", str(max_steps),
     ])).build_session()
     session.renderer.stream = io.StringIO()
     entered = asyncio.Event()
@@ -192,7 +192,7 @@ async def test_stop_holds_earlier_input_until_new_input(
 async def test_sessions_menu_continues_paused_work_unless_it_switches_sessions(tmp_path, monkeypatch, metadata_server, action):
     from unittest.mock import AsyncMock, Mock
     from slipagent.terminal import TerminalUI
-    session = await cli.Launcher(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)])).build_session()
+    session = await cli.Launcher(cli.build_parser().parse_args(["--no-mcp", "--model", "stub/model", "-w", str(tmp_path)])).build_session()
     session.renderer.stream = io.StringIO()
     journal = session.registry.services["session_journal"]
     entered = asyncio.Event()

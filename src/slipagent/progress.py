@@ -23,8 +23,6 @@ class LoopGuard:
         self.reset()
 
     def reset(self) -> None:
-        self.signature: str | None = None
-        self.count = 0
         self.recent: list[tuple[str, int, tuple[str, ...]]] = []
         self.recent_calls: dict[int, list[dict[str, Any]]] = {}
 
@@ -62,8 +60,6 @@ class LoopGuard:
         self.recent = self.recent[-24:]
         self.recent_calls[step_id] = copy.deepcopy(calls)
         self.recent_calls = {step: self.recent_calls[step] for _, step, _ in self.recent}
-        self.count = self.count + 1 if signature == self.signature else 1
-        self.signature = signature
         signatures = [item[0] for item in self.recent]
         period = next((size for size in range(1, 7)
                        if len(signatures) >= size * 3

@@ -3286,6 +3286,38 @@ async def test_latest_user_prompt_stays_pinned_until_next_prompt_reaches_top(dis
             await task
 
 
+async def test_clicking_pinned_prompt_returns_to_its_history_entry(display):
+    sink, size, output, screen, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output)
+        renderer = Renderer(Style(True), sink, False)
+        renderer.terminal = ui
+        task = asyncio.create_task(ui.run())
+        try:
+            for prompt in ("First task\nFirst details", "Second task\nSecond details"):
+                renderer.user_prompt(prompt)
+                ui.write("\n".join(f"{prompt.splitlines()[0]} output {i}" for i in range(40)))
+            await wait_until(lambda: snapshot()[0].rstrip() == "> Second task")
+            pipe.send_text("unfinished draft")
+            await wait_until(lambda: "unfinished draft" in snapshot()[18])
+            for prompt in ("Second", "First"):
+                content = ui.transcript.content.create_content(ui.main_area.width, 17)
+                row = next(i for i in range(content.line_count)
+                           if "".join(part[1] for part in content.get_line(i)).rstrip() == f"> {prompt} task")
+                ui.transcript.seek(row + 20)
+                ui.app.invalidate()
+                await wait_until(lambda: snapshot()[0].rstrip() == f"> {prompt} task")
+                pipe.send_text("\x1b[<0;3;1M\x1b[<0;3;1m")
+                await wait_until(lambda: ui.transcript.vertical_scroll == row)
+                await wait_until(lambda: any(f"{prompt} details" in line for line in snapshot()[1:17]))
+                assert not ui.transcript._following
+                assert "unfinished draft" in snapshot()[18]
+                assert ui.app.layout.current_control is ui.input.control
+        finally:
+            ui.close()
+            await task
+
+
 async def test_pinned_prompt_follows_scrollback_in_both_directions(display):
     sink, size, output, screen, snapshot = display
     with create_pipe_input() as pipe:

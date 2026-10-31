@@ -90,7 +90,8 @@ def build_layout(ui: TerminalUI) -> Layout:
     # does not move the scroll position and select a different prompt again.
     pinned_transcript = FloatContainer(ui.transcript, floats=[Float(
         top=0, left=0, right=0, height=ui._pinned_prompt_height,
-        content=Window(TranscriptControl(ui._pinned_prompt_content), style="class:user"),
+        content=Window(FormattedTextControl(
+            lambda: ui._pinned_prompt_content(ui.main_area.width).get_line(0)), style="class:user"),
     )])
     transcript = DynamicContainer(lambda: pinned_transcript if ui.output.get_size().rows > ui._footer_rows() + ui._queued_prompt_height() + 1 else ui.transcript)
     inspection_visible = Condition(lambda: ui.main_area.inspector_visible)

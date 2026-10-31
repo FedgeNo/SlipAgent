@@ -383,7 +383,8 @@ Scrolling up into an older task shows its prompt line; scrolling down restores
 the newer one. Submitting another task or queued follow-up keeps the preceding
 prompt pinned until the new prompt reaches the top. The pinned prompt uses
 one line, shortening at a word boundary with `…` when needed and adjusting on resize. The
-complete original remains in scrollback. The context view keeps its own layout.
+complete original remains in scrollback. Click the pinned prompt to scroll back
+to its original entry. The context view keeps its own layout.
 
 A one-column scrollbar runs along the right edge of the feed, beside the
 inspector when it is open, and follows whichever scrolling view is showing.

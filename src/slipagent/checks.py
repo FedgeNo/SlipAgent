@@ -175,7 +175,14 @@ async def check_edit_batch_report(registry: ToolRegistry, batch: list[tuple[Tool
                 if not isinstance(interpreter, str) or not interpreter:
                     reports.append(f"{check['name']}: SKIPPED — no selected project Python. No interpreter was substituted.")
                     continue
-            argv: list[str] = [value for arg in check["argv"] for value in (selected if arg == "{files}" else [interpreter if arg == "{python}" else arg])]
+            argv: list[str] = []
+            for arg in check["argv"]:
+                if arg == "{files}":
+                    argv.extend(selected)
+                elif arg == "{python}":
+                    argv.append(interpreter)
+                else:
+                    argv.append(arg)
             archive = registry.services.get("command_archive")
             log = archive.start(shlex.join(argv), step_id=step_id, call_id="batch-check") if archive is not None else None
             try:

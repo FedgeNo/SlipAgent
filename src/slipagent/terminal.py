@@ -335,9 +335,6 @@ class TerminalUI:
         # Existing focus owners also need the new modal availability predicate.
         self._focus.editor = lambda: self._editor_input if self._editor_active and self._menu_future is None and not self._options_field_active else None
 
-    def _inspection_keys(self, files: bool) -> list[Any]:
-        return self._touched_panel.keys() if files else self._calls_panel.keys()
-
     def _inspection_selection(self, files: bool) -> Any:
         return self._touched_panel.selection if files else self._calls_panel.selection
 
@@ -561,9 +558,6 @@ class TerminalUI:
 
     async def _reload_editor(self) -> None:
         await self._editor_panel.reload()
-
-    def _change_editor_page(self, delta: int) -> None:
-        self._editor_panel.change_page(delta)
 
     def _ensure_viewer(self) -> None:
         if "_viewer" not in self.__dict__:
@@ -867,9 +861,6 @@ class TerminalUI:
     def _marquee(self, fragments: StyleAndTextTuples, columns: int, key: str) -> StyleAndTextTuples:
         return self.status_line.marquee(fragments, columns, key)
 
-    def _menu_fragments(self) -> StyleAndTextTuples:
-        return self._choice_panel.fragments()
-
     def _menu_hint(self) -> StyleAndTextTuples:
         """Keep access indicators visible even while the menu replaces readouts."""
         callback = getattr(self, "_status_suffix", None)
@@ -951,13 +942,6 @@ class TerminalUI:
         selected = await self.choose("Commands", command_menu_options())
         if selected is not None:
             self.insert_command(selected)
-
-    def _commands_mouse(self, event: MouseEvent) -> object:
-        if event.event_type == MouseEventType.MOUSE_MOVE:
-            self.__dict__["_hovered_control"] = "commands"
-        elif event.event_type == MouseEventType.MOUSE_UP and event.button == MouseButton.LEFT:
-            self.app.create_background_task(self._choose_command())
-        return None
 
     def _status_fragments(self) -> StyleAndTextTuples:
         fragments = to_formatted_text(ANSI(self._status(self._readout_width())))
@@ -1178,9 +1162,18 @@ class TerminalUI:
         def get_line(index: int) -> StyleAndTextTuples:
             if not 0 <= index < height:
                 return []
-            return [("class:user", text)]
+            return [("class:user", text, self._pinned_prompt_mouse)]
 
         return UIContent(get_line=get_line, line_count=height, show_cursor=False)
+
+    def _pinned_prompt_mouse(self, event: MouseEvent) -> object:
+        if event.button == MouseButton.LEFT:
+            if event.event_type == MouseEventType.MOUSE_UP and self._pinned_prompt is not None:
+                self.transcript.seek(self._pinned_prompt[0])
+                self._focus.restore_prompt()
+                self.app.invalidate()
+            return None
+        return NotImplemented
 
     def _ensure_context(self) -> None:
         """Move legacy request text to disk while preserving the context window."""

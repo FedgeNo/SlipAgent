@@ -74,8 +74,11 @@ def test_rewording_a_label_does_not_hide_a_repeated_call():
     guard = LoopGuard()
     for step, label in enumerate(["Recording A", "Recording A again", "One more time"], start=1):
         call = ToolCall(f"c{step}", "record", {"value": "A", LABEL: label})
-        guard.observe([(call, ToolResult.ok("same"))], registry, step)
-    assert guard.count == 3
+        message, stop = guard.observe([(call, ToolResult.ok("same"))], registry, step)
+        assert bool(message) == (step == 3)
+        assert not stop
+    message, stop = guard.observe([(call, ToolResult.ok("same"))], registry, 4)
+    assert message and stop
 
 
 def test_label_helpers():

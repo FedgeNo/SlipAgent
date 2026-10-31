@@ -171,16 +171,6 @@ def original(receiver: Any, *args: Any, **kwargs: Any) -> Any:
 
 # Fingerprints.
 
-def _method_node(source: bytes | str, class_name: str, method_name: str) -> ast.AST | None:
-    tree = ast.parse(source)
-    for node in tree.body:
-        if isinstance(node, ast.ClassDef) and node.name == class_name:
-            for member in node.body:
-                if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)) and member.name == method_name:
-                    return member
-    return None
-
-
 def fingerprint(source: bytes | str, class_name: str, method_name: str) -> str | None:
     """Hash of a method's code, ignoring comments, formatting, and its docstring."""
     tree = ast.parse(source)
@@ -194,7 +184,7 @@ def fingerprint(source: bytes | str, class_name: str, method_name: str) -> str |
         body = node.body
         if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
                 and isinstance(body[0].value.value, str):
-            node = type(node)(**{**{name: getattr(node, name) for name in node._fields}, "body": body[1:] or [ast.Pass()]})
+            node.body = body[1:] or [ast.Pass()]
         dumps.append(ast.dump(node, include_attributes=False))
     # Single-definition stamps keep their existing format; properties include
     # every accessor and correctly require review of their old getter-only stamp.

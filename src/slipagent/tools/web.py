@@ -236,10 +236,6 @@ async def _public_addresses(url: httpx.URL) -> list[str]:
     return list(dict.fromkeys(str(address) for address in addresses))
 
 
-async def _public_address(url: httpx.URL) -> str:
-    return (await _public_addresses(url))[0]
-
-
 class _PublicTransport(httpx.AsyncHTTPTransport):
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         address = request.extensions.get("validated_address")

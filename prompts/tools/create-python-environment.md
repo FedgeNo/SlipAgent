@@ -1,3 +1,5 @@
+# `create_python_environment`
+
 Create and select a project Python virtual environment when Python work needs one and none is selected. Check project instructions and package-manager configuration first; follow existing Poetry, Conda, or other managed setups instead when applicable.
 
 Defaults to `.venv` in the workspace, using SlipAgent's Python. Supply `path` for a nested project's environment and `python` for a different installed Python executable. Check the returned version against the project's requirements.

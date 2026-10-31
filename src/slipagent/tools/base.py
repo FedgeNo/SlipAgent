@@ -103,10 +103,10 @@ class Tool(ABC):
                 schema = parameters
                 for part in path.split("/") if path else []:
                     schema = schema[part]
-                schema["description"] = "\n" + description.strip() + "\n"
+                schema["description"] = description.strip()
         return ToolSpec(
             name=self.name,
-            description=load_prompt(self.description_prompt) if self.description_prompt else self.description,
+            description=load_prompt(self.description_prompt).strip() if self.description_prompt else self.description,
             parameters=parameters,
         )
 

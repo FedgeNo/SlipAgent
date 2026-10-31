@@ -274,9 +274,35 @@ def test_tool_spec_rereads_description_and_argument_guidance(editable_prompts, w
     descriptions["properties/path"] = "Fresh path guidance."
     path.write_text(json.dumps(descriptions))
     after = tool.spec
-    assert before.description != after.description == "\nFresh read guidance.\n"
-    assert after.parameters["properties"]["path"]["description"] == "\nFresh path guidance.\n"
+    assert before.description != after.description == "Fresh read guidance."
+    assert after.parameters["properties"]["path"]["description"] == "Fresh path guidance."
     assert before.parameters["properties"]["path"]["description"] != "Fresh path guidance."
+
+
+async def test_builtin_tool_descriptions_have_no_extraneous_wrapper_whitespace(workspace):
+    from slipagent.tools import build_default_registry
+    from slipagent.context import ConversationHistory, RecallHistoryTool
+    from slipagent.contextlegacy import memory_specs
+    registry = build_default_registry(workspace)
+    registry.register(RecallHistoryTool(ConversationHistory()))
+    try:
+        def check(value):
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    if key == 'description':
+                        assert child == child.strip()
+                        assert '\\n' not in child
+                    else:
+                        check(child)
+            elif isinstance(value, list):
+                for child in value:
+                    check(child)
+        for spec in [*registry.specs(), *memory_specs(registry.specs())]:
+            wire = json.loads(json.dumps(spec.to_api()))
+            check(wire)
+            assert_markdown_structure(wire['function']['description'])
+    finally:
+        await registry.aclose()
 
 
 async def test_background_summary_rereads_prompt_at_request_time(editable_prompts, free_compaction):

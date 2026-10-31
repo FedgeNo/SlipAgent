@@ -34,9 +34,9 @@ def memory_specs(specs: list[ToolSpec]) -> list[ToolSpec]:
     for spec in specs:
         properties = {**spec.parameters.get("properties", {}),
                       TOOL_SUMMARY_KEY: {"type": "string", "minLength": 1, "maxLength": SUMMARY_MAX_CHARS,
-                                         "description": load_prompt("legacy-tool-summary.md")},
+                                         "description": load_prompt("legacy-tool-summary.md").strip()},
                       TOOL_PREVIOUS_KEY: {"type": "string", "maxLength": SUMMARY_MAX_CHARS,
-                                          "description": load_prompt("legacy-tool-previous-summary.md")}}
+                                          "description": load_prompt("legacy-tool-previous-summary.md").strip()}}
         parameters = {**spec.parameters, "properties": properties,
                       "required": list(dict.fromkeys([*spec.parameters.get("required", []), TOOL_SUMMARY_KEY]))}
         result.append(ToolSpec(spec.name, spec.description, parameters))

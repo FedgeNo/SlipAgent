@@ -7,7 +7,7 @@ remain in their Python owners.
 
 Edit these files with any text editor. SlipAgent reads them when it builds a model request or tool definition; prompt changes do not require a restart or Python edits. The `.md` resources contain Markdown instructions. JSON files contain machine-readable description mappings.
 
-SlipAgent strips leading and trailing whitespace and surrounds each rendered prompt with a newline. Interior whitespace and paragraph boundaries remain intact. Missing prompt files report their full path and must be restored.
+SlipAgent strips leading and trailing whitespace and surrounds each rendered instruction prompt with a newline. Tool and parameter descriptions omit that surrounding padding when inserted into schema fields. Interior whitespace and paragraph boundaries remain intact. Missing prompt files report their full path and must be restored.
 
 ## Markdown Structure
 

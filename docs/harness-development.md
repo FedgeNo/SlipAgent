@@ -61,7 +61,8 @@ editing a description alone does not change executable behavior.
 
 For an existing tool, update its implementation, schema, descriptions, examples,
 and affected tests together. `Tool.spec` reads editable descriptions on access.
-Parameter mappings use schema paths such as `properties/query`; those paths must
+Description fields omit surrounding whitespace; Markdown paragraphs and lists
+retain their internal structure. Parameter mappings use schema paths such as `properties/query`; those paths must
 exist in the Python schema. Templates preserve required placeholders and valid
 JSON. Missing prompt resources and invalid templates are errors.
 

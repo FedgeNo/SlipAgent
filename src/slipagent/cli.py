@@ -53,6 +53,7 @@ from .providers import PROVIDERS, active_providers, create_client, provider_clas
 from .model_catalog import coding_models
 from .modelpricing import free_label, model_order, price_label
 from .tools.base import ToolRegistry, ToolResult
+from .tools.discovery import UNAVAILABLE_BATCH
 from .tools.editing import edit_result_line
 from .tools import build_default_registry
 from .types import KeyInfo, Message, ModelInfo, ToolCall
@@ -227,7 +228,9 @@ class Renderer:
         self.stdout_color = _use_color(sys.stdout, not style.enabled)
 
     def display_result(self, result: ToolResult, call: ToolCall | None) -> ToolResult:
-        """Keep edit recovery source in model history, outside user-facing output."""
+        """Keep model recovery instructions out of user-facing tool results."""
+        if result.is_error and result.text().startswith(UNAVAILABLE_BATCH):
+            return ToolResult.error("Tool batch rejected: a requested tool was unavailable. No tools were executed.")
         if result.is_error and call is not None and call.name == "edit_file":
             text = re.sub(
                 r"(?m)^Nearby actual source \(line numbers are not part of the file\):\n"

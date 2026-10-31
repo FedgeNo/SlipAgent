@@ -1,6 +1,7 @@
 """Tool definitions and execution share the current request's allowlist."""
 
 import json
+import io
 import re
 from importlib import import_module
 
@@ -156,6 +157,10 @@ async def test_load_is_idempotent_and_preserves_valid_names_alongside_errors():
 @pytest.mark.parametrize("allowlist", [None, ("read_file", "optional_record"), ("read_file",)])
 @pytest.mark.parametrize("unavailable", ["optional_record", "missing"])
 async def test_unavailable_call_rejects_the_whole_batch(monkeypatch, native, allowlist, unavailable):
+    from slipagent.cli import Renderer, Style
+
+    sink = io.StringIO()
+    renderer = Renderer(Style(False), sink, verbose=True)
     calls = [ToolCall("before", "read_file", {"value": "before"}),
              ToolCall("load", "load_tools", {"names": ["optional_record"]}),
              ToolCall("unavailable", unavailable, {"value": "data"}),
@@ -178,7 +183,7 @@ async def test_unavailable_call_rejects_the_whole_batch(monkeypatch, native, all
     tools.register(core)
     try:
         async with OpenRouterClient("dummy", transport=httpx.MockTransport(router.handle)) as client:
-            agent = Agent(client, tools, "test/model", exposed_tools=allowlist)
+            agent = Agent(client, tools, "test/model", exposed_tools=allowlist, on_event=renderer.handle)
             assert await agent.run("Record this value.") == "Done."
             await agent.wait_for_compaction()
         assert core.seen == []
@@ -206,6 +211,14 @@ async def test_unavailable_call_rejects_the_whole_batch(monkeypatch, native, all
         returned = [result for record in context_records(retry_messages) for result in record.get("tool_results", [])]
         assert len(returned) == len(calls)
         assert all("No tools were executed" in result["content"] for result in returned)
+        assert all("call load_tools in a separate response" in result["content"] for result in returned)
+        restored_sink = io.StringIO()
+        await Renderer(Style(False), restored_sink, verbose=True).restore_transcript(agent.messages, [])
+        for output in (sink.getvalue(), restored_sink.getvalue()):
+            assert "Tool batch rejected: a requested tool was unavailable." in output
+            assert "Only call tools whose full definitions" not in output
+            assert "call load_tools in a separate response" not in output
+            assert "Tools excluded by session restrictions cannot be loaded" not in output
         assert "No tools were executed" not in retry_messages[0]["content"]
     finally:
         await tools.aclose()

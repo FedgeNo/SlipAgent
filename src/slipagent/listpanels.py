@@ -108,8 +108,9 @@ class ListPanel(ABC, Generic[K]):
                         self.selected_key = key
                         self.open_selected()
                     return None
-                for part_style, text, *_ in self.item_fragments(key):
-                    fragments.append((style + (' ' + part_style if part_style else ''), text, click))
+                for part_style, text, *handlers in self.item_fragments(key):
+                    fragments.append((style + (' ' + part_style if part_style else ''), text,
+                                      handlers[0] if handlers else click))
             else:
                 for part_style, text, *_ in self.item_fragments(key):
                     fragments.append((style + (' ' + part_style if part_style else ''), text))
@@ -175,6 +176,7 @@ class ChoicePanel(ListPanel[int]):
         self.options: list[tuple[str, str]] = []
         self.option_styles: dict[str, str] = {}
         self.option_highlights: dict[str, frozenset[int]] = {}
+        self.option_links: dict[str, StyleAndTextTuples] = {}
         super().__init__(actions)
 
     def keys(self) -> list[int]:
@@ -201,4 +203,5 @@ class ChoicePanel(ListPanel[int]):
         for index, cluster in enumerate(iter_graphemes(self.label(key))):
             visible = re.sub(r'[\x00-\x1f\x7f-\x9f]', lambda match: f'\\x{ord(match[0]):02x}', cluster)
             result.append(('bold underline' if index in positions else '', visible))
+        result.extend(self.option_links.get(value, []))
         return result

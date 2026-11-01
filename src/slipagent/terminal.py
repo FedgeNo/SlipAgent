@@ -369,7 +369,10 @@ class TerminalUI:
         if selected is not None:
             try:
                 target = workspace.resolve(selected)
-                await self._read_file(str(target))
+                if self._file_picker.action == 'edit':
+                    await self._inspect_file(str(target))
+                else:
+                    await self._read_file(str(target))
             except (WorkspaceError, OSError, ValueError) as exc:
                 self.notify(str(exc))
 
@@ -746,6 +749,7 @@ class TerminalUI:
         """Add menu state to live instances without replacing the input buffer."""
         if hasattr(self, "_menu_future"):
             self._choice_panel.__dict__.setdefault('option_highlights', {})
+            self._choice_panel.__dict__.setdefault('option_links', {})
             return
         self._menu_future: asyncio.Future[str | None] | None = None
         self._menu_title = ""

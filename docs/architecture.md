@@ -1071,7 +1071,10 @@ Non-command artifacts and conversation journals retain their existing formats.
 
 `filepicker.py` owns the user-facing `/files [query]` and Ctrl+P selector. It
 reuses `ChoicePanel`, the footer menu lifetime, workspace enumeration, and the
-existing read-only file viewer. Its query field is separate from the agent
+existing read-only file viewer and file-edit coordinator. View / Edit links
+use `_read_file` and `_inspect_file` respectively; edit requests therefore
+use the same `UserEdits.request` boundary hold as other file edits.
+Its query field is separate from the agent
 prompt. One coordinator scans the current query in an owned blocking worker,
 retaining at most 50 ranked paths, and publishes partial progress at most every
 100 ms. Query changes signal cooperative stop and coalesce to the newest text;
@@ -1085,7 +1088,7 @@ case-fold expansions; displayed control characters are escaped. Queries are
 limited to 256 characters. No inventory cache, watcher, content reads, or model
 calls are added. Enumeration keeps workspace ignore/access behavior and the
 selected path is checked against the current workspace access policy before
-opening. The picker does not enter the editor or hold agent work; an already
+opening. Searching and viewing do not hold agent work; choosing Edit does. An already
 open editor must be closed before opening another viewer.
 
 ## Harness Python Execution

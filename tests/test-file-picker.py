@@ -18,6 +18,51 @@ wait_until = terminal_tests.wait_until
 send_keys = terminal_tests.send_keys
 
 
+@pytest.mark.parametrize('action', ['View', 'Edit'])
+async def test_picker_links_use_existing_view_and_edit_calls(display, tmp_path, action):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from prompt_toolkit.data_structures import Point
+    from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
+    from slipagent.useredits import UserEdits
+
+    sink, _, output, _, snapshot = display
+    path = tmp_path / 'file.txt'
+    path.write_text('file contents')
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: 'status', sink, input=pipe, output=output, project_directory=tmp_path)
+        session = SimpleNamespace(agent=SimpleNamespace(running=True), reloader=None)
+        edits = UserEdits(session, ui)
+        ui.__dict__['_user_edits'] = edits
+        ui._open_editor_now = AsyncMock()
+        running = asyncio.create_task(ui.run())
+        choosing = None
+        try:
+            await wait_until(lambda: any('Ready' in row for row in snapshot()))
+            choosing = asyncio.create_task(ui.find_file(Workspace(tmp_path)))
+            await wait_until(lambda: bool(ui._menu_options))
+            fragments = ui._choice_panel.fragments()
+            link = next(fragment for fragment in fragments if fragment[1] == action)
+            link[2](MouseEvent(Point(0, 0), MouseEventType.MOUSE_UP, MouseButton.LEFT, frozenset()))
+            await choosing
+            assert not ui._file_picker.active
+            if action == 'Edit':
+                assert edits.pending == (path, 1)
+                ui._open_editor_now.assert_not_awaited()
+                assert not ui._viewer_active
+            else:
+                assert edits.pending is None
+                assert ui._viewer_active
+            assert path.read_text() == 'file contents'
+        finally:
+            edits.close()
+            if choosing is not None:
+                choosing.cancel()
+                await asyncio.gather(choosing, return_exceptions=True)
+            ui.close()
+            await running
+
+
 @pytest.mark.parametrize('path,query,expected', [
     ('src/agent.py', 'agpy', True), ('src/agent.py', 'AG PY', True),
     ('src/agent.py', 's/a', True), ('src/agent.py', 'missing', False),

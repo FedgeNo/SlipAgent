@@ -8,6 +8,7 @@ import threading
 import time
 import unicodedata
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Callable
 
 from prompt_toolkit.document import Document
@@ -15,6 +16,7 @@ from prompt_toolkit.widgets import TextArea
 from wcwidth import iter_graphemes
 
 from .lifecycle import finish_cleanup
+from .links import CallbackLink
 from .menulifecycle import MenuLifecycle
 from .tools.blocking import run_blocking
 from .workspace import Workspace
@@ -98,6 +100,7 @@ class FilePicker:
     def __init__(self, terminal: Any) -> None:
         self.terminal = terminal
         self.active = False
+        self.action = 'view'
         self.status = 'Scanning…'
         self.revision = 0
         self.changed = asyncio.Event()
@@ -114,6 +117,10 @@ class FilePicker:
             ui._finish_menu(ui._menu_options[ui._menu_index][0])
         return False
 
+    def select(self, path: str, action: str) -> None:
+        self.action = action
+        self.terminal._finish_menu(path)
+
     def query_changed(self, buffer: Any) -> None:
         if not self.active:
             return
@@ -122,6 +129,7 @@ class FilePicker:
             self.stop.set()
         self.terminal._menu_options = []
         self.terminal._choice_panel.option_highlights = {}
+        self.terminal._choice_panel.option_links = {}
         self.status = 'Scanning…'
         self.changed.set()
         self.terminal.app.invalidate()
@@ -133,6 +141,15 @@ class FilePicker:
         selected = ui._menu_options[ui._menu_index][0] if ui._menu_options else None
         ui._menu_options = [(match.path, match.path) for match in matches]
         ui._choice_panel.option_highlights = {match.path: match.positions for match in matches}
+        ui._choice_panel.option_links = {
+            match.path: [('', '  '),
+                         *CallbackLink('View', ('file-view', match.path), ui._link_hover(),
+                                       partial(self.select, match.path, 'view')).fragments(),
+                         ('', ' / '),
+                         *CallbackLink('Edit', ('file-edit', match.path), ui._link_hover(),
+                                       partial(self.select, match.path, 'edit')).fragments()]
+            for match in matches
+        }
         paths = [match.path for match in matches]
         ui._menu_index = paths.index(selected) if selected in paths else 0
         self.status = f'{scanned} files, {len(matches)} matches' + ('' if complete else '…')
@@ -180,6 +197,7 @@ class FilePicker:
             ui.notify('Close the current menu before finding a file.')
             return None
         self.workspace = workspace
+        self.action = 'view'
         self.field.buffer.set_document(Document(query))
         self.active = True
         future: asyncio.Future[str | None] = asyncio.get_running_loop().create_future()
@@ -197,6 +215,7 @@ class FilePicker:
             ui._menu_future = None
             ui._menu_options = []
             ui._choice_panel.option_highlights = {}
+            ui._choice_panel.option_links = {}
 
         try:
             with MenuLifecycle(ui).opened(self.field, cleanup):

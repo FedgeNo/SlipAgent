@@ -42,8 +42,7 @@ def transport_for(provider, requests, fail_profile=False):
 def session_for(client, tmp_path):
     registry = ToolRegistry([])
     agent = Agent(client, registry, ULTRA_MODEL)
-    return cli.Session(agent, registry, client, cli.Renderer(cli.Style(False), io.StringIO(), False),
-                       Workspace(tmp_path), client.api_key, client.base_url, None, "SlipAgent")
+    return cli.Session(agent=agent, registry=registry, client=client, renderer=cli.Renderer(cli.Style(False), io.StringIO(), False), workspace=Workspace(tmp_path), api_key=client.api_key, base_url=client.base_url, http_referer=None, app_title="SlipAgent")
 
 
 def test_provider_config_keeps_credentials_and_preferences_separate():

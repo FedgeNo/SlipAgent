@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from slipagent.editorui import TerminalEditor
+
 import asyncio
 import io
 import json
@@ -879,7 +881,7 @@ async def test_opening_another_touched_file_keeps_agent_held(display, tmp_path, 
         ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output, project_directory=tmp_path)
         agent = SimpleNamespace(running=True, history=SimpleNamespace(steps=[]), _persist=Mock())
         session = SimpleNamespace(agent=agent, registry=ToolRegistry(), reloader=SimpleNamespace(busy=0))
-        edits = UserEdits(session, ui)
+        edits = UserEdits(session, TerminalEditor(ui))
         ui.__dict__["_user_edits"] = edits
         await edits.request(first)
         boundary = asyncio.create_task(edits.boundary())
@@ -1011,7 +1013,7 @@ async def test_repeated_wrap_toggles_and_saves_preserve_long_lines_and_diff(
     session = SimpleNamespace(agent=agent, registry=registry, reloader=None)
     with create_pipe_input() as pipe:
         ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output, project_directory=tmp_path)
-        ui.__dict__["_user_edits"] = UserEdits(session, ui)
+        ui.__dict__["_user_edits"] = UserEdits(session, TerminalEditor(ui))
         app = asyncio.create_task(ui.run())
         menu = None
         try:
@@ -1432,7 +1434,7 @@ async def test_pending_editor_notification_flashes_without_changing_status(displ
     with create_pipe_input() as pipe:
         ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
         session = SimpleNamespace(agent=SimpleNamespace(running=True), registry=ToolRegistry(), reloader=None)
-        edits = UserEdits(session, ui)
+        edits = UserEdits(session, TerminalEditor(ui))
         ui.__dict__["_user_edits"] = edits
         opened = AsyncMock()
         ui._open_editor_now = opened
@@ -1477,7 +1479,7 @@ async def test_pending_editor_cancel_link_beside_notification_releases_hold(disp
         session = SimpleNamespace(agent=SimpleNamespace(running=True), registry=ToolRegistry(), reloader=frame)
         jobs = SimpleNamespace(stop_all=AsyncMock())
         session.registry.services["command_jobs"] = jobs
-        edits = UserEdits(session, ui)
+        edits = UserEdits(session, TerminalEditor(ui))
         ui.__dict__["_user_edits"] = edits
         opened = AsyncMock()
         ui._open_editor_now = opened
@@ -4032,7 +4034,7 @@ async def test_turn_token_counts_follow_output_without_blank_line(monkeypatch):
         renderer=renderer,
         extensions=extensions, work=SessionWork(extensions),
         registry=cli.ToolRegistry(),
-        agent=SimpleNamespace(run=run, pending=[], stopped=False, has_queued_input=False,
+        agent=SimpleNamespace(run=run, pending=[], stopped=False, has_queued_input=False, running=False, on_event=None,
                               usage=Usage(prompt_tokens=10, completion_tokens=5, cost=0.0)),
     )
     monkeypatch.setattr(cli.Repl, "read_line", read)

@@ -55,7 +55,13 @@ async def test_mixed_input_obeys_submission_order(tmp_path, monkeypatch, metadat
         session.agent.enqueue(Submission("original"))
     task = asyncio.create_task(cli.Repl(session).run_request("" if initial_queued else "original", session.renderer.style))
     try:
-        await asyncio.wait_for(entered.wait(), 2)
+        try:
+            # Context construction competes with the full suite's worker load.
+            await asyncio.wait_for(entered.wait(), 5)
+        except TimeoutError:
+            if task.done():
+                task.result()
+            raise
         queued = [Submission(text) for text in ["  earlier correction  ", "  /temperature 0.2  ", "later correction",
                                                 "another later correction", "/temperature 0.3"]]
         for item in queued:

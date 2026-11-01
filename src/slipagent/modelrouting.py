@@ -75,8 +75,7 @@ class ModelRouting:
         if deferred is not None:
             deferred.append(message)
             return
-        from .markdown import literal
-        self.session.renderer.emit(literal(message))
+        self.session.notice(message)
 
     def defer_notices(self) -> None:
         """Hold notices until flush_notices(), so startup prints them after its own sequence."""

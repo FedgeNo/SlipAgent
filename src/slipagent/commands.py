@@ -16,8 +16,8 @@ from .mcp import MCPError, ServerSpec, config_path, load_servers
 from .sessions import SessionError, session_title
 from .requestfailures import failed_steps
 from .checkpoints import CheckpointError
-from .task import TaskMemory
 from .prompts import load_prompt
+from .application import application
 
 if TYPE_CHECKING:
     from .cli import Session, Style
@@ -111,11 +111,6 @@ class BranchSessionCommand(Command):
             if not await self.confirm(context, journal):
                 return False
             try:
-                await session.agent.wait_for_compaction()
-                jobs = session.registry.resources.jobs
-                if jobs is not None:
-                    await jobs.stop_all()
-                session.agent._persist()
                 await self.change(context, journal)
             except SessionError as exc:
                 print(style.red(f"  {exc}"), file=out)
@@ -373,7 +368,7 @@ class DangerCommand(Command):
         else:
             # Lifting confinement takes the explicit word; a bare /danger only reports.
             if argument.lower() in {"on", "off"}:
-                session.workspace.access.danger = argument.lower() == "on"
+                application(session).set_danger(argument.lower() == "on")
             if session.workspace.access.danger:
                 print(style.red("  Danger mode ON: workspace path confinement is disabled."), file=out)
             else:
@@ -398,7 +393,7 @@ class OverthinkingCommand(Command):
         if argument.lower() not in {"", "on", "off"}:
             print(style.red("  usage: /overthinking [on|off]"), file=out)
         else:
-            session.agent.overthinking = argument.lower() != "off"
+            application(session).set_overthinking(argument.lower() != "off")
             print(f"  Overthinking Mode {'ON' if session.agent.overthinking else 'OFF'}.", file=out)
         return None
 
@@ -418,7 +413,7 @@ class PlanningCommand(Command):
         if argument.lower() not in {"", "on", "off"}:
             print(style.red("  usage: /planning [on|off]"), file=out)
         else:
-            session.agent.set_planning(argument.lower() != "off")
+            application(session).set_planning(argument.lower() != "off")
             print(f"  Planning {'ON' if session.agent.planning else 'OFF'}.", file=out)
         return None
 
@@ -433,19 +428,13 @@ class HashlineCommand(Command):
         return argument.lower() in {'on', 'off'}
 
     async def run(self, context: CommandContext, argument: str) -> bool | None:
-        from .tools.hashline import set_hashline
-
         session, style, out = context.session, context.style, context.out
         value = argument.lower()
         if value not in {'', 'on', 'off'}:
             print(style.red('  usage: /hashline [on|off]'), file=out)
             return False
         if value:
-            set_hashline(session.registry, value == 'on')
-            frame = session.reloader
-            if frame is not None:
-                frame._builtin_tools = tuple(tool for tool in session.registry.tools
-                                             if tool.name in session.registry.builtin_names)
+            application(session).set_hashline(value == 'on')
         enabled = session.registry.services.get('hashline_enabled', True)
         print(f"  Hashline editing {'ON' if enabled else 'OFF'}.", file=out)
         return None
@@ -688,12 +677,9 @@ class QueueCommand(Command):
         return True
 
     async def run(self, context: CommandContext, argument: str) -> bool | None:
-        from .inputqueue import input_queue
-
         session, style, out = context.session, context.style, context.out
         terminal = session.renderer.terminal
-        queue = input_queue(session.agent)
-        entries = queue.snapshot()
+        entries = application(session).queued_input()
         parts = argument.split()
         discard = len(parts) == 2 and parts[0] == 'discard'
         number = parts[-1] if parts else ''
@@ -731,7 +717,7 @@ class QueueCommand(Command):
             discard = action == 'discard'
         if discard:
             try:
-                removed = queue.discard(identifier)
+                removed = application(session).discard_input(identifier)
             except SessionError as exc:
                 print(style.red(f'  {exc}'), file=out)
                 return False
@@ -764,7 +750,7 @@ class TaskCommand(Command):
             if session.agent.pending or session.agent.queued_messages:
                 print(style.red("  queued input is still pending; resume or use /queue to discard it before starting another task."), file=out)
             else:
-                session.agent.history.task = TaskMemory(start_message=len(session.agent.messages))
+                application(session).new_task()
                 print("  next prompt starts a new task; previous history and command logs remain available.", file=out)
         elif argument:
             print(style.red("  usage: /task [new]"), file=out)
@@ -790,12 +776,7 @@ class RenameCommand(Command):
             print(style.red("  usage: /rename <name>"), file=out)
         else:
             try:
-                title = session_title(argument)
-                journal = session.registry.resources.journal
-                if journal is not None:
-                    await asyncio.to_thread(journal.rename, argument)
-                else:
-                    session.extensions["title"] = title
+                title = await application(session).rename(argument)
                 print(f"  title: {title}", file=out)
             except SessionError as exc:
                 print(style.red(f"  {exc}"), file=out)
@@ -853,7 +834,7 @@ class SessionsCommand(StoredSessionCommand):
                         ("delete", "Delete Session and All Logs"), ("cancel", "Cancel"),
                     ])
                     if confirm == "delete":
-                        await asyncio.to_thread(journal.delete_saved, selected)
+                        await application(session).delete_saved(selected)
                         print(f"  deleted {entry['title']}", file=out)
                 elif action == "rename":
                     name = (await terminal.ask("Session name › ")).strip()
@@ -861,7 +842,7 @@ class SessionsCommand(StoredSessionCommand):
                         await asyncio.to_thread(journal.rename, name)
                         terminal.set_title(journal.title)
                     elif name:
-                        await asyncio.to_thread(journal.rename_saved, selected, name)
+                        await application(session).rename_saved(selected, name)
                     if name:
                         print(f"  title: {session_title(name)}", file=out)
         except SessionError as exc:
@@ -883,8 +864,7 @@ class ForkCommand(BranchSessionCommand):
         session, style, out = context.session, context.style, context.out
         terminal = session.renderer.terminal
         parent = journal.session_id
-        data = await asyncio.to_thread(journal.load, parent)
-        journal.restore(session.agent, data, fork=True)
+        await application(session).fork()
         print(f"  forked {parent} as {journal.session_id}; continuing in the new session.", file=out)
 
 
@@ -905,9 +885,7 @@ class DeleteCommand(BranchSessionCommand):
     async def change(self, context: CommandContext, journal: SessionJournal) -> None:
         session, style, out = context.session, context.style, context.out
         terminal = session.renderer.terminal
-        session.agent.reset(new_session=False)
-        await asyncio.to_thread(journal.delete_current)
-        session.extensions.pop("title", None)
+        await application(session).delete_current()
         if terminal is not None:
             terminal.clear_transcript()
         session.renderer.show_banner(
@@ -967,12 +945,8 @@ class RewindCommand(ExclusiveCommand):
                 confirm = await terminal.choose("Restore These Files?", [("restore", "Restore Files"), ("cancel", "Cancel")])
                 if confirm == "restore":
                     try:
-                        jobs = session.registry.resources.jobs
-                        if jobs is not None:
-                            await jobs.stop_all()
-                        restored = await run_blocking(checkpoints.rewind, selected)
+                        restored = await application(session).rewind(selected)
                         notice = "Files restored by /rewind: " + ", ".join(restored)
-                        session.registry.context_notes["file_rewind"] = load_prompt('file-rewind.md', notice=notice)
                         print("  " + notice, file=out)
                     except (OSError, CheckpointError) as exc:
                         print(style.red(f"  {exc}"), file=out)
@@ -1017,12 +991,7 @@ class ResumeCommand(StoredSessionCommand):
             if terminal is not None:
                 announcing = True
                 await terminal.notify_before_work(LOADING_CONVERSATION_NOTICE)
-            await session.agent.wait_for_compaction()
-            data = await asyncio.to_thread(journal.load, argument)
-            jobs = session.registry.resources.jobs
-            if jobs is not None:
-                await jobs.stop_all()
-            journal.restore(session.agent, data)
+            await application(session).resume(argument)
             rendering = True
             await session.renderer.restore_transcript(session.agent.messages, session.agent.pending,
                                                       queued_messages=session.agent.queued_messages,
@@ -1284,11 +1253,7 @@ class NewCommand(ExclusiveCommand):
 
     async def run(self, context: CommandContext, argument: str) -> bool | None:
         session, style, out = context.session, context.style, context.out
-        jobs = session.registry.resources.jobs
-        if jobs is not None:
-            await jobs.stop_all()
-        session.agent.reset()
-        session.extensions.pop("title", None)
+        await application(session).reset()
         print(style.dim("  conversation cleared"), file=out)
         return None
 
@@ -1425,7 +1390,7 @@ class StopCommand(Command):
         session, style, out = context.session, context.style, context.out
         session.extensions["resume_after_commands"] = False
         session.renderer._queued_settings_pause = False
-        if session.agent.request_stop():
+        if application(session).stop():
             if session.renderer.terminal is not None:
                 session.renderer.terminal.set_working(True, stopping=True)
             print(style.dim("  stopping after the current step and its tool results."), file=out)
@@ -1471,13 +1436,11 @@ class SkillCommand(Command):
         return not argument
 
     async def run(self, context: CommandContext, argument: str) -> bool | None:
-        from .skills import select
-        from .tools.blocking import run_blocking
         from .workspace import WorkspaceError
         registry = context.session.registry
         try:
             if argument == 'off':
-                registry.services.pop('selected_skill', None)
+                await application(context.session).select_skill(None)
             elif argument:
                 selector = argument
                 if argument.startswith(('"', "'")):
@@ -1485,8 +1448,7 @@ class SkillCommand(Command):
                     if len(parts) != 1:
                         raise ValueError('Select one skill name or path.')
                     selector = parts[0]
-                selected = await run_blocking(select, context.session.workspace, selector)
-                registry.services['selected_skill'] = selected
+                await application(context.session).select_skill(selector)
             active = registry.services.get('selected_skill')
             if active is None:
                 print('  no skill selected.', file=context.out)

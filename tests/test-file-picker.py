@@ -1,5 +1,7 @@
 """Fuzzy path selection preserves prompt state and rejects obsolete workers."""
 
+from slipagent.editorui import TerminalEditor
+
 import asyncio
 import threading
 import unicodedata
@@ -32,7 +34,7 @@ async def test_picker_links_use_existing_view_and_edit_calls(display, tmp_path, 
     with create_pipe_input() as pipe:
         ui = TerminalUI(lambda width: 'status', sink, input=pipe, output=output, project_directory=tmp_path)
         session = SimpleNamespace(agent=SimpleNamespace(running=True), reloader=None)
-        edits = UserEdits(session, ui)
+        edits = UserEdits(session, TerminalEditor(ui))
         ui.__dict__['_user_edits'] = edits
         ui._open_editor_now = AsyncMock()
         running = asyncio.create_task(ui.run())

@@ -42,11 +42,14 @@ async def test_stopped_one_shot_returns_failure(monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
     agent = SimpleNamespace(run=AsyncMock(return_value="Stopped after repeated actions."),
-                            wait_for_compaction=AsyncMock(), stopped=True)
+                            wait_for_compaction=AsyncMock(), stopped=True, running=False, on_event=None)
     renderer = cli.Renderer(cli.Style(False), io.StringIO(), False)
     renderer.output_markdown = True
     monkeypatch.setattr(cli.Repl, "shutdown", AsyncMock())
-    assert await cli.Launcher(argparse.Namespace()).run_one_shot(SimpleNamespace(agent=agent, renderer=renderer), "task") == 1
+    from slipagent.work import SessionWork
+    extensions = {}
+    assert await cli.Launcher(argparse.Namespace()).run_one_shot(
+        SimpleNamespace(agent=agent, renderer=renderer, extensions=extensions, work=SessionWork(extensions)), 'task') == 1
 
 
 async def test_queued_command_pause_is_labelled_a_pause_not_a_stop(tmp_path, monkeypatch):
@@ -83,7 +86,7 @@ def session_with_paused_request(tmp_path):
     registry = ToolRegistry([RecordingTool()])
     agent = Agent(client, registry, "test")
     renderer = cli.Renderer(cli.Style(False), io.StringIO(), False)
-    session = cli.Session(agent, registry, client, renderer, Workspace(tmp_path), "test", "http://unused.invalid", None, "test")
+    session = cli.Session(agent=agent, registry=registry, client=client, renderer=renderer, workspace=Workspace(tmp_path), api_key="test", base_url="http://unused.invalid", http_referer=None, app_title="test")
     return session, started, release
 
 
@@ -212,7 +215,7 @@ async def test_quit_stops_rate_limit_wait_without_another_request(tmp_path, monk
         waiting.set()
         return backoff(attempt, retry_after)
     monkeypatch.setattr(client, "_backoff", observe_backoff)
-    session = cli.Session(agent, registry, client, renderer, Workspace(tmp_path), "test", client.base_url, None, "test")
+    session = cli.Session(agent=agent, registry=registry, client=client, renderer=renderer, workspace=Workspace(tmp_path), api_key="test", base_url=client.base_url, http_referer=None, app_title="test")
     task = asyncio.create_task(cli.Repl(session).run_request("go", renderer.style))
     try:
         await asyncio.wait_for(waiting.wait(), 1)

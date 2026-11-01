@@ -22,6 +22,43 @@ from .links import ActionControl
 from .focus import FocusCoordinator
 
 
+class TerminalEditor:
+    """Adapt terminal widgets to the shared user-edit coordinator."""
+
+    def __init__(self, terminal: Any) -> None:
+        self.terminal = terminal
+
+    @property
+    def active(self) -> bool:
+        return bool(self.terminal.__dict__.get('_editor_active'))
+
+    async def open(self, path: Path, line: int) -> None:
+        await self.terminal._open_editor_now(path, line=line)
+
+    async def close_for_switch(self) -> bool:
+        return bool(await self.terminal._editor_panel.close(release=False))
+
+    async def shutdown(self) -> None:
+        panel = self.terminal.__dict__.get('_editor_panel')
+        if panel is not None:
+            await panel.shutdown()
+
+    def notify(self, text: str) -> None:
+        self.terminal.notify(text)
+
+    def clear_pending_notice(self) -> None:
+        if getattr(self.terminal, '_notification', '') == 'Opening editor after this turn':
+            self.terminal.notify('')
+
+    def recorded(self, path: Path, artifact: dict[str, Any] | None, error: str) -> None:
+        if artifact is not None:
+            self.terminal.write_artifact_reference(artifact)
+        if error:
+            self.terminal.notify('Edit saved; diff archive failed.')
+            self.terminal.write(f'Could not archive user edit: {error}')
+        self.terminal._touched_items[str(path)] = 'user edited'
+
+
 class EditorPanel:
     def __init__(self, terminal: Any) -> None:
         self.terminal = terminal

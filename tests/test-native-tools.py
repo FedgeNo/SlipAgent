@@ -1,5 +1,7 @@
 """Native OpenRouter calls and tolerant, unambiguous response normalization."""
 
+from slipagent import sessionfactory
+
 import asyncio
 import io
 import json
@@ -313,8 +315,7 @@ async def test_selection_refreshes_and_caches_native_support_between_calls(tmp_p
     router = Router({"test/model": ["tools", "response_format"]}, [final] * 4)
     async with OpenRouterClient("test", transport=httpx.MockTransport(router.handle)) as client:
         agent = Agent(client, ToolRegistry(), "test/model")
-        session = Session(agent, agent.registry, client, Renderer(Style(False), io.StringIO(), False),
-                          Workspace(tmp_path), "test", client.base_url, None, None)
+        session = Session(agent=agent, registry=agent.registry, client=client, renderer=Renderer(Style(False), io.StringIO(), False), workspace=Workspace(tmp_path), api_key="test", base_url=client.base_url, http_referer=None, app_title=None)
         await ModelPicker(session, Style(False), io.StringIO()).menu("test/model")
         assert (await client.model_capabilities("test/model")).native_tools
         await agent.run("Inspect the project.")
@@ -335,7 +336,7 @@ async def test_startup_detects_protocol_without_an_inference_call(tmp_path, monk
     from slipagent import cli
     from slipagent.config import DEFAULT_MODEL
     router = Router({DEFAULT_MODEL: params}, [])
-    monkeypatch.setattr(cli, "create_client", lambda provider, **kwargs: OpenRouterClient(**kwargs, transport=httpx.MockTransport(router.handle)))
+    monkeypatch.setattr(sessionfactory, "create_client", lambda provider, **kwargs: OpenRouterClient(**kwargs, transport=httpx.MockTransport(router.handle)))
     monkeypatch.setenv("SLIPAGENT_NO_DOTENV", "1")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test")
     monkeypatch.delenv("OPENROUTER_MODEL", raising=False)

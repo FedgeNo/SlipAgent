@@ -1,5 +1,7 @@
 """Ranked free routing, user control, and failure isolation."""
 
+from slipagent import sessionfactory
+
 from importlib import import_module
 from unittest.mock import AsyncMock
 from types import SimpleNamespace
@@ -487,7 +489,7 @@ async def test_startup_defaults_to_best_rank_unless_explicitly_selected(tmp_path
             return httpx.Response(200, json={"data": {"endpoints": [{**properties, "tag": "stub"}]}})
         return httpx.Response(200, json={"data": {"is_free_tier": True}})
 
-    monkeypatch.setattr(cli, "create_client", lambda provider, **options:
+    monkeypatch.setattr(sessionfactory, "create_client", lambda provider, **options:
                         create_client(provider, **options, transport=httpx.MockTransport(handle)))
     monkeypatch.setattr("slipagent.environment.ProjectEnvironment.snapshot", AsyncMock(return_value={}))
     monkeypatch.setattr(cli.RepositoryMap, "snapshot", AsyncMock(return_value=""))
@@ -538,7 +540,7 @@ async def test_failed_startup_closes_automatically_selected_provider(tmp_path, m
         assert session.client.provider == "google"
         raise RuntimeError("reload startup failed")
 
-    for module in (cli, providers, sessionstate):
+    for module in (sessionfactory, providers, sessionstate):
         monkeypatch.setattr(module, "create_client", client)
     monkeypatch.setattr(sessionstate, "fetch_catalog", providers.fetch_catalog)
     monkeypatch.setattr(cli, "RuntimeFrame", fail)
@@ -598,7 +600,7 @@ async def test_interactive_startup_uses_saved_metadata_and_403_moves_to_the_next
                                                           "finish_reason": "stop"}]})
         return httpx.Response(200, json={"data": {"is_free_tier": True}})
 
-    monkeypatch.setattr(cli, "create_client", lambda provider, **options:
+    monkeypatch.setattr(sessionfactory, "create_client", lambda provider, **options:
                         create_client(provider, **options, transport=httpx.MockTransport(handle)))
     monkeypatch.setattr("slipagent.environment.ProjectEnvironment.snapshot", AsyncMock(return_value={}))
     monkeypatch.setattr(cli.RepositoryMap, "snapshot", AsyncMock(return_value=""))

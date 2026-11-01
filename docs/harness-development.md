@@ -41,6 +41,7 @@ selection belongs to `environment.py`.
 | History, original requests, and summaries | `context.py`, `records.py`, `task.py`, `compaction.py` |
 | Terminal input, scrolling, and rendering | `terminal.py`, `terminallayout.py`, `terminalbindings.py`, `terminalmouse.py`, `statusline.py`, `transcript.py`, renderer in `cli.py` |
 | Slash-command behavior | `commands.py`, CLI command dispatch |
+| Shared session construction, controls, and lifecycle | `sessionfactory.py`, `sessionstate.py`, `application.py`; terminal presentation stays in `cli.py` |
 | Repository orientation | `repomap.py`, `symbols.py` |
 | Optional local semantic retrieval | `semantic/`, `tools/semantic.py`; see [its contracts](semantic-search.md) |
 | Session resources, cancellation, and live reload | `resources.py`, `lifecycle.py`, `runtime.py` |

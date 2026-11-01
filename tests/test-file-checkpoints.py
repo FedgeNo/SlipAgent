@@ -208,7 +208,7 @@ async def test_rewind_command_requires_confirmation_and_reports_current_files(wo
     client = StubClient([])
     agent = Agent(client, registry, "test")
     renderer = cli.Renderer(cli.Style(False), io.StringIO(), False)
-    session = cli.Session(agent, registry, client, renderer, workspace, "test", "http://unused.invalid", None, "test")
+    session = cli.Session(agent=agent, registry=registry, client=client, renderer=renderer, workspace=workspace, api_key="test", base_url="http://unused.invalid", http_referer=None, app_title="test")
     terminal = MagicMock()
     renderer.terminal = terminal
     path = workspace.root / "file.txt"

@@ -108,8 +108,6 @@ async def test_kilo_catalog_is_public_and_filters_specialists(tmp_path, monkeypa
     async with OpenRouterClient("dummy") as client:
         monkeypatch.setattr(client, "list_models", AsyncMock(return_value=[]))
         registry = ToolRegistry([])
-        session = cli.Session(Agent(client, registry, "test/model"), registry, client,
-            cli.Renderer(cli.Style(False), io.StringIO(), False), Workspace(tmp_path),
-            client.api_key, client.base_url, None, "SlipAgent")
+        session = cli.Session(agent=Agent(client, registry, "test/model"), registry=registry, client=client, renderer=cli.Renderer(cli.Style(False), io.StringIO(), False), workspace=Workspace(tmp_path), api_key=client.api_key, base_url=client.base_url, http_referer=None, app_title="SlipAgent")
         assert [m.selector for m in await session.catalog()] == ["kilo::new/coding-model"]
         assert fetch.call_args.args == ("kilo",)

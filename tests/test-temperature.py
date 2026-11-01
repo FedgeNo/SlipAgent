@@ -55,8 +55,7 @@ def transport(requests, *, broken_metadata=False, summary_requests=None):
 def session_for(client, tmp_path, model="adjustable"):
     agent = Agent(client, ToolRegistry(), model)
     renderer = Renderer(Style(True), io.StringIO(), False)
-    return Session(agent, agent.registry, client, renderer, Workspace(tmp_path),
-                   "test", client.base_url, None, "test")
+    return Session(agent=agent, registry=agent.registry, client=client, renderer=renderer, workspace=Workspace(tmp_path), api_key="test", base_url=client.base_url, http_referer=None, app_title="test")
 
 
 async def test_default_and_command_change_actual_requests(tmp_path, free_compaction):

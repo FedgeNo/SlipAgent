@@ -41,6 +41,53 @@ included in the context budget. Shell/MCP paths are not inferred from command
 strings. Legacy explicitly supplied system text remains supported, while CLI
 project guidance comes from this refreshed service rather than a stale suffix.
 
+## Shared Application Controls
+
+`sessionstate.Session` owns the engine and its resources without importing a
+terminal or CLI. `sessionfactory.create_session` builds that shared session from
+`Config` and typed `SessionOptions`; a frontend can supply a session constructor
+and an agent event handler. Constructors use keyword arguments. `cli.Session`
+adds only the terminal renderer and stdin future. The CLI retains launch
+announcements, startup sequencing, slash syntax, menus, and transcript rendering.
+A browser launched from the CLI attaches to this same initialized session.
+
+`application.application(session)` returns the one `SessionApplication` retained
+in session extensions. It owns run tasks, queued-input operations, graceful stop,
+immediate interruption, continuation policy, background work, and idempotent
+shutdown. CLI and future browser controls call these operations instead of
+creating another agent, registry, history, or tool implementation. `start`
+returns the owned task; `wait` shields it so cancellation of a detached UI waiter
+does not cancel agent work. Explicit `interrupt` cancels and drains owned work;
+closing the application drains it before closing MCP, registry, clients, and reload.
+
+Typed session actions cover reset, retained-task boundaries, rename, saved-session
+listing/resume/fork/deletion, file rewind, planning, overthinking, path confinement,
+hashline editing, and skill selection. State-changing operations reject active
+agent work or another mutation, hold reload while awaiting filesystem work, and
+persist successful changes. Live title changes remain available while the agent
+runs. Selection menus and destructive-action confirmations belong to the frontend.
+The CLI's ordered slash-command queue still supplies prompt and menu barriers;
+both interfaces can use the shared `next_run` continuation decision.
+
+Application event subscriptions fan out the same `AgentEvent` objects without
+copying or retaining their payloads. State subscriptions receive small immutable
+`ApplicationState` records. Listeners must be synchronous, nonblocking, and treat
+events as read-only; browser transport will need its own bounded queue and paging.
+Unsubscribe on detach. A failing listener is logged and detached without preventing
+delivery to another interface. Provider notices and retry callbacks use the same
+agent event channel, so they are not bound to terminal output.
+
+`UserEdits` depends on the `EditorClient` protocol rather than terminal widgets.
+`editorui.TerminalEditor` supplies the CLI adapter. Another frontend can implement
+the same open/close/notification interface while sharing the existing boundary
+hold, artifact publication, edit receipts, and cancellation cleanup. File saving
+and conflict checks remain in their existing file/editor owners.
+
+This separation adds no web server or GUI dependencies. Saved journals and history
+formats are unchanged. The session class layout and editor constructor changed;
+restart is required when updating from the preceding layout, then saved sessions
+can resume normally.
+
 ## A Request Is the Model's Entire Memory
 
 Tool-call arguments, structured tool results, observation envelopes, input records,

@@ -11,6 +11,8 @@ from slipagent.cli import LOADING_CONVERSATION_NOTICE, Style
 from slipagent.commands import CommandContext, ResumeCommand, SessionsCommand
 from slipagent.sessions import SessionError, SessionJournal
 from slipagent.terminal import TerminalUI
+from slipagent.tools.base import ToolRegistry
+from slipagent.work import SessionWork
 
 
 @pytest.mark.parametrize("entry", ["picker", "id", "sessions"])
@@ -31,11 +33,15 @@ async def test_loading_notice_precedes_all_resume_work_and_cleans_up(entry, outc
         entered.set()
         await release.wait()
     agent = SimpleNamespace(wait_for_compaction=compaction, messages=[], pending=[], queued_messages={},
-                            history=SimpleNamespace(steps=[]))
+                            history=SimpleNamespace(steps=[]), running=False, on_event=None, _persist=Mock())
     renderer = SimpleNamespace(terminal=terminal, restore_transcript=AsyncMock())
-    session = SimpleNamespace(agent=agent, renderer=renderer, registry=SimpleNamespace(resources=SimpleNamespace(jobs=None)))
+    registry = ToolRegistry()
+    extensions = {}
+    session = SimpleNamespace(agent=agent, renderer=renderer, registry=registry,
+                              extensions=extensions, work=SessionWork(extensions), reloader=None)
     journal = Mock(spec=SessionJournal)
     journal.session_id = "saved"
+    registry.resources.journal = journal
     journal.listing.return_value = [{"id": "saved", "title": "Saved Session", "current": "False"}]
     if outcome == "failure":
         journal.load.side_effect = SessionError("Unreadable saved session")

@@ -95,7 +95,11 @@ async def test_skill_commands_pin_refresh_and_clear_without_changing_selection_o
     path = package(project, folder='with spaces')
     registry = ToolRegistry()
     out = io.StringIO()
-    context = CommandContext(SimpleNamespace(workspace=workspace, registry=registry), Style(False), out)
+    from slipagent.sessionstate import Session
+    agent = Agent(StubClient([]), registry, 'test')
+    session = Session(agent=agent, registry=registry, client=agent.client, workspace=workspace,
+                      api_key='test', base_url='http://unused.invalid', http_referer=None, app_title='test')
+    context = CommandContext(session, Style(False), out)
     try:
         await SkillsCommand().run(context, '')
         assert 'release' in out.getvalue() and str(path) in out.getvalue()

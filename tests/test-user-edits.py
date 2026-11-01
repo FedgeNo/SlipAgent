@@ -1,5 +1,7 @@
 """Editable sessions wait for tool boundaries and deliver explicit user diffs."""
 
+from slipagent.editorui import TerminalEditor
+
 import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -18,7 +20,7 @@ def test_repeated_saved_diff_is_published_once_and_revert_is_notified(tmp_path):
     store = SimpleNamespace(save=Mock(side_effect=["first", "second", "third", "fourth"]))
     agent.registry.services["artifact_store"] = store
     terminal = SimpleNamespace(_touched_items={}, write_artifact_reference=Mock(), notify=Mock(), write=Mock())
-    edits = UserEdits(SimpleNamespace(agent=agent, registry=agent.registry), terminal)
+    edits = UserEdits(SimpleNamespace(agent=agent, registry=agent.registry), TerminalEditor(terminal))
     path = tmp_path / "file"
     edits.record(path, "+first", "edit")
     edits.record(path, "+first", "edit")
@@ -40,7 +42,7 @@ def test_unchanged_save_retries_failed_diff_archive(tmp_path):
     store = SimpleNamespace(save=Mock(side_effect=[OSError("archive unavailable"), "record"]))
     agent.registry.services["artifact_store"] = store
     terminal = SimpleNamespace(_touched_items={}, write_artifact_reference=Mock(), notify=Mock(), write=Mock())
-    edits = UserEdits(SimpleNamespace(agent=agent, registry=agent.registry), terminal)
+    edits = UserEdits(SimpleNamespace(agent=agent, registry=agent.registry), TerminalEditor(terminal))
     path = tmp_path / "file"
     edits.record(path, "+first", "edit")
     edits.record(path, "+first", "edit")
@@ -57,7 +59,7 @@ async def test_edit_request_waits_for_batch_boundary_and_preserves_background_jo
     jobs = SimpleNamespace(stop_all=AsyncMock())
     session = SimpleNamespace(agent=SimpleNamespace(running=True), registry=ToolRegistry(), reloader=None)
     session.registry.services["command_jobs"] = jobs
-    edits = UserEdits(session, terminal)
+    edits = UserEdits(session, TerminalEditor(terminal))
     await edits.request(tmp_path / "a", 12)
     terminal._open_editor_now.assert_not_awaited()
     boundary = asyncio.create_task(edits.boundary())
@@ -74,7 +76,7 @@ async def test_opening_notification_clears_at_boundary_and_preserves_newer_event
     terminal.notify = lambda text: setattr(terminal, "_notification", text)
     terminal._open_editor_now = AsyncMock()
     session = SimpleNamespace(agent=SimpleNamespace(running=True), reloader=None)
-    edits = UserEdits(session, terminal)
+    edits = UserEdits(session, TerminalEditor(terminal))
     await edits.request(tmp_path / "a")
     assert terminal._notification == "Opening editor after this turn"
     await edits.boundary()
@@ -95,7 +97,7 @@ async def test_agent_finishes_all_tools_before_opening_editor_and_waits_before_n
         terminal._editor_active = True
     terminal._open_editor_now = AsyncMock(side_effect=opened)
     session = SimpleNamespace(agent=agent, registry=agent.registry, reloader=None)
-    edits = UserEdits(session, terminal)
+    edits = UserEdits(session, TerminalEditor(terminal))
     agent.on_boundary = edits.checkpoint
     def event(event):
         if event.kind == "tool_start" and event.tool_call.id == "one":
@@ -130,7 +132,7 @@ async def test_saved_user_edit_survives_resume_and_is_distinct_from_user_message
     agent.registry.services["session_journal"] = journal
     terminal = SimpleNamespace(_touched_items={}, write_artifact_reference=Mock(), notify=Mock(), write=Mock())
     session = SimpleNamespace(agent=agent, registry=agent.registry)
-    edits = UserEdits(session, terminal)
+    edits = UserEdits(session, TerminalEditor(terminal))
     path = tmp_path / "file.txt"
     edits.record(path, "@@ -1 +1 @@\n-old\n+user\n", "edit1")
     data = journal.load(journal.session_id)
@@ -151,7 +153,7 @@ async def test_cancelling_held_agent_does_not_wait_again_in_final_boundary(tmp_p
     agent = Agent(client, ToolRegistry(), "test/model")
     terminal = SimpleNamespace(_editor_active=True, notify=Mock())
     session = SimpleNamespace(agent=agent, registry=agent.registry, reloader=None)
-    edits = UserEdits(session, terminal)
+    edits = UserEdits(session, TerminalEditor(terminal))
     edits.released.clear()
     agent.on_boundary = edits.checkpoint
     task = asyncio.create_task(agent.run("Work"))

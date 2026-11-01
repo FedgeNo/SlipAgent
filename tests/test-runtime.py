@@ -61,7 +61,7 @@ async def main():
     renderer = cli.Renderer(cli.Style(False), sink, False)
     prompt = agent_module.build_system_prompt(str(workspace.root), project_instructions='PINNED PROJECT GUIDANCE')
     agent = agent_module.Agent(client, registry, 'test/model', system_prompt=prompt, on_event=lambda event: renderer.handle(event))
-    session = cli.Session(agent, registry, client, renderer, workspace, 'test-key', client.base_url, None, 'test')
+    session = cli.Session(agent=agent, registry=registry, client=client, renderer=renderer, workspace=workspace, api_key='test-key', base_url=client.base_url, http_referer=None, app_title='test')
     frame = RuntimeFrame(session, cli)
     session.reloader = frame
     agent.on_boundary = lambda: frame.checkpoint(boundary=True)

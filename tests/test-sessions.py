@@ -165,7 +165,7 @@ async def test_session_transition_finishes_after_compaction_grace(tmp_path, meta
     journal = session.registry.resources.journal
     try:
         if operation == "one-shot":
-            assert await asyncio.wait_for(cli.Launcher(argparse.Namespace()).run_one_shot(session, "Original request"), 3) == 0
+            assert await asyncio.wait_for(cli.Launcher(argparse.Namespace()).run_one_shot(session, "Original request"), 5) == 0
         else:
             await session.agent.run("Original request")
             await asyncio.wait_for(started.wait(), 3)

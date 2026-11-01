@@ -52,9 +52,7 @@ async def key_session(tmp_path, monkeypatch):
     registry = ToolRegistry()
     out = io.StringIO()
     renderer = cli.Renderer(cli.Style(False), out, False)
-    session = cli.Session(Agent(client, registry, "test/model"), registry, client,
-                          renderer, Workspace(tmp_path), client.api_key, client.base_url,
-                          None, "test")
+    session = cli.Session(agent=Agent(client, registry, "test/model"), registry=registry, client=client, renderer=renderer, workspace=Workspace(tmp_path), api_key=client.api_key, base_url=client.base_url, http_referer=None, app_title="test")
     try:
         yield session, out, requests, clients
     finally:

@@ -14,6 +14,9 @@ src/slipagent/
 ├── runtime.py        stable entry point, watcher, transactional reloads
 ├── cli.py            session, commands, one-shot mode, event rendering
 ├── agent.py          model-step logic and harness system prompt
+├── application.py    shared run ownership, session actions and interface subscriptions
+├── sessionfactory.py frontend-independent engine/session construction
+├── sessionstate.py   shared provider and session state without terminal dependencies
 ├── batching.py       bounded read concurrency and ordered observations
 ├── lifecycle.py      stable cancellation-safe resource ownership
 ├── prompts.py        named, ordered prompt sections

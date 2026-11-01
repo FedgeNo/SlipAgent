@@ -5,32 +5,42 @@ from __future__ import annotations
 from pathlib import Path
 import hashlib
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from .work import WorkCoordinator
 
 if TYPE_CHECKING:
     from .sessionstate import Session
-    from .terminal import TerminalUI
+
+
+class EditorClient(Protocol):
+    @property
+    def active(self) -> bool: ...
+    async def open(self, path: Path, line: int) -> None: ...
+    async def close_for_switch(self) -> bool: ...
+    async def shutdown(self) -> None: ...
+    def notify(self, text: str) -> None: ...
+    def clear_pending_notice(self) -> None: ...
+    def recorded(self, path: Path, artifact: dict[str, Any] | None, error: str) -> None: ...
 
 
 class UserEdits(WorkCoordinator):
-    def __init__(self, session: Session, terminal: TerminalUI) -> None:
+    def __init__(self, session: Session, editor: EditorClient) -> None:
         super().__init__(lambda: session.reloader)
         self.session = session
-        self.terminal = terminal
+        self.editor = editor
         self.pending: tuple[Path, int] | None = None
         self.opening = False
 
     async def request(self, path: Path, line: int = 1) -> None:
         if self.pending is not None or self.opening:
-            self.terminal.notify("An editor request is already pending.")
+            self.editor.notify("An editor request is already pending.")
             return
-        switching = bool(self.terminal.__dict__.get("_editor_active"))
+        switching = self.editor.active
         if switching:
             self.opening = True
             try:
-                if not await self.terminal._editor_panel.close(release=False):
+                if not await self.editor.close_for_switch():
                     return
             finally:
                 self.opening = False
@@ -39,7 +49,7 @@ class UserEdits(WorkCoordinator):
         if not self.session.agent.running or switching:
             await self.boundary()
         else:
-            self.terminal.notify("Opening editor after this turn")
+            self.editor.notify("Opening editor after this turn")
 
     async def boundary(self) -> None:
         if self.pending is not None and not self.opening:
@@ -48,13 +58,13 @@ class UserEdits(WorkCoordinator):
             self.pending = None
             self._clear_opening_notification()
             try:
-                await self.terminal._open_editor_now(path, line=line)
+                await self.editor.open(path, line)
             except BaseException:
                 self.close()
                 raise
             finally:
                 self.opening = False
-            if not self.terminal.__dict__.get("_editor_active"):
+            if not self.editor.active:
                 self.close()
         await self.released.wait()
 
@@ -78,18 +88,19 @@ class UserEdits(WorkCoordinator):
                                  "saved_before_step": len(self.session.agent.history.steps) + 1}
         if not diff:
             entry["reverted_to_editor_baseline"] = True
+        artifact = None
+        error = ''
         if store is not None:
             try:
                 record = store.save(f"User edited {path}", diff, kind="diff", call_id="user-edit", step_id=len(self.session.agent.history.steps) + 1)
                 entry["artifact"] = record
-                self.terminal.write_artifact_reference(record)
+                artifact = record
             except (OSError, ValueError) as exc:
-                self.terminal.notify("Edit saved; diff archive failed.")
-                self.terminal.write(f"Could not archive user edit: {exc}")
+                error = str(exc)
         if "artifact" not in entry:
             entry["diff"] = diff  # Preserve full data until archival can succeed.
         edits[key] = entry
-        self.terminal._touched_items[str(path)] = "user edited"
+        self.editor.recorded(path, artifact, error)
         self.session.agent._persist()
 
     def close(self) -> None:
@@ -98,13 +109,10 @@ class UserEdits(WorkCoordinator):
         self.release()
 
     def _clear_opening_notification(self) -> None:
-        if getattr(self.terminal, "_notification", "") == "Opening editor after this turn":
-            self.terminal.notify("")
+        self.editor.clear_pending_notice()
 
     async def aclose(self) -> None:
         try:
-            panel = self.terminal.__dict__.get("_editor_panel")
-            if panel is not None:
-                await panel.shutdown()
+            await self.editor.shutdown()
         finally:
             self.close()

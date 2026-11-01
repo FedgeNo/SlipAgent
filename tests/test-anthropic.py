@@ -178,9 +178,7 @@ async def test_cli_lists_authenticated_claude_catalog(monkeypatch, capsys):
 async def test_existing_model_picker_selects_claude_without_using_it_for_compaction(tmp_path, monkeypatch):
     async with providers.create_client("openrouter", api_key="dummy") as client:
         registry = ToolRegistry([])
-        session = cli.Session(Agent(client, registry, "test/model"), registry, client,
-                              cli.Renderer(cli.Style(False), io.StringIO(), False),
-                              Workspace(tmp_path), client.api_key, client.base_url, None, "SlipAgent")
+        session = cli.Session(agent=Agent(client, registry, "test/model"), registry=registry, client=client, renderer=cli.Renderer(cli.Style(False), io.StringIO(), False), workspace=Workspace(tmp_path), api_key=client.api_key, base_url=client.base_url, http_referer=None, app_title="SlipAgent")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
         monkeypatch.setenv("NVIDIA_API_KEY", "dummy-nvidia")
         create = providers.create_client

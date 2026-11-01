@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -25,23 +26,22 @@ from . import startupcache
 from .tools.blocking import run_blocking
 
 if TYPE_CHECKING:
-    from .cli import Renderer
     from .modelrouting import ModelRouting
 
 CATALOG_REFRESH_SECONDS = 300.0
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, kw_only=True)
 class Session:
     agent: Agent
     registry: ToolRegistry
     client: APIClient
-    renderer: Renderer
     workspace: Workspace
     api_key: str
     base_url: str
     http_referer: str | None
     app_title: str
+    retry_handler: Callable[[str, int], None] | None = None
     # Carried so rebuilt clients (e.g. after `/key`) keep the same transport.
     transport: Any | None = None
     mcp: MCPManager | None = None
@@ -50,7 +50,6 @@ class Session:
     free_calls: int | None = None
     quota_checked_at: float | None = None
     _catalog: list[ModelInfo] | None = None
-    _input_future: asyncio.Future[str | None] | None = None
     reloader: RuntimeFrame | None = None
     extensions: dict[str, Any] = field(default_factory=dict)
 
@@ -58,6 +57,16 @@ class Session:
 
     def __post_init__(self) -> None:
         self.work = SessionWork(self.extensions)
+        if self.retry_handler is None:
+            self.retry_handler = self.retry_countdown
+
+    def retry_countdown(self, error: str, seconds: int) -> None:
+        from .events import AgentEvent
+        self.agent._emit(AgentEvent(kind='retry_wait', text=error, step=seconds))
+
+    def notice(self, message: str) -> None:
+        from .events import AgentEvent
+        self.agent._emit(AgentEvent(kind='notice', text=message))
 
     def configure_compaction(self) -> None:
         from .compressionproviders import CompressionProviders
@@ -147,7 +156,7 @@ class Session:
                 options = self.extensions.get("provider_options", {}).get(provider, {})
                 return await fetch_catalog(provider, api_key=keys.get(provider),
                                            base_url=options.get("base_url", os.environ.get(implementation.base_url_env)),
-                                           on_retry=self.renderer.retry_countdown)
+                                           on_retry=self.retry_handler)
             results = await asyncio.gather(*(catalog_for(name) for name in names), return_exceptions=True)
             catalog: list[ModelInfo] = []
             errors: list[str] = []
@@ -230,7 +239,7 @@ class Session:
             config = Config.from_env(provider=model.provider, model=model.id)
             options = {"api_key": config.api_key, "base_url": config.base_url,
                        "http_referer": config.http_referer, "app_title": config.app_title,
-                       "on_retry": self.renderer.retry_countdown}
+                       "on_retry": self.retry_handler}
         return create_client(model.provider, **options)
 
     async def refresh_profile(self, model: ModelInfo) -> None:
@@ -291,9 +300,8 @@ class Session:
         self.agent.client = replacement
         limit = replacement.max_temperature
         if self.agent.temperature is not None and self.agent.temperature > limit:
-            from .markdown import literal
             self.agent.temperature = limit
-            self.renderer.emit(literal(f"Temperature lowered to {limit:g}, the {replacement.provider} maximum."))
+            self.notice(f"Temperature lowered to {limit:g}, the {replacement.provider} maximum.")
         self.api_key = replacement.api_key
         self.base_url = replacement.base_url
         self.use_model(model.id)

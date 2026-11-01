@@ -26,7 +26,6 @@ import time
 import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from contextlib import AsyncExitStack
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -37,7 +36,6 @@ from .automation import JsonEventStream
 from .config import (Config, ConfigError, configured_provider, context_tokens_preference, dotenv_path, dotenv_values, environment_source,
                      forget_environment, hide_from_commands, remove_dotenv_value, save_dotenv_value, save_model_choice,
                      save_optimal_choice, starts_optimal)
-from .instructions import load_project_instructions
 from .lifecycle import finish_cleanup
 from .mcp import MCPManager, MCPError
 from .api import (
@@ -49,13 +47,12 @@ from .api import (
     APIError,
     APILimitError,
 )
-from .providers import PROVIDERS, active_providers, create_client, provider_class, fetch_catalog, key_provider
+from .providers import PROVIDERS, active_providers, provider_class, fetch_catalog, key_provider
 from .model_catalog import coding_models
 from .modelpricing import free_label, model_order, price_label
 from .tools.base import ToolRegistry, ToolResult
 from .tools.discovery import UNAVAILABLE_BATCH
 from .tools.editing import edit_result_line
-from .tools import build_default_registry
 from .types import KeyInfo, Message, ModelInfo, ToolCall
 from .workspace import Workspace, WorkspaceError
 from .terminal import TerminalUI, SuggestedPrompt
@@ -67,7 +64,8 @@ from . import plugins
 from .repomap import RepositoryMap
 from .requestfailures import failed_steps, failure_summary
 from .tools.blocking import run_blocking
-from .sessionstate import Session as Session
+from .sessionstate import Session as ApplicationSession
+from .application import application, settle as _gather_quietly
 from .sessions import SessionJournal, SessionError, session_title
 from wcwidth import iter_graphemes, strip_sequences, wcswidth
 from tabulate import tabulate
@@ -817,6 +815,19 @@ class Renderer:
 # --------------------------------------------------------------------------- #
 
 
+@dataclass(slots=True, kw_only=True)
+class Session(ApplicationSession):
+    """Terminal presentation attached to the shared application session."""
+
+    renderer: Renderer
+    _input_future: asyncio.Future[str | None] | None = None
+
+    def __post_init__(self) -> None:
+        ApplicationSession.__post_init__(self)
+        if self.agent.on_event is None:
+            self.agent.on_event = lambda event: self.renderer.handle(event)
+
+
 class Launcher:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
@@ -841,88 +852,40 @@ class Launcher:
             temperature=args.temperature,
             max_tokens=args.max_tokens,
         )
-        try:
-            workspace = Workspace(config.workspace, danger=getattr(args, "danger", False))
-            load_project_instructions(workspace)
-        except WorkspaceError as exc:
-            raise ConfigError(str(exc)) from exc
+        from functools import partial
+        from .sessionfactory import SessionOptions, create_session
 
         style = Style(_use_color(sys.stderr, args.no_color))
         renderer = Renderer(style, sys.stderr, args.verbose)
         renderer.markdown_theme = getattr(args, "theme", "dark")
         renderer.output_markdown = getattr(args, "markdown", False)
         renderer.stdout_color = _use_color(sys.stdout, args.no_color)
-
-        client = create_client(
-            config.provider, api_key=config.api_key,
-            base_url=config.base_url,
-            http_referer=config.http_referer,
-            app_title=config.app_title,
-            on_retry=renderer.retry_countdown,
+        options = SessionOptions(
+            danger=getattr(args, 'danger', False), python=args.python,
+            planning=getattr(args, 'planning', True), hashline=getattr(args, 'hashline', True),
+            context_tokens=(args.context_tokens if getattr(args, 'context_tokens', None) is not None
+                            else context_tokens_preference()),
+            reasoning_history_steps=getattr(args, 'reasoning_history_steps', 25),
+            filtered_thoughts=not getattr(args, 'raw_reasoning_history', False),
+            exposed_tools=tuple(args.tools.split(',')) if getattr(args, 'tools', None) else None,
+            mcp=not args.no_mcp and bool(args.mcp or not args.prompt_flag and not args.prompt
+                                       and not getattr(args, 'prompt_file', None)),
         )
-        async with AsyncExitStack() as resources:
-            resources.push_async_callback(client.aclose)
-            registry = build_default_registry(workspace)
-            if not getattr(args, "hashline", True):
-                from .tools.hashline import set_hashline
-                set_hashline(registry, False)
-            registry.services["editable_prompts"] = True
-            resources.push_async_callback(registry.aclose)
-            registry.services["project_environment"].python_override = args.python
-
-            agent = Agent(
-                client=client,
-                registry=registry,
-                model=config.model,
-                max_steps=config.max_steps,
-                temperature=config.temperature,
-                max_tokens=config.max_tokens,
-                context_steps=config.context_steps,
-                overthinking=config.overthinking,
-                planning=getattr(args, "planning", True),
-                context_tokens=(args.context_tokens if getattr(args, "context_tokens", None) is not None
-                                else context_tokens_preference()),
-                reasoning_history_steps=getattr(args, "reasoning_history_steps", 25),
-                filtered_thoughts=not getattr(args, "raw_reasoning_history", False),
-                exposed_tools=tuple(args.tools.split(',')) if getattr(args, "tools", None) else None,
-                system_prompt=build_system_prompt(str(workspace.root)),
-                on_event=lambda event: renderer.handle(event),
-            )
-
-            # Skip automatic MCP startup for one-shot runs unless --mcp is set.
-            mcp: MCPManager | None = None
-            if not args.no_mcp and (args.mcp or not args.prompt_flag and not args.prompt and not getattr(args, "prompt_file", None)):
-                manager = MCPManager(workspace.root, registry=registry)
-                mcp = manager
-                resources.push_async_callback(manager.aclose)
-
-            session = Session(
-                agent=agent,
-                registry=registry,
-                client=client,
-                renderer=renderer,
-                workspace=workspace,
-                api_key=config.api_key,
-                base_url=config.base_url,
-                http_referer=config.http_referer,
-                app_title=config.app_title,
-                mcp=mcp,
-            )
-            async def close_selected_client() -> None:
-                if session.client is not client:
-                    await session.client.aclose()
-
-            resources.push_async_callback(close_selected_client)
-            registry.services["first_output_wait"] = lambda deadline: renderer.first_output_wait(
-                deadline, skippable=session.model_routing().enabled)
-            registry.services["request_phase"] = renderer.request_phase
-            session.configure_compaction()
+        session = cast(Session, await create_session(config, options,
+            session_factory=partial(Session, renderer=renderer),
+            on_event=lambda event: renderer.handle(event)))
+        session.registry.services['first_output_wait'] = lambda deadline: renderer.first_output_wait(
+            deadline, skippable=session.model_routing().enabled)
+        session.registry.services['request_phase'] = renderer.request_phase
+        try:
             if defer_startup:
-                session.extensions["startup"] = lambda: self.initialize(session, config, announce=True)
+                session.extensions['startup'] = lambda: self.initialize(session, config, announce=True)
             else:
                 await self.initialize(session, config)
-            resources.pop_all()
-            return session
+        except BaseException:
+            await application(session).close()
+            raise
+        return session
 
     async def initialize(self, session: Session, config: Config, *, announce: bool = False) -> None:
         """Overlap independent startup work; build context only after its services settle."""
@@ -1136,7 +1099,7 @@ class Launcher:
         failure: Exception | None = None
         answer = ""
         try:
-            answer = await session.agent.run(prompt)
+            answer = await application(session).run(prompt)
             await session.agent.wait_for_compaction()
         except (APIError, ConfigError, WorkspaceError) as exc:
             print(literal(f"slipagent: {_failure_text(session, exc)}"), file=sys.stderr)
@@ -1348,7 +1311,8 @@ class Repl:
             terminal.__dict__['_workspace'] = session.workspace
             terminal.__dict__["_agent_input_queue"] = lambda: input_queue(session.agent)
             from .useredits import UserEdits
-            user_edits = UserEdits(session, terminal)
+            from .editorui import TerminalEditor
+            user_edits = UserEdits(session, TerminalEditor(terminal))
             registry_edits = session.registry.services.get("user_edits")
             if registry_edits is not None:
                 registry_edits.close()
@@ -1620,6 +1584,7 @@ class Repl:
         """
         session = self.session
         previous_boundary = getattr(session.agent, "on_boundary", None)
+        application(session).cancel_deferred_input = CommandRunner(session).cancel_queued
 
         async def boundary() -> None:
             if previous_boundary is not None:
@@ -1646,8 +1611,7 @@ class Repl:
         reader: asyncio.Task[str | None] | None = asyncio.create_task(
             self.read_line(style)
         )
-        agent_task: asyncio.Task[str] = asyncio.create_task(session.agent.run(prompt))
-        session.work.agent_task = agent_task
+        agent_task = application(session).start(prompt)
         renderer = session.renderer
         exiting = False
         eof = False
@@ -1691,9 +1655,7 @@ class Repl:
                         elif text:
                             if renderer.terminal is not None:
                                 renderer.terminal.consume_submission(line)
-                            session.agent.enqueue(text)
-                            if session.agent.stop_requested:
-                                session.work.resume_after_commands = True
+                            application(session).submit(text)
                         if reader is not None:
                             reader = asyncio.create_task(self.read_line(style))
 
@@ -1704,8 +1666,7 @@ class Repl:
                             renderer.emit(style.dim("  Starting queued input."))
                             if renderer.terminal is not None:
                                 renderer.terminal.set_working(True)
-                            agent_task = asyncio.create_task(session.agent.run(""))
-                            session.work.agent_task = agent_task
+                            agent_task = application(session).start("")
                             continue
                         break
                     answer = agent_task.result()
@@ -1713,20 +1674,18 @@ class Repl:
                         break
                     resume, commands_exit = await CommandRunner(session).apply_deferred(exiting=exiting and not eof)
                     exiting = exiting or commands_exit
+                    # An interrupt can arrive while deferred commands yield.
+                    if session.extensions.get("interrupt_requested"):
+                        continue
                     if session.extensions.get('pending_review') is not None:
                         break
-                    if resume and not exiting and answer != STEP_LIMIT_NOTICE and (answer == STOP_NOTICE or session.agent.has_queued_input):
-                        renderer.emit(style.dim("  Continuing with queued input."))
+                    continuation = application(session).next_run(answer, resume=resume, exiting=exiting)
+                    if continuation is not None:
+                        if continuation.continue_run:
+                            renderer.emit(style.dim("  Continuing with queued input."))
                         if renderer.terminal is not None:
                             renderer.terminal.set_working(True)
-                        agent_task = asyncio.create_task(session.agent.run("", continue_run=True))
-                        session.work.agent_task = agent_task
-                        continue
-                    if not exiting and session.agent.has_queued_input and answer != STEP_LIMIT_NOTICE and not session.agent.stopped:
-                        if renderer.terminal is not None:
-                            renderer.terminal.set_working(True)
-                        agent_task = asyncio.create_task(session.agent.run(""))
-                        session.work.agent_task = agent_task
+                        agent_task = application(session).start("", continue_run=continuation.continue_run)
                         continue
                     break
                 if reader is None:
@@ -1748,7 +1707,8 @@ class Repl:
                 raise
         finally:
             session.agent.on_boundary = previous_boundary
-            session.work.agent_task = None
+            if session.work.agent_task is agent_task:
+                session.work.agent_task = None
             if reader is not None and not reader.done():
                 reader.cancel()
             if reader is not None:
@@ -1776,52 +1736,23 @@ class Repl:
         return exiting
 
     def request_interrupt(self) -> None:
-        """Signal cancellation immediately; retain cleanup outside the input loop."""
         session = self.session
-        cleanup = session.extensions.get("interrupt_task")
-        if cleanup is not None:
+
+        def finished() -> None:
+            session.renderer.emit(session.renderer.style.dim("  Interrupted. Conversation and completed results are preserved."))
+            if session.renderer.terminal is not None:
+                session.renderer.terminal.set_working(False)
+
+        if not application(session).interrupt(preserve_deferred_input=CommandRunner(session).cancel_queued,
+                                               on_finished=finished):
             return
-        session.extensions["interrupt_requested"] = True
-        session.extensions["interrupt_sequence"] = session.extensions.get("interrupt_sequence", 0) + 1
-        session.registry.services["interrupt_requested"] = True
-        discarded = session.extensions.pop("deferred_commands", [])
-        CommandRunner(session).cancel_queued(discarded)
-        session.extensions["resume_after_commands"] = False
         session.renderer._queued_settings_pause = False
-        session.agent.request_stop()
-        session.agent.stopped = True
-        task = session.extensions.get("active_agent_task")
-        command = session.extensions.get("active_command_task")
-        commands = list(session.extensions.get("command_tasks", ()))
-        for owned in [task, command, *commands]:
-            if owned is not None:
-                owned.cancel()
-        compactor = session.registry.services.get("step_compactor")
-        if compactor is not None:
-            compactor.reset()
         session.renderer.emit(session.renderer.style.dim("  Interrupting agent work; cancelling active operations."))
         if session.renderer.terminal is not None:
             session.renderer.terminal.set_working(True, stopping=True)
 
-        async def drain() -> None:
-            jobs = session.registry.services.get("command_jobs")
-            job_cleanup = asyncio.create_task(jobs.stop_all()) if jobs is not None else None
-            await _gather_quietly(*[owned for owned in [task, command, *commands, job_cleanup] if owned is not None])
-            if compactor is not None:
-                await compactor.wait()
-            session.registry.services.pop("interrupt_requested", None)
-            session.renderer.emit(session.renderer.style.dim("  Interrupted. Conversation and completed results are preserved."))
-            if session.renderer.terminal is not None:
-                session.renderer.terminal.set_working(False)
-        session.extensions["interrupt_task"] = asyncio.create_task(drain())
-
     async def wait_for_interrupt(self) -> None:
-        session = self.session
-        task = session.extensions.get("interrupt_task")
-        if task is not None:
-            await finish_cleanup(task)
-            session.extensions.pop("interrupt_task", None)
-            session.extensions.pop("interrupt_requested", None)
+        await application(self.session).wait_for_interrupt()
 
     def refresh_title(self) -> None:
         session = self.session
@@ -1834,12 +1765,7 @@ class Repl:
             terminal.set_title(title)
 
     def start_background_task(self, work: Awaitable[Any]) -> None:
-        """Own startup work that must not delay the prompt; shutdown cancels it."""
-        session = self.session
-        tasks: set[asyncio.Task[Any]] = session.extensions.setdefault("background_tasks", set())
-        task = asyncio.ensure_future(work)
-        tasks.add(task)
-        task.add_done_callback(tasks.discard)
+        application(self.session).background(work)
 
     async def refresh_model_metadata(self) -> None:
         """Replace saved catalogs and profiles used at startup with current ones."""
@@ -1860,29 +1786,7 @@ class Repl:
             pass
 
     async def shutdown(self) -> None:
-        """Release every resource the session owns, MCP subprocesses included.
-
-        Order matters: MCP tools hold references to their clients, so the servers
-        are stopped before the registry and HTTP client are closed.
-        """
-        session = self.session
-        await self.wait_for_interrupt()
-        tasks = list(session.extensions.get("command_tasks", ())) + list(session.extensions.get("background_tasks", ()))
-        for task in tasks:
-            task.cancel()
-        await _gather_quietly(*tasks)
-        try:
-            if session.mcp is not None:
-                await session.mcp.aclose()
-        finally:
-            try:
-                await session.registry.aclose()
-            finally:
-                try:
-                    await session.client.aclose()
-                finally:
-                    if session.reloader is not None:
-                        session.reloader.close()
+        await application(self.session).close()
 
 
 class StatusLine:
@@ -2243,14 +2147,6 @@ class CommandRunner:
     def changes_session(self, command: str, argument: str) -> bool:
         definition = BY_NAME.get(command)
         return definition.changes_session(argument) if definition is not None else False
-
-
-async def _gather_quietly(*tasks: asyncio.Task[object]) -> None:
-    for task in tasks:
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):
-            pass
 
 
 class KeyEntry:

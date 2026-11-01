@@ -1,5 +1,7 @@
 """Startup stays visible and independent services overlap without early requests."""
 
+from slipagent import sessionfactory
+
 import asyncio
 import threading
 from types import SimpleNamespace
@@ -34,7 +36,7 @@ async def test_startup_reports_failed_metadata_and_mcp_outcomes(tmp_path, monkey
     from unittest.mock import AsyncMock
     client = dummy_client(model_capabilities=AsyncMock(return_value=None),
                           key_info=AsyncMock(return_value=None))
-    monkeypatch.setattr(cli, "create_client", lambda *args, **kwargs: client)
+    monkeypatch.setattr(sessionfactory, "create_client", lambda *args, **kwargs: client)
     monkeypatch.setattr(ProjectEnvironment, "snapshot", AsyncMock(return_value={}))
     monkeypatch.setattr(RepositoryMap, "snapshot", AsyncMock(return_value=""))
     args = cli.build_parser().parse_args([
@@ -122,7 +124,7 @@ async def test_deferred_startup_overlaps_services_before_context(tmp_path, monke
         return []
 
     client = dummy_client(model_capabilities=metadata, key_info=quota)
-    monkeypatch.setattr(cli, "create_client", lambda *args, **kwargs: client)
+    monkeypatch.setattr(sessionfactory, "create_client", lambda *args, **kwargs: client)
     monkeypatch.setattr(ProjectEnvironment, "snapshot", environment)
     monkeypatch.setattr(RepositoryMap, "snapshot", repository)
     monkeypatch.setattr(MCPManager, "connect_all", mcp)
@@ -246,7 +248,7 @@ async def test_startup_fetches_each_catalog_once(tmp_path, monkeypatch, provider
     def client(name, **options):
         return create_client(name, **options, transport=httpx.MockTransport(respond))
 
-    monkeypatch.setattr(cli, "create_client", client)
+    monkeypatch.setattr(sessionfactory, "create_client", client)
     args = cli.build_parser().parse_args([
         "--workspace", str(tmp_path), "--api-key", "dummy", "--provider", provider,
         "--model", ULTRA_MODEL, "--no-session", "--no-reload", "--no-mcp",
@@ -305,7 +307,7 @@ async def test_deferred_startup_failure_closes_session(tmp_path, monkeypatch, ca
     async def close():
         closed.append(True)
 
-    monkeypatch.setattr(cli, "create_client", lambda *args, **kwargs: SimpleNamespace(aclose=close))
+    monkeypatch.setattr(sessionfactory, "create_client", lambda *args, **kwargs: SimpleNamespace(aclose=close))
     args = cli.build_parser().parse_args([
         "--workspace", str(tmp_path), "--api-key", "dummy", "--no-session", "--no-reload", "--no-mcp",
     ])

@@ -24,7 +24,7 @@ def session_for(workspace):
     return SimpleNamespace(
         workspace=workspace, agent=agent,
         renderer=Renderer(Style(False), io.StringIO(), False),
-        reloader=SimpleNamespace(_project_instructions=prompt),
+        reloader=SimpleNamespace(_project_instructions=prompt, busy=0),
         extensions=extensions, work=SessionWork(extensions),
     )
 

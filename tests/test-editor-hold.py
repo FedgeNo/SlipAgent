@@ -1,5 +1,7 @@
 """Editor holds block all agent batches while independent background work continues."""
 
+from slipagent.editorui import TerminalEditor
+
 import asyncio
 import shlex
 import sys
@@ -25,7 +27,7 @@ def editor(agent):
         opened.set()
     terminal._open_editor_now = open_editor
     session = SimpleNamespace(agent=agent, registry=agent.registry, reloader=None)
-    edits = UserEdits(session, terminal)
+    edits = UserEdits(session, TerminalEditor(terminal))
     async def checkpoint():
         waiting.set()
         await edits.checkpoint()

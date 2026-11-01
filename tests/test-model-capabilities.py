@@ -1,5 +1,7 @@
 """Select requests from endpoint metadata without paid inference calls."""
 
+from slipagent import sessionfactory
+
 import io
 import json
 
@@ -109,7 +111,7 @@ async def test_infeasible_selection_preserves_active_model(tmp_path, context, ma
     requests, gets = [], []
     async with OpenRouterClient("test", transport=transport_for(models, {"test/new": [endpoint(params, context)]}, requests, gets)) as client:
         agent = Agent(client, ToolRegistry(), "test/current", max_tokens=max_output)
-        session = Session(agent, agent.registry, client, Renderer(Style(False), io.StringIO(), False), Workspace(tmp_path), "test", client.base_url, None, None)
+        session = Session(agent=agent, registry=agent.registry, client=client, renderer=Renderer(Style(False), io.StringIO(), False), workspace=Workspace(tmp_path), api_key="test", base_url=client.base_url, http_referer=None, app_title=None)
         output = io.StringIO()
         await ModelPicker(session, Style(False), output).menu("test/new")
         assert agent.model == "test/current"
@@ -131,7 +133,7 @@ async def test_startup_model_failure_keeps_session_available(tmp_path, monkeypat
                 return httpx.Response(200, json={"data": models})
             return httpx.Response(403, json={"error": {"message": "Model unavailable"}})
         transport = httpx.MockTransport(handle)
-    original_registry = cli.build_default_registry
+    original_registry = sessionfactory.build_default_registry
     def new_client(provider, **kwargs):
         client = OpenRouterClient(**kwargs, transport=transport)
         clients.append(client)
@@ -140,8 +142,8 @@ async def test_startup_model_failure_keeps_session_available(tmp_path, monkeypat
         registry = original_registry(*args)
         registries.append(registry)
         return registry
-    monkeypatch.setattr(cli, "create_client", new_client)
-    monkeypatch.setattr(cli, "build_default_registry", new_registry)
+    monkeypatch.setattr(sessionfactory, "create_client", new_client)
+    monkeypatch.setattr(sessionfactory, "build_default_registry", new_registry)
     monkeypatch.setenv("SLIPAGENT_NO_DOTENV", "1")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test")
     args = cli.build_parser().parse_args(["--no-reload", "--no-mcp", "--model", "test/tiny", "-w", str(tmp_path)])
@@ -266,7 +268,7 @@ async def test_selection_loads_capabilities_and_switches_without_stale_settings(
     async with OpenRouterClient("test", transport=transport_for(models, {"test/strict": [endpoint(strict)], "test/plain": [endpoint(plain)]}, requests, gets)) as client:
         agent = Agent(client, ToolRegistry(), "test/strict")
         renderer = Renderer(Style(False), io.StringIO(), False)
-        session = Session(agent, agent.registry, client, renderer, Workspace(tmp_path), "test", client.base_url, None, None)
+        session = Session(agent=agent, registry=agent.registry, client=client, renderer=renderer, workspace=Workspace(tmp_path), api_key="test", base_url=client.base_url, http_referer=None, app_title=None)
         await ModelPicker(session, Style(False), io.StringIO()).menu("test/plain")
         assert Config.from_env(environ={"OPENROUTER_API_KEY": "test"}).model == "test/plain"
         assert gets[-1].endswith("test/plain/endpoints")
@@ -303,7 +305,7 @@ async def test_rejected_selection_preserves_current_model_and_conversation(tmp_p
         await agent.run("Do the task.")
         original = list(agent.messages)
         renderer = Renderer(Style(True), io.StringIO(), False)
-        session = Session(agent, agent.registry, client, renderer, Workspace(tmp_path), "test", client.base_url, None, None)
+        session = Session(agent=agent, registry=agent.registry, client=client, renderer=renderer, workspace=Workspace(tmp_path), api_key="test", base_url=client.base_url, http_referer=None, app_title=None)
         out = io.StringIO()
         await ModelPicker(session, renderer.style, out).menu("test/new")
         assert "could not load model properties" in out.getvalue()
@@ -321,7 +323,7 @@ async def test_failed_reselection_retains_cached_working_properties(tmp_path):
         agent = Agent(client, ToolRegistry(), "test/current")
         await agent.run("Do the task.")
         endpoints["test/current"] = [endpoint(["temperature"])]
-        session = Session(agent, agent.registry, client, Renderer(Style(False), io.StringIO(), False), Workspace(tmp_path), "test", client.base_url, None, None)
+        session = Session(agent=agent, registry=agent.registry, client=client, renderer=Renderer(Style(False), io.StringIO(), False), workspace=Workspace(tmp_path), api_key="test", base_url=client.base_url, http_referer=None, app_title=None)
         out = io.StringIO()
         await ModelPicker(session, Style(False), out).menu("test/current")
         assert "could not load model properties" in out.getvalue()
@@ -339,7 +341,7 @@ async def test_startup_fetches_model_properties_and_remembers_explicit_choice(tm
     requests, gets = [], []
     transport = transport_for(models, {selected: [endpoint(params, context=128000)]}, requests, gets)
     original = OpenRouterClient
-    monkeypatch.setattr(cli, "create_client", lambda provider, **kwargs: original(**kwargs, transport=transport))
+    monkeypatch.setattr(sessionfactory, "create_client", lambda provider, **kwargs: original(**kwargs, transport=transport))
     monkeypatch.setenv("SLIPAGENT_NO_DOTENV", "1")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test")
     monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
@@ -368,7 +370,7 @@ async def test_reselection_refreshes_reasoning_and_context_properties(tmp_path):
         await agent.run("Do the task.")
         models[0]["reasoning"] = {"supported_efforts": ["low", "medium"]}
         endpoints["test/model"] = [endpoint(params, context=128000)]
-        session = Session(agent, agent.registry, client, Renderer(Style(False), io.StringIO(), False), Workspace(tmp_path), "test", client.base_url, None, None)
+        session = Session(agent=agent, registry=agent.registry, client=client, renderer=Renderer(Style(False), io.StringIO(), False), workspace=Workspace(tmp_path), api_key="test", base_url=client.base_url, http_referer=None, app_title=None)
         await ModelPicker(session, Style(False), io.StringIO()).menu("test/model")
         await agent.run("Continue.")
         assert await agent._context_length() == 128000
@@ -383,7 +385,7 @@ async def test_non_text_model_is_rejected_on_selection(tmp_path):
     requests, gets = [], []
     async with OpenRouterClient("test", transport=transport_for(models, {"test/image": [endpoint(params)]}, requests, gets)) as client:
         agent = Agent(client, ToolRegistry(), "test/current")
-        session = Session(agent, agent.registry, client, Renderer(Style(False), io.StringIO(), False), Workspace(tmp_path), "test", client.base_url, None, None)
+        session = Session(agent=agent, registry=agent.registry, client=client, renderer=Renderer(Style(False), io.StringIO(), False), workspace=Workspace(tmp_path), api_key="test", base_url=client.base_url, http_referer=None, app_title=None)
         out = io.StringIO()
         await ModelPicker(session, Style(False), out).menu("test/image")
         assert "must support text" in out.getvalue()

@@ -65,6 +65,21 @@ def installed_identity() -> dict[str, Any] | None:
         changed = True
     if changed:
         save_private_text(root / 'installation.json', json.dumps(metadata, indent=2) + '\n')
+    source = Path(metadata.get('source', root / 'source'))
+    if metadata.get('commit') and (source / '.git').exists():
+        try:
+            recorded = _commit(metadata['commit'])
+            result = subprocess.run(['git', '-C', str(source), 'rev-parse', 'HEAD'],
+                                    capture_output=True, text=True, timeout=2, check=False)
+            if result.returncode == 0:
+                head = _commit(result.stdout.strip())
+                ancestry = subprocess.run(['git', '-C', str(source), 'merge-base', '--is-ancestor', recorded, head],
+                                          capture_output=True, timeout=2, check=False)
+                # Archive updates retain Git history, which may predate the installed files.
+                if ancestry.returncode == 0:
+                    return {**metadata, 'commit': head, 'version': __version__}
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
     return metadata
 
 

@@ -126,6 +126,62 @@ async def test_identical_commit_needs_only_one_request(monkeypatch):
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize('remote_position', ['same', 'older', 'newer'])
+async def test_checkout_head_overrides_stale_installation(tmp_path, monkeypatch, remote_position):
+    source = tmp_path / 'source'
+    source.mkdir()
+
+    def git(*args):
+        return subprocess.check_output(['git', '-C', str(source), *args], text=True).strip()
+
+    git('init', '-q')
+    git('config', 'user.name', 'Test')
+    git('config', 'user.email', 'test@example.invalid')
+    commits = []
+    for index in range(3):
+        (source / 'version').write_text(str(index))
+        git('add', 'version')
+        git('commit', '-qm', f'Version {index}')
+        commits.append(git('rev-parse', 'HEAD'))
+    metadata = {'source': str(source), 'commit': commits[0], 'version': '0.0.1'}
+    monkeypatch.setattr(updater, 'installation', lambda: (tmp_path, dict(metadata)))
+    remote = commits[1] if remote_position == 'older' else commits[2]
+    if remote_position == 'newer':
+        git('reset', '--hard', commits[1])
+    local = git('rev-parse', 'HEAD')
+
+    def handle(request):
+        if request.url.path.endswith('/commits/master'):
+            return httpx.Response(200, text=remote)
+        if request.url.path.endswith('/pyproject.toml'):
+            return httpx.Response(200, text=f'version = "{__version__}"\n')
+        assert f'/compare/{local}...{remote}' in request.url.path
+        return httpx.Response(200, json={'status': 'ahead' if remote_position == 'newer' else 'behind'})
+
+    found = await updater.check_for_updates(transport=httpx.MockTransport(handle))
+    assert (found is not None) is (remote_position == 'newer')
+    assert not (tmp_path / 'installation.json').exists()
+
+
+@pytest.mark.parametrize('known_commit', [False, True])
+def test_archive_identity_is_preserved_when_git_head_is_older(tmp_path, monkeypatch, known_commit):
+    source = tmp_path / 'source'
+    source.mkdir()
+    subprocess.run(['git', 'init', '-q', str(source)], check=True)
+    subprocess.run(['git', '-C', str(source), '-c', 'user.name=Test', '-c',
+                    'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'Base'], check=True)
+    commit = COMMIT
+    if known_commit:
+        base = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
+        subprocess.run(['git', '-C', str(source), '-c', 'user.name=Test', '-c',
+                        'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'Archive'], check=True)
+        commit = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
+        subprocess.run(['git', '-C', str(source), 'reset', '--hard', base], check=True, capture_output=True)
+    metadata = {'source': str(source), 'commit': commit, 'version': '99.0.0'}
+    monkeypatch.setattr(updater, 'installation', lambda: (tmp_path, dict(metadata)))
+    assert updater.installed_identity() == metadata
+
+
 async def test_update_check_times_out_and_closes_network_stream(monkeypatch):
     monkeypatch.setattr(updater, 'CHECK_TIMEOUT', .1)
     monkeypatch.setattr(updater, 'installed_identity', lambda: {'commit': COMMIT, 'version': __version__})

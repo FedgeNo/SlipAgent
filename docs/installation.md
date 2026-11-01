@@ -31,6 +31,12 @@ from retained Git history. Older installations acquire missing identity fields
 locally during the first startup check. A commit identifies the source base;
 the existing file hashes still detect local modifications.
 
+When the local checkout's HEAD descends from the recorded installation commit,
+startup checks use HEAD and the running version instead of the older installation
+identity. Equal or older public commits do not trigger update notices. This does
+not rewrite the installation record; archive updates whose retained Git history
+predates their installed files continue using their recorded archive identity.
+
 | OS | Installation directory | PATH launcher |
 | --- | --- | --- |
 | Linux | `~/.local/lib/slipagent` | `~/.local/bin/slipagent` |

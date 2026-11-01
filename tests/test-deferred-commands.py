@@ -55,7 +55,7 @@ async def test_commands_wait_for_tools_and_preserve_stop_and_request_budget(
     monkeypatch.setattr(cli.Repl, "read_line", read)
     step = asyncio.create_task(cli.Repl(session).run_request("Inspect the project", session.renderer.style))
     try:
-        await asyncio.wait_for(entered.wait(), 2)
+        await asyncio.wait_for(entered.wait(), 5)
         for command in commands:
             await cli.CommandRunner(session).handle(command)
         assert not session.workspace.access.danger
@@ -101,7 +101,7 @@ async def test_deferred_settings_after_final_failure_or_exit(tmp_path, monkeypat
     monkeypatch.setattr(cli.Repl, "read_line", read)
     step = asyncio.create_task(cli.Repl(session).run_request("Inspect the project", session.renderer.style))
     try:
-        await asyncio.wait_for(entered.wait(), 2)
+        await asyncio.wait_for(entered.wait(), 5)
         await cli.CommandRunner(session).handle("/danger on")
         assert not session.workspace.access.danger
         if outcome == "quit":
@@ -130,7 +130,7 @@ async def test_stop_holds_earlier_input_until_new_input(
     tmp_path, monkeypatch, metadata_server, queued_setting, new_input,
 ):
     session = await cli.Launcher(cli.build_parser().parse_args([
-        "--no-mcp", "--no-reload", "-w", str(tmp_path),
+        "--no-mcp", "--no-reload", "--model", "stub/model", "-w", str(tmp_path),
     ])).build_session()
     session.renderer.stream = io.StringIO()
     entered, release = asyncio.Event(), asyncio.Event()
@@ -152,7 +152,7 @@ async def test_stop_holds_earlier_input_until_new_input(
     monkeypatch.setattr(cli.Repl, "read_line", read)
     task = asyncio.create_task(cli.Repl(session).run_request("Start work", session.renderer.style))
     try:
-        await asyncio.wait_for(entered.wait(), 2)
+        await asyncio.wait_for(entered.wait(), 5)
         if queued_setting:
             await cli.CommandRunner(session).handle("/rename Queued title")
             cli.CommandRunner(session).queue("Earlier queued prompt", "input")

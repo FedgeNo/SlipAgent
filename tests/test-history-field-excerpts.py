@@ -10,7 +10,7 @@ from slipagent.types import Message, ToolCall
 
 @pytest.mark.parametrize("archived", [False, True])
 @pytest.mark.parametrize("native", [False, True])
-async def test_only_large_result_field_is_clipped_and_all_steps_survive(tmp_path, archived, native):
+async def test_older_steps_give_way_before_the_newest_large_result_is_clipped(tmp_path, archived, native):
     history = ConversationHistory()
     messages = []
     for index in range(8):
@@ -36,7 +36,7 @@ async def test_only_large_result_field_is_clipped_and_all_steps_survive(tmp_path
         originals = [step.full_text() for step in history.steps]
         view = await history.view(messages, [], keep_steps=50, context_length=30000, max_output=1000, native_tools=native)
         payload = request_input(view)
-        assert {record['step_id'] for record in payload['history']} == set(range(1, 10))
+        assert [record['step_id'] for record in payload['history']] == [9]
         result = payload['history'][-1]
         assert result['representation'] == 'excerpt'
         assert result['excerpted_fields'] == [['tool_results', 0, 'content', 'stdout']]
@@ -82,7 +82,7 @@ async def test_oversized_structured_array_is_clipped_without_losing_call_or_meta
     assert history.steps[0].tool_results[0].content['values'] == list(range(50000))
 
 
-async def test_several_oversized_results_do_not_force_clipping_fitting_replies_or_reasoning():
+async def test_oversized_results_reduce_older_turns_before_the_latest_turn():
     history, messages = ConversationHistory(), []
     for index in range(4):
         call = ToolCall(f"local-{index}", "run_command", {"command": f"read {index}"})
@@ -93,8 +93,9 @@ async def test_several_oversized_results_do_not_force_clipping_fitting_replies_o
     history.sync(messages)
     view = await history.view(messages, [], keep_steps=50, context_length=30000, max_output=1000)
     records = request_input(view)['history']
-    assert len(records) == 4
-    for index, record in enumerate(records):
+    assert [record['step_id'] for record in records] == [4]
+    for record in records:
+        index = record['step_id'] - 1
         assert record['agent_response'] == f"Verified fact {index}. " * 20
         assert record['reasoning'] == f"Important uncertainty {index}. " * 20
         assert record['user_prompts'] == [f"Permission for task {index}."]
@@ -102,7 +103,7 @@ async def test_several_oversized_results_do_not_force_clipping_fitting_replies_o
         assert all(path[0] == 'tool_results' for path in record.get('excerpted_fields', []))
 
 
-async def test_individually_oversized_new_result_is_clipped_before_fitting_older_result():
+async def test_older_result_is_removed_before_clipping_an_oversized_new_result():
     history = ConversationHistory()
     first, second = ToolCall('first', 'read_file', {}), ToolCall('second', 'read_file', {})
     small = 'Keep this fitting earlier result. ' * 100
@@ -113,7 +114,23 @@ async def test_individually_oversized_new_result_is_clipped_before_fitting_older
     history.steps[0].observed = True
     view = await history.view(messages, [], keep_steps=50, context_length=30000, max_output=1000)
     records = request_input(view)['history']
-    assert len(records) == 2
-    assert records[0]['tool_calls'][0]['unclassified_result'] == small
-    assert records[0]['representation'] == 'full'
-    assert records[1]['representation'] == 'excerpt'
+    assert [record['step_id'] for record in records] == [2]
+    assert records[0]['representation'] == 'excerpt'
+    assert history.steps[0].tool_results[0].content == small
+
+
+async def test_fitting_newest_tool_results_take_priority_over_oversized_reasoning():
+    history = ConversationHistory()
+    call = ToolCall('rules', 'conventions__list_rules', {})
+    reply = Message.assistant('Reading the current rules.', [call])
+    reply.reasoning = 'Extended analysis of earlier work. ' * 15000
+    rules = 'COMPLETE RULES\n' + 'R' * 17186
+    messages = [Message.user('Read the rules.'), reply,
+                Message.tool_result(call.id, {'tool': call.name, 'call_id': call.id,
+                                             'status': 'success', 'content': rules})]
+    view = await history.view(messages, [], keep_steps=50, context_length=20000, max_output=1000)
+    record = request_input(view)['history'][-1]
+    assert record['tool_calls'][0]['result'] == rules
+    assert record['excerpted_fields'] == [['reasoning']]
+    assert history.steps[0].messages[1].reasoning == reply.reasoning
+    assert message_tokens(view) <= int(20000 * .85) - 1000

@@ -194,7 +194,12 @@ def test_prompt_sections_have_stable_order_and_reject_duplicate_owners():
         sections.add("stable", "Duplicate", "bad", 30)
 
 
-async def test_stable_prompt_prefix_survives_new_user_input():
+async def test_stable_prompt_prefix_survives_new_user_input(monkeypatch):
+    from unittest.mock import Mock
+    from slipagent import environment
+    clock = Mock(wraps=environment.datetime)
+    clock.now.return_value = environment.datetime.now()
+    monkeypatch.setattr(environment, 'datetime', clock)
     from slipagent.types import Message
     agent = Agent(None, ToolRegistry(), "test", system_prompt="Stable harness instructions")
     agent.messages.append(Message.user("First task"))

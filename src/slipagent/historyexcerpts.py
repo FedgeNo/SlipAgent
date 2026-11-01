@@ -10,8 +10,9 @@ from .sources import FileText, json_chunks, text_chunks
 
 
 def excerpt_fields(record: dict[str, Any], budget: int,
-                   measure: Callable[[dict[str, Any]], int], *, results_only: bool = False) -> dict[str, Any] | None:
-    """Prefer trimming tool content; retain all other fields that still fit.
+                   measure: Callable[[dict[str, Any]], int], *, results_only: bool = False,
+                   prefer_results: bool = False) -> dict[str, Any] | None:
+    """Trim tool content first, or optional prose to preserve a fitting newest batch.
 
     When the requested budget cannot hold even minimal metadata, return the
     smallest useful projection so the caller can reduce another large turn.
@@ -73,12 +74,12 @@ def excerpt_fields(record: dict[str, Any], budget: int,
         return {"prefix": head, "suffix": tail, "original_characters": len(value),
                 "omitted_characters": len(value) - keep, "original": reference}
 
-    groups = []
     results = []
     for index, result in enumerate(record.get("tool_results", [])):
         results.extend(candidates(result["content"], ["tool_results", index, "content"]))
-    groups.append(results)
-    for field in ("reasoning", "agent_response", "user_edits", "background_commands"):
+    prose = [candidates(record.get(field), [field]) for field in ('reasoning', 'agent_response')]
+    groups = [*prose, results] if prefer_results else [results, *prose]
+    for field in ("user_edits", "background_commands"):
         groups.append(candidates(record.get(field), [field]))
     arguments = []
     for index, call in enumerate(record.get("tool_calls", [])):
@@ -88,7 +89,7 @@ def excerpt_fields(record: dict[str, Any], budget: int,
         prompts.extend(candidates(prompt, ["user_prompts", index]))
     groups.extend([arguments, prompts])
     if results_only:
-        groups = groups[:1]
+        groups = [results]
     changed: list[list[str | int]] = []
     cost = original_cost
     for group in groups:

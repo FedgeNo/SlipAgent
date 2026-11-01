@@ -102,13 +102,15 @@ async def test_silent_request_deadline_cancels_and_falls_back(tmp_path, monkeypa
             await advance(0)
             assert calls == ['first'] and not task.done()
             await advance(2)
+            # The provider deadline uses the controlled clock; let owned disk
+            # diagnostics settle independently of that deadline under suite load.
             if optimal:
-                assert await asyncio.wait_for(task, 1) == 'Recovered.'
+                assert await asyncio.wait_for(task, 5) == 'Recovered.'
                 assert calls == ['first', 'second']
                 assert 'Optimal fallback' in session.renderer.stream.getvalue()
             else:
                 with pytest.raises(APIResponseError, match='120s of request'):
-                    await asyncio.wait_for(task, 1)
+                    await asyncio.wait_for(task, 5)
                 assert calls == ['first']
                 assert session.agent.model == 'first'
             retry.assert_not_awaited()

@@ -82,6 +82,31 @@ async def test_plan_is_supplied_on_next_turn_restored_and_cleared():
         await registry.aclose()
 
 
+async def test_planning_guidance_reaches_custom_prompt_and_plan_survives_reduced_history():
+    from data_text_reader import request_input
+    plan = {'objective': 'Finish the parser fix', 'stages': [
+        {'task': 'Verify current parser behavior', 'status': 'in_progress', 'evidence': 'Located parser.py'}]}
+    client = StubClient([completion(tool_calls=[ToolCall('p', 'update_plan', plan)]), completion('Saved')])
+    registry = ToolRegistry()
+    agent = Agent(client, registry, 'stub', planning=True, system_prompt='Custom project instructions.')
+    try:
+        await agent.run('Fix the parser')
+        first = content_text(client.calls[0]['messages'][0].content)
+        assert '## Persistent Planning' in first
+        assert '`update_plan`' in first and 'history compression' in first
+        for index in range(12):
+            agent.messages.extend([Message.user(f'Check {index}'), Message.assistant('Earlier evidence. ' * 400)])
+        agent.history.sync(agent.messages)
+        agent.context_tokens = 24000
+        view = await agent._context_view(registry.specs(), 1)
+        system = content_text(view[0].content)
+        assert 'Finish the parser fix' in system
+        assert 'Last updated: step 1' in system
+        assert not any(record.get('step_id') == 1 for record in request_input(view)['history'])
+    finally:
+        await registry.aclose()
+
+
 async def test_plan_date_tracks_last_successful_update_not_latest_turn():
     plan = {'objective': 'Fix parsing', 'stages': [{'task': 'Locate parser', 'status': 'pending', 'evidence': ''}]}
     client = StubClient([

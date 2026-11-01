@@ -423,9 +423,9 @@ async def test_reduced_history_keeps_active_request_and_complete_latest_tool_bat
                               context_length=9000, max_output=1000)
     # The active request arrives retained as its original separate messages.
     records = context_records(view)[:-1]
-    assert records[0]['step_id'] == 1
-    assert records[0]['user_prompts'][0]['omitted_characters'] > 0
-    assert [prompt for record in records[1:] for prompt in record.get('user_prompts', [])] == [request, correction]
+    assert all(record['step_id'] > 1 for record in records)
+    from data_text_reader import request_input
+    assert request_input(view)['retained_user_prompts'] == [request, correction]
     assert [(message.tool_call_id, context_body(message.content)) for message in unpack_context(view) if message.role == "tool"] == [
         ("a", "EXACT FIRST RESULT"), ("b", "EXACT SECOND RESULT"),
     ]
@@ -796,8 +796,8 @@ async def test_stored_summaries_over_budget_preserve_originals_without_extra_cal
     assert history.steps[0].summary not in wire
     assert context_records(view)[-2]['compressed_summary'] == history.steps[-1].summary
     assert message_tokens(view) <= int(14000 * .85) - 1000
-    # The newest steps are summarized before any history is dropped.
-    assert not any(context_body(message.content) == "answer 19 " * 300 for message in unpack_context(view))
+    # Old history gives way before the most recent fitting response.
+    assert any(context_body(message.content) == "answer 19 " * 300 for message in unpack_context(view))
     assert any(context_body(message.content) == "next" for message in unpack_context(view))
     assert [step.summary for step in history.steps] == summaries
     assert len(history.steps) == 20

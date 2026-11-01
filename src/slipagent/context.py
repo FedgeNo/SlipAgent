@@ -43,6 +43,7 @@ from .data_text import JSONInput, MessageSections, RenderedJSON, render_data
 from .sources import FileText, materialize
 
 DEFAULT_CONTEXT_LENGTH = 1_000_000
+RECENT_FULL_STEPS = 5
 HISTORY_PART_NAMES = ("prompt", "response", "reasoning", "tool_calls", "tool_results", "user_edits", "background_commands")
 
 
@@ -783,10 +784,10 @@ class ConversationHistory:
 
         # Selection starts from full originals on every request and compresses
         # only what the budget requires, always from the oldest end: step
-        # summaries up to two thirds of the steps, then run-aligned narratives,
-        # then eras of five narratives, then newer step summaries, then dropping the oldest
-        # history. keep_steps remains accepted for older callers.
+        # summaries and grouped memory outside the newest five, then exhaust
+        # older turns before reducing newer ones. keep_steps is compatibility only.
         count = len(self.steps)
+        recent_start = max(0, count - RECENT_FULL_STEPS)
         FULL, STEP, NARRATIVE, ERA, PARTIAL, DROPPED = range(6)
         level = [FULL] * count
         unit_records: dict[int, dict[str, Any]] = {}
@@ -867,7 +868,14 @@ class ConversationHistory:
             target = max(0, unit_costs[index] - max(1, total - available))
             def measure(record: dict[str, Any]) -> int:
                 return math.ceil((TokenEstimates().history_bytes([record]) - empty_history) / 3 * token_scale)
-            clipped = await run_blocking(excerpt_fields, original, target, measure, results_only=results_only)
+            # Keep a fitting newest batch ahead of its own optional prose.
+            without_prose = {key: value for key, value in original.items()
+                             if key not in ('reasoning', 'agent_response')}
+            prefer_results = index == count - 1 and measure(without_prose) <= target
+            if results_only and prefer_results:
+                return False
+            clipped = await run_blocking(excerpt_fields, original, target, measure,
+                                         results_only=results_only, prefer_results=prefer_results)
             if clipped is None:
                 if measure(original) >= unit_costs[index]:
                     return False
@@ -881,7 +889,7 @@ class ConversationHistory:
             return True
 
         async def reductions() -> AsyncIterator[None]:
-            cap = 2 * count // 3
+            cap = min(2 * count // 3, recent_start)
             for index in range(cap):
                 if summarize_step(index):
                     yield
@@ -891,22 +899,21 @@ class ConversationHistory:
             for record in era_records(self.steps):
                 if merge_into(record, ERA, "_era_bytes", cap):
                     yield
-            for index in range(cap, count):
+            for index in range(cap, recent_start):
                 if summarize_step(index):
                     yield
-            # Retain the turn's identity and all fitting fields before removing
-            # any turn. New observations remain original until older reductions
-            # have been tried; a partial result is explicit, never a fake summary.
-            for results_only in (True, False):
-                # A unit larger than the entire remaining allowance must be
-                # clipped regardless; do that before damaging fitting results.
-                indices = sorted(range(count), key=lambda index: (
-                    unit_costs[index] <= available - tail_tokens, not compressible(index), index))
-                for index in indices:
+            # Exhaust each older turn before touching a newer one. The newest
+            # five stay original until reductions outside that window cannot fit.
+            for index in range(count):
+                if level[index] == DROPPED:
+                    continue
+                if index >= recent_start and summarize_step(index):
+                    yield
+                for results_only in (True, False):
                     if await excerpt_step(index, results_only=results_only):
                         yield
-            while drop_oldest():
-                yield
+                if drop_oldest():
+                    yield
 
         def selection() -> list[Message]:
             entries: list[tuple[int, list[Message]]] = []

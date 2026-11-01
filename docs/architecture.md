@@ -192,9 +192,13 @@ Context construction proceeds in this order:
    Every step is sent in full while the history fits the budget. Over budget,
    `ConversationHistory.view` applies reductions from the oldest end until the
    estimate fits and the assembled request measures within the limit: step
-   summaries up to two thirds of the steps, then each wholly summarized
-   narrative, then each era, then summaries in the newest third (never
-   the unseen batch), then omission from the very beginning. A summary replaces
+   summaries outside the newest five turns up to two thirds of the steps, then
+   each eligible narrative and era, then remaining summaries outside that window.
+   It then exhausts older turns through excerpts and omission before reducing
+   any newer turn. The newest five remain original when they fit after those
+   older reductions. Within that window, summaries, excerpts, and omission
+   still proceed oldest first; unseen batches are never replaced by summaries.
+   A summary replaces
    its original only when smaller. A narrative or era replaces exactly the
    records covering its listed source steps. Representation costs are cached per
    archived step and record, so selection is one pass. Each request starts again
@@ -241,13 +245,15 @@ Context construction proceeds in this order:
    `error_excerpt`, or `unclassified_result_excerpt`; other bounded messages
    occupy `response_excerpts`. Request assembly does not append its JSON envelope,
    tool definitions, or system guidance to archived turns.
-   Before omitting any turn, field-level excerpts preserve its identity and
+   Before omitting an individual turn, field-level excerpts preserve its identity and
    fitting fields. `historyexcerpts.py` shortens the largest tool-result content
    first, preserving smaller results, arguments, reply text, and reasoning when
    they fit. Only after result reductions prove insufficient may it shorten
    reasoning/reply text, delivered edit/background metadata, arguments, or
-   historical user messages. Newly returned observations are considered after
-   older reductions. `excerpted_fields` lists the changed source fields; the
+   historical user messages. An older turn is removed if its remaining metadata
+   still cannot fit, before touching newer observations. If the newest tool
+   batch fits without its optional reasoning/reply prose, that prose is shortened
+   ahead of its tool results. `excerpted_fields` lists the changed source fields; the
    prefix/suffix or first/last array items have explicit omission counts. Each
    marker's `original` reference supplies valid recall arguments plus a path
    within the retrieved content, accounting for archived observation wrappers.
@@ -263,11 +269,14 @@ The selected model's context/prompt limits constrain the whole request. The
 budget reserves output, system instructions, tool definitions, response schema,
 and a 15% estimation margin before fitting history. Text estimates use UTF-8
 size, not a model tokenizer. History uses the remaining model allowance;
-`--context-steps` is retained as a deprecated compatibility option; the newest
-third of retained individual posts determines the full-call target.
+`--context-steps` is retained as a deprecated compatibility option; the preferred
+full-call window is the newest five turns, including complete tool results.
 Selection restarts from original history on every request. It tries economical
-summaries/narratives/eras, then field excerpts, before dropping whole turns whose
-remaining metadata still cannot fit. If dropping an oversized unit creates
+summaries/narratives/eras outside that window, then reduces and removes older
+turns individually. Only if the five-turn window itself cannot fit does it
+reduce those turns, oldest first, leaving the newest observation until last.
+Explicit `/compact` boundaries continue to request economical compressed forms
+for their covered, already-observed turns. If dropping an oversized unit creates
 spare capacity, other dropped units that fit are restored, recent first; one
 unfittable unit cannot block the rest. Aggregated records restore their complete
 source-step coverage and are emitted once. The final assembled request is checked
@@ -476,6 +485,10 @@ SlipAgent does not use a model-name allowlist or attempt arbitrary JSON repair.
 
 Acceptance validates response structure and executable calls. Working plans
 use the ordinary `update_plan` tool; no task envelope or revision echo is required.
+The shared working-response guidance encourages it for multi-step and long-running
+work, including with custom system prompts. The latest successful plan is supplied
+separately from selected history, so dropping its original turn does not remove
+the objective, current stage, next actions, or recorded evidence.
 `streaming.py` incrementally previews plain prose and top-level JSON `response`
 strings, including JSON fences. Its lexer retains split escapes and surrogate
 pairs, skips other fields and nested values, and never repairs malformed JSON.

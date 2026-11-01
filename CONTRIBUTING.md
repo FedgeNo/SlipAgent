@@ -12,7 +12,7 @@ documentation, extension steps, live reload, verification, and release baselines
 > real-CLI end-to-end tests in `tests/test_cli_e2e.py`, the reload subprocess
 > tests in `tests/test-retired-imports.py`, and a few long terminal, layout, and
 > indexing checks) are left out by default because they take too long to run on
-> every change. Run `.venv/bin/python -m pytest --slow` before committing changes
+> every change. Run `.venv/bin/python -m pytest --slow` before pushing changes
 > to the CLI, terminal, transcript, reload, or session code, and before a release.
 
 ## Start With the Correct Environment
@@ -91,8 +91,8 @@ does not automatically become model knowledge.
    return them with an error status. Cancellation must release owned resources
    and keep assistant/tool history paired. Validate responses before displaying
    reply text or invoking tools.
-5. Exercise the appropriate checks, then the full suite before presenting a
-   complete change. Update affected commands, examples, help, and documentation
+5. Run focused checks during development; run the full suite when preparing to
+   push. Update affected commands, examples, help, and documentation
    with the implementation rather than leaving incompatible instructions behind.
 
 ```bash
@@ -198,8 +198,11 @@ valid recovery using disposable package copies when modifying this machinery.
   and available analysis. Budget the combined record. Use the model allowance,
   subject to an explicit `--context-tokens` cap. Send every step in full until the
   history exceeds the budget, then compress from the oldest end only as far as
-  needed: step summaries up to two thirds of the steps, then 20-turn narratives,
-  then 100-turn eras, then newer summaries, then omission from the beginning.
+  needed outside the newest five turns: step summaries up to two thirds of the
+  steps, then 20-turn narratives, then 100-turn eras, then remaining older
+  summaries. Excerpt and remove older turns before reducing newer ones. Keep
+  the newest five original when they fit; otherwise reduce those turns oldest
+  first, preserving fitting newest tool results ahead of oversized optional prose.
   Preserve unseen tool results, using labelled excerpts when necessary. Start each
   request from full originals so records return when space becomes available.
 - Summarize each completed step in a separate background request containing its

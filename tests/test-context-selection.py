@@ -103,9 +103,71 @@ async def test_large_recent_originals_use_the_model_allowance_above_200000_token
     assert 200_000 < message_tokens(view) < 850_000 - 8192
 
 
+@pytest.mark.parametrize('archived', [False, True])
+@pytest.mark.parametrize('native', [False, True])
+async def test_last_five_tool_turns_displace_old_summaries_before_losing_results(tmp_path, archived, native):
+    from data_text_reader import request_input
+    from slipagent.turnstore import TurnStore
+    history, messages = ConversationHistory(), []
+    outputs = []
+    for index in range(25):
+        call = ToolCall(f'call-{index}', 'conventions__list_rules' if index == 24 else 'read_file', {})
+        output = f'COMPLETE RESULT {index}\n' + 'R' * (17186 if index == 24 else 4000)
+        outputs.append(output)
+        messages += [Message.user(f'Inspect item {index}'),
+                     Message.assistant(f'Reading item {index}.', [call]),
+                     Message.tool_result(call.id, {'tool': call.name, 'call_id': call.id,
+                                                  'status': 'success', 'content': output})]
+    history.sync(messages)
+    for step in history.steps[:-1]:
+        step.observed = True
+        step.summary = f'Earlier summary {step.id}. ' * (100 if step.id <= 20 else 1)
+    store = TurnStore(tmp_path / 'turns')
+    try:
+        if archived:
+            for step in history.steps:
+                store.archive(step, messages)
+        originals = [step.full_text() for step in history.steps]
+        view = await history.view(messages, [], keep_steps=50, context_length=30000,
+                                  max_output=1000, native_tools=native)
+        records = read_json_input(view[-1].to_api()['content'])['history']
+        recent = [record for record in records if record['step_id'] >= 21]
+        assert [record['step_id'] for record in recent] == list(range(21, 26))
+        assert all(record['representation'] == 'full' for record in recent)
+        assert [record['tool_calls'][0]['result'] for record in recent] == outputs[-5:]
+        assert len(records) < len(history.steps)
+        assert message_tokens(view) <= int(30000 * .85) - 1000
+        assert [step.full_text() for step in history.steps] == originals
+    finally:
+        store.close()
+
+
+async def test_five_turn_window_reduces_older_results_before_the_latest_one():
+    from data_text_reader import request_input
+    history, messages = ConversationHistory(), []
+    newest = 'COMPLETE NEWEST RESULT ' * 600
+    for index in range(5):
+        call = ToolCall(str(index), 'read_file', {})
+        output = newest if index == 4 else f'OLDER RESULT {index} ' * 1200
+        messages += [Message.user(f'Read {index}'), Message.assistant('Reading.', [call]),
+                     Message.tool_result(call.id, {'tool': call.name, 'call_id': call.id,
+                                                  'status': 'success', 'content': output})]
+    history.sync(messages)
+    for step in history.steps[:-1]:
+        step.observed = True
+        step.summary = f'Older durable summary {step.id}. ' * 300
+    view = await history.view(messages, [], keep_steps=50, context_length=20000, max_output=1000)
+    records = request_input(view)['history']
+    assert records[-1]['step_id'] == 5
+    assert records[-1]['representation'] == 'full'
+    assert records[-1]['tool_calls'][0]['result'] == newest
+    assert len(records) < 5
+    assert message_tokens(view) <= int(20000 * .85) - 1000
+
+
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("boundary", [0, 8])
-async def test_oversized_unsummarized_step_does_not_displace_older_history_that_still_fits(native, boundary):
+async def test_oversized_recent_step_displaces_older_history_before_it_is_excerpted(native, boundary):
     history, messages = conversation([f"Useful earlier fact {index}. " * 20 for index in range(8)]
                                      + ["OVERSIZED UNSUMMARIZED RESULT " * 10000]
                                      + ["Recent fact one.", "Recent fact two."])
@@ -115,7 +177,7 @@ async def test_oversized_unsummarized_step_does_not_displace_older_history_that_
     view = await history.view(messages, [], keep_steps=50, context_length=24000,
                               max_output=1000, native_tools=native)
     records = [record for record in context_records(view) if record['record_type'] == 'history_step']
-    assert {record['step_id'] for record in records} == set(range(1, 12))
+    assert {record['step_id'] for record in records} == {9, 10, 11}
     oversized = next(record for record in records if record['step_id'] == 9)
     assert oversized['representation'] == 'excerpt'
     assert oversized['excerpted_fields'] == [['agent_response']]
@@ -152,7 +214,9 @@ async def test_combined_history_is_budgeted_and_does_not_duplicate_steps():
     view = await history.view(messages, [], keep_steps=50, context_length=20000, max_output=1000)
     records = context_records(view)[:-1]
     assert len({record['step_id'] for record in records}) == len(records)
-    assert len(records) == 12
+    assert 0 < len(records) < 12
+    assert records[-1]['step_id'] == 12
+    assert records[-1]['representation'] == 'full'
     assert any(record['representation'] == 'full' for record in records)
     for record in records:
         if record['representation'] == 'full':
@@ -237,7 +301,7 @@ async def test_large_original_is_summarized_only_once_the_budget_requires_it():
     assert answers[0] in history.steps[0].full_text()
 
 
-async def test_newest_steps_are_summarized_before_any_history_is_dropped():
+async def test_newest_full_turn_displaces_old_history_until_it_ages_out():
     answers = [f"EARLY ANSWER {index} " * 5000 for index in range(10)]
     answers += [f"Recent answer {index}" for index in range(49)]
     answers.append("LARGE RECENT ANSWER " * 10_000)
@@ -246,8 +310,9 @@ async def test_newest_steps_are_summarized_before_any_history_is_dropped():
         step.summary = f"EARLY SUMMARY {step.id}: " + "detail " * 500
     first = await history.view(messages, [], keep_steps=50, context_length=90_000, max_output=1000)
     wire = "\n".join(content_text(message.content) for message in unpack_context(first))
-    assert "EARLY SUMMARY 1:" in wire
-    assert "LARGE RECENT ANSWER" not in wire and "SUMMARY 60" in wire
+    assert "EARLY SUMMARY 1:" not in wire
+    assert answers[-1] in wire
+    assert context_records(first)[-2]['representation'] == 'full'
     for index in range(50):
         messages.extend([Message.assistant(f"Later answer {index}"), Message.user(f"Later question {index}")])
     second = await history.view(messages, [], keep_steps=50, context_length=90_000, max_output=1000)

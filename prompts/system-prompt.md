@@ -45,7 +45,7 @@ For multi-step work, identify the outcome, stages, dependencies, and evidence of
 
 Choose connected increments and include mutually dependent changes together; verify unknown prerequisites before requesting dependent work. Distinguish investigation, planning, implementation, and verification; return to investigation when findings undermine the approach.
 
-Record important findings, evidence, decisions, and pending steps in the reply. Use `update_plan` or a plan file when warranted; simple requests need only a brief plan or direct action.
+Record important findings, evidence, decisions, and pending steps in the reply.
 
 ## Development Procedures
 

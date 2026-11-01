@@ -1490,9 +1490,9 @@ class SkillCommand(Command):
 
 class ExitCommand(Command):
     name = 'exit'
-    aliases = ("quit",)
+    aliases: tuple[str, ...] = ("quit",)
     banner = '/exit /quit'
-    help = (
+    help: tuple[CommandHelp, ...] = (
         CommandHelp('/exit', 'quit (also ctrl-d)', '/exit'),
         CommandHelp('/quit', 'same as /exit', '/quit'),
     )
@@ -1503,6 +1503,28 @@ class ExitCommand(Command):
         session.renderer._queued_settings_pause = False
         session.agent.request_stop()
         return True
+
+
+class UpdateCommand(ExitCommand):
+    name = 'update'
+    aliases = ()
+    banner = '/update'
+    help = (CommandHelp('/update', 'close this session and install the latest published commit', '/update'),)
+
+    def changes_session(self, argument: str) -> bool:
+        return True
+
+    async def run(self, context: CommandContext, argument: str) -> bool | None:
+        from .updater import installation
+        from .tools.blocking import run_blocking
+        if argument:
+            print(context.style.red('  usage: /update'), file=context.out)
+            return None
+        if await run_blocking(installation) is None:
+            print('  This checkout is not a managed installation; update it with Git or install.py.', file=context.out)
+            return None
+        context.session.extensions['update_requested'] = True
+        return await super().run(context, '')
 
 
 COMMANDS: tuple[Command, ...] = (
@@ -1521,6 +1543,7 @@ COMMANDS: tuple[Command, ...] = (
     ToolsCommand(),
     SkillsCommand(),
     SkillCommand(),
+    UpdateCommand(),
     ModelCommand(),
     ModelsCommand(),
     ProviderCommand(),

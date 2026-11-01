@@ -223,6 +223,22 @@ def test_changed_files_includes_modifications_additions_and_deletions():
                                    {"same": "a", "edited": "d", "added": "e"}) == ["added", "deleted", "edited"]
 
 
+def test_successful_install_records_exact_source_commit_and_version(tmp_path, monkeypatch):
+    import json
+
+    checkout, root = tmp_path / 'download', tmp_path / 'installed'
+    (checkout / 'src').mkdir(parents=True)
+    (checkout / 'src/app.py').write_text('candidate')
+    (checkout / 'pyproject.toml').write_text('[project]\nversion = "1.2.3"\n')
+    monkeypatch.setattr(installer.shutil, 'which', lambda name: 'fixture-uv')
+    monkeypatch.setattr(installer.subprocess, 'run', lambda *args, **kwargs: None)
+    installer.install(checkout, root, tmp_path / 'bin', windows=False, dev=False, python='fixture',
+                      source_commit='a' * 40)
+    metadata = json.loads((root / 'installation.json').read_text())
+    assert metadata['version'] == '1.2.3' and metadata['commit'] == 'a' * 40
+    assert metadata['source'] == str(root / 'source')
+
+
 @pytest.mark.parametrize("manifest", ['{"src/a.py": "' + "a" * 64 + '"}', '{}', 'invalid'])
 def test_manifest_detection_and_unknown_baseline(monkeypatch, manifest):
     monkeypatch.setattr(Path, "exists", lambda path: True)

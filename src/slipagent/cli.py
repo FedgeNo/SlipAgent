@@ -928,6 +928,9 @@ class Launcher:
         """Overlap independent startup work; build context only after its services settle."""
         args = self.args
         renderer, registry, agent = session.renderer, session.registry, session.agent
+        update_ready = asyncio.Event()
+        if announce and os.environ.get('SLIPAGENT_NO_UPDATE_CHECK') != '1':
+            Repl(session).start_background_task(self.startup_update_check(session, update_ready))
         provider_count = len(active_providers(keys={config.provider: config.api_key}))
         if provider_count < 3:
             renderer.emit(renderer.style.warning(
@@ -1106,8 +1109,26 @@ class Launcher:
                 except (OSError, ConfigError) as exc:
                     renderer.emit(literal(f"  could not remember model choice: {exc}"))
             notice("Startup complete." if model_error is None else "Startup finished; model capability check failed.")
+            update_ready.set()
         finally:
             routing.flush_notices()
+
+    async def startup_update_check(self, session: Session, ready: asyncio.Event) -> None:
+        """Offer an update after startup without making startup wait for the check."""
+        from .updater import check_for_updates
+        release = None
+        failure = ''
+        try:
+            release = await check_for_updates()
+        except Exception as exc:
+            failure = f'Update check unavailable ({type(exc).__name__}).'
+        await ready.wait()
+        if failure:
+            session.renderer.emit(session.renderer.style.dim(f'  {failure}'), separate=False)
+        elif release is not None:
+            session.extensions['available_update'] = release
+            session.renderer.emit(f'  Update available: SlipAgent {release.version} ({release.commit[:12]}). '
+                                  'Use /update to install the latest published commit.', separate=False)
 
     async def run_one_shot(self, session: Session, prompt: str, events: JsonEventStream | None = None) -> int:
         """Run a single task. Progress goes to stderr so stdout stays pipeable."""
@@ -1295,7 +1316,11 @@ class Launcher:
                 events.write("run_start", model=session.agent.model, provider=session.client.provider,
                              workspace=str(session.workspace.root), session_id=session.agent.session_id)
             return await self.run_one_shot(session, prompt, events)
-        return await Repl(session).run()
+        result = await Repl(session).run()
+        if result == 0 and session.extensions.get('update_requested'):
+            from .updater import update
+            return await asyncio.to_thread(update)
+        return result
 
 
 # --------------------------------------------------------------------------- #

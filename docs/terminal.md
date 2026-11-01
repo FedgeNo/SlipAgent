@@ -64,6 +64,7 @@ In the REPL:
 | `/task new` | Make the next prompt a new task, retaining previous history and command logs |
 | `/rename <name>` | Save this conversation's name and set its terminal title to `{name} \| SlipAgent` |
 | `/sessions` | Choose a saved session to resume, rename, or delete; `/sessions list` prints IDs and the storage path |
+| `/update` | Close this session cleanly and install the latest GitHub commit, preserving installer edit checks |
 | `/skills` | List project and user skill packages; see [skills](skills.md) |
 | `/skill [name\|path\|off]` | Show, explicitly select, or clear a pinned workflow skill |
 | `/resume` | Choose a saved session with Up/Down and Enter; Escape cancels (interactive terminal; queues while working) |

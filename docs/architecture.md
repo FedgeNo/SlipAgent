@@ -824,6 +824,17 @@ Catalog/capability discovery, quota, repository-map warming, Python discovery, M
 and session recovery overlap; context validation follows their completion. Provider
 capability discovery owns catalog loading, avoiding duplicate catalog requests.
 The CLI uses four default executor workers and at most four concurrent MCP starts.
+Interactive startup also starts an informational GitHub update check as an owned
+background task. Its ten-second deadline covers metadata resolution and commit
+comparison; startup does not await it. An event gates any notice until startup
+finishes. A later result is displayed without taking focus, and shutdown cancels
+the task. The check migrates missing installed commit/version metadata locally,
+compares public commit ancestry, and never downloads or installs application code.
+`/update` queues at an agent boundary and requests normal REPL shutdown. Only
+after the terminal and session resources close does the launcher run the updater
+off the event loop. That updater resolves `master` afresh, downloads a commit-pinned
+archive, and passes its identity to the installer for atomic metadata publication.
+Existing modification checks and failed-install rollback remain authoritative.
 Prompts and settings entered during startup queue until initialization completes;
 Esc, `/exit`, `/quit`, or EOF cancel startup and drain owned work before shutdown.
 The repository worker finishes before its resources close. Reload watching begins

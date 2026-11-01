@@ -76,6 +76,18 @@ def test_startup_reports_missing_current_directory(monkeypatch, capsys):
 
 @pytest.mark.parametrize("cancel", [False, True])
 async def test_deferred_startup_overlaps_services_before_context(tmp_path, monkeypatch, cancel):
+    from slipagent import updater
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr('slipagent.environment.ensure_harness_math', AsyncMock())
+    monkeypatch.delenv('SLIPAGENT_NO_UPDATE_CHECK')
+    update_entered, update_release = asyncio.Event(), asyncio.Event()
+
+    async def update_check():
+        update_entered.set()
+        await update_release.wait()
+        return updater.Release('a' * 40, '99.0.0')
+
+    monkeypatch.setattr(updater, 'check_for_updates', update_check)
     entered = set()
     release = asyncio.Event()
     context = []
@@ -127,6 +139,7 @@ async def test_deferred_startup_overlaps_services_before_context(tmp_path, monke
             while len(entered) < 5:
                 await asyncio.sleep(0)
         assert not context
+        await asyncio.wait_for(update_entered.wait(), 2)
         if cancel:
             task.cancel()
             await asyncio.sleep(.01)
@@ -137,8 +150,15 @@ async def test_deferred_startup_overlaps_services_before_context(tmp_path, monke
                 await task
             assert not context
         else:
-            await task
+            await asyncio.wait_for(task, 2)
             assert context == [True]
+            assert not update_release.is_set()
+            assert 'available_update' not in session.extensions
+            update_release.set()
+            async with asyncio.timeout(2):
+                while 'available_update' not in session.extensions:
+                    await asyncio.sleep(0)
+            assert session.extensions['available_update'].commit == 'a' * 40
     finally:
         release.set()
         await asyncio.gather(task, return_exceptions=True)
@@ -269,7 +289,7 @@ async def test_cli_limits_worker_threads_to_four(monkeypatch):
         finally:
             release.set()
             await asyncio.gather(*tasks)
-        return object()
+        return SimpleNamespace(extensions={})
 
     async def repl(session):
         return 0

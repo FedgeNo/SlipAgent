@@ -40,6 +40,7 @@ def isolated_session_storage(tmp_path: Path, system_temp_root: Path, verified_ma
             monkeypatch.delenv(name)
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setenv("SLIPAGENT_NO_DOTENV", "1")
+    monkeypatch.setenv('SLIPAGENT_NO_UPDATE_CHECK', '1')
     # tmp_path already has a unique name. Avoid rescanning every earlier test's
     # numbered temp directories, while keeping system temp outside its workspace.
     system_temp = system_temp_root / tmp_path.name

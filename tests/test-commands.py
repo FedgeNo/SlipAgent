@@ -40,6 +40,7 @@ from slipagent.commands import command_help
     ("skill", "", False, True),
     ("skill", "release", True, False),
     ("skill", "off", True, False),
+    ("update", "", True, False),
     ("theme", "light", False, True),
     ("markdown", "source", False, True),
     ("copy", "", False, True),

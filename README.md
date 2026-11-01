@@ -43,7 +43,7 @@ The first launch without an API key asks for one, lists providers that offer
 free models, and offers to save it. You can add keys for more providers later
 with `/key`; more providers mean more free models to fall back on.
 
-To update later, run `slipagent --update`. It downloads the latest version and
+To update later, run `slipagent --update` (or `/update` in the REPL). It downloads the latest commit and
 runs its installer, which warns before replacing any files you have edited.
 [Installation details](docs/installation.md) cover data locations, Windows,
 and running from a development checkout.

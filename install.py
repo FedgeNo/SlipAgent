@@ -11,6 +11,7 @@ import json
 import ntpath
 import os
 import platform
+import re
 import shlex
 import shutil
 import subprocess
@@ -233,7 +234,30 @@ def copy_source(checkout: Path, destination: Path) -> None:
             shutil.copy2(checkout / name, destination / name)
 
 
-def install(checkout: Path, root: Path, bin_dir: Path, *, windows: bool, dev: bool, python: str, data_dir: Path | None = None) -> Path:
+def source_identity(checkout: Path, commit: str | None = None) -> dict[str, str | None]:
+    version = None
+    try:
+        match = re.search(r'^version = "([^"]+)"', (checkout / 'pyproject.toml').read_text(encoding='utf-8'), re.MULTILINE)
+        if match is not None:
+            version = match.group(1)
+    except OSError:
+        pass
+    if commit is not None and not re.fullmatch('[0-9a-f]{40}', commit):
+        raise ValueError('Source commit must be a full Git SHA.')
+    if commit is None and (checkout / '.git').exists():
+        try:
+            result = subprocess.run(['git', '-C', str(checkout), 'rev-parse', 'HEAD'],
+                                    capture_output=True, text=True, timeout=2, check=False)
+            output = getattr(result, 'stdout', None)
+            if isinstance(output, str) and re.fullmatch('[0-9a-f]{40}', output.strip()):
+                commit = output.strip()
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return {'commit': commit, 'version': version}
+
+
+def install(checkout: Path, root: Path, bin_dir: Path, *, windows: bool, dev: bool, python: str,
+            data_dir: Path | None = None, source_commit: str | None = None) -> Path:
     launcher = bin_dir / ("slipagent.exe" if windows else "slipagent")
     prepare_launcher(launcher, root, windows=windows)
     if root.exists() and any(root.iterdir()) and not (root / ".slipagent-managed").is_file():
@@ -265,7 +289,7 @@ def install(checkout: Path, root: Path, bin_dir: Path, *, windows: bool, dev: bo
             backups.append((target, saved, existed))
         try:
             return _install_candidate(checkout, root, bin_dir, windows=windows, dev=dev,
-                                      python=python, data_dir=data_dir)
+                                      python=python, data_dir=data_dir, source_commit=source_commit)
         except BaseException:
             try:
                 for target, saved, existed in backups:
@@ -286,7 +310,9 @@ def install(checkout: Path, root: Path, bin_dir: Path, *, windows: bool, dev: bo
             shutil.rmtree(directory)
 
 
-def _install_candidate(checkout: Path, root: Path, bin_dir: Path, *, windows: bool, dev: bool, python: str, data_dir: Path | None = None) -> Path:
+def _install_candidate(checkout: Path, root: Path, bin_dir: Path, *, windows: bool, dev: bool, python: str,
+                       data_dir: Path | None = None, source_commit: str | None = None) -> Path:
+    identity = source_identity(checkout, source_commit)
     launcher = bin_dir / ("slipagent.exe" if windows else "slipagent")
     prepare_launcher(launcher, root, windows=windows)
     marker = root / ".slipagent-managed"
@@ -339,7 +365,8 @@ def _install_candidate(checkout: Path, root: Path, bin_dir: Path, *, windows: bo
             print("Preserved configuration in the private user data directory.")
         replace_launcher(entry, launcher, root, windows=windows)
         activated = True
-        metadata = {"source": str(source), "python": str(executable), "launcher": str(launcher), "checkout": str(source)}
+        metadata = {"source": str(source), "python": str(executable), "launcher": str(launcher), "checkout": str(source),
+                    **identity}
         pending = root / ("installation." + uuid.uuid4().hex + ".json")
         pending_paths.append(pending)
         pending.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
@@ -365,6 +392,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bin-dir", type=Path, help="Override the launcher directory")
     parser.add_argument("--python", default=getattr(sys, "_base_executable", sys.executable), help="Python 3.11+ for the managed environment")
     parser.add_argument("--dev", action="store_true", help="Also install this project's development dependencies")
+    parser.add_argument('--source-commit', help='Exact source commit supplied by the pinned-archive updater')
     parser.add_argument("--dry-run", action="store_true", help="Show destinations without changing files or PATH")
     args = parser.parse_args(argv)
     if sys.version_info < (3, 11):
@@ -395,7 +423,8 @@ def main(argv: list[str] | None = None) -> int:
             if answer.strip().lower() not in {"y", "yes"}:
                 print("Installation/update cancelled; no changes made.")
                 return 0
-        launcher = install(Path(__file__).resolve().parent, root, bin_dir, windows=system == "Windows", dev=args.dev, python=args.python, data_dir=data_dir)
+        launcher = install(Path(__file__).resolve().parent, root, bin_dir, windows=system == "Windows", dev=args.dev,
+                           python=args.python, data_dir=data_dir, source_commit=args.source_commit)
         if system == "Windows":
             update_windows_path(bin_dir)
         else:

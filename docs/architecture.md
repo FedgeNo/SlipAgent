@@ -1044,6 +1044,22 @@ Command quotas count retained bytes; inspection quotas charge header plus logica
 payload bytes per record. Shared physical storage is not the sum of those counters.
 Non-command artifacts and conversation journals retain their existing formats.
 
+## Selected Skill Ownership
+
+`skills.py` reads metadata from immediate project/user package directories and
+loads one explicitly selected `SKILL.md`. The selected snapshot is plain data
+under `ToolRegistry.services['selected_skill']`, so reload candidates borrow it
+without I/O or resource ownership. Commands discover/load through owned blocking
+workers and publish a new selection only after a successful read. The model has
+no activation tool. `ContextBuilder` renders the snapshot with
+`prompts/selected-skill.md` in every working request, outside the compressible
+history and within ordinary context budgeting. Journal state validates and
+persists the snapshot; resume/fork restore it without package access, while
+reset or restoring an unselected session clears it. Selection never executes
+scripts or grants additional tool/path access. Resource references resolve
+against the recorded package directory. See [skill packages](skills.md) for
+format, precedence, limits, and snapshot lifetime.
+
 ## Background Command Ownership
 
 `run_command(background=True)` creates a `CommandLog` with the initiating

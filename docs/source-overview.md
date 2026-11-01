@@ -19,6 +19,7 @@ src/slipagent/
 ├── prompts.py        named, ordered prompt sections
 ├── diagnostics.py    exact request snapshots and failed-attempt records
 ├── jobs.py           session-owned background commands and job controls
+├── skills.py         explicit package discovery and pinned skill instructions
 ├── lsp.py            optional configured language-server navigation
 ├── context.py        rolling context, summaries, original-step retrieval
 ├── historyexcerpts.py field-level clipping with references to unchanged history

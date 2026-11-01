@@ -1420,6 +1420,69 @@ class StopCommand(Command):
         return None
 
 
+class SkillsCommand(Command):
+    name = 'skills'
+    banner = '/skills'
+    help = (CommandHelp('/skills', 'list project and user skill packages', '/skills'),)
+
+    def background(self, argument: str) -> bool:
+        return True
+
+    async def run(self, context: CommandContext, argument: str) -> bool | None:
+        from .skills import catalog
+        from .tools.blocking import run_blocking
+        if argument:
+            print(context.style.red('  usage: /skills'), file=context.out)
+            return None
+        packages, errors = await run_blocking(catalog, context.session.workspace)
+        if not packages:
+            print('  no skill packages found.', file=context.out)
+        for skill in packages:
+            print(f"  {skill.name} ({skill.scope}{'' if skill.enabled else ', disabled'}) — {skill.description}\n"
+                  f"    {skill.path}", file=context.out)
+        for error in errors:
+            print(context.style.red(f'  {error}'), file=context.out)
+        return None
+
+
+class SkillCommand(Command):
+    name = 'skill'
+    banner = '/skill [name|path|off]'
+    help = (CommandHelp('/skill [name|path|off]', 'show, select, or clear a pinned workflow skill (queues while working)', '/skill '),)
+
+    def changes_session(self, argument: str) -> bool:
+        return bool(argument)
+
+    def background(self, argument: str) -> bool:
+        return not argument
+
+    async def run(self, context: CommandContext, argument: str) -> bool | None:
+        from .skills import select
+        from .tools.blocking import run_blocking
+        from .workspace import WorkspaceError
+        registry = context.session.registry
+        try:
+            if argument == 'off':
+                registry.services.pop('selected_skill', None)
+            elif argument:
+                selector = argument
+                if argument.startswith(('"', "'")):
+                    parts = shlex.split(argument)
+                    if len(parts) != 1:
+                        raise ValueError('Select one skill name or path.')
+                    selector = parts[0]
+                selected = await run_blocking(select, context.session.workspace, selector)
+                registry.services['selected_skill'] = selected
+            active = registry.services.get('selected_skill')
+            if active is None:
+                print('  no skill selected.', file=context.out)
+            else:
+                print(f"  skill: {active['name']}\n  source: {active['path']}\n  SHA-256: {active['sha256']}", file=context.out)
+        except (OSError, ValueError, WorkspaceError) as exc:
+            print(context.style.red(f'  {exc}'), file=context.out)
+        return None
+
+
 class ExitCommand(Command):
     name = 'exit'
     aliases = ("quit",)
@@ -1451,6 +1514,8 @@ COMMANDS: tuple[Command, ...] = (
     PlanningCommand(),
     HashlineCommand(),
     ToolsCommand(),
+    SkillsCommand(),
+    SkillCommand(),
     ModelCommand(),
     ModelsCommand(),
     ProviderCommand(),

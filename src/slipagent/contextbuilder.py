@@ -90,6 +90,10 @@ class ContextBuilder:
             if not preview:
                 self.registry.services["instruction_snapshot"] = snapshot
         environment = self.registry.resources.environment
+        selected_skill = self.registry.services.get('selected_skill')
+        if selected_skill is not None:
+            from .skills import render
+            sections.add('skill', 'Selected Skill', render(selected_skill), 21, owner='skills')
         session_info = await run_blocking(session_environment)
         session_info["model"] = self.settings.model
         if workspace is not None:

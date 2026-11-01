@@ -273,6 +273,7 @@ class Agent:
         self.registry.services.pop("background_snapshot", None)
         self.registry.context_notes.pop("request_diagnostics", None)
         self.registry.context_notes.pop("user_edits", None)
+        self.registry.services.pop('selected_skill', None)
         self.registry.services.pop("step_user_edits", None)
         self.registry.services.pop("accepted_user_edits", None)
         journal = self.registry.resources.journal

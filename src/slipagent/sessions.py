@@ -405,6 +405,9 @@ class SessionJournal:
                  "compact_through": agent.history.compact_through,
                  "user_edits": agent.registry.context_notes.get("user_edits", {}),
                  "background_commands": agent.registry.context_notes.get("background_commands")}
+        selected_skill = agent.registry.services.get('selected_skill')
+        if selected_skill is not None:
+            state['selected_skill'] = selected_skill
         if state != self.state:
             self._append("state", **state)
             self.state = copy.deepcopy(state)
@@ -626,6 +629,8 @@ class SessionJournal:
                     or queued != sorted(set(queued))):
                 raise ValueError("invalid queued message indices")
             cap = state.get("context_tokens")
+            from .skills import validate_snapshot
+            validate_snapshot(state.get('selected_skill'))
             if cap is not None and (type(cap) is not int or cap < MIN_CONTEXT_TOKENS):
                 raise ValueError("invalid context cap")
             usage = state["usage"]
@@ -911,6 +916,11 @@ class SessionJournal:
             replay.close()
             loaded.store = None
         agent.pending = list(data["state"]["pending"])
+        selected_skill = data['state'].get('selected_skill')
+        if selected_skill is not None:
+            agent.registry.services['selected_skill'] = copy.deepcopy(selected_skill)
+        else:
+            agent.registry.services.pop('selected_skill', None)
         # Journals from before the cap existed keep this launch's setting.
         if "context_tokens" in data["state"]:
             agent.context_tokens = data["state"]["context_tokens"]

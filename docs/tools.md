@@ -92,6 +92,10 @@ there. `read_file` and `edit_file` remain available in either mode.
 
 Tools return large results directly; request assembly applies the selected
 model's context budget. Explicitly requested ranges still select only those ranges.
+Edit diffs follow the same history policy as other tool results: the newest five
+turns retain complete results when they fit, reducing older history first. If
+those five turns alone exceed the budget, older turns within that window are
+reduced before newer ones. Context reductions preserve the archived originals.
 
 | Data | Limit |
 | --- | --- |

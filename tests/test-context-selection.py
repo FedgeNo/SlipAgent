@@ -165,6 +165,59 @@ async def test_five_turn_window_reduces_older_results_before_the_latest_one():
     assert message_tokens(view) <= int(20000 * .85) - 1000
 
 
+@pytest.mark.parametrize('archived', [False, True])
+@pytest.mark.parametrize('native', [False, True])
+async def test_recent_edit_diffs_remain_complete_when_older_history_is_reduced(workspace, tmp_path, archived, native):
+    from slipagent.tools.files import EditFileTool
+    from slipagent.turnstore import TurnStore
+
+    history, messages = ConversationHistory(), []
+    outputs = []
+    for index in range(25):
+        name = 'read_file'
+        arguments = {'path': 'example.txt'}
+        output = f'Older observation {index}: ' + 'x' * 5000
+        if index >= 20:
+            name = 'edit_file'
+            before = ''.join(f'old {index} {line}: ' + 'a' * 60 + '\n' for line in range(80))
+            after = ''.join(f'new {index} {line}: ' + 'b' * 60 + '\n' for line in range(80))
+            (workspace.root / 'example.txt').write_text(before)
+            arguments.update(old_string=before, new_string=after)
+            result = await EditFileTool(workspace).invoke(arguments)
+            assert not result.is_error
+            output = result.text()
+            assert '-' + before.splitlines()[0] in output
+            assert '+' + after.splitlines()[-1] in output
+            assert 'Diff truncated' not in output
+            outputs.append(output)
+        call = ToolCall(f'call-{index}', name, arguments)
+        messages += [Message.user(f'Inspect or edit {index}'), Message.assistant('Working.', [call]),
+                     Message.tool_result(call.id, {'tool': name, 'call_id': call.id,
+                                                  'status': 'success', 'content': output})]
+    history.sync(messages)
+    for step in history.steps:
+        step.observed = True
+        step.summary = f'Short summary {step.id}'
+    store = TurnStore(tmp_path / 'edit-turns')
+    try:
+        if archived:
+            for step in history.steps:
+                store.archive(step, messages)
+        originals = [step.full_text() for step in history.steps]
+        view = await history.view(messages, [], keep_steps=50, context_length=65000,
+                                  max_output=1000, native_tools=native)
+        records = read_json_input(view[-1].to_api()['content'])['history']
+        recent = [record for record in records if record['step_id'] >= 21]
+        assert [record['step_id'] for record in recent] == list(range(21, 26))
+        assert all(record['representation'] == 'full' for record in recent)
+        assert [record['tool_calls'][0]['result'] for record in recent] == outputs
+        assert any(record['representation'] != 'full' for record in records if record['step_id'] < 21)
+        assert message_tokens(view) <= int(65000 * .85) - 1000
+        assert [step.full_text() for step in history.steps] == originals
+    finally:
+        store.close()
+
+
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("boundary", [0, 8])
 async def test_oversized_recent_step_displaces_older_history_before_it_is_excerpted(native, boundary):

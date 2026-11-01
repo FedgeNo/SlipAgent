@@ -223,7 +223,11 @@ class SessionJournal:
             raise SessionError("Session journal is unavailable; no further actions can be recorded.")
         while self._writer is not None or self._pending_records or self._unsynced:
             if self._writer is not None:
-                await finish_cleanup(self._writer)
+                writer = self._writer
+                await finish_cleanup(writer)
+                # A finished task's scheduled callback may still be waiting.
+                # Settle it here so this loop cannot starve that callback.
+                self._writer_finished(writer)
                 continue
             if self._pending_records:
                 await run_blocking(self._drain_records)

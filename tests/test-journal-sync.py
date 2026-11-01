@@ -3,6 +3,8 @@
 import asyncio
 import os
 import threading
+import subprocess
+import sys
 import pytest
 
 from slipagent.agent import Agent
@@ -10,6 +12,34 @@ from slipagent.sessions import SessionError, SessionJournal
 from slipagent.tools.base import ToolRegistry
 from slipagent.types import ToolCall
 from test_agent import StubClient, RecordingTool, completion
+
+
+def test_flush_settles_finished_writer_before_its_scheduled_callback(tmp_path):
+    # A subprocess deadline also catches an event-loop spin that asyncio timeouts cannot.
+    script = '''
+import asyncio, sys
+from pathlib import Path
+from slipagent.agent import Agent
+from slipagent.sessions import SessionJournal
+from slipagent.tools.base import ToolRegistry
+
+async def main():
+    root = Path(sys.argv[1])
+    agent = Agent(None, ToolRegistry(), "test")
+    journal = SessionJournal(str(root), root / "saved")
+    journal.begin(agent)
+    finished = asyncio.create_task(asyncio.sleep(0))
+    await finished
+    journal._writer = finished
+    asyncio.get_running_loop().call_soon(journal._writer_finished, finished)
+    await journal.flush()
+    assert journal._writer is None
+
+asyncio.run(main())
+'''
+    result = subprocess.run([sys.executable, '-c', script, str(tmp_path)],
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
 
 
 def attach(agent, workspace, tmp_path):

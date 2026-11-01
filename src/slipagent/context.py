@@ -488,7 +488,7 @@ class ConversationHistory:
         self.task = TaskMemory()
         self.compact_through = 0
 
-    def sync(self, messages: list[Message]) -> None:
+    def sync(self, messages: list[Message], *, on_step: Callable[[CompletedStep], None] | None = None) -> None:
         """Archive complete batches and register the user sources they belong to.
 
         Stop at an incomplete assistant/tool sequence. The cursor advances only
@@ -516,8 +516,11 @@ class ConversationHistory:
             requests = [entry.content or "" for entry in segment if entry.role == "user"]
             if requests:
                 self._request = "\n".join(requests)
-            self.steps.append(CompletedStep(len(self.steps) + 1, self._request, list(segment)))
+            completed = CompletedStep(len(self.steps) + 1, self._request, list(segment))
+            self.steps.append(completed)
             self.cursor = end
+            if on_step is not None:
+                on_step(completed)
             start = end
             index = end
 
@@ -750,7 +753,7 @@ class ConversationHistory:
             state = (step.summary, getattr(step, "reasoning_summary", None),
                      getattr(step, "compaction_status", None), getattr(step, "compaction_error", None))
             if index not in indexes:
-                previous = step.__dict__.get('_size_index')
+                previous = step.__dict__.get('_size_index') if disk is not None else None
                 if disk is not None and previous is not None and previous[0] is disk and previous[1] == state:
                     indexes[index] = previous[2]
                 else:

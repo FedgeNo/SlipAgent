@@ -551,6 +551,9 @@ class SessionJournal:
             raise SessionError("Session ID must be a complete ID from /sessions, or latest.")
         path = self.directory / (selected + ".jsonl")
         data: dict[str, Any] = {"messages": [], "state": {}, "steps": {}, "started": set(), "logs": {}, "id": selected, "torn": False, "complete_bytes": 0}
+        from .turnstore import TurnStore
+        replay = TurnStore()
+        data['replay_store'] = replay
         try:
             with path.open("rb") as source:
                 for index, raw in enumerate(source):
@@ -573,14 +576,14 @@ class SessionJournal:
                             raise ValueError("unsupported or mismatched session header")
                         data["title"] = self._saved_title(selected, event)
                     elif kind == "message":
-                        data["messages"].append(event["message"])
+                        data["messages"].append(replay.write(f'message-{index:08d}.json', event["message"]))
                         if "request_failure" in event:
                             marker = event["request_failure"]
                             data.setdefault("request_failures", {})[marker["id"]] = marker["failure"]
                     elif kind == "replace":
                         if type(event["index"]) is not int or not 0 <= event["index"] < len(data["messages"]):
                             raise ValueError("invalid message replacement")
-                        data["messages"][event["index"]] = event["message"]
+                        data["messages"][event["index"]] = replay.write(f'message-{index:08d}.json', event["message"])
                     elif kind == "state":
                         data["state"] = event
                     elif kind == "discard_input":
@@ -659,8 +662,28 @@ class SessionJournal:
                             or stream["payload"] != "" and re.fullmatch(r"[0-9a-f]{64}", stream["payload"]) is None):
                         raise ValueError("invalid shared command payload ID")
             task = TaskMemory(start_message=data["state"]["task_start"])
-            history = ConversationHistory(task=task)
-            history.sync(data["messages"])
+            history = ConversationHistory(task=task, store=replay)
+
+            def archive_step(step: CompletedStep) -> None:
+                # Apply saved observations before writing the disk-backed model
+                # projection. Validation below still checks the complete replay.
+                saved = data['steps'].get(step.id, {})
+                step.summary = saved.get('summary')
+                step.reasoning_summary = saved.get('reasoning_summary')
+                step.compaction_status = saved.get('compaction_status', 'interrupted')
+                step.compaction_error = saved.get('compaction_error')
+                edits = saved.get('user_edits')
+                if edits is None:
+                    edits = data.get('delivered_user_edits', {}).get(step.id)
+                if edits:
+                    step.user_edits = edits
+                if saved.get('background_commands'):
+                    step.background_commands = saved['background_commands']
+                if step.id in data.get('request_failures', {}):
+                    setattr(step, 'request_failure', data['request_failures'][step.id])
+                replay.archive(step, data['messages'])
+
+            history.sync(data["messages"], on_step=archive_step)
             boundary = data["state"].get("compact_through", 0)
             if type(boundary) is not int or not 0 <= boundary <= len(history.steps):
                 raise ValueError("invalid manual compaction boundary")
@@ -740,22 +763,48 @@ class SessionJournal:
                     validate_era_record(era, step_id, len(history.steps))
                     setattr(step, "era_summary", era)
             data["history"] = history
+            for step in history.steps:
+                if isinstance(step, CompletedStep):
+                    replay.summarized(step)
             data["usage"] = Usage.from_api(data["state"]["usage"])
             return data
         except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError) as exc:
+            replay.close()
             raise SessionError(f"Cannot resume {selected}: {exc}. The saved journal was not modified.") from exc
 
     def _restore_messages(self, data: dict[str, Any]) -> list[Message]:
-        messages = []
+        from .sources import FileText, materialize
+        from .turnstore import ArchivedMessage
+        messages: list[Message] = []
         for raw in data["messages"]:
             if not isinstance(raw, dict) or raw.get("role") not in {"system", "user", "assistant", "tool"}:
                 raise ValueError("invalid message")
-            allowed = (str, dict, list) if raw["role"] == "tool" else (str,)
+            allowed = (str, FileText, dict, list) if raw["role"] == "tool" else (str, FileText)
             if raw.get("content") is not None and not isinstance(raw["content"], allowed):
                 raise ValueError("invalid message content")
-            message = Message.from_api(raw)
-            message.reasoning_model = raw.get("reasoning_model")
-            messages.append(message)
+            canonical = dict(raw)
+            if raw['role'] == 'system':
+                # Current instructions outlive a history-store replacement and
+                # remain resident independently of archived conversation payloads.
+                canonical = materialize(canonical)
+            for key in ('name', 'tool_call_id', 'reasoning_model'):
+                if key in canonical:
+                    canonical[key] = materialize(canonical[key])
+            for call in canonical.get('tool_calls') or []:
+                if 'id' in call:
+                    call['id'] = materialize(call['id'])
+                function = call.get('function') or {}
+                if 'name' in function:
+                    function['name'] = materialize(function['name'])
+                if isinstance(function.get('arguments'), FileText):
+                    function['arguments'] = materialize(function['arguments'])
+            message = Message.from_api(canonical)
+            message.reasoning_model = canonical.get('reasoning_model')
+            if message.role == 'system':
+                messages.append(message)
+            else:
+                messages.append(ArchivedMessage({**message.to_record(), 'reasoning_model': message.reasoning_model},
+                                                owner=data['replay_store']))
         # Only the final batch may be incomplete. Fill missing observations
         # explicitly so providers get a valid call/result sequence on resume.
         index, step = 0, 0
@@ -813,7 +862,12 @@ class SessionJournal:
             turns = TurnStore(self.directory / (identifier + "-turns"))
             for step in data["history"].steps:
                 if isinstance(step, CompletedStep):
-                    turns.archive(step, data["messages"])
+                    turns.archive(step, data["messages"], relocate=True)
+            from .turnstore import ArchivedMessage
+            for index, message in enumerate(data['messages']):
+                if isinstance(message, ArchivedMessage) and message._source_owner is not turns:
+                    data['messages'][index] = ArchivedMessage(
+                        turns.write(f'pending-{index:08d}.json', message._stored), owner=turns)
             path = self.directory / (identifier + ".jsonl")
             if fork:
                 staged = copy.copy(self)
@@ -852,6 +906,10 @@ class SessionJournal:
         agent.history.compact_through = loaded.compact_through
         agent.history.store = turns
         agent.registry.resources.turns = turns
+        replay = data.pop('replay_store', None)
+        if replay is not None:
+            replay.close()
+            loaded.store = None
         agent.pending = list(data["state"]["pending"])
         # Journals from before the cap existed keep this launch's setting.
         if "context_tokens" in data["state"]:

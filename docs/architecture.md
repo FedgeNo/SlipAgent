@@ -1210,6 +1210,15 @@ journal. Journal shutdown precedes turn-store shutdown.
 Complete originals are never rewritten by compression.
 
 Resume reads and validates the journal before changing the active conversation.
+Replay spools each message/replacement into temporary indexed storage as its
+JSONL record is decoded. It constructs and archives completed turns individually,
+applying saved edits, failure markers and background observations before creating
+their model projections. Large old payloads do not accumulate in memory; peak
+payload memory is bounded by the largest decoded record/batch, alongside retained
+metadata, user-intent sources and summaries. Individual JSONL records are still
+decoded whole. Loaded message lists retain their source owner. Successful restore
+relocates completed turns and pending input into the target session's storage
+before releasing replay storage; forked sources survive deletion of their parent.
 Interactive resume announces loading immediately after selection (also for an
 explicit ID or the saved-session action menu), before waiting for compaction,
 reading the journal, stopping jobs, or restoring state. `notify_before_work`

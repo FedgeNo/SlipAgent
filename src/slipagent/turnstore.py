@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 class ArchivedMessage(Message):
     """Keep message identity fields resident and retrieve archived values on demand."""
 
-    def __init__(self, record: dict[str, Any] | None = None, **values: Any) -> None:
+    def __init__(self, record: dict[str, Any] | None = None, *, owner: TurnStore | None = None, **values: Any) -> None:
         if record is None:
             super().__init__(**values)
             record = super().to_record()
@@ -26,6 +26,7 @@ class ArchivedMessage(Message):
         else:
             super().__init__(role=record["role"], tool_call_id=record.get("tool_call_id"), name=record.get("name"))
         self._stored = record
+        self._source_owner = owner
 
     def __getattribute__(self, name: str) -> Any:
         if name in {"content", "reasoning", "reasoning_details", "reasoning_model", "tool_calls"} and "_stored" in self.__dict__:
@@ -37,7 +38,12 @@ class ArchivedMessage(Message):
         return super().__getattribute__(name)
 
     def __copy__(self) -> ArchivedMessage:
-        return ArchivedMessage(self._stored)
+        return ArchivedMessage(self._stored, owner=self._source_owner)
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> ArchivedMessage:
+        result = ArchivedMessage(copy.deepcopy(self._stored, memo), owner=self._source_owner)
+        memo[id(self)] = result
+        return result
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Message):
@@ -87,14 +93,15 @@ class TurnStore:
         finally:
             pending.unlink(missing_ok=True)
 
-    def archive(self, step: CompletedStep, messages: list[Message]) -> None:
-        if "_disk" not in step.__dict__:
+    def archive(self, step: CompletedStep, messages: list[Message], *, relocate: bool = False) -> None:
+        if "_disk" not in step.__dict__ or relocate:
             originals = step.messages
-            source = {"version": 1, "step_id": step.id, "request": step.request,
+            source = step._disk if "_disk" in step.__dict__ else {
+                      "version": 1, "step_id": step.id, "request": step.request,
                       "messages": [{**message.to_record(), "reasoning_model": message.reasoning_model} for message in originals],
                       "parts": step.parts(), "model": step.context_messages()[0].content}
             step._disk = self.write(f"{step.id:08d}.raw.json", source)
-            replacements = {id(message): ArchivedMessage(record) for message, record in zip(originals, step._disk["messages"])}
+            replacements = {id(message): ArchivedMessage(record, owner=self) for message, record in zip(originals, step._disk["messages"])}
             step.messages = [replacements[id(message)] for message in originals]
             for index, message in enumerate(messages):
                 if id(message) in replacements:
@@ -103,6 +110,9 @@ class TurnStore:
                 step.__dict__.pop(name, None)
             if "user_edits" in step._disk["parts"]:
                 step.user_edits = step._disk["parts"]["user_edits"]
+            if relocate:
+                for name in ('_disk_summary_state', '_disk_group_state', '_disk_era_state', '_size_index'):
+                    step.__dict__.pop(name, None)
         self.summarized(step)
 
     def summarized(self, step: CompletedStep) -> None:

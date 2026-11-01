@@ -71,6 +71,7 @@ In the REPL:
 | `/rewind` | Choose a file-edit checkpoint and confirm restoration of that batch and all later batches; Escape cancels; queues while working |
 | `/rewind list` | List available file-edit checkpoints without restoring files |
 | `/requests [attempt]` | List the latest 20 request attempts, or inspect one exact request and its outcome |
+| `/timings [step\|on\|off\|clear]` | Show local phase durations for the latest or selected turn, enable/disable collection, or clear current timing records; available while working |
 | `/mcp` | Show MCP servers, their status, and the tools they contribute |
 | `/mcp add <name> <cmd> [args…]` | Connect a server over stdio for this session only |
 | `/mcp save <name> <cmd> [args…]` | Same, and persist it globally to `mcp.json` |

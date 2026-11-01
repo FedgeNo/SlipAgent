@@ -43,7 +43,7 @@ leave no final record: treat a missing `run_end` as incomplete.
 
 **Completed means the harness finished, not that its answer or code was correct.**
 Tool errors stay labelled in their event even if the model recovers. Grade the
-resulting files and behavior independently. Session usage includes background
+resulting files and behavior independently. Session usage excludes free background
 compression; `requests` counts working requests, including retries.
 
 Automation mode does not remember its selected model in your preferences. Session

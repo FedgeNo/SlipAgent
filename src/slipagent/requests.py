@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from .api import APIClient, APIContextError, APIOutputSkipped, APIResponseError, APITransportError, RETRYABLE_STATUS
+from .timings import timing_log
 from .budget import ContextBudget
 from .capabilities import RequestProfile
 from .context import ContextError
@@ -100,6 +101,10 @@ class RequestDriver:
             request_estimate = 0
             diagnostic_id: int | None = None
             diagnostics = self.registry.resources.diagnostics
+            timings = timing_log(self.registry)
+            preparation: int | None = None
+            provider: int | None = None
+            first_output: int | None = None
             xml_tool_calls = model_prompt_profile(self.settings.model).get("xml_tool_calls", False)
             preview = ResponseStream(xml_tool_calls=xml_tool_calls)
             partial_reasoning: list[str] = []
@@ -118,7 +123,8 @@ class RequestDriver:
             def finish_attempt(outcome: str, *, detail: str = "", response: str = "", usage: Usage | None = None) -> None:
                 if diagnostics is not None:
                     diagnostics.finish(diagnostic_id, outcome, detail=detail, response=response,
-                                       usage=asdict(usage) if usage is not None else None)
+                                       usage=asdict(usage) if usage is not None else None,
+                                       timings=timings.snapshot(step) if timings.enabled else None)
                     if diagnostics.error and self.registry.context_notes.get("request_diagnostics") != diagnostics.error:
                         self.registry.context_notes["request_diagnostics"] = diagnostics.error
                         self.hooks.emit(AgentEvent(kind="warning", text=f"Request diagnostics: {diagnostics.error}"))
@@ -135,7 +141,9 @@ class RequestDriver:
                 step_usage = Usage()
                 start_next_step = True
             async def request_sent(request: Any) -> None:
-                nonlocal request_estimate, diagnostic_id
+                nonlocal request_estimate, diagnostic_id, provider, first_output, preparation
+                timings.finish(preparation)
+                preparation = None
                 request_estimate = request.estimate
                 self.hooks.delivered()
                 if diagnostics is not None:
@@ -153,8 +161,13 @@ class RequestDriver:
                 if instructions is not None:
                     instructions.presented(self.registry.services.get("instruction_snapshot", {}))
                 self.hooks.emit(AgentEvent(kind="context", step=step, request_body=request))
+                provider = timings.start('provider_response', step)
+                first_output = timings.start('provider_first_output', step)
             def delta(kind: str, chunk: str) -> None:
-                nonlocal received_content, labels_shown
+                nonlocal received_content, labels_shown, first_output
+                if first_output is not None and chunk and kind in ('content', 'reasoning', 'tool_label'):
+                    timings.finish(first_output)
+                    first_output = None
                 if kind == "content":
                     received_content = True
                 if kind == "tool_label":
@@ -195,16 +208,32 @@ class RequestDriver:
                     instructions = self.registry.resources.instructions
                     if instructions is not None:
                         instructions.presented(self.registry.services.get("instruction_snapshot", {}))
-                completion = await self.client.chat(
-                    model=self.settings.model,
-                    messages=context,
-                    tools=(specs or None) if native_tools else None,
-                    extra_body=extra_body,
-                    temperature=self.settings.temperature,
-                    max_tokens=self.settings.max_tokens,
-                    session_id=self.settings.session_id,
-                    **options,
-                )
+                    provider = timings.start('provider_response', step)
+                    first_output = timings.start('provider_first_output', step)
+                else:
+                    preparation = timings.start('request_preparation', step)
+                try:
+                    completion = await self.client.chat(
+                        model=self.settings.model,
+                        messages=context,
+                        tools=(specs or None) if native_tools else None,
+                        extra_body=extra_body,
+                        temperature=self.settings.temperature,
+                        max_tokens=self.settings.max_tokens,
+                        session_id=self.settings.session_id,
+                        **options,
+                    )
+                except BaseException as error:
+                    outcome = 'cancelled' if isinstance(error, asyncio.CancelledError) else 'error'
+                    timings.finish(preparation, outcome)
+                    timings.finish(provider, outcome)
+                    timings.finish(first_output, outcome)
+                    raise
+                else:
+                    timings.finish(preparation)
+                    timings.finish(provider)
+                    # Some providers deliver only a complete JSON/tool response.
+                    timings.finish(first_output, 'complete_response')
                 try:
                     if not options:
                         stream_guard.feed("reasoning", completion.message.reasoning or "")

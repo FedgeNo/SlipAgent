@@ -21,6 +21,7 @@ from .events import AgentEvent as AgentEvent, EventKind as EventKind, EventHandl
 from .requests import ContextStepLimit as ContextStepLimit, MAX_MEMORY_ATTEMPTS as MAX_MEMORY_ATTEMPTS
 from .requests import RequestAccepted, RequestStopped
 from .api import APIClient, APIError
+from .timings import timing_log, save_timings
 from .config import DEFAULT_MAX_STEPS, DEFAULT_CONTEXT_STEPS
 from .context import (
     DEFAULT_CONTEXT_LENGTH,
@@ -125,6 +126,7 @@ class Agent:
             )
             self.registry.resources.compactor = result
         result.on_step = self._persist_step
+        result.timings = timing_log(self.registry)
         return result
 
     def _persist(self) -> None:
@@ -200,6 +202,7 @@ class Agent:
     async def wait_for_compaction(self) -> None:
         """Settle summaries within the session-transition grace period."""
         await self._compactor().settle()
+        await save_timings(self.registry)
 
     async def _archive_step(self, capabilities: RequestProfile | None) -> None:
         self.history.sync(self.messages)
@@ -225,6 +228,9 @@ class Agent:
         if journal is not None and not journal.failed:
             # Queued records can reference the immutable turn files cleared below.
             journal._drain_records()
+        timings = self.registry.services.get('phase_timings')
+        if timings is not None:
+            timings.clear()
         jobs = self.registry.resources.jobs
         if jobs is not None:
             jobs.clear()
@@ -471,10 +477,11 @@ class Agent:
             ContextSettings(model, self.planning, self.context_steps, self.overthinking,
                             self.reasoning_history_steps, self.filtered_thoughts, self.max_tokens),
         )
-        return await builder.build(
-            specs, length, self._uses_native_tools(capabilities, model=model), capabilities=capabilities,
-            preview=preview, repair=repair, budget_fraction=budget_fraction,
-        )
+        with nullcontext() if preview else timing_log(self.registry).measure('context_selection', step):
+            return await builder.build(
+                specs, length, self._uses_native_tools(capabilities, model=model), capabilities=capabilities,
+                preview=preview, repair=repair, budget_fraction=budget_fraction,
+            )
 
     def _uses_native_tools(self, capabilities: RequestProfile | None, *, model: str | None = None) -> bool:
         channel = model_prompt_profile(self.model if model is None else model).get("tool_channel")
@@ -592,7 +599,9 @@ class Agent:
                         self._notify_jobs()
                         self._persist()
                         if journal is not None and journal.path is not None and not journal.failed:
-                            await journal.flush()
+                            with timing_log(self.registry).measure('journal_persistence', max(1, len(self.history.steps))):
+                                await journal.flush()
+                        await save_timings(self.registry)
                     finally:
                         self.running = False
                         if self.stop_requested:

@@ -18,6 +18,8 @@ import json
 import re
 from collections import Counter, deque
 from itertools import chain
+from functools import partial
+from contextlib import nullcontext
 from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any, TypeVar, cast
 
@@ -30,6 +32,7 @@ from .lifecycle import finish_cleanup
 from .prompts import load_prompt
 from .modelrouting import eligible_free, transient_error
 from .tools.blocking import run_blocking
+from .timings import PhaseTimings
 
 T = TypeVar("T")
 
@@ -100,6 +103,7 @@ class StepCompactor:
         self.generation = 0
         self.on_step: Callable[[CompletedStep], None] | None = None
         self.routing: CompressionProviders | None = None
+        self.timings: PhaseTimings | None = None
 
     def submit(self, step: CompletedStep, client: APIClient, model: str,
                capabilities: RequestProfile | None, max_tokens: int | None, *,
@@ -110,6 +114,8 @@ class StepCompactor:
         step.__dict__["_compaction_request"] = (client, model, capabilities, max_tokens,
                                                tuple(_frozen_step(prior) for prior in (history or [])[-25:]),
                                                conversation, _frozen_step(step))
+        if self.timings is not None:
+            step.__dict__['_compaction_queued_at'] = self.timings.clock()
         queue = self.__dict__.setdefault("_ready", deque())
         if conversation is not None:
             self.__dict__["_conversation"] = conversation
@@ -126,6 +132,8 @@ class StepCompactor:
                         tuple(_frozen_step(prior) for prior in conversation[max(0, index - 25):index]),
                         conversation, _frozen_step(earlier))
                     earlier.compaction_status = "deferred"
+                    if self.timings is not None:
+                        earlier.__dict__['_compaction_queued_at'] = self.timings.clock()
         else:
             self.__dict__.setdefault("_standalone_steps", []).append(step)
         if len(queue) < COMPACTION_QUEUE_SIZE:
@@ -192,6 +200,22 @@ class StepCompactor:
         from .historymerge import ready_job
         return ready_job(self, conversation, active, route)
 
+    def _finish_timing(self, ticket: int | None, task: asyncio.Task[None]) -> None:
+        if self.timings is not None:
+            outcome = 'completed'
+            if task.cancelled():
+                outcome = 'cancelled'
+            else:
+                error = task.exception()
+                if error is not None:
+                    outcome = 'error'
+                    # Observing the exception for timing must not hide the
+                    # unhandled-task diagnostic that asyncio would otherwise emit.
+                    task.get_loop().call_exception_handler({
+                        'message': 'Unhandled background compaction job failure',
+                        'exception': error, 'task': task})
+            self.timings.finish(ticket, outcome)
+
     async def _drain(self, generation: int, previous: tuple[asyncio.Task[None], ...]) -> None:
         if previous:
             await asyncio.gather(*previous, return_exceptions=True)
@@ -206,14 +230,17 @@ class StepCompactor:
                 if job is None:
                     self.__dict__.pop("_standalone_steps", None)
                     return
-                await job[1]
+                with self.timings.measure(f'compaction_{job[0][0]}', job[0][1]) if self.timings is not None else nullcontext():
+                    await job[1]
                 continue
             while generation == self.generation and len(running) < slots:
                 job = self._next_job(set(running.values()), generation)
                 if job is None:
                     break
                 key, work = job
+                ticket = self.timings.start(f'compaction_{key[0]}', key[1]) if self.timings is not None else None
                 task: asyncio.Task[None] = asyncio.create_task(work, name=f"slipagent-summary-{key[0]}-{key[1]}")
+                task.add_done_callback(partial(self._finish_timing, ticket))
                 running[task] = key
                 self.jobs.add(task)
                 task.add_done_callback(self.jobs.discard)
@@ -231,6 +258,9 @@ class StepCompactor:
                     running.pop(task)
 
     async def _summarize_step(self, step: CompletedStep, request: tuple[Any, ...], generation: int) -> None:
+        queued = step.__dict__.pop('_compaction_queued_at', None)
+        if queued is not None and self.timings is not None:
+            self.timings.record('compaction_wait', self.timings.clock() - queued, step.id)
         client, model, capabilities, max_tokens, history, conversation, frozen = request
         source = copy.deepcopy(frozen.compaction_input())
         if not isinstance(client, APIClient):

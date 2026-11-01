@@ -1768,6 +1768,31 @@ to the model along with the active generation number.
   `uipreferences.py` preserves unrelated entries in the existing preferences
   file. Folder commands receive literal argument lists without a shell.
 
+## Local Phase Timings
+
+`timings.py` owns lightweight, local phase timing independently of conversation
+history and usage accounting. Each registry keeps at most 512 completed duration
+records plus active operations, tagged only with phase, step, call ID, elapsed
+seconds and outcome. `/timings` shows the latest turn; a number selects a retained
+turn. `on`/`off` control collection and `clear` discards current records/spans.
+Collection starts enabled and its setting lasts for this process. Session reset
+clears durations while retaining the setting. No timing records become model input.
+
+Instrumentation separates context selection, request preparation, provider response
+and first delivered output, tool admission wait, tool execution, journal barriers,
+post-edit checks, and background step/narrative/era compaction. These intervals can
+overlap and must not be summed as a wall-clock total. A first-output record marked
+`complete_response` means no earlier streamed text/label was delivered. Error and
+cancellation outcomes preserve elapsed time; compaction durations describe job
+execution, with summary success/failure still owned by compaction state.
+
+Recent request diagnostic metadata captures matching timing snapshots at attempt
+settlement, after tool batches and turn completion, and after compaction settles.
+Snapshots can include operations still marked `running` at capture. `/requests N`
+retains those saved snapshots; live `/timings` covers only the current process's
+bounded records. Persistence uses the existing diagnostic owner/quota and owned
+workers. Disabling collection adds no new snapshots. There is no external collector.
+
 ## Extending the Contracts
 
 When adding a tool, define an accurate schema and recovery-oriented description,

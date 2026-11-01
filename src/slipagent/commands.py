@@ -1049,6 +1049,42 @@ class RequestsCommand(Command):
         return None
 
 
+class TimingsCommand(Command):
+    name = 'timings'
+    banner = '/timings'
+    help = (CommandHelp('/timings [step|on|off|clear]', 'show local phase durations for a turn; control collection', '/timings '),)
+
+    def background(self, argument: str) -> bool:
+        return True
+
+    async def run(self, context: CommandContext, argument: str) -> bool | None:
+        from .timings import timing_log
+        timings = timing_log(context.session.registry)
+        argument = argument.strip().lower()
+        if argument in ('on', 'off'):
+            timings.set_enabled(argument == 'on')
+            print(f'  Timing collection: {argument}.', file=context.out)
+            return None
+        if argument == 'clear':
+            timings.clear()
+            print('  Local timings cleared.', file=context.out)
+            return None
+        if argument and (not argument.isascii() or not argument.isdecimal() or int(argument) < 1):
+            print('  Usage: /timings [step|on|off|clear]', file=context.out)
+            return None
+        rows = timings.snapshot()
+        selected = int(argument) if argument else max((row['step'] for row in rows), default=0)
+        rows = [row for row in rows if row['step'] == selected]
+        if not rows:
+            print('  No timing records for this turn.' + (' Collection is off.' if not timings.enabled else ''), file=context.out)
+        else:
+            print(f'  Timings for step {selected} (overlapping phases are not additive):', file=context.out)
+            for row in rows:
+                call = f"  call {row['call_id']}" if row['call_id'] else ''
+                print(f"  {row['phase']:<26} {row['seconds']:9.3f}s  {row['outcome']}{call}", file=context.out)
+        return None
+
+
 class McpCommand(Command):
     name = 'mcp'
     banner = '/mcp [add|save|remove]'
@@ -1428,6 +1464,7 @@ COMMANDS: tuple[Command, ...] = (
     RewindCommand(),
     ResumeCommand(),
     RequestsCommand(),
+    TimingsCommand(),
     McpCommand(),
     NewCommand(),
     ReloadCommand(),

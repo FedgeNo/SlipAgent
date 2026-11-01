@@ -35,7 +35,7 @@ def test_rolling_logging_keeps_newest_complete_attempt(tmp_path, oversized):
         archive.read(1)
 
 
-@pytest.mark.parametrize("operation", ["begin", "response", "finish"])
+@pytest.mark.parametrize("operation", ["begin", "response", "finish", "timings"])
 @pytest.mark.parametrize("quota", [None, 32 * 1024 * 1024])
 def test_live_logging_recovers_from_legacy_default_quota(tmp_path, operation, quota):
     archive = RequestDiagnostics()
@@ -51,6 +51,10 @@ def test_live_logging_recovers_from_legacy_default_quota(tmp_path, operation, qu
     elif operation == "response":
         archive.response(attempt, {"choices": []})
         assert (tmp_path / "00000001-response.json.gz").is_file()
+    elif operation == 'timings':
+        archive.update_timings([{'phase': 'context_selection', 'step': 1, 'call_id': '',
+                                 'seconds': .25, 'outcome': 'completed'}])
+        assert archive.listing()[0]['timings'][0]['seconds'] == .25
     else:
         archive.finish(attempt, "accepted", response="done")
         assert json.loads((tmp_path / "00000001.json").read_text())["outcome"] == "accepted"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 
 from .activity import command_output
@@ -14,6 +15,7 @@ from .tools.discovery import UNAVAILABLE_BATCH
 from .types import Message, ToolCall
 
 from .events import AgentEvent
+from .timings import timing_log, save_timings
 
 
 class ToolBatch:
@@ -33,23 +35,37 @@ class ToolBatch:
         self.allowed_tools = allowed_tools
         self.results: list[tuple[ToolCall, ToolResult]] = []
         self.observations: dict[str, tuple[int, Message]] = {}
+        self.timings = timing_log(registry)
+        self.queued_at: float | None = None
 
     async def invoke_call(self, tool_call: ToolCall) -> ToolResult:
+        if self.queued_at is not None:
+            self.timings.record('tool_wait', self.timings.clock() - self.queued_at, self.step, tool_call.id)
         journal = self.registry.resources.journal
         if journal is not None:
-            journal.tool_started(self.step, tool_call.id)
-            # The marker and the messages before it must be durable before effects begin.
-            await journal.flush()
+            with self.timings.measure('journal_persistence', self.step, tool_call.id):
+                journal.tool_started(self.step, tool_call.id)
+                # The marker and the messages before it must be durable before effects begin.
+                await journal.flush()
         self.emit(AgentEvent(kind="tool_start", step=self.step, tool_call=tool_call))
         invocation_token = current_invocation.set((self.step, tool_call.id))
         output_token = command_output.set(
             lambda chunk: self.emit(AgentEvent(kind="tool_output", step=self.step, text=chunk, tool_call=tool_call))
         )
+        execution = self.timings.start('tool_execution', self.step, tool_call.id)
+        outcome = 'completed'
         try:
             result = await self.registry.invoke(tool_call.name, tool_arguments(tool_call.arguments))
+            if result.is_error:
+                outcome = 'error'
+        except asyncio.CancelledError:
+            outcome = 'cancelled'
+            raise
         except Exception as exc:
+            outcome = 'error'
             result = ToolResult.error(f"Tool dispatch failed: {type(exc).__name__}: {exc}. Effects may be partial; inspect before retrying.")
         finally:
+            self.timings.finish(execution, outcome)
             command_output.reset(output_token)
             current_invocation.reset(invocation_token)
         return result
@@ -120,6 +136,7 @@ class ToolBatch:
         if checkpoints is not None:
             checkpoints.begin(self.step)
         checkpoint_token = current_checkpoint.set(checkpoints)
+        self.queued_at = self.timings.clock()
         try:
             await run_batch(calls, self.registry, self.invoke_call, self.commit_call)
         except BaseException:
@@ -130,7 +147,9 @@ class ToolBatch:
             if checkpoints is not None:
                 checkpoints.finish()
 
-        report = await check_edit_batch_report(self.registry, self.results, self.step)
+        with self.timings.measure('post_edit_checks', self.step):
+            report = await check_edit_batch_report(self.registry, self.results, self.step)
+        await save_timings(self.registry)
         check_report = report.text
         if check_report:
             target = self.observations.get(report.call_id) if report.call_id is not None else None

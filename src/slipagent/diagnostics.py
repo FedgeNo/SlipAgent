@@ -173,7 +173,7 @@ class RequestDiagnostics:
             return None
 
     def finish(self, attempt: int | None, outcome: str, *, detail: str = "", response: str = "",
-               usage: dict[str, Any] | None = None) -> None:
+               usage: dict[str, Any] | None = None, timings: list[dict[str, Any]] | None = None) -> None:
         self._migrate_quota()
         if attempt is None or self.error:
             return
@@ -182,7 +182,37 @@ class RequestDiagnostics:
             record = json.loads(path.read_text())
             record.update(outcome=outcome, detail=detail, response_excerpt=response,
                           response_characters=len(response), usage=usage)
+            if timings is not None:
+                record['timings'] = timings
             self._write(path, json.dumps(record, ensure_ascii=False).encode("utf-8"))
+            self._trim()
+        except (OSError, ValueError) as exc:
+            self.error = str(exc)
+
+    def update_timings(self, rows: list[dict[str, Any]]) -> None:
+        """Refresh recent attempt snapshots after tools or background work settle."""
+        self._migrate_quota()
+        if self.error or not rows:
+            return
+        grouped: dict[int, list[dict[str, Any]]] = {}
+        for row in rows:
+            grouped.setdefault(row['step'], []).append(row)
+        try:
+            for index in range(max(1, self.sequence - 19), self.sequence + 1):
+                path = self.directory / f'{index:08d}.json'
+                try:
+                    record = json.loads(path.read_text())
+                except (FileNotFoundError, ValueError):
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                step_id = record.get('step_id')
+                if type(step_id) is not int:
+                    continue
+                current = grouped.get(step_id)
+                if current is not None and current != record.get('timings'):
+                    record['timings'] = current
+                    self._write(path, json.dumps(record, ensure_ascii=False).encode('utf-8'))
             self._trim()
         except (OSError, ValueError) as exc:
             self.error = str(exc)

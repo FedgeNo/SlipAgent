@@ -611,6 +611,17 @@ def test_literal_message_contract_requires_restart(run_copy):
     ''')
 
 
+def test_http_mcp_transport_edits_require_restart(run_copy):
+    run_copy('''
+        edit('mcphttp.py', 'MAX_SSE_EVENTS = 1024', 'MAX_SSE_EVENTS = 1023')
+        await frame.checkpoint()
+        assert frame.generation == 0
+        assert 'Restart required for frame/contract edits: mcphttp.py' in sink.getvalue()
+        await cli.CommandRunner(session).handle('/model')
+        assert 'current model: openrouter::test/model' in sink.getvalue()
+    ''')
+
+
 def test_terminal_rebuild_preserves_draft_history_scroll_and_input_queue(run_copy):
     run_copy('''
         from prompt_toolkit.input import create_pipe_input

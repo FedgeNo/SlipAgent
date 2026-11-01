@@ -182,6 +182,7 @@ session, or save it globally to `mcp.json` so later runs in every project pick i
 ```text
 /mcp add my-server python /path/to/server.py
 /mcp save my-server python /path/to/server.py
+/mcp add remote https://example.com/mcp
 /mcp
 ```
 
@@ -205,8 +206,8 @@ JSON Schema the server advertises. The REPL connects every globally configured s
 on startup; a server that fails to start is reported and skipped rather than
 blocking the session.
 
-Only the stdio transport and MCP tools are supported; resources and prompts
-are not surfaced. Existing MCP connections survive component reloads.
+Stdio and Streamable HTTP transports expose MCP tools; resources and prompts
+are not surfaced. Existing MCP connections survive compatible component reloads.
 Connected server instructions enter model context with their server scope from the first request, even while their tool definitions are deferred. Servers excluded by an explicit tool allowlist do not contribute guidance.
 Structured results and error flags are retained. A server starts in the selected
 workspace unless `cwd` is configured; relative values resolve against that workspace.
@@ -215,3 +216,63 @@ Tool calls wait up to 300 seconds by default; set a server's `timeout` (seconds)
 MCP processes receive a minimal environment, as in the reference MCP SDKs: `HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER` and `TMPDIR` (or the Windows equivalents), plus locale (`LANG`, `LANGUAGE`, `LC_*`) and proxy variables. Add anything else a server needs, including API keys, under its `env` in `mcp.json`.
 Project Python selection does not rewrite their command or PATH; use an explicit
 interpreter in the server's `command` when required.
+
+### Streamable HTTP
+
+A remote entry uses `url` instead of `command`. Optional private `headers` hold
+authentication or service-specific headers:
+
+```json
+{
+  "mcpServers": {
+    "remote": {
+      "url": "https://example.com/mcp",
+      "headers": {"Authorization": "Bearer YOUR_TOKEN"},
+      "timeout": 300
+    }
+  }
+}
+```
+
+Keep these headers in the private global `mcp.json`, outside project storage.
+`/mcp save remote https://example.com/mcp` saves an endpoint; edit its private
+configuration to add credentials. Protocol-managed headers cannot be overridden.
+HTTP entries cannot also specify `command`, `args`, `env`, or `cwd`. Inline URL
+credentials and fragments are rejected. Redirects are refused: configure the
+final endpoint so credentials and request bodies are never redirected elsewhere.
+
+HTTP supports the [2025-11-25 Streamable HTTP contract](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)
+and negotiates 2025-11-25 or 2025-06-18 through initialization. It accepts JSON or
+SSE responses, carries session/version headers, declines unsupported server
+requests, and attempts session deletion during disconnect. It does not open an
+idle GET event stream, resume SSE streams, support the older separate HTTP+SSE
+transport, or perform OAuth login. Supply already provisioned authentication.
+
+Network I/O is asynchronous. Connection establishment is capped at 10 seconds;
+initialization and the complete paginated tool listing each have a 30-second
+deadline. Tool calls use the existing 300-second default or configured `timeout`,
+including lock waiting and response streaming. Heartbeats do not extend the
+deadline. Cancellation attempts a notification for at most one second. Session
+deletion waits at most one second and HTTP-client closure at most two seconds.
+HTTP connections are session-owned and cleanup cancels in-flight requests.
+
+Requests and responses are limited to 8 MiB each, responses must be uncompressed,
+and SSE responses are limited to 1,024 events. The entire catalog is limited to
+1,000 tools. Tool names allow 256 characters, descriptions 65,536 characters,
+and server instructions 262,144 characters. Each tool schema allows 4,096 JSON
+value nodes, 64 levels, and keys of at most 1,024 characters. Exceeding a limit
+fails visibly instead of silently omitting tools or truncating results. JSON
+encoding/decoding, SSE framing, schema parsing, and tool-result rendering use
+owned workers. Registrations yield between groups of 16 tools.
+
+HTTP-tool argument validation runs in an isolated harness-Python subprocess,
+including regex constraints, with a five-second deadline and 8 MiB input/output
+limits. On POSIX its address space is capped at 512 MiB. Timeout, cancellation,
+or malformed worker output rejects the operation and reaps the subprocess;
+the tool is not sent. Other tools keep their existing validation behavior.
+
+HTTP failures are tool errors, without automatic tool-call retries. A lost
+response can mean an operation already took effect: inspect before retrying.
+An expired session is reinitialized before the next explicit operation; the
+failed operation is never automatically replayed. Protocol, size, and network
+errors do not terminate the terminal event loop.

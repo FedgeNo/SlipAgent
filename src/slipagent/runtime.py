@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from .cli import Session
 
 # Wire/state contracts and resource owners stay in the running frame.
-CORE_MODULES = frozenset({"", "runtime", "config", "types", "data_text", "workspace", "tools.base", "mcp", "lifecycle", "resources", "work"})
+CORE_MODULES = frozenset({"", "runtime", "config", "types", "data_text", "workspace", "tools.base", "mcp", "mcphttp", "lifecycle", "resources", "work"})
 # Native models and an indexing worker keep one generation until shutdown.
 CORE_MODULES |= frozenset({"semantic", "semantic.cpu", "semantic.embed", "semantic.indexer",
                            "semantic.retrieval", "semantic.search", "semantic.storage",

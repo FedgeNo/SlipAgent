@@ -75,7 +75,7 @@ In the REPL:
 | `/requests [attempt]` | List the latest 20 request attempts, or inspect one exact request and its outcome |
 | `/timings [step\|on\|off\|clear]` | Show local phase durations for the latest or selected turn, enable/disable collection, or clear current timing records; available while working |
 | `/mcp` | Show MCP servers, their status, and the tools they contribute |
-| `/mcp add <name> <cmd> [args…]` | Connect a server over stdio for this session only |
+| `/mcp add <name> <cmd-or-url> [args…]` | Connect a stdio or Streamable HTTP server for this session only |
 | `/mcp save <name> <cmd> [args…]` | Same, and persist it globally to `mcp.json` |
 | `/mcp remove <name>` | Disconnect a server and drop it from the config |
 | `/new` (or `/reset`) | Start a fresh conversation/task/usage/log index; retain saved sessions and current guidance/model/settings |

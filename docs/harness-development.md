@@ -86,6 +86,11 @@ To add a tool:
    Include lifecycle and reload tests when the tool retains resources.
 
 Only full definitions delivered in the current request authorize execution.
+`Tool.validate_call` is the async argument-validation entry point used by both
+batch preflight and invocation. Its default keeps the existing validator and
+normalization behavior; HTTP MCP tools isolate it in a bounded subprocess so
+server-supplied regexes cannot occupy the terminal event loop. Overrides must
+preserve normalization and return validation errors before any tool effects.
 Calling an unavailable or unloaded tool rejects the whole response's tool batch,
 including otherwise valid calls. A discovery preview, old model knowledge, or a
 definition loaded midway through that batch does not authorize it. Allowlists

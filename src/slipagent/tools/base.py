@@ -143,7 +143,7 @@ class Tool(ABC):
         if "__invalid_arguments__" in arguments:
             return ToolResult.error(f"Invalid JSON arguments for tool '{self.name}': expected a JSON object.")
 
-        problem = validate_arguments(self.parameters, arguments, allow_unknown=not self.strict_arguments)
+        problem = await self.validate_call(arguments)
         if problem is not None:
             return ToolResult.error(f"Invalid arguments for tool '{self.name}': {problem}")
 
@@ -152,6 +152,10 @@ class Tool(ABC):
             return ToolResult.error(f"Invalid arguments for tool '{self.name}': {problem}")
 
         return await self.run(**arguments)
+
+    async def validate_call(self, arguments: dict[str, Any]) -> str | None:
+        """Validate and normalize arguments before effects; remote tools may isolate this work."""
+        return validate_arguments(self.parameters, arguments, allow_unknown=not self.strict_arguments)
 
 
 def _binds_arguments(run: Callable[..., Any], arguments: dict[str, Any]) -> str | None:

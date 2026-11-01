@@ -59,7 +59,7 @@ def test_menu_inserts_only_the_command_prefix_and_help_keeps_all_variants():
     assert "/rename " in choices
     assert "<name>" in choices["/rename "]
     assert "/mcp add " in choices
-    assert "<command>" in choices["/mcp add "]
+    assert "<command-or-url>" in choices["/mcp add "]
     assert "/danger off" in choices
     assert "/overthinking [on|off]" in choices["/overthinking "]
     assert "/overthinking [on|off]" in command_help("overthinking")

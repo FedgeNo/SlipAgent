@@ -828,10 +828,22 @@ Prompts and settings entered during startup queue until initialization completes
 Esc, `/exit`, `/quit`, or EOF cancel startup and drain owned work before shutdown.
 The repository worker finishes before its resources close. Reload watching begins
 after startup settles, preserving the editor's boundary callback when present.
-MCP negotiation prefers modern per-request metadata and retains the legacy
+Stdio MCP negotiation prefers modern per-request metadata and retains the legacy
 handshake fallback. If initial discovery failed but the handshake rejection
 identifies a supported modern version, discovery is retried once on that same
 connection. Disjoint versions and a failed recovery remain visible errors.
+Streamable HTTP uses the shared MCP operations with a separate async transport
+in `mcphttp.py`, negotiating the documented HTTP versions through initialization.
+It owns its HTTP pool, deadlines, in-flight requests, and retained disconnect
+task. JSON/SSE processing and result projection use owned workers, with explicit
+byte/event/catalog/schema limits. Remote argument checks run in a bounded,
+reaped subprocess to isolate regex evaluation; `Tool.validate_call` is awaited
+both by batch preflight and by invocation, preserving normalization and rejection
+before effects. Normal tools retain synchronous validation inside that async
+entry point. HTTP redirects and ambiguous tool-call replay are refused. See
+[HTTP MCP configuration](configuration.md#streamable-http) for supported behavior
+and exact limits. HTTP client/schema changes require restart through the stable
+MCP/tool-base contracts.
 Shutdown cancels command tasks, closes MCP connections, closes tools and registry
 services, closes the API client, and releases the runtime generation.
 

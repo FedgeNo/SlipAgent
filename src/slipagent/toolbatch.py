@@ -10,7 +10,7 @@ from .batching import run_batch
 from .checkpoints import FileCheckpoints, current_checkpoint
 from .checks import check_edit_batch_report
 from .calllabels import tool_arguments
-from .tools.base import ToolRegistry, ToolResult, current_invocation, validate_arguments, _binds_arguments
+from .tools.base import ToolRegistry, ToolResult, current_invocation, _binds_arguments
 from .tools.discovery import UNAVAILABLE_BATCH
 from .types import Message, ToolCall
 
@@ -122,7 +122,7 @@ class ToolBatch:
         for call in calls:
             tool = self.registry.get(call.name)
             arguments = tool_arguments(call.arguments)
-            problem = (validate_arguments(tool.parameters, arguments, allow_unknown=not tool.strict_arguments)
+            problem = (await tool.validate_call(arguments)
                        or _binds_arguments(tool.run, arguments)) if tool is not None else "unknown tool"
             if problem:
                 problems.append(f"{call.name}: {problem}")

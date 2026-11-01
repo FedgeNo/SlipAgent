@@ -1094,8 +1094,8 @@ class McpCommand(Command):
     banner = '/mcp [add|save|remove]'
     help = (
         CommandHelp('/mcp', 'show MCP servers and their tools', '/mcp'),
-        CommandHelp('/mcp add <name> <command> [args…]', 'connect an MCP server over stdio for this session', '/mcp add '),
-        CommandHelp('/mcp save <name> <command> [args…]', 'same, but also save it globally for future runs in every project', '/mcp save '),
+        CommandHelp('/mcp add <name> <command-or-url> [args…]', 'connect a stdio or Streamable HTTP MCP server for this session', '/mcp add '),
+        CommandHelp('/mcp save <name> <command-or-url> [args…]', 'same, but also save it globally for future runs in every project', '/mcp save '),
         CommandHelp('/mcp remove <name>', 'disconnect a server and forget it', '/mcp remove '),
     )
 
@@ -1110,7 +1110,7 @@ class McpCommand(Command):
 
         try:
             action, spec, removal = self.split(argument)
-        except ValueError as exc:
+        except (ValueError, MCPError) as exc:
             print(style.red(f"  invalid MCP command: {exc}"), file=out)
             return None
 
@@ -1143,7 +1143,7 @@ class McpCommand(Command):
 
         if action not in ("add", "save") or spec is None:
             print(
-                style.red(f"  usage: /mcp add <name> <command> [args…]  "
+                style.red(f"  usage: /mcp add <name> <command-or-url> [args…]  "
                           f"(or /mcp save …)"),
                 file=out,
             )
@@ -1177,7 +1177,7 @@ class McpCommand(Command):
         return None
 
     def split(self, argument: str) -> tuple[str, ServerSpec | None, str | None]:
-        """Parse `add|save|remove <name> <command> [args…]`.
+        """Parse `add|save|remove <name> <command-or-url> [args…]`.
 
         Returns the subcommand, the server spec to connect, and the name to remove.
         The command and its arguments are split on the first space after the name,
@@ -1200,6 +1200,11 @@ class McpCommand(Command):
         command_parts = shlex.split(rest)
         if not command_parts:
             return action, None, None
+
+        if command_parts[0].startswith(('http://', 'https://')):
+            if len(command_parts) != 1:
+                raise MCPError('HTTP MCP takes one endpoint URL; put private headers in mcp.json.')
+            return action, ServerSpec.from_json(name, {'url': command_parts[0]}), None
 
         return action, ServerSpec(name=name, command=command_parts[0], args=command_parts[1:]), None
 

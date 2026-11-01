@@ -65,7 +65,8 @@ src/slipagent/
 ├── config.py         configuration resolution
 ├── workspace.py      symlink-aware path boundary
 ├── types.py          shared messages, tool calls, usage, wire types
-├── mcp.py            persistent stdio MCP connections
+├── mcp.py            shared MCP configuration, operations, and stdio connections
+├── mcphttp.py        bounded Streamable HTTP and isolated remote argument checks
 ├── plugins.py        user method overrides, fingerprints, and approvals
 ├── plugintools.py    /plugin copy, diff, and restamp
 ├── updater.py        --update: download the latest release and run its installer

@@ -1,4 +1,6 @@
-"""MCP client: expose tools from Model Context Protocol servers.
+"""Shared MCP operations/configuration and the stdio transport.
+
+Streamable HTTP uses the same operations through the stable mcphttp owner.
 
 Speaks JSON-RPC 2.0 over a server's stdio transport, one message per line, as
 required by the spec. A connected server's tools are wrapped in `MCPTool` and
@@ -25,6 +27,7 @@ import json
 import os
 import re
 import signal
+from urllib.parse import urlsplit, urlunsplit
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -115,23 +118,50 @@ class MCPError(Exception):
 
 @dataclass(slots=True)
 class ServerSpec:
-    """One configured MCP server: a command to launch over stdio."""
+    """One stdio command or Streamable HTTP endpoint."""
 
     name: str
-    command: str
+    command: str = ""
     args: list[str] = field(default_factory=list)
     env: dict[str, str] | None = None
     cwd: str | None = None
     description: str = ""
     timeout: float | None = None
+    url: str | None = None
+    headers: dict[str, str] | None = field(default=None, repr=False)
 
     @classmethod
     def from_json(cls, name: str, raw: Any) -> ServerSpec:
         if not isinstance(raw, dict):
             raise MCPError(f"server '{name}' must be a JSON object")
-        command = raw.get("command")
-        if not isinstance(command, str) or not command.strip():
+        command = raw.get("command", "")
+        url = raw.get('url')
+        if url is not None:
+            if not isinstance(url, str):
+                raise MCPError(f"server '{name}' needs an HTTP(S) URL")
+            try:
+                parsed = urlsplit(url)
+                valid = (parsed.scheme in ('http', 'https') and parsed.hostname and parsed.port != 0
+                         and parsed.username is None and parsed.password is None and not parsed.fragment
+                         and not any(ord(char) < 33 for char in url))
+            except ValueError:
+                valid = False
+            if not valid:
+                raise MCPError(f"server '{name}' needs an HTTP(S) URL without inline credentials or fragments")
+            if command or raw.get('args') or raw.get('env') or raw.get('cwd'):
+                raise MCPError(f"server '{name}' cannot combine url with command, args, env, or cwd")
+        elif not isinstance(command, str) or not command.strip():
             raise MCPError(f"server '{name}' is missing a 'command' string")
+        headers = raw.get('headers')
+        if headers is not None:
+            reserved = {'host', 'content-length', 'transfer-encoding', 'accept', 'content-type', 'accept-encoding',
+                        'mcp-session-id', 'mcp-protocol-version', 'last-event-id'}
+            if (url is None or not isinstance(headers, dict) or any(
+                    not isinstance(key, str) or not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", key)
+                    or key.lower() in reserved or not isinstance(value, str)
+                    or any(ord(char) < 32 or ord(char) > 126 for char in value)
+                    for key, value in headers.items())):
+                raise MCPError(f"server '{name}' has invalid HTTP headers; protocol headers are managed by SlipAgent")
         args = raw.get("args") or []
         if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
             raise MCPError(f"server '{name}' has a non-string 'args' list")
@@ -148,16 +178,21 @@ class ServerSpec:
             raise MCPError(f"server '{name}' has an invalid 'timeout'; use seconds between 0 and 86400")
         return cls(
             name=name,
-            command=command.strip(),
+            command=command.strip() if isinstance(command, str) else '',
             args=list(args),
             env=env,
             cwd=cwd,
             description=str(raw.get("description") or ""),
             timeout=float(timeout) if timeout is not None else None,
+            url=url,
+            headers=dict(headers) if headers is not None else None,
         )
 
     def to_json(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {"command": self.command, "args": self.args}
+        payload: dict[str, Any] = ({"url": self.url} if self.url is not None
+                                   else {"command": self.command, "args": self.args})
+        if self.headers:
+            payload['headers'] = self.headers
         if self.env:
             payload["env"] = self.env
         if self.cwd:
@@ -169,6 +204,9 @@ class ServerSpec:
         return payload
 
     def command_line(self) -> str:
+        if self.url is not None:
+            parsed = urlsplit(self.url)
+            return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, '', ''))
         parts = [self.command, *self.args]
         return " ".join(parts)
 
@@ -753,31 +791,33 @@ class MCPClient:
             result = response.get("result")
             if not isinstance(result, dict) or not isinstance(result.get("tools"), list):
                 raise MCPError("tools/list returned a malformed result; expected an object with a tools array")
-            for entry in result["tools"]:
-                if not isinstance(entry, dict):
-                    continue
-                name = entry.get("name")
-                if not isinstance(name, str) or not name:
-                    continue
-                schema = entry.get("inputSchema")
-                try:
-                    if not isinstance(schema, dict) or schema.get("type") != "object":
-                        raise ValueError("inputSchema must describe an object")
-                    validate_schema_shape(schema)
-                except (ValueError, RecursionError) as exc:
-                    raise MCPError(f"Invalid schema for MCP tool '{name}': {exc}") from exc
-                tools.append(
-                    MCPToolInfo(
-                        name=name,
-                        description=str(entry.get("description") or ""),
-                        input_schema=schema,
-                    )
-                )
+            tools.extend(await self._tool_page(result))
             cursor = result.get("nextCursor")
             if not isinstance(cursor, str) or not cursor or cursor in seen_cursors:
                 break
             seen_cursors.add(cursor)
         self.tools = tools
+        return tools
+
+    async def _tool_page(self, result: dict[str, Any]) -> list[MCPToolInfo]:
+        return self._parse_tool_page(result)
+
+    def _parse_tool_page(self, result: dict[str, Any]) -> list[MCPToolInfo]:
+        tools = []
+        for entry in result['tools']:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get('name')
+            if not isinstance(name, str) or not name:
+                continue
+            schema = entry.get('inputSchema')
+            try:
+                if not isinstance(schema, dict) or schema.get('type') != 'object':
+                    raise ValueError('inputSchema must describe an object')
+                validate_schema_shape(schema)
+            except (ValueError, RecursionError) as exc:
+                raise MCPError(f"Invalid schema for MCP tool '{name}': {exc}") from exc
+            tools.append(MCPToolInfo(name, str(entry.get('description') or ''), schema))
         return tools
 
     def _request_meta(self) -> dict[str, Any] | None:
@@ -791,6 +831,12 @@ class MCPClient:
             "tools/call", {"name": name, "arguments": arguments}, self._request_meta(),
             timeout=self.spec.timeout if self.spec.timeout is not None else DEFAULT_TOOL_TIMEOUT,
         )
+        return await self._format_tool_result(name, response)
+
+    async def _format_tool_result(self, name: str, response: dict[str, Any]) -> ToolResult:
+        return self._tool_result(name, response)
+
+    def _tool_result(self, name: str, response: dict[str, Any]) -> ToolResult:
         if "error" in response:
             return ToolResult.error(
                 f"MCP tool '{name}' failed: {self._describe_error('tools/call', response)}"
@@ -934,14 +980,27 @@ class MCPManager:
         cwd = Path(spec.cwd).expanduser() if spec.cwd is not None else self.workspace
         if not cwd.is_absolute():
             cwd = self.workspace / cwd
-        client = MCPClient(replace(spec, cwd=str(cwd)))
+        if spec.url is not None:
+            from .mcphttp import MCPHTTPClient
+            client: MCPClient = MCPHTTPClient(spec)
+        else:
+            client = MCPClient(replace(spec, cwd=str(cwd)))
         state = ServerState(spec=spec, client=client)
         self.servers[name] = state
 
         try:
             await client.connect()
             tools = await client.list_tools()
-            state.qualified = self._register(name, client, tools, state)
+            if spec.url is not None:
+                # Publish bounded groups on the event loop; expensive schema
+                # validation has already happened in the HTTP client's worker.
+                for index in range(0, len(tools), 16):
+                    registered = self._register(name, client, tools[index:index + 16], state)
+                    if self.registry is None:
+                        state.qualified.extend(registered)
+                    await asyncio.sleep(0)
+            else:
+                state.qualified = self._register(name, client, tools, state)
         except BaseException as exc:
             cleanup_error = ""
             try:
@@ -957,7 +1016,8 @@ class MCPManager:
         state.status = "connected"
         version = client.protocol_version or "unknown"
         collision = state.detail
-        state.detail = f"MCP {version} ({client.era}), {len(state.qualified)} tool(s), cwd: {client.spec.cwd}"
+        location = 'Streamable HTTP' if spec.url is not None else f'cwd: {client.spec.cwd}'
+        state.detail = f"MCP {version} ({client.era}), {len(state.qualified)} tool(s), {location}"
         if collision:
             state.detail += f"; {collision}"
         return state
@@ -978,7 +1038,12 @@ class MCPManager:
             if qualified in self.registry:
                 skipped.append(qualified)
                 continue
-            self.registry.register(MCPTool(client, info, qualified))
+            if client.spec.url is not None:
+                from .mcphttp import MCPHTTPTool
+                tool: MCPTool = MCPHTTPTool(client, info, qualified)
+            else:
+                tool = MCPTool(client, info, qualified)
+            self.registry.register(tool)
             registered.append(qualified)
         if skipped:
             state.detail = f"skipped {len(skipped)} colliding tools: " + ", ".join(skipped)

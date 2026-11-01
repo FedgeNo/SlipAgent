@@ -64,6 +64,7 @@ In the REPL:
 | `/task new` | Make the next prompt a new task, retaining previous history and command logs |
 | `/rename <name>` | Save this conversation's name and set its terminal title to `{name} \| SlipAgent` |
 | `/sessions` | Choose a saved session to resume, rename, or delete; `/sessions list` prints IDs and the storage path |
+| `/files [query]` | Fuzzy-find a workspace file and open it read-only; Ctrl+P opens the same picker |
 | `/update` | Close this session cleanly and install the latest GitHub commit, preserving installer edit checks |
 | `/skills` | List project and user skill packages; see [skills](skills.md) |
 | `/skill [name\|path\|off]` | Show, explicitly select, or clear a pinned workflow skill |
@@ -115,6 +116,17 @@ a key that has expired or expires within seven days is warned about once.
 
 Both forms supplying a key are omitted from input history, queued display text,
 model input, and session journals.
+
+Ctrl+P or `/files [query]` opens a separate file-query field without submitting
+the prompt draft or pausing agent work. Type a partial filename or path;
+matching is case-insensitive and supports abbreviated subsequences, Unicode,
+and spaces between query parts. The picker shows up to 50 ranked paths with
+matched graphemes highlighted, and updates partial results during the scan.
+Use arrows or Page Up/Down to select, Enter or a click to open a UTF-8 text file
+read-only, Tab to move between query and results, and Esc to cancel. Workspace
+ignore and access rules apply, and access is checked again when opening. An
+existing editor must be closed before opening another viewer. No model calls,
+content searches, or new persistent file index are involved.
 
 Conversation titles default to `{full working directory} | SlipAgent`.
 While a saved conversation keeps that default, the model names it from your

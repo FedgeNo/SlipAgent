@@ -98,7 +98,8 @@ messages queue and are sent at the next step. **Esc** interrupts immediately;
 | Ctrl+O | Show or hide the Touched/Calls sidebar |
 | Ctrl+\\ | Show the exact context sent to the model |
 | Shift+Tab | Move between the feed, sidebar, and links |
-| F2 / F3 / F4 | Markdown source view / copy the latest reply / inspection options |
+| F2 / F3 / F4 | Markdown source view / search the feed / inspection options |
+| Ctrl+P | Fuzzy-find a workspace file and open it read-only |
 
 The [Terminal Guide](docs/terminal.md) covers every command, the sidebar,
 viewers, the editor, queueing, and Danger Mode.

@@ -12,6 +12,7 @@ from prompt_toolkit.data_structures import Point
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
+from wcwidth import iter_graphemes
 
 from .uiwindows import ListWindow
 
@@ -86,6 +87,9 @@ class ListPanel(ABC, Generic[K]):
     def item_text(self, key: K) -> str:
         return self.label(key)
 
+    def item_fragments(self, key: K) -> StyleAndTextTuples:
+        return [('', self.item_text(key))]
+
     def fragments(self) -> StyleAndTextTuples:
         keys = self.keys()
         if not keys:
@@ -104,9 +108,11 @@ class ListPanel(ABC, Generic[K]):
                         self.selected_key = key
                         self.open_selected()
                     return None
-                fragments.append((style, self.item_text(key), click))
+                for part_style, text, *_ in self.item_fragments(key):
+                    fragments.append((style + (' ' + part_style if part_style else ''), text, click))
             else:
-                fragments.append((style, self.item_text(key)))
+                for part_style, text, *_ in self.item_fragments(key):
+                    fragments.append((style + (' ' + part_style if part_style else ''), text))
         return fragments
 
 
@@ -168,6 +174,7 @@ class ChoicePanel(ListPanel[int]):
     def __init__(self, actions: ListActions[int]) -> None:
         self.options: list[tuple[str, str]] = []
         self.option_styles: dict[str, str] = {}
+        self.option_highlights: dict[str, frozenset[int]] = {}
         super().__init__(actions)
 
     def keys(self) -> list[int]:
@@ -183,3 +190,15 @@ class ChoicePanel(ListPanel[int]):
 
     def item_text(self, key: int) -> str:
         return ("› " if key == self.selection else "  ") + self.label(key)
+
+    def item_fragments(self, key: int) -> StyleAndTextTuples:
+        value = self.options[key][0]
+        if value not in self.option_highlights:
+            return super().item_fragments(key)
+        import re
+        positions = self.option_highlights[value]
+        result: StyleAndTextTuples = [('', '› ' if key == self.selection else '  ')]
+        for index, cluster in enumerate(iter_graphemes(self.label(key))):
+            visible = re.sub(r'[\x00-\x1f\x7f-\x9f]', lambda match: f'\\x{ord(match[0]):02x}', cluster)
+            result.append(('bold underline' if index in positions else '', visible))
+        return result

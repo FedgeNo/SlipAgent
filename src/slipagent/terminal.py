@@ -45,6 +45,7 @@ from .viewerpanels import ViewerDeck, TextViewerPanel, DiffViewerPanel, FileView
 from .inspection import IndexedText, field_snapshot, artifact_snapshot, build_snapshot
 from .transcriptlayouts import TranscriptLayouts
 from .types import ToolCall
+from .workspace import Workspace, WorkspaceError
 from .diffcomments import attach_reference, diff_reference
 from .statusline import NOTICE_SECONDS, PULSE_FRAMES, TIP_SECONDS, StatusLine
 from .mainarea import MainArea
@@ -205,6 +206,7 @@ class TerminalUI:
     _selection_start: Point | None
     _cleared_records: set[int]
     _selection_end: Point | None
+    _choice_panel: ChoicePanel
     _scrollbar: TranscriptScrollbar
     context_window: TranscriptWindow
 
@@ -340,6 +342,36 @@ class TerminalUI:
         if '_feed_search' not in self.__dict__:
             from .feedsearch import FeedSearch
             self._feed_search = FeedSearch(self)
+
+    def _ensure_file_picker(self) -> None:
+        if '_file_picker' not in self.__dict__:
+            from .filepicker import FilePicker
+            self._file_picker = FilePicker(self)
+
+    async def find_file(self, workspace: Workspace | None = None, query: str = '') -> None:
+        self._ensure_file_picker()
+        if self._editor_active:
+            self.notify('Close the editor before opening a file viewer.')
+            return
+        if workspace is None:
+            workspace = self.__dict__.get('_workspace')
+        if workspace is None:
+            root = self.__dict__.get('_project_directory')
+            if root is None:
+                self.notify('No workspace is available for file search.')
+                return
+            try:
+                workspace = await asyncio.to_thread(Workspace, root)
+            except WorkspaceError as exc:
+                self.notify(str(exc))
+                return
+        selected = await self._file_picker.choose(workspace, query)
+        if selected is not None:
+            try:
+                target = workspace.resolve(selected)
+                await self._read_file(str(target))
+            except (WorkspaceError, OSError, ValueError) as exc:
+                self.notify(str(exc))
 
     def _inspection_selection(self, files: bool) -> Any:
         return self._touched_panel.selection if files else self._calls_panel.selection
@@ -713,6 +745,7 @@ class TerminalUI:
     def _ensure_menu(self) -> None:
         """Add menu state to live instances without replacing the input buffer."""
         if hasattr(self, "_menu_future"):
+            self._choice_panel.__dict__.setdefault('option_highlights', {})
             return
         self._menu_future: asyncio.Future[str | None] | None = None
         self._menu_title = ""
@@ -913,6 +946,7 @@ class TerminalUI:
         self._menu_future = future
         self._menu_title = title
         self._choice_panel.option_styles = styles or {}
+        self._choice_panel.option_highlights = {}
         self.__dict__["_menu_legend"] = legend or []
         self._menu_options = [(value, re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", label))
                               for value, label in options]
@@ -2125,6 +2159,7 @@ class TerminalUI:
 
     def _close_transcript(self) -> None:
         self._feed_search.close()
+        self._file_picker.close()
         panel = self.__dict__.get("_editor_panel")
         if panel is not None:
             panel.dispose()

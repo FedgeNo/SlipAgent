@@ -1067,6 +1067,27 @@ Command quotas count retained bytes; inspection quotas charge header plus logica
 payload bytes per record. Shared physical storage is not the sum of those counters.
 Non-command artifacts and conversation journals retain their existing formats.
 
+## Fuzzy File Picker
+
+`filepicker.py` owns the user-facing `/files [query]` and Ctrl+P selector. It
+reuses `ChoicePanel`, the footer menu lifetime, workspace enumeration, and the
+existing read-only file viewer. Its query field is separate from the agent
+prompt. One coordinator scans the current query in an owned blocking worker,
+retaining at most 50 ranked paths, and publishes partial progress at most every
+100 ms. Query changes signal cooperative stop and coalesce to the newest text;
+publication checks both query revision and workspace identity. Closing/reopening
+also guards coordinator lifetime by the menu future, so an older scan cannot
+overwrite a new root or take ownership of its task.
+
+Matching uses case-folded NFC subsequences with filename, adjacency, and boundary
+bonuses. Highlight positions refer to original grapheme clusters, including
+case-fold expansions; displayed control characters are escaped. Queries are
+limited to 256 characters. No inventory cache, watcher, content reads, or model
+calls are added. Enumeration keeps workspace ignore/access behavior and the
+selected path is checked against the current workspace access policy before
+opening. The picker does not enter the editor or hold agent work; an already
+open editor must be closed before opening another viewer.
+
 ## Harness Python Execution
 
 `tools/python.py` owns `run_python`, a core tool available from the first request that executes one script in

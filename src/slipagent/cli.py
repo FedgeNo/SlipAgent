@@ -1345,6 +1345,7 @@ class Repl:
                 project_directory=session.workspace.root,
             )
             renderer.terminal = terminal
+            terminal.__dict__['_workspace'] = session.workspace
             terminal.__dict__["_agent_input_queue"] = lambda: input_queue(session.agent)
             from .useredits import UserEdits
             user_edits = UserEdits(session, terminal)

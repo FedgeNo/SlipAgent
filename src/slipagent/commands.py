@@ -291,6 +291,15 @@ class ViewCommand(Command):
         return False
 
 
+class FilesCommand(PresentationCommand):
+    name = 'files'
+    banner = '/files [query]'
+    help = (CommandHelp('/files [query]', 'find a workspace file by fuzzy path and open it read-only (Ctrl+P)', '/files '),)
+
+    async def apply(self, context: CommandContext, argument: str, terminal: TerminalUI) -> None:
+        await terminal.find_file(context.session.workspace, argument)
+
+
 class ThemeCommand(PresentationCommand):
     name = 'theme'
     help = (
@@ -1533,6 +1542,7 @@ COMMANDS: tuple[Command, ...] = (
     SettingsCommand(),
     MenuCommand(),
     ViewCommand(),
+    FilesCommand(),
     ThemeCommand(),
     MarkdownCommand(),
     CopyCommand(),

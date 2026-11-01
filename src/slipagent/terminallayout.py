@@ -42,6 +42,7 @@ def build_layout(ui: TerminalUI) -> Layout:
     ui._ensure_viewer()
     ui._ensure_inspection()
     ui._ensure_search()
+    ui._ensure_file_picker()
     ui._ensure_focus()
     ui._ensure_queued_prompts()
     if not isinstance(ui.input.window, InputWindow):
@@ -82,6 +83,8 @@ def build_layout(ui: TerminalUI) -> Layout:
     menu_footer = menus.footer(
         ActionControl(ui._menu_heading),
         ui._menu_window, lambda: ui._menu_window, ui._bottom_row(menu=True))
+    file_footer = HSplit([ui._file_picker.field, ui._menu_window, ui._bottom_row(menu=True)],
+                         height=lambda: ui._footer_rows(), style='class:footer class:menu')
     setting_footer = menus.footer(
         ActionControl(lambda: ui._activity_notice([("class:menu-title", "Folder Opener")])),
         ui._options_panel.field, lambda: ui._options_panel.field, ui._bottom_row(menu=False))
@@ -112,8 +115,8 @@ def build_layout(ui: TerminalUI) -> Layout:
                                      ConditionalContainer(Window(width=ui._inspection_panel.width, style="class:menu"), inspection_visible)],
                                     height=ui._queued_prompt_height),
                              Condition(lambda: ui._queued_prompt_height() > 0)),
-        DynamicContainer(lambda: search_footer if ui._feed_search.active else menu_footer if ui._menu_future is not None else setting_footer if ui._options_field_active else footer),
-    ]), focused_element=ui._feed_search.field if ui._feed_search.active else ui._menu_window if ui._menu_future is not None else ui._options_panel.field if ui._options_field_active else ui._editor_input if ui._editor_active else
+        DynamicContainer(lambda: file_footer if ui._file_picker.active else search_footer if ui._feed_search.active else menu_footer if ui._menu_future is not None else setting_footer if ui._options_field_active else footer),
+    ]), focused_element=ui._file_picker.field if ui._file_picker.active else ui._feed_search.field if ui._feed_search.active else ui._menu_window if ui._menu_future is not None else ui._options_panel.field if ui._options_field_active else ui._editor_input if ui._editor_active else
         ui._viewer_window if ui._viewer_active else ui.input)
 
 

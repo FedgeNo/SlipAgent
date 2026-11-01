@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 def build_bindings(ui: TerminalUI) -> KeyBindings:
     bindings = KeyBindings()
     in_search = Condition(lambda: ui._feed_search.active)
+    in_picker = Condition(lambda: ui._file_picker.active)
     in_search_results = in_search & Condition(lambda: ui.app.layout.current_window is ui._feed_search.window)
     in_menu = Condition(lambda: ui._menu_future is not None and ui.app.layout.current_window is ui._menu_window)
     in_setting = Condition(lambda: ui.__dict__.get("_options_field_active", False) and ui.app.layout.current_control is ui._options_panel.field.control)
@@ -87,7 +88,7 @@ def build_bindings(ui: TerminalUI) -> KeyBindings:
     def ignore_inspection_text(event: KeyPressEvent) -> None:
         pass
 
-    @bindings.add("f3", filter=Condition(lambda: not ui._password), eager=True)
+    @bindings.add("f3", filter=Condition(lambda: not ui._password) & ~in_picker, eager=True)
     def search_feed(event: KeyPressEvent) -> None:
         ui._feed_search.open()
 
@@ -105,7 +106,7 @@ def build_bindings(ui: TerminalUI) -> KeyBindings:
         ui._feed_search.window.scroll(-rows if key in {"up", "pageup"} else rows)
         ui.app.invalidate()
 
-    @bindings.add("f4", filter=~in_menu & ~in_setting & ~in_search)
+    @bindings.add("f4", filter=~in_menu & ~in_setting & ~in_search & ~in_picker)
     def options_screen(event: KeyPressEvent) -> None:
         ui.app.create_background_task(ui._options_panel.show())
 
@@ -200,7 +201,7 @@ def build_bindings(ui: TerminalUI) -> KeyBindings:
     def toggle_markdown(event: KeyPressEvent) -> None:
         ui.configure_markdown(source=not ui.__dict__.get("_markdown_source", False))
 
-    @bindings.add("f3", filter=~in_menu & ~in_viewer & ~in_editor & ~in_setting)
+    @bindings.add("f3", filter=~in_menu & ~in_viewer & ~in_editor & ~in_setting & ~in_picker)
     def copy_response(event: KeyPressEvent) -> None:
         if ui.last_markdown():
             ui.copy_response()
@@ -212,14 +213,15 @@ def build_bindings(ui: TerminalUI) -> KeyBindings:
 
     @bindings.add("enter", filter=in_menu, eager=True)
     def select_menu(event: KeyPressEvent) -> None:
-        ui._finish_menu(ui._menu_options[ui._menu_index][0])
+        if ui._menu_options:
+            ui._finish_menu(ui._menu_options[ui._menu_index][0])
 
     @bindings.add("escape", filter=in_menu, eager=True)
     @bindings.add("c-d", filter=in_menu)
     def cancel_menu(event: KeyPressEvent) -> None:
         ui._finish_menu(None)
 
-    @bindings.add("escape", filter=~in_search & ~in_menu & ~in_viewer & ~in_editor & ~in_setting & ~in_inspection & ~in_link & ~in_feed, eager=True)
+    @bindings.add("escape", filter=~in_search & ~in_menu & ~in_viewer & ~in_editor & ~in_setting & ~in_inspection & ~in_link & ~in_feed & ~in_picker, eager=True)
     def stop_now(event: KeyPressEvent) -> None:
         # An open viewer owns Esc even when focus has moved to the prompt.
         if ui._viewer_active:
@@ -279,11 +281,40 @@ def build_bindings(ui: TerminalUI) -> KeyBindings:
     def scroll_down(event: KeyPressEvent) -> None:
         ui._scroll_output(3)
 
-    @bindings.add("c-d", filter=~in_menu & ~in_viewer & ~in_editor & ~in_setting & ~in_inspection)
+    @bindings.add("c-d", filter=~in_menu & ~in_viewer & ~in_editor & ~in_setting & ~in_inspection & ~in_picker)
     def eof(event: KeyPressEvent) -> None:
         if not event.current_buffer.text:
             ui._end_input()
         else:
             event.current_buffer.delete()
+
+    @bindings.add('c-p', filter=Condition(lambda: not ui._password and ui._menu_future is None)
+                  & ~in_search & ~in_setting, eager=True)
+    def find_file(event: KeyPressEvent) -> None:
+        ui.app.create_background_task(ui.find_file())
+
+    @bindings.add('up', filter=in_picker)
+    @bindings.add('down', filter=in_picker)
+    @bindings.add('pageup', filter=in_picker)
+    @bindings.add('pagedown', filter=in_picker)
+    def move_file(event: KeyPressEvent) -> None:
+        key = event.key_sequence[-1].key
+        rows = max(1, ui._footer_rows() - 2) if key in {'pageup', 'pagedown'} else 1
+        ui._move_menu(-rows if key in {'up', 'pageup'} else rows)
+
+    @bindings.add('enter', filter=in_picker, eager=True)
+    def select_file(event: KeyPressEvent) -> None:
+        ui._file_picker.accept(ui._file_picker.field.buffer)
+
+    @bindings.add('escape', filter=in_picker, eager=True)
+    @bindings.add('c-d', filter=in_picker)
+    def cancel_file(event: KeyPressEvent) -> None:
+        ui._finish_menu(None)
+
+    @bindings.add('tab', filter=in_picker)
+    @bindings.add('s-tab', filter=in_picker)
+    def focus_file(event: KeyPressEvent) -> None:
+        target = ui._menu_window if ui.app.layout.current_control is ui._file_picker.field.control else ui._file_picker.field
+        ui._focus.focus(target)
 
     return bindings

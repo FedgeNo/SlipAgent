@@ -9,6 +9,8 @@ Edit these files with any text editor. SlipAgent reads them when it builds a mod
 
 SlipAgent strips leading and trailing whitespace and surrounds each rendered instruction prompt with a newline. Tool and parameter descriptions omit that surrounding padding when inserted into schema fields. Interior whitespace and paragraph boundaries remain intact. Missing prompt files report their full path and must be restored.
 
+Running generations read their prompt resources even when a Python reload is rejected. When a schema change adds parameter-description paths that an older generation cannot resolve, give the new schema versioned prompt resources and retain the older resources for its consumers. `tools/run-command-v2.md` and `tools/run-command-v2-parameters.json` describe stdin-capable commands; the unversioned files remain compatible with running generations without stdin support.
+
 ## Markdown Structure
 
 Address actions available in the current response: interpreting supplied evidence, planning, replying, and requesting tools. Express workflow guidance as a choice from current evidence, not an obligation to act on future turns. Tool results requested now are unavailable to this response. Historical evidence, conditional plans, and factual descriptions of harness behavior can refer to other turns.

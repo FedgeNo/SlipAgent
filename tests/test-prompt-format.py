@@ -279,6 +279,37 @@ def test_tool_spec_rereads_description_and_argument_guidance(editable_prompts, w
     assert before.parameters["properties"]["path"]["description"] != "Fresh path guidance."
 
 
+def test_run_command_prompts_remain_compatible_with_previous_schema(workspace):
+    import copy
+    from slipagent.tools.shell import RunCommandTool
+
+    current = RunCommandTool(workspace).spec
+    assert current.parameters['properties']['interactive']['description']
+    assert 'interactive=true' in current.description
+    previous = RunCommandTool(workspace)
+    previous.parameters = copy.deepcopy(previous.parameters)
+    previous.parameters['properties'].pop('interactive')
+    previous.parameter_prompts = 'tools/run-command-parameters.json'
+    previous.description_prompt = 'tools/run-command.md'
+    restored = previous.spec
+    assert 'interactive' not in restored.parameters['properties']
+    assert 'interactive=true' not in restored.description
+    assert restored.parameters['properties']['background']['description']
+
+
+def test_interactive_command_argument_guidance_stays_editable(editable_prompts, workspace):
+    from slipagent.tools.shell import RunCommandTool
+
+    tool = RunCommandTool(workspace)
+    before = tool.spec
+    path = editable_prompts / tool.parameter_prompts
+    descriptions = json.loads(path.read_text())
+    descriptions['properties/interactive'] = 'Fresh stdin guidance.'
+    path.write_text(json.dumps(descriptions))
+    assert tool.spec.parameters['properties']['interactive']['description'] == 'Fresh stdin guidance.'
+    assert before.parameters['properties']['interactive']['description'] != 'Fresh stdin guidance.'
+
+
 async def test_builtin_tool_descriptions_have_no_extraneous_wrapper_whitespace(workspace):
     from slipagent.tools import build_default_registry
     from slipagent.context import ConversationHistory, RecallHistoryTool

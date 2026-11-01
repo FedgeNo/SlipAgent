@@ -34,9 +34,9 @@ CLEANUP_TIMEOUT = 2.0
 
 
 class RunCommandTool(Tool):
-    parameter_prompts = 'tools/run-command-parameters.json'
+    parameter_prompts = 'tools/run-command-v2-parameters.json'
     name = "run_command"
-    description_prompt = 'tools/run-command.md'
+    description_prompt = 'tools/run-command-v2.md'
     description = load_prompt(description_prompt)
     parameters = {
         "type": "object",

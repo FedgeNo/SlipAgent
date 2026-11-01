@@ -661,7 +661,8 @@ class Agent:
         filtered = self._filter_specs(specs)
         if catalog is None:
             return filtered
-        names = catalog.select(self._filter_specs(self.registry.specs()), self.messages)
+        self.history.sync(self.messages)
+        names = catalog.select(self._filter_specs(self.registry.specs()), self.messages, history=self.history)
         return [spec for spec in filtered if spec.name in names]
 
     async def _request_response(self, specs: list[ToolSpec], step: int,

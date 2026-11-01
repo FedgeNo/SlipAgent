@@ -126,6 +126,11 @@ The renderer shows a short unavailable-tool rejection in the feed and Calls view
 including restored conversations. Detailed loading instructions remain in the
 original tool observations for the model's next request.
 Reset clears discovery state, and saved load results/calls restore it on resume.
+Selection restores completed history batches incrementally and revisits only
+the unfinished tail. Replacing or rewinding completed history rebuilds the
+restored names; registry changes still apply the current available definitions
+and allowlist on every selection. Catalog contents and description limits are
+unchanged.
 Reload candidates borrow the same catalog through registry services. MCP server
 guidance enters requests when a tool from that server is eligible in the catalog,
 including before its full definition is loaded.

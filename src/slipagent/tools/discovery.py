@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from ..sources import TextSource, materialize
 from ..turnstore import resident_content
 from ..types import Message, ToolSpec
 from .base import Tool, ToolRegistry, ToolResult
+
+if TYPE_CHECKING:
+    from ..context import ConversationHistory
 
 CORE_TOOLS = frozenset({"read_file", "write_file", "list_dir", "grep", "edit_file", "run_command", "load_tools", "update_plan"})
 UNAVAILABLE_BATCH = "No tools were executed. The entire batch was rejected because these tools are not available "
@@ -17,16 +20,41 @@ class ToolCatalog:
     def __init__(self) -> None:
         self.available: dict[str, ToolSpec] = {}
         self.loaded: set[str] = set()
+        self._steps: list[Any] | None = None
+        self._processed = 0
+        self._last_step: Any = None
 
-    def select(self, specs: list[ToolSpec], messages: list[Message]) -> set[str]:
+    def select(self, specs: list[ToolSpec], messages: list[Message], *,
+               history: ConversationHistory | None = None) -> set[str]:
         self.available = {spec.name: spec for spec in specs}
+        if history is None:
+            self.loaded.update(self._restore(messages))
+            return set((CORE_TOOLS | self.loaded) & self.available.keys())
+        steps = history.steps
+        if (self._steps is not steps or self._processed > len(steps)
+                or (self._processed and steps[self._processed - 1] is not self._last_step)):
+            self.loaded.clear()
+            self._steps = steps
+            self._processed = 0
+        for index in range(self._processed, len(steps)):
+            self.loaded.update(self._restore(steps[index].messages))
+        self._processed = len(steps)
+        self._last_step = steps[-1] if steps else None
+        # Unfinished batches may still receive rejection results. Revisit only
+        # this tail instead of permanently caching their provisional tool use.
+        tail = self._restore(messages[history.cursor:])
+        return set((CORE_TOOLS | self.loaded | tail) & self.available.keys())
+
+    @staticmethod
+    def _restore(messages: list[Message]) -> set[str]:
+        loaded: set[str] = set()
         # Ordinary history restores discovery after resume, fork, or rewind.
         # Call IDs are local to one assistant batch, including older sessions
         # whose executed tools restore loading without a load_tools result.
         rejected: set[str | None] = set()
         for message in reversed(messages):
             if message.role == "assistant":
-                self.loaded.update(call.name for call in message.tool_calls or [] if call.id not in rejected)
+                loaded.update(call.name for call in message.tool_calls or [] if call.id not in rejected)
                 rejected.clear()
             if message.role != "tool":
                 continue
@@ -39,8 +67,8 @@ class ToolCatalog:
             if observation.get("tool") == "load_tools":
                 content = materialize(observation.get("content"))
                 if isinstance(content, dict) and isinstance(content.get("loaded"), list):
-                    self.loaded.update(name for name in content["loaded"] if isinstance(name, str))
-        return set((CORE_TOOLS | self.loaded) & self.available.keys())
+                    loaded.update(name for name in content["loaded"] if isinstance(name, str))
+        return loaded
 
     def deferred(self) -> list[dict[str, str]]:
         result = []

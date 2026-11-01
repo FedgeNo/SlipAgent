@@ -28,6 +28,56 @@ class OptionalTool(RecordingTool):
     description = "Record an optional value.\n\nA distinctive long contract that should be deferred."
 
 
+def test_incremental_restoration_skips_completed_results_and_rebuilds_on_rewind(monkeypatch):
+    from slipagent.context import ConversationHistory
+    from slipagent.tools import discovery
+
+    specs = [OptionalTool().spec]
+    messages = [Message.assistant(None, [ToolCall("use", "optional_record", {})]),
+                Message.tool_result("use", {"tool": "optional_record", "status": "success", "content": "ok"})]
+    history = ConversationHistory()
+    history.sync(messages)
+    catalog = ToolCatalog()
+    reads = []
+    original = discovery.resident_content
+    monkeypatch.setattr(discovery, "resident_content", lambda message: (reads.append(message), original(message))[1])
+    assert catalog.select(specs, messages, history=history) == {"optional_record"}
+    assert len(reads) == 1
+    assert catalog.select(specs, messages, history=history) == {"optional_record"}
+    assert len(reads) == 1
+    # Newly appended completed batches are the only results inspected.
+    messages.extend([Message.assistant("done"), Message.user("next")])
+    history.sync(messages)
+    assert catalog.select([], messages, history=history) == set()
+    assert catalog.select(specs, messages, history=history) == {"optional_record"}
+    assert len(reads) == 1
+    history.clear()
+    messages[:] = [Message.assistant("rewound")]
+    history.sync(messages)
+    assert catalog.select(specs, messages, history=history) == set()
+
+
+def test_incremental_restoration_revisits_incomplete_and_replaced_history():
+    from slipagent.context import ConversationHistory
+
+    specs = [OptionalTool().spec]
+    messages = [Message.assistant(None, [ToolCall("use", "optional_record", {})])]
+    history = ConversationHistory()
+    history.sync(messages)
+    catalog = ToolCatalog()
+    assert catalog.select(specs, messages, history=history) == {"optional_record"}
+    messages.append(Message.tool_result("use", {"tool": "optional_record", "status": "error",
+                                                "content": UNAVAILABLE_BATCH + "optional_record"}))
+    history.sync(messages)
+    assert catalog.select(specs, messages, history=history) == set()
+    restored = ConversationHistory()
+    accepted = [Message.assistant(None, [ToolCall("use", "optional_record", {})]),
+                Message.tool_result("use", {"status": "success", "content": "ok"})]
+    restored.sync(accepted)
+    assert catalog.select(specs, accepted, history=restored) == {"optional_record"}
+    assert catalog.select(specs, messages, history=history) == set()
+
+
 def registry():
     services = {}
     return ToolRegistry([LoadToolsTool(services), OptionalTool()], services=services)

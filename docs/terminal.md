@@ -117,7 +117,9 @@ Conversation titles default to `{full working directory} | SlipAgent`.
 While a saved conversation keeps that default, the model names it from your
 request in its first reply. `/rename Fix login` changes the saved conversation and terminal title to
 `Fix login | SlipAgent`, including while the agent works. `/sessions` shows saved
-titles, and `/resume` or `--resume` restores them. In the REPL, restoring also
+titles, and `/resume` or `--resume` restores them. After deleting a saved session
+from the list, selection stays at the same index, or the new last item if the
+list is shorter. In the REPL, restoring also
 loads the original conversation into the scrolling area and starts at the end.
 Prompts, replies, saved thoughts, tool calls/results, and queued input remain
 available by scrolling up; restoring does not execute tools or call the model.

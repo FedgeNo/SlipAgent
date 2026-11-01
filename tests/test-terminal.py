@@ -53,6 +53,28 @@ async def test_opening_menu_takes_keyboard_focus(display, origin):
             await running
 
 
+@pytest.mark.parametrize('initial_index,expected', [(8, 8), (99, 9)])
+async def test_menu_initial_selection_is_visible_and_used_by_enter(display, initial_index, expected):
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: 'status', sink, input=pipe, output=output)
+        running = asyncio.create_task(ui.run())
+        choice = None
+        try:
+            await wait_until(lambda: any('Ready' in row for row in snapshot()))
+            choice = asyncio.create_task(ui.choose('Sessions', [(str(i), f'Session {i}') for i in range(10)],
+                                                   initial_index=initial_index))
+            await wait_until(lambda: any(f'› Session {expected}' in row for row in snapshot()))
+            pipe.send_text('\r')
+            assert await asyncio.wait_for(choice, 5) == str(expected)
+        finally:
+            if choice is not None:
+                choice.cancel()
+                await asyncio.gather(choice, return_exceptions=True)
+            ui.close()
+            await running
+
+
 def test_failing_status_callback_renders_an_error_instead_of_raising(display):
     sink, _, output, _, _ = display
 

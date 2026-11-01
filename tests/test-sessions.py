@@ -562,18 +562,26 @@ async def test_corrupt_inspection_index_is_reported_as_a_session_error(workspace
     assert restored.registry.services["artifact_store"] is before_artifact_store
 
 
-async def test_sessions_menu_renames_and_deletes_other_sessions_then_returns_to_the_list(tmp_path, metadata_server):
+@pytest.mark.parametrize('extra_session', [False, True])
+async def test_sessions_menu_renames_and_deletes_other_sessions_then_returns_to_the_list(tmp_path, metadata_server, extra_session):
     import io
     from unittest.mock import AsyncMock, Mock
     from slipagent import cli
     from slipagent.terminal import TerminalUI
     session = await cli.Launcher(cli.build_parser().parse_args(["--no-mcp", "-w", str(tmp_path)])).build_session()
     journal = session.registry.services["session_journal"]
-    session.agent.client = StubClient([completion("Old answer"), completion("Current answer")])
+    session.agent.client = StubClient([completion("Extra answer")] * extra_session +
+                                     [completion("Old answer"), completion("Current answer")])
     terminal = Mock(spec=TerminalUI)
     output = io.StringIO()
     terminal.write.side_effect = lambda text, **kwargs: output.write(text)
     try:
+        earlier = []
+        if extra_session:
+            await session.agent.run("Extra prompt")
+            await session.agent.wait_for_compaction()
+            earlier.append(journal.session_id)
+            session.agent.reset()
         await session.agent.run("Old prompt")
         await session.agent.wait_for_compaction()
         old = journal.session_id
@@ -589,12 +597,15 @@ async def test_sessions_menu_renames_and_deletes_other_sessions_then_returns_to_
         await cli.CommandRunner(session).handle("/sessions")
         listing, actions = terminal.choose.call_args_list[:2]
         assert listing.args[0] == "Saved Sessions"
-        assert [value for value, _ in listing.args[1]] == [current, old]
+        assert [value for value, _ in listing.args[1]] == [current, old, *earlier]
         assert "(current)" in listing.args[1][0][1] and "(current)" not in listing.args[1][1][1]
         assert [value for value, _ in actions.args[1]] == ["resume", "rename", "delete", "back"]
         assert "Renamed Old | SlipAgent" in terminal.choose.call_args_list[2].args[1][1][1]
         assert terminal.choose.call_args_list[4].args[0] == "Permanently Delete Renamed Old | SlipAgent?"
-        assert [entry["id"] for entry in journal.listing()] == [current]
+        returned = terminal.choose.call_args_list[5]
+        assert returned.kwargs['initial_index'] == (1 if extra_session else 0)
+        assert [value for value, _ in returned.args[1]] == [current, *earlier]
+        assert [entry["id"] for entry in journal.listing()] == [current, *earlier]
         assert not list(journal.directory.glob(old + "*"))
         assert journal.session_id == current and journal.title == current_title
         assert "Current prompt" in [message.content for message in session.agent.messages]

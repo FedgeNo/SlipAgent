@@ -817,14 +817,18 @@ class SessionsCommand(StoredSessionCommand):
                 print(f"  storage: {journal.directory}", file=out)
                 return None
             # Return to the list after changing another session, so several can be cleared in turn.
+            selected_index = 0
             while True:
                 entries = {entry["id"]: entry for entry in await asyncio.to_thread(journal.listing)}
                 if not entries:
                     print("  no saved sessions for this project.", file=out)
                     return None
-                selected = await terminal.choose("Saved Sessions", [(entry["id"], journal.label(entry)) for entry in entries.values()])
+                selected_index = min(selected_index, len(entries) - 1)
+                selected = await terminal.choose("Saved Sessions", [(entry["id"], journal.label(entry)) for entry in entries.values()],
+                                                 initial_index=selected_index)
                 if selected is None:
                     return None
+                selected_index = list(entries).index(selected)
                 entry = entries[selected]
                 current = entry["current"] == "True"
                 action = await terminal.choose(entry["title"], [

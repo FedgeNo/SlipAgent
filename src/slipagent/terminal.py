@@ -901,7 +901,8 @@ class TerminalUI:
 
     async def choose(self, title: str, options: list[tuple[str, str]], *,
                      styles: dict[str, str] | None = None,
-                     legend: StyleAndTextTuples | None = None) -> str | None:
+                     legend: StyleAndTextTuples | None = None,
+                     initial_index: int = 0) -> str | None:
         """Choose a value/label pair in the footer; cancellation preserves the draft."""
         self._ensure_menu()
         if self._menu_future is not None:
@@ -915,7 +916,7 @@ class TerminalUI:
         self.__dict__["_menu_legend"] = legend or []
         self._menu_options = [(value, re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", label))
                               for value, label in options]
-        self._menu_index = 0
+        self._menu_index = max(0, min(initial_index, len(options) - 1))
         self._menu_window.vertical_scroll = self._menu_window.vertical_scroll_2 = 0
 
         def cleanup() -> None:

@@ -1069,7 +1069,7 @@ Non-command artifacts and conversation journals retain their existing formats.
 
 ## Harness Python Execution
 
-`tools/python.py` owns `run_python`, a deferred tool that executes one script in
+`tools/python.py` owns `run_python`, a core tool available from the first request that executes one script in
 a fresh harness-Python subprocess. It prepares and removes its temporary source
 through owned blocking workers; cancellation during preparation or spawn retains
 cleanup ownership. The subprocess uses direct argv, workspace cwd, closed stdin,

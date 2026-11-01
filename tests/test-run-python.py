@@ -121,14 +121,14 @@ async def test_invalid_python_arguments_create_no_script_or_process(workspace, m
     assert (await RunPythonTool(workspace).invoke(arguments)).is_error
 
 
-async def test_python_tool_is_registered_and_loaded_explicitly(workspace):
+async def test_python_tool_is_available_by_default_and_respects_allowlist(workspace):
     registry = build_default_registry(workspace)
     try:
         from slipagent.agent import Agent
         agent = Agent(None, registry, 'test')
-        assert 'run_python' not in {spec.name for spec in agent._visible_specs(registry.specs())}
-        assert not (await registry.invoke('load_tools', {'names': ['run_python']})).is_error
         assert 'run_python' in {spec.name for spec in agent._visible_specs(registry.specs())}
         assert not (await registry.invoke('run_python', {'code': "print('READY_TO_CALCULATE')"})).is_error
+        agent.exposed_tools = ('load_tools',)
+        assert 'run_python' not in {spec.name for spec in agent._visible_specs(registry.specs())}
     finally:
         await registry.aclose()

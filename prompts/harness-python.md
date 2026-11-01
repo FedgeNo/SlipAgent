@@ -2,7 +2,7 @@
 
 This is the running harness's Python environment. Use its `math_command` followed by `-c 'CODE'` or `-` with a script on stdin for standalone calculations. `-I` isolates imports from the working directory and Python environment variables.
 
-The optional `run_python` tool directly executes a supplied script in this interpreter, using a fresh subprocess per call with captured output and command logs. Load its full definition before calling it. Use `print` for results; variables and imports do not persist between calls. When that tool is unavailable, the advertised `math_command` remains usable through an available execution tool.
+The default `run_python` tool directly executes a supplied script in this interpreter, using a fresh subprocess per call with captured output and command logs. In the default tool set, its full definition is supplied from the first request; no loading call is needed. Use `print` for results; variables and imports do not persist between calls. When that tool is unavailable, the advertised `math_command` remains usable through an available execution tool.
 
 ```text
 ${environment}

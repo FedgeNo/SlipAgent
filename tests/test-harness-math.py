@@ -121,6 +121,8 @@ async def test_math_guidance_and_metadata_reach_custom_native_embedded_and_glm_c
         assert delivered.count("Use Python for challenging arithmetic") == 1
         assert 'one Python script instead of spending a model round trip' in delivered
         assert 'run_python' in delivered and 'variables and imports do not persist' in delivered
+        assert 'no loading call is needed' in delivered
+        assert 'load it with `load_tools` first' not in delivered
         assert "Harness Python and Mathematics" in delivered
         assert "Session Environment" in delivered
         assert "operating_system" in delivered and "machine" in delivered and "user" in delivered

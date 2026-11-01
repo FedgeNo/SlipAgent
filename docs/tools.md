@@ -5,7 +5,7 @@
 ## Tools
 
 The model initially gets complete definitions for `read_file`, `write_file`,
-`list_dir`, `grep`, `edit_file`, `run_command`, and `load_tools`. Other tools appear
+`list_dir`, `grep`, `edit_file`, `run_command`, `run_python`, and `load_tools`. Other tools appear
 in a compact names-and-purpose catalog. The model calls `load_tools` with selected
 names to obtain their full descriptions and argument schemas; those definitions
 join subsequent system prompts and API tool lists for the conversation.
@@ -116,7 +116,7 @@ limits; they do not cap file-tool results or complete history retrieval.
 
 ### Python Calculations And Data Processing
 
-Load `run_python` with `load_tools`, then supply Python source in `code`:
+`run_python` is available by default from the first request. Supply Python source in `code`:
 
 ```json
 {"code":"from fractions import Fraction\nvalues = [Fraction(1, 3), Fraction(1, 6)]\nprint('sum:', sum(values))"}

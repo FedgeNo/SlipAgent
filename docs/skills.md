@@ -49,6 +49,17 @@ of proven improvements for lower-end models. They activate only when selected.
 | `/skill prepare-commit` | Review and verify a coherent commit within the user's authorized scope. |
 | `/skill investigate-failure` | Diagnose a command, job, service, or workflow through bounded probes. |
 
+The review skill asks for status, summary, coverage, and severity-ordered findings
+with path/line, evidence, and uncertainty. It guides ordinary conversation and
+does not restrict tools. `/review [scope]` runs a dedicated review using the same
+agent with file-reading and local Git inspection tools only. Shell/Python
+execution, edits, MCP tools, and running tests are unavailable in that mode.
+Its structured `answer` tool validates findings; a prose-only or interrupted
+review is incomplete. `/review results` opens the report or a finding's source
+line, warning when a file has changed since inspection. The original tools and
+selected skill are restored when review ends. Saved review records remain
+available through `/view`; the latest-results picker is session-local.
+
 Create a package with the same name in a higher-priority root to customize or
 disable a bundled workflow. Selecting a package by its displayed path bypasses
 name precedence. Bundled packages contain instructions only, with no scripts.

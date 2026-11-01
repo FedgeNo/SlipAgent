@@ -638,6 +638,9 @@ class Agent:
             self.registry.unregister("update_plan")
 
     def _filter_specs(self, specs: list[ToolSpec]) -> list[ToolSpec]:
+        if self.registry.services.get('active_review') is not None:
+            from .review import READ_TOOLS
+            return [spec for spec in specs if spec.name in READ_TOOLS]
         if self.exposed_tools is None:
             return specs
         allowed = set(self.exposed_tools) | {"recall_history"}

@@ -21,6 +21,7 @@ src/slipagent/
 ├── jobs.py           session-owned background commands and job controls
 ├── skills.py         explicit package discovery and pinned skill instructions
 ├── filepicker.py     bounded asynchronous fuzzy file selection for the user
+├── review.py         read-only review profile, validated reports and source navigation
 ├── lsp.py            optional configured language-server navigation
 ├── context.py        rolling context, summaries, original-step retrieval
 ├── historyexcerpts.py field-level clipping with references to unchanged history

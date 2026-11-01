@@ -1378,6 +1378,17 @@ class Repl:
             quota_task = asyncio.create_task(Quota(session).poll())
             reload_task = asyncio.create_task(session.reloader.watch()) if session.reloader is not None else None
             while True:
+                review_scope = session.extensions.pop('pending_review', None)
+                if review_scope is not None:
+                    try:
+                        if await self.run_review(review_scope, style):
+                            break
+                    except Exception as exc:
+                        renderer.emit(style.red(f'  Review incomplete: {type(exc).__name__}: {exc}'))
+                        _, commands_exit = await CommandRunner(session).apply_deferred()
+                        if commands_exit:
+                            break
+                    continue
                 try:
                     line = await self.read_line(style)
                 except EOFError:
@@ -1556,6 +1567,50 @@ class Repl:
             print(file=renderer.stream)
         return line or None
 
+    async def run_review(self, scope: str, style: Style) -> bool:
+        from .review import review_mode
+        from .tools.blocking import run_blocking
+        session = self.session
+        frame = session.reloader
+        if frame is not None:
+            frame.busy += 1
+        try:
+            with review_mode(session.agent, scope) as state:
+                render_report = True
+                try:
+                    exiting = await self.run_request(load_prompt('review-request.md', scope=scope), style)
+                    render_report = state.report is None or session.agent.stopped or session.agent.stop_requested
+                except BaseException as exc:
+                    state.incomplete(f'Review interrupted or failed: {type(exc).__name__}.')
+                    raise
+                finally:
+                    if state.report is None:
+                        state.incomplete('Review ended without a validated report.')
+                    if session.agent.stopped or session.agent.stop_requested:
+                        state.incomplete('Review interrupted before completion.')
+                    if render_report:
+                        session.renderer.emit(await run_blocking(state.text))
+                    store = session.registry.resources.artifacts
+                    if store is not None:
+                        import json
+                        try:
+                            record = await run_blocking(store.save, '/review ' + scope,
+                                json.dumps({'scope': scope, 'report': state.report,
+                                            'text': await run_blocking(state.text)}, ensure_ascii=False), kind='review')
+                            if session.renderer.terminal is not None:
+                                session.renderer.terminal.write_artifact_reference(record)
+                        except (OSError, ValueError) as exc:
+                            session.renderer.emit(style.red(f'  Could not save review record: {exc}'))
+        finally:
+            if frame is not None:
+                frame.busy -= 1
+        _, commands_exit = await CommandRunner(session).apply_deferred(exiting=exiting)
+        exiting = exiting or commands_exit
+        if (not exiting and session.extensions.get('pending_review') is None
+                and session.agent.has_queued_input and not session.agent.stopped):
+            return await self.run_request('', style)
+        return exiting
+
     async def run_request(self, prompt: str, style: Style) -> bool:
         """Run a task while keeping the prompt usable in the background.
 
@@ -1569,6 +1624,11 @@ class Repl:
         async def boundary() -> None:
             if previous_boundary is not None:
                 await previous_boundary()
+            review = session.registry.services.get('active_review')
+            if review is not None:
+                if review.report is None and session.work.deferred_commands and not session.agent.has_queued_input:
+                    session.agent.request_stop()
+                return
             if not session.agent.has_queued_input and not session.agent.stop_requested:
                 # Model changes and compaction affect the next request without stopping the task.
                 commands = session.work.deferred_commands or []
@@ -1649,8 +1709,12 @@ class Repl:
                             continue
                         break
                     answer = agent_task.result()
+                    if session.registry.services.get('active_review') is not None:
+                        break
                     resume, commands_exit = await CommandRunner(session).apply_deferred(exiting=exiting and not eof)
                     exiting = exiting or commands_exit
+                    if session.extensions.get('pending_review') is not None:
+                        break
                     if resume and not exiting and answer != STEP_LIMIT_NOTICE and (answer == STOP_NOTICE or session.agent.has_queued_input):
                         renderer.emit(style.dim("  Continuing with queued input."))
                         if renderer.terminal is not None:
@@ -1676,7 +1740,7 @@ class Repl:
             await _gather_quietly(agent_task)
             # A failed model request still leaves an idle session where queued
             # settings can be applied. Cancellation/exit must not start new work.
-            if not isinstance(exc, asyncio.CancelledError):
+            if not isinstance(exc, asyncio.CancelledError) and session.registry.services.get('active_review') is None:
                 await CommandRunner(session).apply_deferred(exiting=exiting)
             if isinstance(exc, asyncio.CancelledError) and session.extensions.get("interrupt_requested"):
                 await self.wait_for_interrupt()

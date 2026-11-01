@@ -715,7 +715,7 @@ class TerminalUI:
                 references = call.setdefault("artifacts", [])
                 if not any(saved["record_id"] == identifier for saved in references):
                     references.append(record)
-        label = "Diff" if record["kind"] == "diff" else "Output"
+        label = {"diff": "Diff", "review": "Review"}.get(str(record["kind"]), "Output")
         text = f"View {label} — Record {identifier}"
         if inline:
             self.write_chunk(text)

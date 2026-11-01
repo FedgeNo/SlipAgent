@@ -68,6 +68,8 @@ In the REPL:
 | `/update` | Close this session cleanly and install the latest GitHub commit, preserving installer edit checks |
 | `/skills` | List project and user skill packages; see [skills](skills.md) |
 | `/skill [name\|path\|off]` | Show, explicitly select, or clear a pinned workflow skill |
+| `/review [scope]` | Review working changes or a requested scope with enforced read-only tools and structured findings |
+| `/review results` | Open the latest review report or jump to a finding's source line |
 | `/resume` | Choose a saved session with Up/Down and Enter; Escape cancels (interactive terminal; queues while working) |
 | `/resume <id>` or `/resume latest` | Restore a saved conversation and its scrolling transcript at the end; queues while working; no tools are replayed |
 | `/fork` | Copy the current saved session and continue in the copy; preserve the original; queues while working |

@@ -1067,6 +1067,36 @@ Command quotas count retained bytes; inspection quotas charge header plus logica
 payload bytes per record. Shared physical storage is not the sum of those counters.
 Non-command artifacts and conversation journals retain their existing formats.
 
+## Dedicated Code Review
+
+`review.py` owns `/review [scope]`, the temporary read-only tool profile, structured
+report validation, and source navigation. The ordinary agent, request protocol,
+history, journal, and artifact store remain in use. The profile replaces the
+registry's tools with built-in file readers and local Git status/diff/log plus a
+review-specific `answer`. The agent also filters definitions against the review
+allowlist; whole-batch preflight rejects calls outside the visible definitions.
+There is no shell, Python, MCP, deferred loader, or project test execution.
+This restricts model tools, not external processes or existing background jobs.
+
+The review prompt is supplied independently of compressed history, selected
+skills, custom system prompts, and repair requests. The active skill is temporarily
+omitted from requests while its saved selection remains intact. Successful answer-only batches finish through the normal agent path;
+the report records status, summary, coverage, and at most 100 findings with
+severity, title, readable path, valid line, evidence, and uncertainty. Findings
+require a successful `read_file` observation; file signatures detect changes
+since inspection and mark source links stale. Reports do not establish that the
+model's claims are correct. Prose without a validated answer is incomplete.
+
+The REPL queues a review until earlier work settles and prevents automatic
+continuation and deferred session changes until its temporary profile is removed.
+Reload application is held during the review. Original tools, exposure settings,
+and the selected skill are restored on success, interruption, and failure.
+Reports are saved as inspection artifacts, with explicit incomplete outcomes on
+interruption or failure. `/review results` uses the existing choice and read-only
+file viewers, rechecking workspace access and warning about stale source lines.
+Its latest-report reference is session-local; saved artifacts and tool results
+remain accessible after resume. No review worker or separate conversation is added.
+
 ## Fuzzy File Picker
 
 `filepicker.py` owns the user-facing `/files [query]` and Ctrl+P selector. It

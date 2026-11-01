@@ -1497,6 +1497,29 @@ class SkillCommand(Command):
         return None
 
 
+class ReviewCommand(ExclusiveCommand):
+    name = 'review'
+    banner = '/review [scope|results]'
+    help = (CommandHelp('/review [scope]', 'review working changes or a specified scope with read-only tools', '/review '),
+            CommandHelp('/review results', 'open the latest review report and source findings', '/review results'))
+
+    async def run(self, context: CommandContext, argument: str) -> bool | None:
+        if argument == 'results':
+            from .review import show_review
+            state = context.session.registry.services.get('last_review')
+            if state is None or state.session_id != context.session.agent.session_id:
+                print('  No review results in this session.', file=context.out)
+            elif context.session.renderer.terminal is not None:
+                await show_review(context.session.renderer.terminal, state)
+            else:
+                from .tools.blocking import run_blocking
+                print(await run_blocking(state.text), file=context.out)
+        else:
+            context.session.extensions['pending_review'] = argument or 'Review all current staged and unstaged working changes, including untracked files.'
+            context.session.work.resume_after_commands = False
+        return None
+
+
 class ExitCommand(Command):
     name = 'exit'
     aliases: tuple[str, ...] = ("quit",)
@@ -1553,6 +1576,7 @@ COMMANDS: tuple[Command, ...] = (
     ToolsCommand(),
     SkillsCommand(),
     SkillCommand(),
+    ReviewCommand(),
     UpdateCommand(),
     ModelCommand(),
     ModelsCommand(),

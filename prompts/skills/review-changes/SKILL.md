@@ -21,3 +21,5 @@ description: Review a change and its callers for evidence-backed defects, with c
 ## Finish
 
 Present actionable findings in severity order, each with a useful code location and supporting evidence. State when no defects were found in the reviewed scope, and identify material coverage limits. Do not silently fix or discard the work under review.
+
+Use this consistent report structure: status (`completed` or `incomplete`), summary, coverage and limitations, then findings. Each finding includes severity (`critical`, `high`, `medium`, or `low`), title, path and line, evidence describing trigger/expected/actual behavior and consequence, and uncertainty. An empty findings list means no defects were found within the assessed scope, not verified correctness. Report interrupted or unfinished work as incomplete. In a dedicated `/review` run, submit these fields through its structured `answer` tool; in an ordinary skill-guided conversation, use the same fields in readable prose. The skill alone does not restrict tool access.

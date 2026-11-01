@@ -11,7 +11,7 @@ import yaml
 
 from .config import data_directory
 from .fileio import open_regular, read_regular
-from .prompts import load_prompt
+from .prompts import load_prompt, prompt_directory
 from .workspace import Workspace
 
 MAX_SKILL_BYTES = 256 * 1024
@@ -72,7 +72,8 @@ def _skill(path: Path, scope: str) -> Skill:
 
 
 def skill_roots(workspace: Workspace) -> list[tuple[str, Path]]:
-    return [('project', workspace.root / '.slipagent' / 'skills'), ('user', data_directory() / 'skills')]
+    return [('project', workspace.root / '.slipagent' / 'skills'),
+            ('user', data_directory() / 'skills'), ('bundled', prompt_directory() / 'skills')]
 
 
 def catalog(workspace: Workspace) -> tuple[list[Skill], list[str]]:
@@ -104,8 +105,10 @@ def select(workspace: Workspace, selector: str) -> dict[str, str]:
     packages, _ = catalog(workspace)
     matches = [skill for skill in packages if skill.name == selector]
     if matches:
-        project = [skill for skill in matches if skill.scope == 'project']
-        matches = project or matches
+        # Catalog roots are ordered by precedence; duplicates within a scope
+        # remain ambiguous instead of choosing an arbitrary package.
+        scope = matches[0].scope
+        matches = [skill for skill in matches if skill.scope == scope]
         if len(matches) != 1:
             raise SkillError('Ambiguous skill name; select a SKILL.md path: ' + ', '.join(str(s.path) for s in matches))
         selected = matches[0]
@@ -115,7 +118,7 @@ def select(workspace: Workspace, selector: str) -> dict[str, str]:
             path = workspace.root / path
         if path.is_dir():
             path = path / 'SKILL.md'
-        # Catalogued user packages are explicitly trusted instruction sources.
+        # Catalogued packages are explicitly trusted instruction sources.
         # Other paths use the ordinary workspace access policy.
         known = next((skill for skill in packages if skill.path == path.absolute()), None)
         path = known.path if known is not None else workspace.resolve(path)

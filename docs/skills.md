@@ -10,19 +10,21 @@ They do not modify Python classes or automatically run scripts.
 1. The current project's `.slipagent/skills/` directory.
 2. The `skills/` directory under SlipAgent's user data directory, including any
    `SLIPAGENT_STATE_DIR` override. See [installation locations](installation.md#installation-and-data-locations).
+3. SlipAgent's bundled `prompts/skills/` directory, included in source and
+   installed packages.
 
 Each package is an immediate child directory containing `SKILL.md`. Discovery
 does not recursively search resources or follow linked package directories.
 Invalid or unreadable metadata is reported without hiding other packages.
 
-Use `/skill release` to select a package by its metadata name. Project packages
-take precedence over user packages with the same name, including when the
-project package is disabled. Duplicate names within the selected scope require
+Use `/skill release` to select a package by its metadata name. Name precedence
+is **project → user → bundled**, including disabled packages: a disabled project
+or user override prevents selection of a lower-priority namesake. Duplicate names within the selected scope require
 an explicit path. `/skills` displays all paths so duplicates remain identifiable.
 
 `/skill .slipagent/skills/release` or `/skill PATH/TO/SKILL.md` selects by path.
 Paths are relative to the workspace unless absolute; quote a path when needed.
-Catalogued user packages are permitted instruction sources. Other explicit
+Catalogued user and bundled packages are permitted instruction sources. Other explicit
 paths follow ordinary workspace access rules. Missing, invalid, or disabled
 packages leave the current selection unchanged.
 
@@ -31,6 +33,25 @@ the selected name, source path, and source SHA-256. `/skill off` clears it.
 Selection and clearing queue at the normal agent boundary while work is active;
 listing and status remain available during a turn. There is no model-selected
 activation or automatic catalog injection into model requests.
+
+## Bundled Workflows
+
+These optional starter workflows provide concise procedures with completion
+conditions and recovery guidance. They have been reviewed and checked for
+loading and selection, without comparative model-performance testing or claims
+of proven improvements for lower-end models. They activate only when selected.
+
+| Selection | Purpose |
+| --- | --- |
+| `/skill fix-bug` | Reproduce a bug, trace its cause, correct it, and verify the result. |
+| `/skill implement-feature` | Define observable behavior, follow project patterns, and complete integration. |
+| `/skill review-changes` | Find evidence-backed defects and report review coverage. |
+| `/skill prepare-commit` | Review and verify a coherent commit within the user's authorized scope. |
+| `/skill investigate-failure` | Diagnose a command, job, service, or workflow through bounded probes. |
+
+Create a package with the same name in a higher-priority root to customize or
+disable a bundled workflow. Selecting a package by its displayed path bypasses
+name precedence. Bundled packages contain instructions only, with no scripts.
 
 ## Package Format
 

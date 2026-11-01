@@ -110,7 +110,8 @@ viewers, the editor, queueing, and Danger Mode.
 - `.slipagent/project.json` can select the project's Python interpreter and add
   checks that run after edits. See [Configuration](docs/configuration.md).
 - `/skills` lists reusable workflow packages; `/skill NAME_OR_PATH` selects one
-  explicitly. See [Skill Packages](docs/skills.md).
+  explicitly. Five optional workflows are bundled, including `/skill fix-bug`.
+  See [Skill Packages](docs/skills.md).
 - MCP servers are added with `/mcp add` (this session) or `/mcp save`
   (all sessions).
 - Language servers for `navigate_code` are configured in your user settings,

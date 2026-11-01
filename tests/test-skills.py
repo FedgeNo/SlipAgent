@@ -17,6 +17,11 @@ from test_agent import StubClient, completion
 attach = import_module('test-sessions').attach
 
 
+@pytest.fixture(autouse=True)
+def isolated_bundled_skills(monkeypatch, tmp_path):
+    monkeypatch.setattr('slipagent.skills.prompt_directory', lambda: tmp_path / 'prompts')
+
+
 def package(root, folder='release', name='release', *, enabled=True, body='Check the release carefully.'):
     path = root / folder / 'SKILL.md'
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -161,6 +166,47 @@ def test_invalid_saved_skill_is_rejected():
     validate_snapshot(None)
     with pytest.raises(SkillError, match='Invalid saved'):
         validate_snapshot({'name': 'incomplete'})
+
+
+def test_all_bundled_workflows_are_listed_and_explicitly_selectable(workspace, monkeypatch, tmp_path):
+    from slipagent.prompts import prompt_directory
+    roots(workspace, monkeypatch, tmp_path)
+    monkeypatch.setattr('slipagent.skills.prompt_directory', prompt_directory)
+    packages, errors = catalog(workspace)
+    expected = {'fix-bug', 'implement-feature', 'review-changes', 'prepare-commit', 'investigate-failure'}
+    assert not errors
+    assert {skill.name for skill in packages if skill.scope == 'bundled'} == expected
+    for name in expected:
+        snapshot = select(workspace, name)
+        validate_snapshot(snapshot)
+        assert snapshot['instructions'].strip()
+        assert snapshot['name'] == name
+        assert snapshot['root'] == str(prompt_directory() / 'skills' / name)
+
+
+def test_project_and_user_packages_override_bundled_names(workspace, monkeypatch, tmp_path):
+    project, user = roots(workspace, monkeypatch, tmp_path)
+    bundled = tmp_path / 'prompts' / 'skills'
+    package(bundled, name='release', body='Bundled workflow.')
+    assert select(workspace, 'release')['instructions'] == 'Bundled workflow.'
+    personal = package(user, body='User workflow.')
+    assert select(workspace, 'release')['path'] == str(personal)
+    local = package(project, body='Project workflow.')
+    assert select(workspace, 'release')['path'] == str(local)
+    package(project, enabled=False)
+    with pytest.raises(SkillError, match='disabled'):
+        select(workspace, 'release')
+    assert select(workspace, str(personal))['instructions'] == 'User workflow.'
+
+
+def test_installed_layout_discovers_bundled_skill_resources(workspace, monkeypatch, tmp_path):
+    from slipagent import prompts
+    roots(workspace, monkeypatch, tmp_path)
+    package_root = tmp_path / 'site-packages' / 'slipagent'
+    path = package(package_root / 'prompts' / 'skills', name='installed-workflow')
+    monkeypatch.setattr(prompts, '__file__', str(package_root / 'prompts.py'))
+    monkeypatch.setattr('slipagent.skills.prompt_directory', prompts.prompt_directory)
+    assert select(workspace, 'installed-workflow')['path'] == str(path)
 
 
 async def test_restoring_unselected_session_clears_active_skill(workspace, monkeypatch, tmp_path):

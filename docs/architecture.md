@@ -1046,7 +1046,7 @@ Non-command artifacts and conversation journals retain their existing formats.
 
 ## Selected Skill Ownership
 
-`skills.py` reads metadata from immediate project/user package directories and
+`skills.py` reads metadata from immediate project/user/bundled package directories and
 loads one explicitly selected `SKILL.md`. The selected snapshot is plain data
 under `ToolRegistry.services['selected_skill']`, so reload candidates borrow it
 without I/O or resource ownership. Commands discover/load through owned blocking
@@ -1058,7 +1058,10 @@ persists the snapshot; resume/fork restore it without package access, while
 reset or restoring an unselected session clears it. Selection never executes
 scripts or grants additional tool/path access. Resource references resolve
 against the recorded package directory. See [skill packages](skills.md) for
-format, precedence, limits, and snapshot lifetime.
+format, precedence, limits, and snapshot lifetime. Bundled instructions live in
+`prompts/skills/` and use the existing prompt resource location for both checkout
+and installed layouts. Name selection prefers project, then user, then bundled
+packages; duplicates within the winning scope require an explicit path.
 
 ## Background Command Ownership
 

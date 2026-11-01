@@ -60,6 +60,7 @@ The `z-ai/glm-5.3` and `z-ai/glm-5.3-flash` profiles use the GLM XML channel and
 | `harness-python.md` | Running harness interpreter, installed math libraries and versions, standalone calculation commands, and separation from the project environment; supplied in every working context, including custom system prompts |
 | `session-environment.md` | OS user, host, platform, working directory, shell, current local time, model and saved session ID when available; supplied in every working context |
 | `selected-skill.md` | Explicitly selected instruction snapshot, provenance, relative-resource base, and access boundaries; supplied in all working contexts while active, including custom prompts and repairs, independently of compressed history |
+| `skills/*/SKILL.md` | Optional bundled workflow packages, activated only by explicit user selection; project and user names take precedence |
 | `system-history.md` | Input authority and use of historical evidence |
 | `input-history.md`, `input-current-request.md` | Labels and interpretation for historical metadata and tool-result blocks, followed by the current request at the end of the outgoing user message |
 | `current-turn.md`, `current-turn-tool-results.md` | Current-step metadata in the system prompt, and the note that a step carries tool results |

@@ -145,10 +145,10 @@ class EditHashlinesTool(Tool):
                 return ToolResult.error("File revision changed; no edits applied. Call read_hashlines again and copy fresh anchors/revision.")
             text = data.decode("utf-8")
             updated, first = apply_hashline_edits(text, edits)
-            if read_regular(target, MAX_READ_BYTES) != data:
-                return ToolResult.error("File changed during edit preparation; no edits applied. Call read_hashlines again.")
             if updated != text:
-                _atomic_write(self.workspace, target, updated)
+                _atomic_write(self.workspace, target, updated, expected=data)
+            elif read_regular(target, MAX_READ_BYTES) != data:
+                return ToolResult.error("File changed during edit preparation; no edits applied. Call read_hashlines again.")
         except (OSError, UnicodeError, WorkspaceError, ValueError) as exc:
             return ToolResult.error(f"Anchored edit failed: {exc}. Inspect the file before retrying a storage/checkpoint failure.")
         relative = self.workspace.relative(target)

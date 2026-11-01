@@ -38,17 +38,25 @@ def _read_limit_error(size: int) -> str:
             "Select the needed content with run_command.")
 
 
-def _atomic_write(workspace: Workspace, target: Path, content: str) -> None:
+def _atomic_write(workspace: Workspace, target: Path, content: str, *, expected: bytes | None = None) -> None:
     from ..checkpoints import current_checkpoint
 
     encoded = content.encode("utf-8")
     target = workspace.resolve(target)
     if target.exists() and not stat.S_ISREG(target.stat().st_mode):
         raise OSError("Destination is not a regular file.")
+
+    def check_current() -> None:
+        if read_regular(target, MAX_READ_BYTES) != expected:
+            raise OSError("File changed during edit preparation or publication; no edits applied. Read the file again before retrying.")
+
+    if expected is not None:
+        check_current()
     checkpoints = current_checkpoint.get()
     entry = checkpoints.prepare(target, encoded) if checkpoints is not None else None
     try:
-        _atomic_write_bytes(workspace, target, encoded)
+        _atomic_write_bytes(workspace, target, encoded,
+                            before_replace=check_current if expected is not None else None)
     except BaseException:
         if checkpoints is not None:
             checkpoints.abort(entry)
@@ -60,11 +68,12 @@ def _atomic_write(workspace: Workspace, target: Path, content: str) -> None:
             raise OSError(f"File was written, but checkpoint completion could not be saved: {exc}") from exc
 
 
-def _atomic_write_bytes(workspace: Workspace, target: Path, encoded: bytes) -> None:
+def _atomic_write_bytes(workspace: Workspace, target: Path, encoded: bytes, *,
+                        before_replace: Callable[[], None] | None = None) -> None:
     def write(output: BinaryIO) -> None:
         output.write(encoded)
 
-    _atomic_write_stream(workspace, target, write)
+    _atomic_write_stream(workspace, target, write, before_replace=before_replace)
 
 
 def _atomic_write_stream(workspace: Workspace, target: Path, write: Callable[[BinaryIO], None], *,
@@ -406,7 +415,8 @@ class EditFileTool(Tool):
         if size > MAX_READ_BYTES:
             return ToolResult.error(_read_limit_error(size))
         try:
-            text = read_regular(target, MAX_READ_BYTES).decode("utf-8")
+            original = read_regular(target, MAX_READ_BYTES)
+            text = original.decode("utf-8")
         except UnicodeDecodeError:
             return ToolResult.error(
                 f"{self.workspace.relative(target)} is not UTF-8 text."
@@ -420,7 +430,7 @@ class EditFileTool(Tool):
             return ToolResult.error(f"{self.workspace.relative(target)}: {exc}\nNo changes were made.")
 
         try:
-            _atomic_write(self.workspace, target, updated)
+            _atomic_write(self.workspace, target, updated, expected=original)
         except (OSError, UnicodeError) as exc:
             return ToolResult.error(f"Could not write file: {exc}")
 

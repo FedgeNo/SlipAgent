@@ -704,8 +704,8 @@ Summary completion and observation delivery are independent. `CompletedStep.obse
 protects the newest tool batch until an accepted working response has received
 it; a fast compactor cannot replace unseen results. No working actions are
 performed by the compactor. It does not emit context-inspector or reasoning
-stream events. Its reported usage contributes to session totals, independently
-of primary step accounting. Both compactors omit temperature regardless of the
+stream events. Compaction usage and spend are excluded from session totals.
+Both compactors omit temperature regardless of the
 working model's explicit setting, and use the selected destination's
 reasoning/routing settings for each attempt.
 
@@ -1117,7 +1117,11 @@ so later explicit calls can start cleanly.
 
 `tools/editing.py` plans every exact replacement against the same original text.
 Zero/ambiguous matches, overlaps, empty edits and no-ops reject before the single
-atomic write. LF/CRLF matching preserves the file's local newlines. Nearby source
+atomic write. Exact and hashline edits recheck the original bytes before checkpoint
+preparation and immediately before replacement, after flushing the temporary file.
+A changed or deleted source rejects the edit and preserves the external change;
+this check is not a cross-process filesystem compare-and-swap. LF/CRLF matching
+preserves the file's local newlines. Nearby source
 and already-present replacement hints are bounded diagnostics, never fuzzy edits.
 Successful edits return a bounded diff. Legacy single-replacement arguments and
 the new `edits` array are mutually exclusive.

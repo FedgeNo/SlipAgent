@@ -181,7 +181,7 @@ Context construction proceeds in this order:
    analysis. Older records use a summary if its estimated cost is lower than
    the original representation before adding analysis. The budget includes all
    fields actually sent, presentation indentation, and message overhead. Selection
-   checks the fully assembled request, including excerpts, against the allowance.
+   uses an additive representation-size index, including excerpts, against the allowance.
    Both native-tool and embedded-tool profiles receive the same record format;
    ties keep originals, with complete tool batches intact. Every step has its
    own object in the user input's `history` list. `JSONInput` keeps the input
@@ -191,7 +191,7 @@ Context construction proceeds in this order:
    for system data sections, compression input, and archive retrieval.
    Every step is sent in full while the history fits the budget. Over budget,
    `ConversationHistory.view` applies reductions from the oldest end until the
-   estimate fits and the assembled request measures within the limit: step
+   indexed size fits within the limit: step
    summaries outside the newest five turns up to two thirds of the steps, then
    each eligible narrative and era, then remaining summaries outside that window.
    It then exhausts older turns through excerpts and omission before reducing
@@ -200,8 +200,13 @@ Context construction proceeds in this order:
    still proceed oldest first; unseen batches are never replaced by summaries.
    A summary replaces
    its original only when smaller. A narrative or era replaces exactly the
-   records covering its listed source steps. Representation costs are cached per
-   archived step and record, so selection is one pass. Each request starts again
+   records covering its listed source steps. `historyindex.py` caches exact encoded
+   byte contributions per archived representation, including tool-result sizes.
+   It accounts for list separators and changes in result-block number width when
+   combining records. Original/summary/metadata changes invalidate affected step
+   indexes; reasoning-window, run and manual-boundary variants have separate entries.
+   Derived `.sizes.json` sidecars record measured representations beside turn files;
+   resume rebuilds them from authoritative history. Each request starts again
    from full originals before applying a persisted manual compaction boundary,
    if present, and ordinary budget reductions. There is no persistent omission marker.
    `--context-tokens` can cap total working context.
@@ -279,8 +284,12 @@ Explicit `/compact` boundaries continue to request economical compressed forms
 for their covered, already-observed turns. If dropping an oversized unit creates
 spare capacity, other dropped units that fit are restored, recent first; one
 unfittable unit cannot block the rest. Aggregated records restore their complete
-source-step coverage and are emitted once. The final assembled request is checked
-again against the same calibrated allowance. These decisions neither invoke
+source-step coverage and are emitted once. Mandatory instructions, tool definitions,
+response schemas, current input, output reservation, and token calibration are
+budgeted on every request. History costs are added in bytes before applying the
+user-message rounding and allowance once; selection and backfill do not render
+or remeasure a complete candidate request. Newly created excerpts are indexed
+individually. These decisions neither invoke
 `/compact` nor advance its fixed boundary, and they are not saved back as a
 progressively smaller history view.
 Selection preflight uses a copy of history/task selection state so an incompatible

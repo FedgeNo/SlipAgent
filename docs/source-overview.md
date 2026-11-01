@@ -97,7 +97,7 @@ request pipeline and interactive inspection features:
 | --- | --- |
 | Request assembly and recovery | `contextbuilder.py`, `requests.py`, `toolbatch.py`, `contextlegacy.py`, `requestbody.py`, `requestfailures.py`, `responsecapture.py`, `upload.py`, `toolcompat.py`, `thoughts.py`, `calllabels.py` |
 | Model routing, pricing, and scores | `modelrouting.py`, `compressionproviders.py`, `modelpricing.py`, `modelscores.py`, `startupcache.py` |
-| History summaries and turn storage | `historymerge.py`, `turnstore.py` |
+| History summaries, size indexes and turn storage | `historymerge.py`, `historyindex.py`, `turnstore.py` |
 | User input awaiting dispatch | `submissions.py`, `inputqueue.py`, `diffcomments.py` |
 | Command-output monitoring | `monitoring.py` |
 | Headless JSON Lines output | `automation.py` |

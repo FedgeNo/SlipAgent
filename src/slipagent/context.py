@@ -41,6 +41,7 @@ from .records import linked_tool_results, record_message, step_record
 from .requestfailures import is_incomplete
 from .data_text import JSONInput, MessageSections, RenderedJSON, render_data
 from .sources import FileText, materialize
+from .historyindex import HistorySize, HistorySizeIndex
 
 DEFAULT_CONTEXT_LENGTH = 1_000_000
 RECENT_FULL_STEPS = 5
@@ -676,23 +677,32 @@ class ConversationHistory:
         tail_messages = [message for message in messages[self.cursor:] if message.role != "system"]
         # Budget the same input fields that will be sent, including the retained
         # request and corrections even when no new user message was supplied.
-        tail = [assemble([])[-1]]
         overhead = tokens(pinned)
         if not text_tool_history:
             overhead += math.ceil(estimate_tokens(json.dumps([spec.to_api() for spec in specs])) * token_scale)
         if schema is not None:
             overhead += math.ceil(estimate_tokens(json.dumps(schema)) * token_scale)
         available = int(context_length * 0.85) - max_output - overhead
-        rendered_limit = available + tokens(pinned)
-        tail_tokens = tokens(tail)
-        if tail_tokens + 256 >= available:
+        # History adds bytes to one user message. Apply its rounding/message
+        # allowance once, after reserving all request-wide instructions and tools.
+        from .requestbody import wire_message
+        from .sources import json_chunks
+        available = (math.floor(available / token_scale) - 32) * 3
+        reserve = math.ceil(256 * 3 / token_scale)
+
+        def input_bytes() -> int:
+            return sum(len(chunk.encode('utf-8')) for chunk in json_chunks(wire_message(assemble([])[-1]), indent=None))
+
+        tail_bytes = input_bytes()
+        if tail_bytes + reserve >= available:
             raise ContextError("Current input and instructions exceed the context budget. Shorten the input or reference a file; conversation history is preserved.")
         if user_edits:
             from .editdelivery import bounded_notifications
-            edit_budget = min(2048, max(256, int(available * .2)), available - tail_tokens - 256)
+            edit_budget = min(2048, max(256, int(available * token_scale / 3 * .2)),
+                              math.floor((available - tail_bytes - reserve) * token_scale / 3))
             edit_view, edits_omitted = bounded_notifications(user_edits, edit_budget,
                 lambda edits, omitted: tokens([Message.user(RenderedJSON({"user_edits": edits, "user_edits_omitted": omitted}))]))
-            tail_tokens = tokens([assemble([])[-1]])
+            tail_bytes = input_bytes()
         def context_part(index: int, *, compressed: bool = False,
                          include_summary: bool = True) -> list[Message]:
             step = self.steps[index]
@@ -729,43 +739,41 @@ class ConversationHistory:
         required_start = unseen_results if unseen_results is not None else len(self.steps) - int(required_last)
         from .historymerge import era_records, historical_records
         parts: dict[tuple[int, bool], list[Message]] = {}
-        costs: dict[tuple[int, bool], int] = {}
-        empty_history = TokenEstimates().history_bytes([])
+        costs: dict[tuple[int, bool], HistorySize] = {}
+        sizing = HistorySizeIndex(TokenEstimates().history_bytes)
+        indexes: dict[int, HistorySizeIndex] = {}
 
-        def part_cost(index: int, form: tuple[bool, bool], part: list[Message]) -> int:
-            # Measure history in its sent projection. Archived steps are
-            # immutable, so each form is measured once until its record or
-            # summary state changes; the assembled request is still checked.
+        def part_cost(index: int, form: tuple[bool, bool], part: list[Message]) -> HistorySize:
             step = self.steps[index]
             disk = step.__dict__.get("_disk") if isinstance(step, CompletedStep) else None
             attached = overthinking and index >= len(self.steps) - reasoning_history_steps
-            key = (*form, runs[index], attached, filtered_thoughts, step.summary, getattr(step, "reasoning_summary", None),
-                   getattr(step, "compaction_status", None), getattr(step, "compaction_error", None),
-                   step.id <= self.compact_through)
-            cache: dict[Any, tuple[Any, int]] | None = (
-                step.__dict__.setdefault("_sent_bytes", {}) if disk is not None else None)
-            entry = cache.get(key) if cache is not None else None
-            if entry is not None and entry[0] is disk:
-                size = entry[1]
-            else:
-                size = TokenEstimates().history_bytes([message.content for message in part]) - empty_history
-                if cache is not None:
-                    cache[key] = (disk, size)
-            return math.ceil(size / 3 * token_scale)
+            state = (step.summary, getattr(step, "reasoning_summary", None),
+                     getattr(step, "compaction_status", None), getattr(step, "compaction_error", None))
+            if index not in indexes:
+                previous = step.__dict__.get('_size_index')
+                if disk is not None and previous is not None and previous[0] is disk and previous[1] == state:
+                    indexes[index] = previous[2]
+                else:
+                    indexes[index] = HistorySizeIndex(TokenEstimates().history_bytes)
+                    if disk is not None:
+                        step.__dict__['_size_index'] = (disk, state, indexes[index])
+            key = (*form, runs[index], attached, filtered_thoughts, step.id <= self.compact_through)
+            return indexes[index].get(key, part[0].content)
 
-        def narrative_cost(record: dict[str, Any], cache: str = "_narrative_bytes") -> int:
+        def narrative_cost(record: dict[str, Any], cache: str = "_narrative_size") -> HistorySize:
             anchor = self.steps[record["step_id"] - 1]
-            entry: tuple[Any, int] | None = (
+            entry: tuple[Any, HistorySize] | None = (
                 anchor.__dict__.get(cache) if isinstance(anchor, CompletedStep) else None)
             if entry is not None and entry[0] is record:
                 size = entry[1]
             else:
-                size = TokenEstimates().history_bytes([record]) - empty_history
+                size = sizing.measure_record(record)
                 if isinstance(anchor, CompletedStep):
                     anchor.__dict__[cache] = (record, size)
-            return math.ceil(size / 3 * token_scale)
+            indexes[record["step_id"] - 1].remember((cache,), size)
+            return size
 
-        def supplied(index: int, compressed: bool) -> tuple[list[Message], int]:
+        def supplied(index: int, compressed: bool) -> tuple[list[Message], HistorySize]:
             key = (index, compressed)
             if key not in parts:
                 include_summary = not (compressed and self.steps[index].id <= self.compact_through)
@@ -777,7 +785,7 @@ class ConversationHistory:
                     compact = context_part(index, compressed=True)
                     compact_cost = part_cost(index, (True, True), compact)
                     raw = context_part(index, include_summary=False)
-                    if compact_cost < part_cost(index, (False, False), raw):
+                    if sizing.record_bytes(compact_cost) < sizing.record_bytes(part_cost(index, (False, False), raw)):
                         chosen, cost = compact, compact_cost
                 parts[key], costs[key] = chosen, cost
             return parts[key], costs[key]
@@ -792,10 +800,32 @@ class ConversationHistory:
         level = [FULL] * count
         unit_records: dict[int, dict[str, Any]] = {}
         unit_costs = [supplied(index, False)[1] for index in range(count)]
-        record_costs: dict[int, int] = {}
+        record_costs: dict[int, HistorySize] = {}
         partials: dict[int, list[Message]] = {}
-        removed: list[tuple[list[int], int, int]] = []
-        total = sum(unit_costs) + tail_tokens
+        removed: list[tuple[list[int], int, HistorySize]] = []
+        content_bytes = sum(cost.content_bytes for cost in unit_costs)
+        block_count = sum(cost.blocks for cost in unit_costs)
+        record_count = count
+
+        def change_cost(before: list[HistorySize], after: list[HistorySize]) -> None:
+            nonlocal content_bytes, block_count, record_count
+            content_bytes += sum(cost.content_bytes for cost in after) - sum(cost.content_bytes for cost in before)
+            block_count += sum(cost.blocks for cost in after) - sum(cost.blocks for cost in before)
+            record_count += len(after) - len(before)
+
+        def total_bytes(extra: list[HistorySize] | None = None) -> int:
+            addition = extra or []
+            return tail_bytes + sizing.total_bytes(
+                content_bytes + sum(cost.content_bytes for cost in addition),
+                block_count + sum(cost.blocks for cost in addition), record_count + len(addition))
+
+        def finish(selected: list[Message]) -> list[Message]:
+            if self.store is not None:
+                for index, entry in indexes.items():
+                    if entry.dirty:
+                        self.store.write(f'{self.steps[index].id:08d}.sizes.json', entry.snapshot())
+                        entry.dirty = False
+            return assemble(selected)
 
         def compressible(index: int) -> bool:
             step = self.steps[index]
@@ -804,23 +834,21 @@ class ConversationHistory:
             return not unseen and index != unseen_results and not (pending and index == count - 1)
 
         def summarize_step(index: int) -> bool:
-            nonlocal total
             if level[index] != FULL or not compressible(index):
                 return False
             cost = supplied(index, True)[1]
-            if cost >= unit_costs[index]:
+            if sizing.record_bytes(cost) >= sizing.record_bytes(unit_costs[index]):
                 return False  # Missing or larger summaries keep the original evidence.
-            total -= unit_costs[index] - cost
+            change_cost([unit_costs[index]], [cost])
             level[index], unit_costs[index] = STEP, cost
             return True
 
         def merge_into(record: dict[str, Any], form: int, cache: str, cap: int) -> bool:
             # One record replaces every unit that covers its source steps.
-            nonlocal total
             members = [step_id - 1 for step_id in record["step_ids"]]
             if any(index >= cap or not compressible(index) or level[index] >= form for index in members):
                 return False
-            current: dict[int, int] = {}
+            current: dict[int, HistorySize] = {}
             for index in members:
                 if level[index] in (NARRATIVE, ERA):
                     covering = unit_records[index]
@@ -828,9 +856,11 @@ class ConversationHistory:
                 else:
                     current[index] = unit_costs[index]
             cost = narrative_cost(record, cache)
-            if cost >= sum(current.values()):
+            old = list(current.values())
+            if sizing.record_bytes(cost) >= sizing.total_bytes(
+                    sum(item.content_bytes for item in old), sum(item.blocks for item in old), len(old)):
                 return False
-            total += cost - sum(current.values())
+            change_cost(old, [cost])
             for index in members:
                 level[index] = form
                 unit_records[index] = record
@@ -838,7 +868,6 @@ class ConversationHistory:
             return True
 
         def drop_oldest() -> bool:
-            nonlocal total
             index = next((index for index in range(count) if level[index] != DROPPED), None)
             if index is None or index >= required_start or index == unseen_results:
                 return False
@@ -851,13 +880,12 @@ class ConversationHistory:
                 members = [index]
                 cost = unit_costs[index]
             removed.append((members, level[index], cost))
-            total -= cost
+            change_cost([cost], [])
             for member in members:
                 level[member] = DROPPED
             return True
 
         async def excerpt_step(index: int, *, results_only: bool) -> bool:
-            nonlocal total
             if level[index] != FULL and not (level[index] == PARTIAL and not results_only):
                 return False
             from .historyexcerpts import excerpt_fields
@@ -865,9 +893,9 @@ class ConversationHistory:
             # A partial observation must not inherit an optional whole-turn
             # summary, particularly before the model has seen the actual result.
             original = context_part(index, include_summary=False)[0].content
-            target = max(0, unit_costs[index] - max(1, total - available))
+            target = max(0, sizing.record_bytes(unit_costs[index]) - max(1, total_bytes() - available))
             def measure(record: dict[str, Any]) -> int:
-                return math.ceil((TokenEstimates().history_bytes([record]) - empty_history) / 3 * token_scale)
+                return sizing.record_bytes(sizing.measure_record(record))
             # Keep a fitting newest batch ahead of its own optional prose.
             without_prose = {key: value for key, value in original.items()
                              if key not in ('reasoning', 'agent_response')}
@@ -877,13 +905,13 @@ class ConversationHistory:
             clipped = await run_blocking(excerpt_fields, original, target, measure,
                                          results_only=results_only, prefer_results=prefer_results)
             if clipped is None:
-                if measure(original) >= unit_costs[index]:
+                if measure(original) >= sizing.record_bytes(unit_costs[index]):
                     return False
                 clipped = original
-            cost = measure(clipped)
-            if cost >= unit_costs[index]:
+            cost = sizing.measure_record(clipped)
+            if sizing.record_bytes(cost) >= sizing.record_bytes(unit_costs[index]):
                 return False
-            total -= unit_costs[index] - cost
+            change_cost([unit_costs[index]], [cost])
             level[index], unit_costs[index] = PARTIAL, cost
             partials[index] = [record_message(clipped)]
             return True
@@ -894,10 +922,10 @@ class ConversationHistory:
                 if summarize_step(index):
                     yield
             for record in historical_records(self.steps):
-                if merge_into(record, NARRATIVE, "_narrative_bytes", cap):
+                if merge_into(record, NARRATIVE, "_narrative_size", cap):
                     yield
             for record in era_records(self.steps):
-                if merge_into(record, ERA, "_era_bytes", cap):
+                if merge_into(record, ERA, "_era_size", cap):
                     yield
             for index in range(cap, recent_start):
                 if summarize_step(index):
@@ -931,27 +959,13 @@ class ConversationHistory:
             entries.sort(key=lambda entry: entry[0])
             return [message for _, part in entries for message in part]
 
-        def backfill(candidate: list[Message]) -> list[Message]:
-            nonlocal total
-            restored: list[tuple[list[int], int, int]] = []
+        def backfill() -> list[Message]:
             for members, form, cost in reversed(removed):
-                if total + cost <= available:
+                if total_bytes([cost]) <= available:
                     for member in members:
                         level[member] = form
-                    total += cost
-                    restored.append((members, form, cost))
-            if not restored:
-                return candidate
-            while True:
-                proposed = assemble(selection())
-                if tokens(proposed) <= rendered_limit:
-                    return proposed
-                if not restored:
-                    return candidate
-                members, _, cost = restored.pop()
-                for member in members:
-                    level[member] = DROPPED
-                total -= cost
+                    change_cost([], [cost])
+            return finish(selection())
 
         # A manual boundary chooses economical compressed forms even when the
         # full history fits. Later steps still follow normal budget selection.
@@ -960,19 +974,15 @@ class ConversationHistory:
             summarize_step(index)
         if boundary:
             for record in historical_records(self.steps):
-                merge_into(record, NARRATIVE, "_narrative_bytes", boundary)
+                merge_into(record, NARRATIVE, "_narrative_size", boundary)
             for record in era_records(self.steps):
-                merge_into(record, ERA, "_era_bytes", boundary)
+                merge_into(record, ERA, "_era_size", boundary)
 
-        if total <= available:
-            candidate = assemble(selection())
-            if tokens(candidate) <= rendered_limit:
-                return candidate
+        if total_bytes() <= available:
+            return finish(selection())
         async for _ in reductions():
-            if total <= available:
-                candidate = assemble(selection())
-                if tokens(candidate) <= rendered_limit:
-                    return backfill(candidate)
+            if total_bytes() <= available:
+                return backfill()
         if required_last:
             failure_context: list[Message] = []
             excerpt_index = len(self.steps) - 1
@@ -985,16 +995,20 @@ class ConversationHistory:
                                              if key != "response_excerpt"}
                 failure_context = [record_message(record)]
                 excerpt_index = unseen_results
-            excerpt_budget = available - tail_tokens - tokens(failure_context)
+            failure_sizes = [sizing.measure_record(message.content) for message in failure_context]
+            failure_bytes = sizing.total_bytes(sum(cost.content_bytes for cost in failure_sizes),
+                                               sum(cost.blocks for cost in failure_sizes), len(failure_sizes))
+            excerpt_budget = available - tail_bytes - failure_bytes
             while excerpt_budget > 0:
-                excerpt = self.steps[excerpt_index].excerpt_context_messages(int(excerpt_budget / token_scale))
+                excerpt = self.steps[excerpt_index].excerpt_context_messages(max(0, excerpt_budget // 3 - 32))
                 if excerpt is None:
                     break
-                candidate = assemble(excerpt + failure_context)
-                cost = tokens(candidate)
-                if cost <= rendered_limit:
-                    return candidate
-                excerpt_budget -= max(1, cost - rendered_limit)
+                sizes = [sizing.measure_record(message.content) for message in excerpt] + failure_sizes
+                cost = tail_bytes + sizing.total_bytes(sum(item.content_bytes for item in sizes),
+                                                       sum(item.blocks for item in sizes), len(sizes))
+                if cost <= available:
+                    return finish(excerpt + failure_context)
+                excerpt_budget -= max(1, cost - available)
         raise ContextError("Current input and latest tool results exceed the context budget even without older history; originals and summaries are preserved.")
 
 

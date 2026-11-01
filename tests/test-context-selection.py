@@ -431,7 +431,7 @@ async def test_archived_history_costs_are_measured_once(monkeypatch):
         first = reads.count(len(code))
         reads.clear()
         await history.view(messages, [], keep_steps=10, context_length=200_000, max_output=256)
-        # Later requests read the archived result only to assemble the request.
-        assert first == 2 and reads.count(len(code)) == 1
+        # Building the view no longer rereads selected history for a final check.
+        assert first == 2 and reads.count(len(code)) == 0
     finally:
         history.clear()

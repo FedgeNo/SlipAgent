@@ -29,6 +29,21 @@ def test_request_body_rejects_nonfinite_transport_numbers(value):
         RequestBody({"messages": [], "temperature": value})
 
 
+def test_request_accounting_uses_spooled_string_sizes_without_rereading(monkeypatch):
+    from slipagent.requestbody import value_tokens
+    text = '界\\"\n\t👩‍💻' * 3000
+    chunks = FileText.chunks
+
+    def no_spool_read(self):
+        assert self.characters < len(text), 'Accounting reread a completed request payload'
+        yield from chunks(self)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(FileText, 'chunks', no_spool_read)
+        body = RequestBody({'messages': [{'role': 'user', 'content': text}]})
+    assert body.estimate == value_tokens({'role': 'user', 'content': text})
+
+
 @pytest.mark.parametrize("indent", [None, 2])
 def test_indexed_values_preserve_unicode_escaping_and_json_format(tmp_path, indent):
     original = {"body": ('é🌙\\"\n\t' * 3000), "values": [None, True, 2.5, ""]}

@@ -1,7 +1,7 @@
 """Private append-only session journals; resume never replays tools.
 
-Records reach the operating system when written. Message deltas and tool-start
-markers are also synced to disk before execution, off the event loop so a slow
+Active turns capture immutable record snapshots for an owned writer. Message
+deltas and tool-start markers are serialized and synced before execution, off the event loop so a slow
 disk delays the agent rather than the interface. A missing result means
 uncertainty, not permission to retry. Only a torn final line can
 be ignored during recovery; malformed complete records reject the journal.
@@ -12,6 +12,7 @@ from __future__ import annotations
 from .prompts import load_prompt
 
 import copy
+import asyncio
 import hashlib
 import json
 import math
@@ -20,6 +21,10 @@ import re
 import shutil
 import tempfile
 import uuid
+from collections import deque
+from collections.abc import Iterator
+from contextlib import contextmanager
+from threading import RLock
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +35,7 @@ from .config import MIN_CONTEXT_TOKENS, data_directory
 from .api import APIError
 from .task import TaskMemory
 from .tools.blocking import run_blocking
+from .lifecycle import finish_cleanup
 from .tools.output import CommandLog, OutputStream
 from .types import Message, Usage, content_text
 
@@ -99,6 +105,11 @@ class SessionJournal:
         self.failed = False
         # Records written since the last sync to disk.
         self._unsynced = False
+        self._deferred = 0
+        self._writer: asyncio.Task[None] | None = None
+        self._write_error: BaseException | None = None
+        self._pending_records: deque[tuple[str, dict[str, Any]]] = deque()
+        self._write_lock = RLock()
         try:
             _private_directory(self.directory)
             metadata = self.directory / "project.json"
@@ -113,6 +124,62 @@ class SessionJournal:
             raise SessionError(f"Cannot open session storage {self.directory}: {exc}") from exc
 
     def _append(self, kind: str, **data: Any) -> None:
+        if self._write_error is not None:
+            raise self._write_error
+        if self.path is None or self.failed:
+            raise SessionError("Session journal is unavailable; no further actions can be recorded.")
+        if self._deferred or self._writer is not None:
+            self._pending_records.append((kind, copy.deepcopy(data)))
+            self._start_writer()
+        else:
+            self._drain_records()
+            with self._write_lock:
+                self._write_record(kind, **data)
+
+    def _start_writer(self) -> None:
+        if self._writer is None and self._pending_records and not self.failed:
+            self._writer = asyncio.create_task(run_blocking(self._drain_records), name='session journal append')
+            self._writer.add_done_callback(self._writer_finished)
+
+    def _writer_finished(self, task: asyncio.Task[None]) -> None:
+        error = None if task.cancelled() else task.exception()
+        if self._writer is not task:
+            return
+        self._writer = None
+        if error is not None:
+            self._write_error = error
+            self.failed = True
+        else:
+            self._start_writer()
+
+    @contextmanager
+    def defer_appends(self) -> Iterator[None]:
+        """Capture turn records now; serialize them at an owned async barrier."""
+        self._deferred += 1
+        try:
+            yield
+        finally:
+            self._deferred -= 1
+
+    def _drain_records(self) -> None:
+        with self._write_lock:
+            while self._pending_records:
+                kind, data = self._pending_records.popleft()
+                try:
+                    self._write_record(kind, **data)
+                except (OSError, ValueError, TypeError) as exc:
+                    self.failed = True
+                    raise SessionError(f"Could not save session {self.session_id}: {exc}. Inspect its journal before resuming.") from exc
+
+    def _discard_failed_records(self) -> None:
+        with self._write_lock:
+            self._pending_records.clear()
+            self._writer = None
+            self._write_error = None
+
+    def _write_record(self, kind: str, **data: Any) -> None:
+        if self._write_error is not None:
+            raise self._write_error
         if self.path is None or self.failed:
             raise SessionError("Session journal is unavailable; no further actions can be recorded.")
         from .sources import json_chunks
@@ -150,15 +217,33 @@ class SessionJournal:
 
     async def flush(self) -> None:
         """Wait until every record written so far is on disk, without blocking the event loop."""
+        if self._write_error is not None:
+            raise self._write_error
         if self.path is None or self.failed:
             raise SessionError("Session journal is unavailable; no further actions can be recorded.")
-        if self._unsynced:
-            self._unsynced = False
+        while self._writer is not None or self._pending_records or self._unsynced:
+            if self._writer is not None:
+                await finish_cleanup(self._writer)
+                continue
+            if self._pending_records:
+                await run_blocking(self._drain_records)
+            if self._unsynced:
+                self._unsynced = False
+                try:
+                    await run_blocking(self._sync)
+                except BaseException:
+                    self._unsynced = True
+                    raise
+
+    async def aclose(self) -> None:
+        if self._writer is not None:
             try:
-                await run_blocking(self._sync)
-            except BaseException:
-                self._unsynced = True
-                raise
+                await finish_cleanup(self._writer)
+            except SessionError:
+                if not self.failed:
+                    raise
+        if self.path is not None and not self.failed:
+            await self.flush()
 
     @property
     def title(self) -> str:
@@ -219,6 +304,10 @@ class SessionJournal:
         return _validate_title(title)
 
     def begin(self, agent: Agent, parent: str | None = None, *, title: str | None = None) -> None:
+        if self.failed:
+            self._discard_failed_records()
+        else:
+            self._drain_records()
         title = session_title(self.project) if title is None else _validate_title(title)
         self.session_id = uuid.uuid4().hex
         self.path = self.directory / (self.session_id + ".jsonl")
@@ -368,6 +457,8 @@ class SessionJournal:
         self._append("replace", index=index, message=self._message(message))
 
     def listing(self) -> list[dict[str, str]]:
+        if not self.failed:
+            self._drain_records()
         result = []
         modified: dict[str, int] = {}
         try:
@@ -449,6 +540,8 @@ class SessionJournal:
             raise SessionError(f"Could not delete session {session_id}: {exc}. Some session files may have been removed.") from exc
 
     def load(self, selected: str) -> dict[str, Any]:
+        if not self.failed:
+            self._drain_records()
         if selected == "latest":
             choices = [item for item in self.listing() if item["id"] != self.session_id and "damaged" not in item]
             if not choices:
@@ -724,6 +817,9 @@ class SessionJournal:
             path = self.directory / (identifier + ".jsonl")
             if fork:
                 staged = copy.copy(self)
+                staged._pending_records = deque()
+                staged._writer, staged._write_error, staged._deferred = None, None, 0
+                staged._write_lock = RLock()
                 staged.session_id, staged.path, staged.failed = identifier, path, False
                 fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 os.close(fd)
@@ -777,6 +873,8 @@ class SessionJournal:
         self.cursor = 0 if fork else data["message_count"]
         self.step_count = 0 if fork else len(data["steps"])
         self.last_message, self.system, self.state = None, None, None
+        if self.failed:
+            self._discard_failed_records()
         self.failed = False
         self._title = data["title"]
         agent.session_id = identifier

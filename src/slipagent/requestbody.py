@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 
 from .data_text import RenderedContent, RenderedJSON
-from .sources import json_chunks, materialize, spool_directory, write_indexed_json
+from .sources import FileText, json_chunks, json_key, materialize, spool_directory, write_indexed_json
 from .types import Message
 
 
@@ -30,8 +30,21 @@ def wire_message(message: Message) -> dict[str, Any]:
 
 
 def value_tokens(value: Any, *, ensure_ascii: bool = False) -> int:
-    size = sum(len(chunk.encode("utf-8")) for chunk in json_chunks(value, indent=None, ensure_ascii=ensure_ascii))
+    size = value_bytes(value, ensure_ascii=ensure_ascii)
     return (size + 2) // 3 + 32
+
+
+def value_bytes(value: Any, *, ensure_ascii: bool = False) -> int:
+    """Count compact JSON from stored ranges without rereading their text."""
+    if isinstance(value, FileText) and value.quoted and not ensure_ascii:
+        return value.size
+    if isinstance(value, dict):
+        return 2 + max(0, len(value) - 1) * 2 + sum(
+            len(json_key(key, ensure_ascii=ensure_ascii).encode('utf-8')) + 2
+            + value_bytes(child, ensure_ascii=ensure_ascii) for key, child in value.items())
+    if isinstance(value, (list, tuple)):
+        return 2 + max(0, len(value) - 1) * 2 + sum(value_bytes(child, ensure_ascii=ensure_ascii) for child in value)
+    return sum(len(chunk.encode('utf-8')) for chunk in json_chunks(value, indent=None, ensure_ascii=ensure_ascii))
 
 
 class RequestBody(httpx.AsyncByteStream):

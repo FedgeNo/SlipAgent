@@ -124,6 +124,9 @@ class GoogleClient(APIClient):
     def prepare_payload(self, payload: dict[str, Any], profile: RequestProfile | None) -> None:
         payload.pop("session_id", None)
         model = payload["model"]
+        # Establish the shared limiter on the loop before concurrent spool workers.
+        if self.free_tier_limited(model) and getattr(self, '_upload_pacer', None) is None:
+            self._upload_pacer = UploadPacer(FREE_TIER_TOKENS_PER_MINUTE)
         properties = getattr(self, "_model_properties", {}).get(model, {})
         if properties.get("thinking") is True or model.startswith(("gemini-2.5-", "gemini-3")):
             # Request Google's visible summaries while retaining its default thinking level.

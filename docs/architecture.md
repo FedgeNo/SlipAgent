@@ -74,6 +74,10 @@ removes its turn files.
 `sources.py` provides bounded text and JSON iterators. `requestbody.py` serializes
 selected history and rendered prompt sections into one immutable temporary
 request file before transport. Its small index references strings in that file;
+the client constructs the snapshot in an owned worker from independent input
+containers. Cancellation settles construction and removes a snapshot that never
+reached transport. Provider request-body factories run in that worker; shared
+upload limiters are established on the event loop before construction.
 HTTP sends chunks of at most 64 KiB with an exact Content-Length. Retries replay
 the same snapshot. This disk spool prevents prompt edits or completed summaries
 from changing an in-flight request. Dynamic templates and active input still
@@ -83,7 +87,9 @@ avoiding RAM-backed system temporary space.
 
 The internal request callback passes this snapshot to diagnostics, token
 accounting, and the context viewer. An explicit legacy `on_request` callback can
-still request a materialized dictionary. Token estimates count serialized UTF-8
+still request a materialized dictionary. Token estimates combine canonical stored
+JSON-string sizes and resident metadata, without rereading completed message
+payloads. They count serialized UTF-8
 bytes incrementally, preserving the existing selection policy and calibration.
 Complete history selections return structured content without character paging. Resume
 accepts both legacy text observations and structured journal observations.
@@ -465,7 +471,7 @@ truncation and incomplete JSON arguments still reject the entire batch.
 The archive retains assistant calls followed by matching `role: tool` results.
 Working requests package each complete step as one JSON object, regardless of
 native-tool support. JSON history does not change the selected response contract.
-The budgeter measures serialized records; recall retains originals, and the
+The budgeter indexes serialized record sizes; recall retains originals, and the
 current prompt is retained independently of compression. Legacy archive readers
 remain separate from active response acceptance.
 
@@ -1193,8 +1199,14 @@ instructions or step-batch check annotations. State records hold task boundaries
 usage, queued input, and selected settings. Working plans persist as tool results. Step records
 hold summary state, including asynchronous summary completion.
 Reasoning is stored in the original message, included in recent context when
-Overthinking Mode is enabled, and supplied separately to compaction. Writes flush/fsync;
-an unsavable tool-start marker stops dispatch.
+Overthinking Mode is enabled, and supplied separately to compaction. During an
+active turn, journal appends capture independent snapshots and an owned writer
+serializes/appends them in order off the event loop. Flush barriers settle that
+writer and fsync before tool effects and before the turn returns. Cancellation
+waits for owned writes; an unsavable tool-start marker stops dispatch. Idle
+synchronous callers retain immediate appends. Session transitions drain pending
+records before releasing their source files; failed records cannot enter a new
+journal. Journal shutdown precedes turn-store shutdown.
 Complete originals are never rewritten by compression.
 
 Resume reads and validates the journal before changing the active conversation.

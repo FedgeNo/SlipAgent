@@ -239,12 +239,13 @@ class APIClient:
             payload["stream"] = True
             payload["stream_options"] = {"include_usage": True}
         self.prepare_payload(payload, capabilities)
-        body = self.request_body(payload)
+        body = await self._build_request_body(payload)
         if on_phase is not None and hasattr(body, "on_wait"):
             body.on_wait = on_phase
         if on_request is not None:
             # Capture the final request body before transport, without headers.
-            on_request(body.read())
+            from .tools.blocking import run_blocking
+            on_request(await run_blocking(body.read))
         if on_request_body is not None:
             # An async observer may persist the body; transport waits for it.
             observed = on_request_body(body)
@@ -268,7 +269,7 @@ class APIClient:
                               on_raw_response: Callable[[httpx.Response], None] | None = None,
                               on_first_output: Callable[[FirstOutputDeadline | None], None] | None = None,
                               on_phase: Callable[[str], None] | None = None) -> Completion:
-        body = request_body if request_body is not None else self.request_body(payload)
+        body = request_body if request_body is not None else await self._build_request_body(payload)
         transport_options: dict[str, Any] = {"timeout": None} if disable_timeout else {}
         observed = False
         attempt = 0
@@ -478,6 +479,25 @@ class APIClient:
     def request_body(self, payload: dict[str, Any]) -> RequestBody:
         from .requestbody import RequestBody
         return RequestBody(payload)
+
+    async def _build_request_body(self, payload: dict[str, Any]) -> RequestBody:
+        from .tools.blocking import run_blocking
+        snapshot = copy.deepcopy(payload)
+        body = None
+
+        def build() -> RequestBody:
+            nonlocal body
+            body = self.request_body(snapshot)
+            return body
+
+        try:
+            return await run_blocking(build)
+        except BaseException:
+            # A cancelled thread still finishes construction; settle its storage
+            # before propagating cancellation without a transport owner.
+            if body is not None:
+                await run_blocking(body.temporary.cleanup)
+            raise
 
     def request_headers(self, http_referer: str | None, app_title: str | None) -> dict[str, str]:
         return {}

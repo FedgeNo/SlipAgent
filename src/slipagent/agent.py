@@ -12,6 +12,7 @@ import uuid
 import asyncio
 import json
 import sys
+from contextlib import nullcontext
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -220,6 +221,10 @@ class Agent:
 
     def reset(self, *, new_session: bool = True) -> None:
         """Clear the conversation, keeping the system prompt."""
+        journal = self.registry.resources.journal
+        if journal is not None and not journal.failed:
+            # Queued records can reference the immutable turn files cleared below.
+            journal._drain_records()
         jobs = self.registry.resources.jobs
         if jobs is not None:
             jobs.clear()
@@ -574,18 +579,24 @@ class Agent:
             self._loop_guard().reset()
         self.registry.context_notes.pop("progress", None)
         self.running = True
-        try:
-            return await self._run(prompt)
-        finally:
+        journal = self.registry.resources.journal
+        with journal.defer_appends() if journal is not None else nullcontext():
             try:
-                if self.on_boundary is not None:
-                    await self.on_boundary()
+                return await self._run(prompt)
             finally:
-                self.running = False
-                self._notify_jobs()
-                if self.stop_requested:
-                    self.stopped = True
-                self._persist()
+                try:
+                    if self.on_boundary is not None:
+                        await self.on_boundary()
+                finally:
+                    try:
+                        self._notify_jobs()
+                        self._persist()
+                        if journal is not None and journal.path is not None and not journal.failed:
+                            await journal.flush()
+                    finally:
+                        self.running = False
+                        if self.stop_requested:
+                            self.stopped = True
 
     async def _run(self, prompt: str) -> str:
         if prompt:

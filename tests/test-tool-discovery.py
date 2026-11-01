@@ -334,6 +334,41 @@ async def test_reset_clears_loading_and_saved_history_restores_it():
         await tools.aclose()
 
 
+@pytest.mark.parametrize('fork', [False, True])
+async def test_saved_session_restores_loaded_tools_after_original_store_closes(workspace, tmp_path, fork):
+    from slipagent.sessions import SessionJournal
+
+    tools = registry()
+    agent = Agent(StubClient([
+        completion('Load', [ToolCall('load', 'load_tools', {'names': ['optional_record']})]),
+        completion('Use', [ToolCall('use', 'optional_record', {'value': 'saved'})]), completion('Done')]), tools, 'test')
+    journal = SessionJournal(str(workspace.root), tmp_path / 'saved')
+    tools.services['session_journal'] = journal
+    journal.begin(agent)
+    restored_tools = registry()
+    restored = Agent(None, restored_tools, 'test')
+    try:
+        await agent.run('Load and use the optional tool')
+        await agent.wait_for_compaction()
+        assert tools.get('optional_record').seen == [{'value': 'saved'}]
+        parent = journal.session_id
+        saved = journal.load(parent)
+        journal.restore(restored, saved, fork=fork)
+        # Close old archive owners before discovery reads the restored records.
+        agent.history.clear()
+        assert 'optional_record' in {spec.name for spec in restored._visible_specs(restored_tools.specs())}
+        assert restored_tools.get('optional_record').seen == []
+        if fork:
+            journal.delete_saved(parent)
+            assert 'optional_record' in {spec.name for spec in restored._visible_specs(restored_tools.specs())}
+        # An allowlist change still takes effect after the restored catalog is cached.
+        restored.exposed_tools = ('load_tools',)
+        assert 'optional_record' not in {spec.name for spec in restored._visible_specs(restored_tools.specs())}
+    finally:
+        await tools.aclose()
+        await restored_tools.aclose()
+
+
 @pytest.mark.parametrize("rejected_first", [False, True])
 def test_restoring_tool_use_scopes_rejected_call_ids_to_their_batch(rejected_first):
     accepted = [

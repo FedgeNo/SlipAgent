@@ -49,6 +49,63 @@ def streamed(values):
     return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Frames(values))
 
 
+@pytest.mark.parametrize('native', [False, True])
+@pytest.mark.parametrize('boundary', ['utf8', 'event_separator', 'argument_escape', 'tool_name'])
+async def test_real_stream_boundaries_preserve_one_tool_effect(native, boundary):
+    from slipagent.capabilities import RequestProfile
+
+    value = 'quote " / λ😀\nnext'
+    arguments = json.dumps({'value': value}, ensure_ascii=False)
+    if native:
+        values = [frame({'content': 'Visible λ😀'}),
+                  frame({'tool_calls': [{'index': 0, 'id': 'wire-call', 'function': {
+                      'name': 'record', 'arguments': arguments[:12]}}]}),
+                  frame({'tool_calls': [{'index': 0, 'function': {'arguments': arguments[12:]}}]}),
+                  frame(finish='tool_calls'), '[DONE]']
+    else:
+        text = json.dumps({'response': 'Visible λ😀', 'tool_calls': [
+            {'name': 'record', 'arguments': {'value': value}}]}, ensure_ascii=False)
+        values = [frame({'content': text[:19]}), frame({'content': text[19:]}), frame(finish='stop'), '[DONE]']
+    wire = b''.join(packet(value) for value in values)
+    offsets = {'utf8': wire.index('😀'.encode()) + 1,
+               'event_separator': wire.index(b'\n\n') + 1,
+               'argument_escape': wire.index(b'\\') + 1,
+               'tool_name': wire.index(b'record') + 3}
+    cut = offsets[boundary]
+
+    class CutStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield wire[:cut]
+            await asyncio.sleep(0)
+            yield wire[cut:]
+
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(200, headers={'content-type': 'text/event-stream'}, stream=CutStream())
+        text = 'Done' if native else json.dumps({'response': 'Done', 'tool_calls': []})
+        return httpx.Response(200, json={'choices': [{'message': {'role': 'assistant', 'content': text}, 'finish_reason': 'stop'}]})
+
+    tool = RecordingTool()
+    registry = ToolRegistry([tool])
+    events = []
+    try:
+        async with OpenRouterClient('dummy', transport=httpx.MockTransport(handle)) as client:
+            client.cache_capabilities('test/model', RequestProfile(
+                parameters={'tools'} if native else {'response_format'}, context_length=128000))
+            agent = Agent(client, registry, 'test/model', on_event=events.append)
+            assert await agent.run('Run one record call') == 'Done'
+            assert tool.seen == [{'value': value}]
+            assert len([message for message in agent.messages if message.role == 'tool']) == 1
+            shown = ''.join(event.text for event in events if event.kind == 'assistant_delta' and event.step == 1)
+            assert shown == 'Visible λ😀'
+            assert len(requests) == 2
+    finally:
+        await registry.aclose()
+
+
 @pytest.mark.parametrize("model", [
     "test/model",
     "nvidia/nemotron-3-super-120b-a12b:free",

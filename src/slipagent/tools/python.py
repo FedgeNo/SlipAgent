@@ -1,18 +1,27 @@
-"""Explicit, non-overwriting project virtual-environment creation."""
+"""Project environment creation and fresh harness-Python script execution."""
 
 from __future__ import annotations
 
 import asyncio
 import os
 import shutil
+import shlex
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..config import ConfigError, command_environment
 from ..environment import ProjectEnvironment
-from ..workspace import WorkspaceError
+from ..workspace import Workspace, WorkspaceError
 from .base import Tool, ToolResult
-from .shell import capture_process
+from .output import CommandArchive
+from .shell import capture_process, RunCommandTool, DEFAULT_TIMEOUT, MAX_TIMEOUT, _subprocess_env
+from .blocking import run_blocking
+
+if TYPE_CHECKING:
+    from ..jobs import CommandInput
 
 
 class CreatePythonEnvironmentTool(Tool):
@@ -92,3 +101,51 @@ class CreatePythonEnvironmentTool(Tool):
             return ToolResult.ok({"created": created, "path": str(target), "environment": selected})
         except (OSError, ValueError, ConfigError, WorkspaceError) as exc:
             return ToolResult.error(str(exc))
+
+
+class RunPythonTool(Tool):
+    name = 'run_python'
+    description = ''
+    description_prompt = 'tools/run-python.md'
+    parameter_prompts = 'tools/run-python-parameters.json'
+    parameters = {'type': 'object', 'properties': {
+        'code': {'type': 'string', 'minLength': 1, 'maxLength': 262144},
+        'timeout': {'type': 'number', 'minimum': .1, 'maximum': MAX_TIMEOUT},
+    }, 'required': ['code']}
+
+    def __init__(self, workspace: Workspace, archive: CommandArchive | None = None) -> None:
+        self.workspace = workspace
+        self.archive = archive
+
+    async def run(self, code: str, timeout: float = DEFAULT_TIMEOUT) -> ToolResult:
+        if not code.strip():
+            return ToolResult.error('code must not be empty.')
+        temporary = None
+
+        def prepare() -> str:
+            nonlocal temporary
+            temporary = tempfile.TemporaryDirectory(prefix='slipagent-python-', dir=self.workspace.temporary_directory)
+            script = Path(temporary.name) / 'script.py'
+            script.write_text(code, encoding='utf-8')
+            return str(script)
+
+        try:
+            script = await run_blocking(prepare)
+            return await PythonCommandRunner(self.workspace, self.archive).run(script, timeout=timeout)
+        finally:
+            if temporary is not None:
+                await run_blocking(temporary.cleanup)
+
+
+class PythonCommandRunner(RunCommandTool):
+    """Use shared capture, logs, and cleanup with direct Python execution."""
+
+    def _command_label(self, command: str) -> str:
+        arguments = [sys.executable, '-u', '-P', command]
+        return subprocess.list2cmdline(arguments) if os.name == 'nt' else shlex.join(arguments)
+
+    async def _spawn(self, command: str, *, input_channel: CommandInput | None = None) -> asyncio.subprocess.Process:
+        return await asyncio.create_subprocess_exec(
+            sys.executable, '-u', '-P', command, stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            cwd=str(self.workspace.root), env=_subprocess_env(), start_new_session=os.name == 'posix')

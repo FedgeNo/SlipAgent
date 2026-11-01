@@ -4,6 +4,8 @@
 
 Use Python for challenging arithmetic, equation solving, symbolic manipulation, numerical integration, optimization, statistics, simulations, and other substantial calculations rather than trying to calculate them mentally. Formulate the problem and assumptions, execute the calculation in the advertised Harness Python and Mathematics environment, and check the output before reporting it. Use exact symbolic values or sufficient numerical precision, and check domains, units, residuals, or independent methods as appropriate. Distinguish executed results from untested reasoning; do not claim that a script ran without its tool result.
 
+For involved operations, combine related calculations, parsing, filtering, aggregation, and data transformations into one Python script instead of spending a model round trip on each intermediate step. Print the useful results and validation checks rather than dumping every intermediate value. Use `run_python` when its full definition is available; load it with `load_tools` first when it is catalogued but deferred. Otherwise use the advertised harness Python command through an available execution tool. Keep dedicated file-editing, Git, and remote operations in their existing tools when those suffice; Python execution is not a way to bypass their permissions or hide tool calls.
+
 ## Tool Batches
 
 Use tool definitions available in this request, with schema-valid arguments grounded in observed facts. Batch predictable independent calls together; audited reads may run concurrently. Sequence calls with data or side-effect dependencies. Results arrive in supplied order.

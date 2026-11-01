@@ -53,6 +53,7 @@ The complete built-in tool set is:
 | `glob` | Find files and directories by name pattern. |
 | `list_dir` | List one directory, directories first. |
 | `run_command` | Run a shell command and capture output; `background=true` returns a managed job ID. |
+| `run_python` | Execute a script with harness Python for mathematics and multi-step data processing, with command logs and bounded process cleanup. |
 | `command_jobs` | List, inspect, wait for, or stop managed background commands. |
 | `command_input` | Send text or EOF to an explicitly interactive background command. |
 | `monitor_command` | Watch background output or completion; deliver results and their initialization turn directly in request prompts. |
@@ -112,6 +113,35 @@ declarations per file. Its automatic overview remains bounded by approximately
 3% of the context allowance and 128,000 characters; it does not replace source
 reads. Compressed summaries and diagnostic/UI previews retain their separate
 limits; they do not cap file-tool results or complete history retrieval.
+
+### Python Calculations And Data Processing
+
+Load `run_python` with `load_tools`, then supply Python source in `code`:
+
+```json
+{"code":"from fractions import Fraction\nvalues = [Fraction(1, 3), Fraction(1, 6)]\nprint('sum:', sum(values))"}
+```
+
+Each call starts a fresh subprocess using SlipAgent's interpreter and advertised
+math environment. Variables and imports do not persist between calls; use
+`print` for output. Related calculations, parsing, filtering, and aggregation
+can run in one script to save model round trips. Project tests and project
+dependencies still use the project's selected interpreter through `run_command`.
+Dedicated editing, Git, and remote tools retain their existing roles.
+
+Scripts run with the workspace as cwd and stdin closed, without a shell. The
+safe-path option avoids implicit script/cwd imports; explicit `PYTHONPATH` still
+applies. Source is limited to 262,144 characters and written to an owned temporary
+file, avoiding command-line quoting and argument-size limits. That file is
+removed after execution or cancellation; the original tool call retains the
+source in history. No other SlipAgent tool interface is injected into Python.
+
+Timeout defaults to 120 seconds and is capped at 600. Output capture, live
+progress, command logs, per-stream limits, exit status, and process-group cleanup
+are shared with `run_command`. Use `read_command_output` for archived output.
+Errors can have partial effects; this tool has shell-equivalent process access,
+not an OS sandbox. Keep generated files in permitted workspace/temp locations
+and perform only operations within the user's task.
 
 ### Background Commands
 

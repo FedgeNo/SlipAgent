@@ -17,7 +17,7 @@ from .search import GlobTool, GrepTool, search_tools
 from .shell import RunCommandTool, shell_tools
 from .web import FetchPageTool, WebSearchTool, web_tools
 from .output import CommandArchive, ReadCommandOutputTool
-from .python import CreatePythonEnvironmentTool
+from .python import CreatePythonEnvironmentTool, RunPythonTool
 from .discovery import LoadToolsTool
 from .http import HttpFetchTool
 from .semantic import SemanticSearchTool
@@ -40,6 +40,7 @@ __all__ = [
     "HttpFetchTool",
     "ReadFileTool",
     "RunCommandTool",
+    "RunPythonTool",
     "SemanticSearchTool",
     "Tool",
     "ToolRegistry",
@@ -92,6 +93,7 @@ def build_default_registry(
             AnswerTool(),
             LoadToolsTool(services),
             CreatePythonEnvironmentTool(services["project_environment"]),
+            RunPythonTool(workspace, archive),
             *file_tools(workspace, artifacts),
             *path_tools(workspace),
             *search_tools(workspace),

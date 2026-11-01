@@ -119,6 +119,8 @@ async def test_math_guidance_and_metadata_reach_custom_native_embedded_and_glm_c
         messages = await agent._context_view([], 0, capabilities=profile, preview=True)
         delivered = "\n".join(content_text(message.content) for message in messages if message.role == "system")
         assert delivered.count("Use Python for challenging arithmetic") == 1
+        assert 'one Python script instead of spending a model round trip' in delivered
+        assert 'run_python' in delivered and 'variables and imports do not persist' in delivered
         assert "Harness Python and Mathematics" in delivered
         assert "Session Environment" in delivered
         assert "operating_system" in delivered and "machine" in delivered and "user" in delivered

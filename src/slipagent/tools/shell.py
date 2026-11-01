@@ -79,7 +79,7 @@ class RunCommandTool(Tool):
                 return ToolResult.error("Background command service is unavailable")
             # start() checks again; this early refusal keeps a refused job from leaving a log behind.
             self.jobs.check_capacity()
-        log = self.archive.start(command) if self.archive is not None else None
+        log = self.archive.start(self._command_label(command)) if self.archive is not None else None
         if background:
             assert self.jobs is not None and log is not None
             from ..jobs import CommandInput
@@ -93,11 +93,7 @@ class RunCommandTool(Tool):
 
     async def _execute(self, command: str, limit: float, log: CommandLog | None, *,
                        background: bool = False, input_channel: CommandInput | None = None) -> ToolResult:
-        spawn = asyncio.create_task(asyncio.create_subprocess_shell(
-            command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            stdin=asyncio.subprocess.PIPE if input_channel is not None else None,
-            cwd=str(self.workspace.root), env=_subprocess_env(), start_new_session=os.name == "posix",
-        ))
+        spawn = asyncio.create_task(self._spawn(command, input_channel=input_channel))
         try:
             process = await asyncio.shield(spawn)
         except asyncio.CancelledError:
@@ -122,7 +118,7 @@ class RunCommandTool(Tool):
         finally:
             if progress is not None:
                 progress.close()
-        result = CommandOutput()._render(command, process.returncode, stdout, stderr, archived=log is not None)
+        result = CommandOutput()._render(self._command_label(command), process.returncode, stdout, stderr, archived=log is not None)
         if log is not None:
             result.content += "\n" + log.notice()
         if timed_out:
@@ -131,6 +127,15 @@ class RunCommandTool(Tool):
                 "inspect before retrying. Captured output follows.\n" + result.content
             )
         return result
+
+    def _command_label(self, command: str) -> str:
+        return command
+
+    async def _spawn(self, command: str, *, input_channel: CommandInput | None = None) -> asyncio.subprocess.Process:
+        return await asyncio.create_subprocess_shell(
+            command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.PIPE if input_channel is not None else None,
+            cwd=str(self.workspace.root), env=_subprocess_env(), start_new_session=os.name == 'posix')
 
 
 class ProcessCapture:

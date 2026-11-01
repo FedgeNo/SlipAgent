@@ -1067,6 +1067,25 @@ Command quotas count retained bytes; inspection quotas charge header plus logica
 payload bytes per record. Shared physical storage is not the sum of those counters.
 Non-command artifacts and conversation journals retain their existing formats.
 
+## Harness Python Execution
+
+`tools/python.py` owns `run_python`, a deferred tool that executes one script in
+a fresh harness-Python subprocess. It prepares and removes its temporary source
+through owned blocking workers; cancellation during preparation or spawn retains
+cleanup ownership. The subprocess uses direct argv, workspace cwd, closed stdin,
+and Python's safe-path option while preserving the normal command environment.
+`PythonCommandRunner` borrows the existing `RunCommandTool` capture/log/timeout
+and cleanup path, overriding only launch and display labeling. Shell launch
+behavior remains in the base owner. No kernel state, registry injection, or
+nested tool orchestration is introduced. Source and timeout limits, interpreter
+selection, and output recovery are documented in [tools](tools.md#python-calculations-and-data-processing).
+
+`prompts/response-common.md` owns the encouragement to combine calculations and
+mechanical transformations into fewer Python calls, so standalone exports,
+custom system prompts, repairs, and each reply format retain it. The harness
+environment prompt and tool description specify runtime details and fallbacks
+without treating the harness interpreter as the project's environment.
+
 ## Selected Skill Ownership
 
 `skills.py` reads metadata from immediate project/user/bundled package directories and

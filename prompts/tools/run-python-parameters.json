@@ -1,0 +1,4 @@
+{
+    "properties/code": "Python source to execute in a fresh harness-Python subprocess, at most 262144 characters. Print the results you need.",
+    "properties/timeout": "Execution timeout in seconds, default 120 and maximum 600."
+}

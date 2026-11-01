@@ -216,6 +216,7 @@ def cli_environment(**overrides: str) -> dict[str, str]:
            if name in os.environ}
     env.update({
         "OPENROUTER_API_KEY": "test-key", "SLIPAGENT_NO_DOTENV": "1", "NO_COLOR": "1",
+        "SLIPAGENT_NO_UPDATE_CHECK": os.environ.get('SLIPAGENT_NO_UPDATE_CHECK', '1'),
         "SLIPAGENT_STATE_DIR": os.environ["SLIPAGENT_STATE_DIR"],
         "PYTHONPATH": os.pathsep.join([GUARD_DIRECTORY, str(Path(__file__).resolve().parents[1] / "src")]),
     })
@@ -1244,7 +1245,7 @@ async def test_command_help_accepts_optional_slash_without_executing_command(tmp
             assert replies[0] == replies[1]
             assert f'Help: /{topic}' in replies[0]
             if topic == 'mcp':
-                assert 'connect an MCP server over stdio' in replies[0]
+                assert 'stdio or Streamable HTTP MCP server' in replies[0]
                 assert '/mcp remove' in replies[0]
             if topic == 'model':
                 assert '/model <model>' in replies[0] and '[subcommand]' in replies[0]
@@ -1582,6 +1583,7 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
     parser = pyte.Stream(screen)
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     with SlowStub([step, text_step("resumed successfully")]) as stub:
+        terminal_output = bytearray()
         proc = subprocess.Popen(
             [sys.executable, "-m", "slipagent.cli", "--base-url", stub.base_url,
              "--workspace", str(project_dir), "--model", "stub/one", "--no-mcp"],
@@ -1593,13 +1595,15 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             while time.monotonic() < deadline:
                 if select.select([master], [], [], .05)[0]:
                     raw = os.read(master, 65536)
+                    terminal_output.extend(raw)
                     if b"\x1b[6n" in raw:
                         os.write(master, b"\x1b[1;1R")
                     parser.feed(decoder.decode(raw))
                 if predicate():
                     return
                 assert proc.poll() is None, "CLI exited before the expected state"
-            pytest.fail("terminal state timed out: " + repr(screen.display))
+            pytest.fail("terminal state timed out: " + repr(screen.display)
+                        + '\nTerminal output: ' + repr(terminal_output.decode('utf-8', errors='replace')[-20000:]))
         try:
             wait_for(lambda: "openrouter::stub/one" in screen.display[23] and "Working" in screen.display[17])
             assert screen.title.endswith(f"{project_dir} | SlipAgent")

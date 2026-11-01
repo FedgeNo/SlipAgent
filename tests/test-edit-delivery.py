@@ -29,14 +29,14 @@ def setup_edits(tmp_path, responses, **options):
 
 async def test_large_saved_diff_fits_and_retires_into_retrievable_history(tmp_path):
     agent, client, edits, store = setup_edits(tmp_path, [completion("Done"), completion("Next")],
-                                             context_tokens=16_000, max_tokens=512)
+                                             context_tokens=18_000, max_tokens=512)
     diff = "@@ -1 +1 @@\n" + "-before\n+after α 👩‍💻\n" * 20_000
     edits.record(tmp_path / "file", diff, "edit")
     assert await agent.run("Continue") == "Done"
     payload = request_input(client.calls[0]["messages"])
     notice = payload["user_edits"][0]
     assert len(notice["diff"]) < len(diff) and notice["diff_truncated"]
-    assert message_tokens(client.calls[0]["messages"]) < 16_000
+    assert message_tokens(client.calls[0]["messages"]) < 18_000
     assert store.read(notice["artifact"]["record_id"])["output"] == diff
     assert await agent.run("Next") == "Next"
     assert "user_edits" not in request_input(client.calls[-1]["messages"])
@@ -163,7 +163,7 @@ async def test_transport_failure_keeps_saved_edit_pending(tmp_path):
 
 async def test_many_saved_files_share_budget_and_only_included_revisions_retire(tmp_path):
     agent, client, edits, _ = setup_edits(tmp_path, [completion("Done"), completion("Next")],
-                                         context_tokens=16_000, max_tokens=512)
+                                         context_tokens=18_000, max_tokens=512)
     for number in range(60):
         edits.record(tmp_path / f"file-{number}", "+changed\n" * 1000, f"edit-{number}")
     await agent.run("Work")
@@ -171,7 +171,7 @@ async def test_many_saved_files_share_budget_and_only_included_revisions_retire(
     included = {notice["edit_id"] for notice in payload["user_edits"]}
     assert 0 < len(included) < 60
     assert payload["user_edits_omitted"] == 60 - len(included)
-    assert message_tokens(client.calls[0]["messages"]) < 16_000
+    assert message_tokens(client.calls[0]["messages"]) < 18_000
     pending = agent.registry.context_notes["user_edits"]
     assert {key for key, entry in pending.items() if entry["delivered"]} == included
     await agent.run("Continue")

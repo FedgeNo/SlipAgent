@@ -9,9 +9,109 @@ import sys
 
 import pytest
 
-from slipagent.jobs import CommandJobs, CommandJobsTool
+from slipagent.jobs import CommandJobs, CommandJobsTool, CommandInputTool
 from slipagent.tools.shell import RunCommandTool
 from slipagent.tools.output import CommandArchive, ReadCommandOutputTool
+
+
+async def test_interactive_job_accepts_literal_input_and_eof_across_tool_replacement(workspace):
+    archive, jobs = CommandArchive(100000), CommandJobs()
+    tool = RunCommandTool(workspace, archive, jobs)
+    command = shlex.join([sys.executable, '-u', '-c',
+                          "import sys; print('ready'); print('received:' + sys.stdin.read())"])
+    try:
+        started = await tool.run(command, background=True, interactive=True)
+        key = started.content['job_id']
+        first = await CommandInputTool(jobs).run(key, text='héllo')
+        assert not first.is_error and first.content['bytes_sent'] == 6
+        # Rebuilt tools borrow the same job-owned pipe.
+        second = await CommandInputTool(jobs).run(key, text=' world\n', eof=True)
+        assert not second.is_error
+        result = await CommandJobsTool(jobs).run('wait', key)
+        assert result.content['state'] == 'completed'
+        assert result.content['stdin'] == 'closed'
+        output = content_text((await ReadCommandOutputTool(archive).run(log_id=key)).content)
+        assert 'received:héllo world' in output
+        assert (await CommandInputTool(jobs).run(key, text='again')).is_error
+    finally:
+        await jobs.aclose()
+        await archive.aclose()
+
+
+async def test_interactive_input_validation_and_stop(workspace):
+    archive, jobs = CommandArchive(100000), CommandJobs()
+    tool, inputs = RunCommandTool(workspace, archive, jobs), CommandInputTool(jobs)
+    command = shlex.join([sys.executable, '-c', 'import sys; sys.stdin.read()'])
+    try:
+        assert (await tool.run(command, interactive=True)).is_error
+        assert not archive.logs
+        key = (await tool.run(command, background=True, interactive=True)).content['job_id']
+        assert (await inputs.run(key)).is_error
+        assert (await inputs.run(key, text='é' * 32769)).is_error
+        assert (await inputs.run('missing', text='test')).is_error
+        assert not (await inputs.run(key, text='accepted')).is_error
+        await CommandJobsTool(jobs).run('stop', key)
+        assert jobs.jobs[key].input.state == 'closed'
+        assert (await inputs.run(key, eof=True)).is_error
+        plain = (await tool.run('echo plain', background=True)).content['job_id']
+        assert (await inputs.run(plain, text='test')).is_error
+    finally:
+        await jobs.aclose()
+        await archive.aclose()
+
+
+async def test_cancelled_input_closes_pipe_without_stopping_owned_job(workspace, monkeypatch):
+    archive, jobs = CommandArchive(100000), CommandJobs()
+    command = shlex.join([sys.executable, '-c', 'import time; time.sleep(60)'])
+    try:
+        key = (await RunCommandTool(workspace, archive, jobs).run(command, background=True, interactive=True)).content['job_id']
+        channel = jobs.jobs[key].input
+        await asyncio.wait_for(channel.ready.wait(), 5)
+        entered = asyncio.Event()
+
+        async def blocked():
+            entered.set()
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(channel.process.stdin, 'drain', blocked)
+        sending = asyncio.create_task(CommandInputTool(jobs).run(key, text='hello'))
+        await asyncio.wait_for(entered.wait(), 5)
+        sending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await sending
+        assert channel.state == 'closed'
+        assert jobs.active
+    finally:
+        await jobs.aclose()
+        await archive.aclose()
+
+
+@pytest.mark.parametrize('failure', ['broken_pipe', 'timeout'])
+async def test_failed_input_closes_pipe_and_reports_partial_delivery(workspace, monkeypatch, failure):
+    from slipagent import jobs as jobs_module
+
+    archive, jobs = CommandArchive(100000), CommandJobs()
+    command = shlex.join([sys.executable, '-c', 'import time; time.sleep(60)'])
+    try:
+        key = (await RunCommandTool(workspace, archive, jobs).run(command, background=True, interactive=True)).content['job_id']
+        channel = jobs.jobs[key].input
+        await asyncio.wait_for(channel.ready.wait(), 5)
+
+        async def fail():
+            if failure == 'broken_pipe':
+                raise BrokenPipeError('closed by child')
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(channel.process.stdin, 'drain', fail)
+        monkeypatch.setattr(jobs_module, 'INPUT_TIMEOUT', .01)
+        result = await CommandInputTool(jobs).run(key, text='hello')
+        assert result.is_error
+        assert 'partially delivered' in result.content
+        assert channel.state == 'closed'
+        assert (await CommandInputTool(jobs).run(key, text='retry')).is_error
+    finally:
+        await jobs.aclose()
+        await archive.aclose()
 
 
 async def test_background_output_wait_timeout_and_stop(workspace):
@@ -41,14 +141,18 @@ async def test_background_output_wait_timeout_and_stop(workspace):
         await archive.aclose()
 
 
-async def test_shutdown_during_process_start_reaps_job(workspace):
+@pytest.mark.parametrize('interactive', [False, True])
+async def test_shutdown_during_process_start_reaps_job(workspace, interactive):
     archive, jobs = CommandArchive(10000), CommandJobs()
     tool = RunCommandTool(workspace, archive, jobs)
     try:
-        await tool.run(shlex.join([sys.executable, "-c", "import time; time.sleep(60)"]), background=True)
+        await tool.run(shlex.join([sys.executable, "-c", "import time; time.sleep(60)"]),
+                       background=True, interactive=interactive)
         await jobs.aclose()
         assert not jobs.active
         assert all(log.finished for log in archive.logs.values())
+        if interactive:
+            assert all(job.input.state == 'closed' for job in jobs.jobs.values())
     finally:
         await jobs.aclose()
         await archive.aclose()

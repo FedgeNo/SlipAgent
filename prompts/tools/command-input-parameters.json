@@ -1,0 +1,5 @@
+{
+    "properties/job_id": "The job_id returned by an interactive background run_command call.",
+    "properties/text": "Literal UTF-8 input, at most 65536 bytes. Include a newline when needed; default empty.",
+    "properties/eof": "Close stdin after submitting text. Default false; closing is irreversible."
+}

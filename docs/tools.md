@@ -54,6 +54,7 @@ The complete built-in tool set is:
 | `list_dir` | List one directory, directories first. |
 | `run_command` | Run a shell command and capture output; `background=true` returns a managed job ID. |
 | `command_jobs` | List, inspect, wait for, or stop managed background commands. |
+| `command_input` | Send text or EOF to an explicitly interactive background command. |
 | `monitor_command` | Watch background output or completion; deliver results and their initialization turn directly in request prompts. |
 | `read_command_output` | Page retained stdout/stderr or read its tail by log ID; list logs by step/call ID. |
 | `read_artifact` | Read a bounded character page of a saved inspection record by numeric `record_id`; select `field`, `offset`, and `limit`. Omit the ID for a paginated record list. |
@@ -120,6 +121,20 @@ Pass `{"command":"your test command","background":true,"timeout":120}` to
 `action="status"` to inspect, or `action="stop"` to kill the process group.
 `action="list"` lists all jobs from the optional `offset` onward.
 Use `read_command_output` with the log ID for live pages or tails.
+
+To supply input later, start the command with both `background=true` and
+`interactive=true`. Load `command_input`, then send
+`{"job_id":"ID_FROM_RESULT","text":"answer\n"}`. Text is literal and no newline
+is added automatically. Each call accepts at most 65,536 UTF-8 bytes. Send
+`eof=true` to close stdin, optionally after text in the same call. Closing stdin
+cannot be undone. Job metadata reports stdin as `disabled`, `starting`, `open`,
+or `closed`.
+
+This uses pipes, without terminal emulation. Readiness and draining each have a
+five-second limit. Success confirms submission to the pipe, not consumption;
+inspect output and the final exit status. A failed or cancelled write can have
+partial effects and closes stdin. Input does not reset the execution timeout.
+Input calls and their results are retained in ordinary tool history.
 
 Waits are capped at 30 seconds and never cancel the command. Execution retains
 the normal 120-second default and 600-second maximum timeout. At most four jobs

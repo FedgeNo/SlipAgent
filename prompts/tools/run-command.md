@@ -19,3 +19,5 @@ Session logs retain decoded output within the disk quota. Use `read_command_outp
 Set `poll=true` only for intentional external-state polling.
 
 Set `background=true` for a managed job; the result supplies `job_id` and `log_id`. Use `command_jobs` to check/wait/stop known jobs and `read_command_output` for live output. Up to four jobs run concurrently. Execution timeout defaults to 120 seconds, capped at 600. Establish success from the outcome.
+
+Set `interactive=true` together with `background=true` to open a stdin pipe. Load and use `command_input` to send literal text or EOF by job ID. Ordinary commands retain their existing stdin behavior. This is pipe input, not a terminal; programs requiring a TTY are unsupported. Input does not extend the execution timeout.

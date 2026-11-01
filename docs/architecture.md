@@ -1053,6 +1053,18 @@ and shutdown; rebuilt shell tools borrow it. Process creation is shielded so
 cancellation cannot lose a child between spawn and handle assignment. Capture
 reuses foreground capture and its bounded cleanup of processes and pipes.
 
+`interactive=true` requires `background=true` and creates a job-owned
+`CommandInput` pipe. Rebuilt `command_input` tools borrow it through the existing
+job owner. Older retained jobs have no input channel. `command_input` sends at
+most 65,536 UTF-8 bytes per call, adds no newline, and optionally closes stdin
+after draining. Readiness and draining each wait at most five seconds. Failed or
+cancelled writes close stdin and report possible partial delivery; successful
+submission does not establish consumption. Job settlement closes the channel
+even if cancellation wins before execution or while spawning. Input uses normal
+tool-start journaling and result history; resume never replays it or reconnects
+to prior processes. Ordinary stdin behavior and execution deadlines are unchanged.
+No PTY is allocated.
+
 `command_jobs` provides list/status/wait/stop. Its bounded wait never cancels the
 owned task; output is retrieved incrementally through `read_command_output`.
 Four jobs can run at once and 128 handles are retained, evicting only completed

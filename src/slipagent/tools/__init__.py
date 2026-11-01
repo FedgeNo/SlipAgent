@@ -68,7 +68,7 @@ def build_default_registry(
     construction creates the environment selector and command archive.
     Code navigation is included only when language servers are configured.
     """
-    from ..jobs import CommandJobs, CommandJobsTool
+    from ..jobs import CommandJobs, CommandJobsTool, CommandInputTool
     from ..monitoring import MonitorCommandTool
     from ..diagnostics import RequestDiagnostics
     from ..lsp import LanguageServers, NavigateCodeTool, load_language_servers
@@ -99,6 +99,7 @@ def build_default_registry(
             *navigate_tools(workspace),
             *shell_tools(workspace, archive, services.get("command_jobs")),
             *([CommandJobsTool(services["command_jobs"])] if "command_jobs" in services else []),
+            *([CommandInputTool(services["command_jobs"])] if "command_jobs" in services else []),
             *([MonitorCommandTool(services["command_jobs"])] if "command_jobs" in services else []),
             *([NavigateCodeTool(services["language_servers"])]
               if "language_servers" in services and load_language_servers() else []),

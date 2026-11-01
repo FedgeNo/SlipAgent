@@ -61,6 +61,8 @@ async def test_tool_guidance_reaches_actual_request_body(workspace, native):
         assert "whole file" in descriptions["write_file"]
         assert "`poll=true`" in descriptions["run_command"]
         assert "`background=true`" in descriptions["run_command"]
+        assert "`interactive=true`" in descriptions["run_command"]
+        assert "65,536 UTF-8 bytes" in descriptions["command_input"]
         assert "`next_offset`" in descriptions["read_command_output"]
         assert "30 seconds" in descriptions["command_jobs"]
         assert "Unicode character positions" in descriptions["navigate_code"]

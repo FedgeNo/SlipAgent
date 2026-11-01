@@ -14,17 +14,48 @@ from .tools.base import Tool, ToolResult
 from .tools.output import CommandLog
 from .monitoring import CommandMonitors
 
+MAX_INPUT_BYTES = 65536
+INPUT_TIMEOUT = 5.0
+
+
+class CommandInput:
+    """A pipe owned by its background job, never by a replacement tool."""
+
+    def __init__(self) -> None:
+        self.ready = asyncio.Event()
+        self.process: asyncio.subprocess.Process | None = None
+        self.state = "starting"
+
+    def attach(self, process: asyncio.subprocess.Process) -> None:
+        self.process = process
+        self.state = "open"
+        self.ready.set()
+
+    def close(self) -> None:
+        if self.process is not None and self.process.stdin is not None:
+            self.process.stdin.close()
+        self.process = None
+        self.state = "closed"
+        self.ready.set()
+
 
 class CommandJob:
-    def __init__(self, log: CommandLog) -> None:
+    def __init__(self, log: CommandLog, *, input_channel: CommandInput | None = None) -> None:
         self.log = log
         self.state = "running"
         self.result: ToolResult | None = None
         self.task: asyncio.Task[None] | None = None
         self.notified = False
+        self._input = input_channel
+
+    @property
+    def input(self) -> CommandInput | None:
+        # Jobs retained from before stdin support were started without a pipe.
+        return self.__dict__.get('_input')
 
     def metadata(self) -> dict[str, Any]:
-        return {"job_id": self.log.id, "state": self.state, **self.log.metadata()}
+        return {"job_id": self.log.id, "state": self.state,
+                "stdin": self.input.state if self.input is not None else "disabled", **self.log.metadata()}
 
 
 class CommandJobs:
@@ -59,14 +90,15 @@ class CommandJobs:
         # Only reported completions may leave the retained list.
         return next((key for key, job in self.jobs.items() if job.state != "running" and job.notified), None)
 
-    def start(self, log: CommandLog, run: Callable[[], Awaitable[ToolResult]]) -> CommandJob:
+    def start(self, log: CommandLog, run: Callable[[], Awaitable[ToolResult]], *,
+              input_channel: CommandInput | None = None) -> CommandJob:
         self.check_capacity()
         while len(self.jobs) >= 128:
             oldest = self._removable()
             if oldest is None:
                 break
             del self.jobs[oldest]
-        job = CommandJob(log)
+        job = CommandJob(log, input_channel=input_channel)
         self.jobs[log.id] = job
 
         async def execute() -> None:
@@ -80,6 +112,8 @@ class CommandJobs:
                 job.state = "failed"
                 job.result = ToolResult.error(f"Background command failed: {exc}; inspect its log before retrying")
             finally:
+                if job.input is not None:
+                    job.input.close()
                 log.finish(log.returncode, log.timed_out)
 
         job.task = self.lifetime.spawn(execute())
@@ -87,6 +121,8 @@ class CommandJobs:
             # Cancellation can win before execute() reaches its first line.
             if task.cancelled() and job.state == "running":
                 job.state = "stopped"
+                if job.input is not None:
+                    job.input.close()
                 log.finish(log.returncode, log.timed_out)
             if self.on_completion is not None:
                 self.on_completion()
@@ -163,3 +199,53 @@ class CommandJobsTool(Tool):
             result["result"] = job.result.content
             result["is_error"] = job.result.is_error
         return ToolResult.ok(result)
+
+
+class CommandInputTool(Tool):
+    name = "command_input"
+    description = ""
+    description_prompt = 'tools/command-input.md'
+    parameter_prompts = 'tools/command-input-parameters.json'
+    parameters = {"type": "object", "properties": {
+        "job_id": {"type": "string"},
+        "text": {"type": "string"},
+        "eof": {"type": "boolean"},
+    }, "required": ["job_id"]}
+
+    def __init__(self, jobs: CommandJobs) -> None:
+        self.jobs = jobs
+
+    async def run(self, job_id: str, text: str = '', eof: bool = False) -> ToolResult:
+        try:
+            data = text.encode('utf-8')
+        except UnicodeEncodeError:
+            return ToolResult.error("text must be valid UTF-8.")
+        if len(data) > MAX_INPUT_BYTES or (not data and not eof):
+            return ToolResult.error("Supply text and/or eof=true; text must be at most 65536 UTF-8 bytes. No input was sent.")
+        job = self.jobs.jobs.get(job_id)
+        if job is None:
+            return ToolResult.error("Unknown job_id; use command_jobs action=list. Jobs from an earlier process cannot receive input.")
+        channel = job.input
+        if channel is None:
+            return ToolResult.error("This job has no input pipe; start run_command with background=true and interactive=true.")
+        try:
+            await asyncio.wait_for(channel.ready.wait(), INPUT_TIMEOUT)
+        except TimeoutError:
+            return ToolResult.error("Job input is not ready; no input was sent. Inspect command_jobs before retrying.")
+        process = channel.process
+        if (job.state != 'running' or process is None or process.returncode is not None
+                or process.stdin is None or process.stdin.is_closing()):
+            return ToolResult.error("Job input is closed or the process has exited; no input was sent.")
+        try:
+            process.stdin.write(data)
+            await asyncio.wait_for(process.stdin.drain(), INPUT_TIMEOUT)
+            if eof:
+                channel.close()
+        except asyncio.CancelledError:
+            channel.close()
+            raise
+        except (OSError, RuntimeError, TimeoutError) as exc:
+            channel.close()
+            return ToolResult.error(f"Input delivery failed: {exc}. Input may have been partially delivered; stdin was closed. Inspect output before retrying.")
+        return ToolResult.ok({"job_id": job_id, "bytes_sent": len(data), "eof": eof,
+                              "notice": "Bytes submitted to stdin; consumption and command success are not confirmed. Inspect command output and status."})

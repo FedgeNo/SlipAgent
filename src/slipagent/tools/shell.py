@@ -26,7 +26,7 @@ from .output import CommandArchive, CommandLog, MAX_OUTPUT_CHARS as MAX_OUTPUT_C
 from ..lifecycle import finish_cleanup
 
 if TYPE_CHECKING:
-    from ..jobs import CommandJobs
+    from ..jobs import CommandJobs, CommandInput
 
 DEFAULT_TIMEOUT = 120.0
 MAX_TIMEOUT = 600.0
@@ -51,6 +51,7 @@ class RunCommandTool(Tool):
             },
             "poll": {"type": "boolean", "description": ""},
             "background": {"type": "boolean", "description": ""},
+            "interactive": {"type": "boolean", "description": ""},
         },
         "required": ["command"],
     }
@@ -60,9 +61,12 @@ class RunCommandTool(Tool):
         self.archive = archive
         self.jobs = jobs
 
-    async def run(self, command: str, timeout: float = DEFAULT_TIMEOUT, poll: bool = False, background: bool = False) -> ToolResult:
+    async def run(self, command: str, timeout: float = DEFAULT_TIMEOUT, poll: bool = False,
+                  background: bool = False, interactive: bool = False) -> ToolResult:
         if not command.strip():
             return ToolResult.error("command must not be empty.")
+        if interactive and not background:
+            return ToolResult.error("interactive=true requires background=true so later calls can supply input.")
 
         try:
             self.workspace.resolve(".")
@@ -78,15 +82,20 @@ class RunCommandTool(Tool):
         log = self.archive.start(command) if self.archive is not None else None
         if background:
             assert self.jobs is not None and log is not None
-            job = self.jobs.start(log, lambda: self._execute(command, limit, log, background=True))
+            from ..jobs import CommandInput
+            channel = CommandInput() if interactive else None
+            job = self.jobs.start(log, lambda: self._execute(command, limit, log, background=True, input_channel=channel),
+                                  input_channel=channel)
             # Ensure subprocess ownership is established before a following stop.
             await asyncio.sleep(0)
             return ToolResult.ok({**job.metadata(), "notice": log.notice()})
         return await self._execute(command, limit, log)
 
-    async def _execute(self, command: str, limit: float, log: CommandLog | None, *, background: bool = False) -> ToolResult:
+    async def _execute(self, command: str, limit: float, log: CommandLog | None, *,
+                       background: bool = False, input_channel: CommandInput | None = None) -> ToolResult:
         spawn = asyncio.create_task(asyncio.create_subprocess_shell(
             command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.PIPE if input_channel is not None else None,
             cwd=str(self.workspace.root), env=_subprocess_env(), start_new_session=os.name == "posix",
         ))
         try:
@@ -104,6 +113,8 @@ class RunCommandTool(Tool):
                 log.finish(None, False)
             return ToolResult.error(f"Could not start command: {exc}")
 
+        if input_channel is not None:
+            input_channel.attach(process)
         publish = None if background else command_output.get()
         progress = OutputProgress(publish) if publish is not None else None
         try:

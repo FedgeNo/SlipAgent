@@ -33,7 +33,8 @@ class ToolCatalog:
         steps = history.steps
         if (self._steps is not steps or self._processed > len(steps)
                 or (self._processed and steps[self._processed - 1] is not self._last_step)):
-            self.loaded.clear()
+            if self._steps is not None:
+                self.loaded.clear()
             self._steps = steps
             self._processed = 0
         for index in range(self._processed, len(steps)):

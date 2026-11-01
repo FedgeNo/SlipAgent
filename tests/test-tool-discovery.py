@@ -28,6 +28,15 @@ class OptionalTool(RecordingTool):
     description = "Record an optional value.\n\nA distinctive long contract that should be deferred."
 
 
+def test_initial_history_binding_preserves_explicitly_loaded_tools():
+    from slipagent.context import ConversationHistory
+    catalog = ToolCatalog()
+    history = ConversationHistory()
+    catalog.loaded.add('optional_record')
+    assert catalog.select([OptionalTool().spec], [], history=history) == {'optional_record'}
+    assert catalog.select([OptionalTool().spec], [], history=ConversationHistory()) == set()
+
+
 def test_incremental_restoration_skips_completed_results_and_rebuilds_on_rewind(monkeypatch):
     from slipagent.context import ConversationHistory
     from slipagent.tools import discovery

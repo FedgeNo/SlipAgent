@@ -14,6 +14,7 @@ from urllib.parse import quote, unquote
 from .application import application
 from .context import CompletedStep, HistoryStep
 from .fileio import open_regular
+from .historyquestions import QUESTION_LIMIT, QUESTION_PREFIX, question_preview
 from .records import response_source
 from .sessionstate import Session
 from .sources import TextSource, json_chunks, text_chunks
@@ -369,6 +370,7 @@ class GuiBrowser:
                 tool_calls.append({'index': call_index, 'name': text_page(name, limit=128)['text']})
             value = resident_content(message)
             tool_result = None
+            preview: dict[str, Any]
             if message.role == 'tool':
                 envelope = value if isinstance(value, dict) else {}
                 name = envelope.get('tool') or message.name or 'Tool'
@@ -378,9 +380,17 @@ class GuiBrowser:
                 preview = {'text': '', 'more': False}
             else:
                 preview = text_page('' if value is None and message.role == 'assistant' else value, limit=4096)
+            history_context = None
+            if message.role == 'user' and preview['text'].startswith(QUESTION_PREFIX):
+                original = text_page(value, limit=QUESTION_LIMIT)
+                question = question_preview(original['text']) if not original['more'] else None
+                if question is not None:
+                    preview = text_page(question['question'], limit=4096)
+                    history_context = question['history_reference']['label']
             items.append({'index': index, 'id': f'/messages/{index}', 'role': message.role,
                           'source': response_source([message]),
                           'toolCalls': tool_calls, 'toolCount': len(calls), 'toolResult': tool_result,
+                          'historyContext': history_context,
                           **preview})
         return {'items': items, 'offset': offset, 'total': len(messages),
                 'sessionId': self.session.agent.session_id}

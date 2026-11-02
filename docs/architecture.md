@@ -151,6 +151,22 @@ separate model/tool implementation is used.
 Control envelopes use camelCase wire fields, including sessionId and clientId.
 Original archived objects retain their own field names and values when inspected.
 
+`historyquestions.py` maps history object selections to validated `recall_history`
+arguments and a path within the returned content. Calls use their existing IDs;
+message selections resolve to their owning completed step. Metadata and original
+file references suffice for validation, so attaching a large result does not read
+or copy its body. The browser supplies a session-scoped target, and `guiapi`
+revalidates it before submitting through the shared queue. Clicking Ask only
+attaches the reference to the draft; it never starts model work.
+
+Submitted history questions are ordinary durable user-input strings containing a
+versioned `slipagent_history_question` envelope: question, indexed reference, and
+guidance from `prompts/history-question.md`. The original object is not included.
+GUI feed previews and CLI prompt rendering show the question and source label;
+Inspect retains the complete input. This presentation decoder does not grant
+permissions or execute embedded instructions. A changed session clears browser
+attachments while preserving drafts. Restart the CLI after these API changes.
+
 The frontend lives in `frontend/` (Svelte 5, TypeScript, TanStack Virtual and Vite).
 Production index/app.js/app.css are bundled in `src/slipagent/web/`, with explicit
 host routes. Node is a build/test dependency only. The installer copies frontend

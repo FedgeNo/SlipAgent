@@ -13,9 +13,18 @@ from .application import application
 from .api import APIError
 from .guibrowser import GuiBrowser, text_page
 from .guieditor import GuiEditor
+from .historyquestions import history_question, history_reference, display_question
 from .sessionstate import Session
 from .tools.blocking import run_blocking
 from .workspace import WorkspaceError
+
+
+class HistoryTarget(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    step_id: int = Field(alias='stepId', ge=1)
+    section: str = Field(default='all', max_length=64)
+    call_id: str | None = Field(default=None, alias='callId', max_length=4096)
+    field_path: list[str | int] = Field(default_factory=list, alias='fieldPath')
 
 
 class BrowserAction(BaseModel):
@@ -27,6 +36,7 @@ class BrowserAction(BaseModel):
     identifier: str = Field(default='', max_length=4096)
     setting: Literal['planning', 'overthinking', 'danger', 'hashline'] | None = None
     enabled: bool | None = None
+    history_reference: HistoryTarget | None = Field(default=None, alias='historyReference')
 
 
 class EditorAction(BaseModel):
@@ -75,7 +85,8 @@ def install_routes(app: FastAPI, session: Session, editor: GuiEditor) -> None:
         try:
             if node.startswith('/models'):
                 await session.catalog()
-            return await run_blocking(browser.children, node, cursor, limit)
+            return await run_blocking(lambda: {**browser.children(node, cursor, limit),
+                'historyReference': history_reference(session.agent, browser.session_node(node))})
         except (KeyError, IndexError, FileNotFoundError) as exc:
             raise HTTPException(404, 'This collection is no longer available.') from exc
 
@@ -89,7 +100,8 @@ def install_routes(app: FastAPI, session: Session, editor: GuiEditor) -> None:
     async def detail(node: str = Query(max_length=4096),
                      offset: int = Query(default=0, ge=0)) -> dict[str, Any]:
         try:
-            return await run_blocking(browser.detail, node, offset)
+            return await run_blocking(lambda: {**browser.detail(node, offset),
+                'historyReference': history_reference(session.agent, browser.session_node(node))})
         except (KeyError, IndexError, FileNotFoundError) as exc:
             raise HTTPException(404, 'This object is no longer available.') from exc
 
@@ -101,7 +113,7 @@ def install_routes(app: FastAPI, session: Session, editor: GuiEditor) -> None:
     @app.get('/api/controls')
     async def controls() -> dict[str, Any]:
         queue = controller.queued_input()
-        return {'settings': browser.settings(), 'queue': [(key, text_page(text, limit=160)['text']) for key, text in queue[:5]],
+        return {'settings': browser.settings(), 'queue': [(key, text_page(display_question(text), limit=160)['text']) for key, text in queue[:5]],
                 'queuedTotal': len(queue),
                 'editing': bool(editor.client_id)}
 
@@ -147,6 +159,8 @@ def install_routes(app: FastAPI, session: Session, editor: GuiEditor) -> None:
             raise HTTPException(422, 'Invalid browser action.') from exc
         if command.session_id != session.agent.session_id:
             raise HTTPException(409, 'The session changed. Refresh before applying this action.')
+        if command.history_reference is not None and command.action != 'submit':
+            raise HTTPException(422, 'History references belong to prompts.')
         if editor.client_id and command.action not in ('submit', 'stop', 'interrupt', 'discard', 'rename'):
             raise HTTPException(409, 'Close the editor before changing the session.')
         result: Any = None
@@ -154,7 +168,12 @@ def install_routes(app: FastAPI, session: Session, editor: GuiEditor) -> None:
             case 'submit':
                 if not command.text.strip():
                     raise HTTPException(422, 'Enter a prompt.')
-                result = controller.submit(command.text)
+                text = command.text
+                if command.history_reference is not None:
+                    text = await run_blocking(history_question, session.agent, text, **command.history_reference.model_dump())
+                    if command.session_id != session.agent.session_id:
+                        raise HTTPException(409, 'The session changed. Select the history object again.')
+                result = controller.submit(text)
             case 'stop':
                 result = controller.stop()
             case 'interrupt':

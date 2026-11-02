@@ -1,6 +1,6 @@
 <script lang="ts">
     import {onMount} from 'svelte';
-    import {observe, request, type BrowserNode, type Children, type Detail, type SessionState} from './api';
+    import {observe, request, type BrowserNode, type Children, type Detail, type HistoryReference, type SessionState} from './api';
     import {Navigation, type Position} from './navigation';
     import ListPane from './ListPane.svelte';
     import Feed from './Feed.svelte';
@@ -30,6 +30,8 @@
     let runError = $state('');
     let notice = $state('');
     let prompt = $state('');
+    let promptInput = $state<HTMLTextAreaElement>();
+    let promptReference = $state<HistoryReference>();
     let sending = $state(false);
     let actionBusy = $state(false);
     let revision = $state(0);
@@ -55,6 +57,18 @@
     let planData = $state<{objective?: string; stages?: {task: string; status: string; evidence: string}[]}>({});
     function openSearch() { searchMode = true; requestAnimationFrame(() => searchInput?.focus()); }
     function modal(node: HTMLDialogElement) { node.showModal(); }
+
+    const historyReference = $derived(detail?.historyReference ?? right?.historyReference ??
+        (!selection ? left?.historyReference : undefined));
+    const historyAction = $derived(historyReference?.target.section === 'all' && !historyReference.target.fieldPath.length ?
+        'Ask About This Step' : historyReference?.target.callId && historyReference.target.fieldPath.length === 1 ?
+        (historyReference.target.section === 'tool_calls' ? 'Ask About This Call' : 'Ask About This Result') : 'Ask About This');
+    function askHistory() {
+        if (!historyReference || historyReference.sessionId !== sessionState?.sessionId) return;
+        promptReference = historyReference;
+        searchMode = false;
+        requestAnimationFrame(() => promptInput?.focus());
+    }
 
     $effect(() => {
         streaming; reasoning;
@@ -146,8 +160,10 @@
         if (sending || !prompt.trim()) return;
         sending = true;
         try {
-            await request('actions', {sessionId: sessionState?.sessionId, action: 'submit', text: prompt});
+            await request('actions', {sessionId: promptReference?.sessionId ?? sessionState?.sessionId, action: 'submit',
+                text: prompt, ...(promptReference ? {historyReference: promptReference.target} : {})});
             prompt = '';
+            promptReference = undefined;
             controls = await request('controls');
             error = '';
         } catch (failure) { error = String(failure); }
@@ -167,6 +183,10 @@
                 const previous = sessionState?.sessionId;
                 const switched = sessionState?.sessionId !== record.state.sessionId;
                 sessionState = record.state;
+                if (promptReference && promptReference.sessionId !== record.state.sessionId) {
+                    promptReference = undefined;
+                    notice = 'History reference cleared because the session changed. Your draft is preserved.';
+                }
                 if (switched || record.type === 'snapshot') {
                     revision++;
                     const section = position.root.split('/')[1];
@@ -230,7 +250,8 @@
                         <div class="SearchInput"><input aria-label="Search History" bind:this={searchInput} bind:value={searchQuery} placeholder="Search all original history…" maxlength="256"/><button type="button" aria-label="Close Search" onclick={() => searchMode = false}>×</button></div>
                         <div class="ComposerFooter"><small>Search works while the agent runs · Esc returns to your prompt</small></div>
                     {:else}
-                    <textarea aria-label="Prompt" placeholder="Describe what you want to build…" bind:value={prompt} rows="3"
+                    {#if promptReference}<div class="HistoryContext"><span>About {promptReference.label}</span><button type="button" aria-label="Remove History Reference" onclick={() => promptReference = undefined}>×</button></div>{/if}
+                    <textarea aria-label="Prompt" placeholder={promptReference ? 'Ask about this history selection…' : 'Describe what you want to build…'} bind:this={promptInput} bind:value={prompt} rows="3"
                         onkeydown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void submit(); } }}></textarea>
                     <div class="ComposerFooter"><small>{sessionState?.running ? activity : connection === 'Connected' ? 'Enter to send · Shift+Enter for a new line' : connection}</small><div>
                         {#if sessionState?.running}<button type="button" class="TextButton" onclick={() => action('stop')}>Stop After Turn</button><button type="button" class="DangerButton" onclick={() => action('interrupt')}>Interrupt</button>{/if}
@@ -248,6 +269,7 @@
             </section>
             <section class="DetailColumn">
                 <div class="ColumnHeading"><h2>{selection?.label || 'Details'}</h2>{#if selection?.collection}<button class="TextButton" onclick={() => navigate(selection!.id)}>Focus ↗</button>{/if}</div>
+                {#if historyReference && historyReference.sessionId === sessionState?.sessionId}<div class="DetailActions"><button class="Primary" disabled={sending} onclick={askHistory}>{historyAction}</button><small>{historyReference.label}</small></div>{/if}
                 {#if selection?.kind === 'file'}<div class="FileActions"><button class="TextButton" onclick={() => choose(selection!)}>View</button><button class="TextButton" onclick={() => editing = selection!.id}>Edit</button></div>{/if}
                 {#if selection?.kind === 'model'}<div class="DetailActions"><button class="Primary" disabled={sessionState?.running || actionBusy} onclick={() => action('model', {identifier: selection!.actionValue})}>Select Model</button><small>{selection.preview}</small></div>{/if}
                 {#if selection?.kind === 'optimal'}<div class="DetailActions"><button class="Primary" disabled={sessionState?.running || actionBusy} onclick={() => action('optimal')}>Enable Optimal Selection</button></div>{/if}

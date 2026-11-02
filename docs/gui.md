@@ -40,6 +40,15 @@ Inspect exposes the same attribution under `response_source` for messages and
 turns. Changing models does not relabel older responses. Older records display
 only the attribution they actually contain; an unknown provider stays unknown.
 
+History objects offer **Ask About This Step**, **Ask About This Call**,
+**Ask About This Result**, or **Ask About This** for individual fields. The action
+focuses the prompt box and adds a removable reference while preserving your draft.
+Write your question and send it normally; during a run it joins the same queue.
+The model receives the question and an indexed `recall_history` reference, rather
+than a copy of a potentially large result. Chat shows your question with an
+“About…” label; Inspect preserves the full reference. Changing sessions clears
+the attachment and keeps your draft so it cannot target unrelated history.
+
 ## Work With The Agent
 
 Send a prompt with Enter; Shift+Enter inserts a newline. During a run, **Queue**

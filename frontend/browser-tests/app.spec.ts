@@ -106,10 +106,54 @@ test('restores checkpointed files after confirmation without resetting history',
     await expect(page.locator('.MessageCard').filter({hasText: 'Original answer 79'})).toBeVisible();
 });
 
+test('asks about a selected history step without overwriting the draft or submitting twice', async ({page}) => {
+    let submissions = 0;
+    page.on('request', (request) => {
+        if (request.url().endsWith('/api/actions') && request.postDataJSON()?.action === 'submit') submissions++;
+    });
+    await page.getByRole('button', {name: 'History', exact: true}).click();
+    await page.locator('.HierarchyColumn .ObjectRow').first().click();
+    const prompt = page.getByRole('textbox', {name: 'Prompt', exact: true});
+    await prompt.fill('Explain this earlier decision.');
+    await page.getByRole('button', {name: 'Ask About This Step', exact: true}).click();
+    await expect(prompt).toBeFocused();
+    await expect(prompt).toHaveValue('Explain this earlier decision.');
+    await expect(page.locator('.HistoryContext')).toContainText('Step 1');
+    expect(submissions).toBe(0);
+    const sent = page.waitForRequest((request) => request.url().endsWith('/api/actions') && request.postDataJSON()?.action === 'submit');
+    await page.getByRole('button', {name: 'Send ↗', exact: true}).click();
+    const body = (await sent).postDataJSON();
+    expect(body.historyReference).toEqual({stepId: 1, section: 'all', callId: null, fieldPath: []});
+    await expect(page.locator('.MessageCard.user').filter({hasText: 'Explain this earlier decision.'})).toBeVisible();
+    await expect(page.locator('.MessageCard.user').filter({hasText: 'Explain this earlier decision.'})).not.toContainText('slipagent_history_question');
+    await expect(page.locator('.HistoryContext')).toHaveCount(0);
+    expect(submissions).toBe(1);
+    await page.locator('.HierarchyColumn .ListScroll').evaluate((element) => { element.scrollTop = 80 * 76; });
+    await page.locator('.HierarchyColumn .ObjectRow').filter({hasText: 'Turn 81'}).dblclick();
+    await page.locator('.HierarchyColumn .ObjectRow').filter({hasText: 'tool_calls'}).dblclick();
+    await page.locator('.HierarchyColumn .ObjectRow').first().click();
+    await page.getByRole('button', {name: 'Ask About This Call', exact: true}).click();
+    await expect(page.locator('.HistoryContext')).toContainText('Step 81 · Tool Call 1');
+    await page.getByRole('button', {name: 'Remove History Reference'}).click();
+    await page.getByRole('button', {name: 'Up One Level'}).click();
+    await page.locator('.HierarchyColumn .ObjectRow').filter({hasText: 'tool_results'}).dblclick();
+    await page.locator('.HierarchyColumn .ObjectRow').first().click();
+    await page.getByRole('button', {name: 'Ask About This Result', exact: true}).click();
+    await expect(page.locator('.HistoryContext')).toContainText('Step 81 · Tool Result 1');
+    expect(submissions).toBe(1);
+});
+
 test('starts a fresh conversation while retaining readable session instructions', async ({page}) => {
+    await page.getByRole('button', {name: 'History', exact: true}).click();
+    await page.locator('.HierarchyColumn .ListScroll').evaluate((element) => { element.scrollTop = 0; });
+    await page.locator('.HierarchyColumn .ObjectRow').first().click();
+    await page.getByRole('textbox', {name: 'Prompt', exact: true}).fill('A draft to preserve across a reset.');
+    await page.getByRole('button', {name: 'Ask About This Step', exact: true}).click();
     await page.getByRole('button', {name: 'Reset Conversation', exact: true}).click();
     await page.getByRole('dialog').getByRole('button', {name: 'Confirm', exact: true}).click();
     await expect(page.getByRole('heading', {name: 'What Are We Building?'})).toBeVisible();
+    await expect(page.locator('.HistoryContext')).toHaveCount(0);
+    await expect(page.getByRole('textbox', {name: 'Prompt', exact: true})).toHaveValue('A draft to preserve across a reset.');
     await expect(page.getByRole('button', {name: 'Read Full Instructions →'})).toBeVisible();
     await page.getByRole('button', {name: 'Read Full Instructions →'}).click();
     await page.locator('.HierarchyColumn .ObjectRow').filter({hasText: 'content'}).click();

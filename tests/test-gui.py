@@ -350,6 +350,139 @@ async def test_tool_results_are_compact_in_feed_and_originals_remain_inspectable
         await application(session).close()
 
 
+@pytest.mark.parametrize('node,section,call_id,path,expected', [
+    ('/turns/1/tool_calls/0/function/arguments/path', 'tool_calls', 'call-one', [0, 'function', 'arguments', 'path'], 'sample.py'),
+    ('/turns/1/tool_results/0/content/content', 'tool_results', 'call-one', [0, 'content', 'content'], 'Original result'),
+    ('/turns/1/reasoning', 'reasoning', None, [], 'Original thoughts'),
+    ('/messages/1/content', 'user', None, [0], 'Original question'),
+    ('/messages/2/content', 'response', None, [], 'Original answer'),
+    ('/messages/2/tool_calls/0/function/name', 'tool_calls', 'call-one', [0, 'function', 'name'], 'read_file'),
+    ('/messages/3/content/content', 'tool_results', 'call-one', [0, 'content', 'content'], 'Original result'),
+    ('/turns/1/tool_calls/1/function/arguments/path', 'tool_calls', 'call-two', [0, 'function', 'arguments', 'path'], 'second.py'),
+    ('/turns/1/tool_results/1/content/content', 'tool_results', 'call-two', [0, 'content', 'content'], 'Second result'),
+    ('/turns/1/user_edits/0/path', 'user_edits', None, [0, 'path'], 'sample.py'),
+    ('/turns/1/background_commands/0/state', 'background_commands', None, [0, 'state'], 'completed'),
+    ('/turns/1/response_source/provider', 'all', None, ['response_source', 'provider'], 'openrouter'),
+])
+async def test_history_actions_reference_retrievable_original_fields(workspace, node, section, call_id, path, expected):
+    from slipagent.types import Message, decode_json_content
+    session = session_for(workspace)
+    reply = Message.assistant('Original answer', [ToolCall('call-one', 'read_file', {'path': 'sample.py'}),
+        ToolCall('call-two', 'read_file', {'path': 'second.py'})])
+    reply.reasoning = 'Original thoughts'
+    reply.reasoning_model = 'test/model'
+    reply.response_provider = 'openrouter'
+    session.agent.messages[:] = [Message.system('System instructions')]
+    session.agent.messages.extend([Message.user('Original question'), reply,
+        Message.tool_result('call-one', {'tool': 'read_file', 'call_id': 'call-one', 'status': 'success', 'content': 'Original result'}),
+        Message.tool_result('call-two', {'tool': 'read_file', 'call_id': 'call-two', 'status': 'success', 'content': 'Second result'})])
+    session.agent.history.sync(session.agent.messages)
+    session.agent.history.steps[0].user_edits = [{'path': 'sample.py', 'diff': 'Original diff'}]
+    session.agent.history.steps[0].background_commands = [{'job_id': 'job-one', 'state': 'completed'}]
+    host = gui.GuiHost(session)
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=host.app), base_url='http://localhost:9000') as client:
+            headers = {'Authorization': 'Bearer ' + host.token, 'Origin': 'http://localhost:9000'}
+            response = await client.get('/api/detail', params={'node': node}, headers=headers)
+            assert response.status_code == 200
+            attachment = response.json()['historyReference']
+            target = attachment['target']
+            assert target == {'stepId': 1, 'section': section, 'callId': call_id, 'fieldPath': path}
+            assert attachment['sessionId'] == session.agent.session_id
+            arguments = {'step_id': 1, 'section': section}
+            if call_id is not None:
+                arguments['call_id'] = call_id
+            recalled = await session.registry.invoke('recall_history', arguments)
+            value = decode_json_content(recalled.content)['content']
+            for key in path:
+                value = value[key]
+            assert value == expected
+            response = await client.post('/api/actions', headers=headers, json={
+                'sessionId': session.agent.session_id, 'action': 'submit', 'text': 'Why this choice?', 'historyReference': target})
+            assert response.status_code == 200
+            queued = application(session).queued_input()
+            assert len(queued) == 1
+            question = json.loads(queued[0][1])
+            assert question['question'] == 'Why this choice?'
+            assert question['history_reference']['arguments'] == arguments
+            assert question['history_reference']['selected_field_path'] == path
+            assert 'Original result' not in queued[0][1] and 'Original thoughts' not in queued[0][1]
+            feed = (await client.get('/api/feed', headers=headers)).json()
+            assert feed['items'][1]['text'] == 'Original question'
+    finally:
+        await host.aclose()
+        await application(session).close()
+
+
+async def test_invalid_history_prompt_references_do_not_submit_or_change_sessions(workspace):
+    from slipagent.types import Message
+    session = session_for(workspace)
+    session.agent.messages.extend([Message.user('Question'), Message.assistant('Answer')])
+    session.agent.history.sync(session.agent.messages)
+    host = gui.GuiHost(session)
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=host.app), base_url='http://localhost:9000') as client:
+            headers = {'Authorization': 'Bearer ' + host.token, 'Origin': 'http://localhost:9000'}
+            target = {'stepId': 1, 'section': 'all', 'callId': None, 'fieldPath': []}
+            for invalid in [{**target, 'stepId': 999}, {**target, 'section': 'unknown'},
+                            {**target, 'callId': 'missing'}, {**target, 'fieldPath': ['missing']}]:
+                response = await client.post('/api/actions', headers=headers, json={
+                    'sessionId': session.agent.session_id, 'action': 'submit', 'text': 'Explain', 'historyReference': invalid})
+                assert response.status_code == 400
+            response = await client.post('/api/actions', headers=headers, json={
+                'sessionId': 'stale-session', 'action': 'submit', 'text': 'Explain', 'historyReference': target})
+            assert response.status_code == 409
+            response = await client.post('/api/actions', headers=headers, json={
+                'sessionId': session.agent.session_id, 'action': 'reset', 'historyReference': target})
+            assert response.status_code == 422
+            assert not application(session).queued_input()
+            assert len(session.agent.history.steps) == 1
+    finally:
+        await host.aclose()
+        await application(session).close()
+
+
+async def test_history_prompt_references_large_original_without_copying_it_into_chat(workspace, tmp_path, monkeypatch):
+    import io
+    from slipagent.cli import Renderer, Style
+    from slipagent.guibrowser import GuiBrowser
+    from slipagent.historyquestions import history_reference, history_question, display_question
+    from slipagent.sources import FileText
+    from slipagent.turnstore import TurnStore
+    from slipagent.types import Message
+    session = session_for(workspace)
+    payload = 'Large original result. ' * 20_000
+    session.agent.messages.extend([Message.user('Read'), Message.assistant('Reading', [ToolCall('large-call', 'read_file', {})]),
+        Message.tool_result('large-call', {'tool': 'read_file', 'call_id': 'large-call', 'status': 'success', 'content': payload})])
+    session.agent.history.sync(session.agent.messages)
+    store = TurnStore(tmp_path / 'turns')
+    store.archive(session.agent.history.steps[0], session.agent.messages)
+    monkeypatch.setattr(FileText, 'read', lambda self: pytest.fail('Materialized the original history field'))
+    try:
+        attachment = history_reference(session.agent, '/turns/1/tool_results/0/content/content')
+        target = attachment['target']
+        text = history_question(session.agent, 'Why was this result useful?', step_id=target['stepId'],
+            section=target['section'], call_id=target['callId'], field_path=target['fieldPath'])
+        assert len(text) < 4096 and payload[:100] not in text
+        session.agent.messages.append(Message.user(text))
+        browser = GuiBrowser(session)
+        item = browser.feed(len(session.agent.messages) - 1, 1)['items'][0]
+        assert item['text'] == 'Why was this result useful?'
+        assert item['historyContext'].startswith('Step 1 · Tool Result 1')
+        assert browser.value(item['id'] + '/content') == text
+        sink = io.StringIO()
+        Renderer(Style(False), sink, False).user_prompt(text)
+        assert 'Why was this result useful?' in sink.getvalue()
+        assert 'slipagent_history_question' not in sink.getvalue()
+        ordinary = '{"slipagent_history_question": 1, "question": "Ordinary incomplete JSON"}'
+        assert display_question(ordinary) == ordinary
+        nested = '{"slipagent_history_question":' + '[' * 2000 + '0' + ']' * 2000 + '}'
+        assert display_question(nested) == nested
+    finally:
+        store.close()
+        await application(session).close()
+
+
 async def test_structured_actions_use_shared_input_and_reject_stale_sessions(workspace):
     session = session_for(workspace)
     host = gui.GuiHost(session)

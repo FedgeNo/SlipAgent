@@ -3,10 +3,12 @@ export type SessionState = {
     stopped: boolean; queuedInputs: number; changing: boolean; closed: boolean;
 };
 export type BrowserNode = {id: string; label: string; kind: string; collection: boolean; preview: string; actionValue?: string; enabled?: boolean};
-export type Children = {node: string; parent: string | null; items: BrowserNode[]; nextCursor: string | null};
-export type Detail = {text: string; more: boolean};
+export type HistoryTarget = {stepId: number; section: string; callId: string | null; fieldPath: (string | number)[]};
+export type HistoryReference = {sessionId: string; label: string; target: HistoryTarget};
+export type Children = {node: string; parent: string | null; items: BrowserNode[]; nextCursor: string | null; historyReference?: HistoryReference | null};
+export type Detail = {text: string; more: boolean; historyReference?: HistoryReference | null};
 export type FeedItem = Detail & {index: number; id: string; role: string; source?: {model?: string; provider?: string};
-    toolResult?: {name: string; status: string} | null; toolCalls: {index: number; name: string}[]; toolCount: number};
+    historyContext?: string | null; toolResult?: {name: string; status: string} | null; toolCalls: {index: number; name: string}[]; toolCount: number};
 export type FeedPage = {items: FeedItem[]; offset: number; total: number; sessionId: string};
 export type Notification = {type: string; epoch: string; sequence: number; state?: SessionState;
     event?: {kind: string; text: string; step: number}};

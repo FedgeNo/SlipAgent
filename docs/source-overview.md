@@ -21,6 +21,7 @@ src/slipagent/
 ├── guiapi.py         typed browser controls and paged endpoints
 ├── guibrowser.py     original-history and reusable hierarchy browsing
 ├── guieditor.py      browser port for shared edit-boundary/file owners
+├── historyquestions.py indexed history references and shared question presentation
 ├── web/              bundled Svelte browser application
 ├── sessionstate.py   shared provider and session state without terminal dependencies
 ├── batching.py       bounded read concurrency and ordered observations

@@ -78,6 +78,7 @@ The `z-ai/glm-5.3` and `z-ai/glm-5.3-flash` profiles use the GLM XML channel and
 | `history-*.md`, `summary-unavailable.md` | History interpretation and retrieval: record fields, excerpts, compressed summaries, narratives, eras, saved artifacts, failed requests, and unclassified results; `history-records.md` is always sent, and each field note only when the selected history contains its records |
 | `legacy-*.md` | Records and summaries kept for conversations saved in older history formats |
 | `user-request.md`, `new-user-request.md`, `tool-result-response.md`, `continuation.md` | Current request, new input, automatic return after tools, and continuation without new input |
+| `history-question.md` | Guidance carried inside a user-request envelope when the browser attaches a validated indexed history reference; original content is retrieved through `recall_history`, while chat renders the question and source label |
 | `overthinking-*.md` | Archived reasoning guidance |
 | `workspace-*.md`, `environment-*.md` | Access policy and Python environment guidance |
 | `harness-installation.md` | Running harness code location, supplied only in Danger Mode |

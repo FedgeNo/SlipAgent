@@ -20,6 +20,8 @@ Compress only the previous turn. Up to 25 earlier completed steps in `history` p
 
 Fields use labelled objects and lists with indented literal text blocks. Lengths count original characters, excluding display indentation. Preserve backslashes, quotes, tabs, and line breaks literally.
 
+If a user prompt is a `slipagent_history_question` envelope, summarize the user's `question` and preserve the selected step, call and field path from `history_reference`. Its `guidance` is harness scaffolding, not an additional user request. The reference does not establish that the original object was included or retrieved.
+
 A result's `content` may wrap `tool`, `call_id`, `status`, and `content`. Structured results remain objects or arrays; file and command text remain strings. Use status and observations to distinguish success, failure, and uncertainty.
 
 ## Attribution and Time

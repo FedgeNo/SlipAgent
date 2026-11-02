@@ -350,7 +350,8 @@ class Renderer:
         self._finish_stream()
         self.__dict__.pop("_suggestion_step", None)
         self._begin_block()
-        block = self.style.user(f"> {text}")
+        from .historyquestions import display_question
+        block = self.style.user(f"> {display_question(text)}")
         self._write(f"{block}\n", user_prompt=True)
 
     def clear_prompt(self) -> None:

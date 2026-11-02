@@ -178,7 +178,7 @@ class GuiCommand(Command):
             return None
         from .gui import start_gui
         host = await start_gui(context.session, port=context.session.extensions.get('gui_port', 0))
-        print(f'  Browser: {host.url}', file=context.out)
+        print(host.connection_message, file=context.out)
         return None
 
 

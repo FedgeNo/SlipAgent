@@ -59,6 +59,14 @@ class GuiHost:
     def url(self) -> str:
         return f'http://127.0.0.1:{self.port}/#{self.token}'
 
+    @property
+    def connection_message(self) -> str:
+        return (f'  Browser: {self.url}\n'
+                '  For SSH access, run this on your own computer:\n'
+                f'    ssh -N -L {self.port}:127.0.0.1:{self.port} YOUR_SSH_HOST\n'
+                '  Replace YOUR_SSH_HOST with the SSH destination you used to connect.\n'
+                '  Then open the same Browser link above on your computer. Keep the CLI and tunnel open.')
+
     def allowed_host(self, host: str) -> bool:
         return re.fullmatch(r'(?:127\.0\.0\.1|localhost)(?::[0-9]{1,5})?', host) is not None
 

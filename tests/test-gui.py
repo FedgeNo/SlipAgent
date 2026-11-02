@@ -266,6 +266,9 @@ async def test_gui_command_reuses_host_and_parser_exposes_launch_options(workspa
         host = session.registry.services['gui_host']
         await command.run(CommandContext(session, Style(False), out), '')
         assert out.getvalue().count(host.url) == 2
+        assert out.getvalue().count(f'ssh -N -L {host.port}:127.0.0.1:{host.port} YOUR_SSH_HOST') == 2
+        assert 'on your own computer' in out.getvalue()
+        assert 'same Browser link' in out.getvalue()
     finally:
         await application(session).close()
 
@@ -275,6 +278,10 @@ def test_gui_launch_flag_starts_after_initialization_and_exits_cleanly(tmp_path)
     result = run_repl_commands(tmp_path, ['/quit'], '--gui', '--no-mcp')
     assert result.returncode == 0, result.stderr
     assert 'Browser: http://127.0.0.1:' in result.stderr
+    import re
+    port = re.search(r'Browser: http://127\.0\.0\.1:(\d+)', result.stderr)[1]
+    assert f'ssh -N -L {port}:127.0.0.1:{port} YOUR_SSH_HOST' in result.stderr
+    assert 'on your own computer' in result.stderr
     assert 'Traceback' not in result.stderr
 
 

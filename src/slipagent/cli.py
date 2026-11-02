@@ -1345,7 +1345,7 @@ class Repl:
                 from .gui import start_gui
                 try:
                     host = await start_gui(session, port=session.extensions.get('gui_port', 0))
-                    renderer.emit(f'  Browser: {host.url}')
+                    renderer.emit(host.connection_message)
                 except (OSError, RuntimeError, TimeoutError) as exc:
                     renderer.emit(style.red(f'  Browser host could not start: {exc}'))
             if renderer.terminal is not None:

@@ -88,7 +88,14 @@ terminal interface.
 
 ## SSH Forwarding
 
-The host listens only on `127.0.0.1`. On the remote machine, choose a port:
+The host listens only on `127.0.0.1`.
+
+The CLI prints an SSH tunnel command with both ports already filled in whenever
+it prints the browser link. Run that command on your own computer, replacing
+`YOUR_SSH_HOST` with the SSH destination you normally use. Forwarding the same
+local and remote port makes the exact printed browser link work locally.
+
+To choose a fixed port, start on the remote machine with:
 
 ```bash
 slipagent --gui --gui-port 8765

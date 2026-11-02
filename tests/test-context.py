@@ -816,6 +816,55 @@ async def test_current_input_never_silently_truncates():
     assert not history.steps
 
 
+@pytest.mark.parametrize("archived", [False, True])
+@pytest.mark.parametrize("summarized", [False, True])
+async def test_failed_response_payloads_do_not_collapse_history_to_two_records(tmp_path, archived, summarized):
+    from slipagent.turnstore import TurnStore
+
+    history = ConversationHistory()
+    messages = [Message.system("pinned instructions")]
+    for i in range(8):
+        messages.extend([Message.user(f"question {i}"), Message.assistant(f"useful answer {i} " * 100)])
+    messages.extend([Message.assistant("Reading", [ToolCall("read", "record", {})]),
+                     Message.tool_result("read", "UNSEEN RESULT")])
+    for i in range(6):
+        message = Message.assistant("Incomplete reply")
+        message.reasoning = "Unfinished reasoning " * 10000 if summarized else ""
+        messages.append(message)
+    history.sync(messages)
+    for i, step in enumerate(history.steps[-6:], 1):
+        step.request_failure = dict(outcome="request_error", error="Stream ended",
+            response_excerpt="unaccepted provider payload " * 10000, diagnostic_attempt=i,
+            request_number=i, consecutive_failures=i, total_failed_attempts=i, tools_executed=False)
+        if summarized:
+            step.summary = "The provider failed before finishing; no tools executed."
+    if archived:
+        store = TurnStore(tmp_path / "turns")
+        for step in history.steps:
+            store.archive(step, messages)
+    view = await history.view(messages, [], keep_steps=5, context_length=30000, max_output=1000)
+    wire = "\n".join(content_text(message.content) for message in view)
+    assert "UNSEEN RESULT" in wire
+    assert "A clipped text value has" in wire
+    records = context_records(view)
+    assert len([record for record in records if record["record_type"] == "history_step"]) >= 7
+    assert any(record.get("request_failure", {}).get("consecutive_failures") == 6 for record in records)
+    assert message_tokens(view) <= int(30000 * .85) - 1000
+    assert message_tokens(view) > 20000
+    assert len(history.steps[-1].request_failure["response_excerpt"]) > 100000
+    clipped = next(record.get("reasoning") if summarized else record["request_failure"]["response_excerpt"]
+                   for record in records if isinstance(record.get("reasoning") if summarized else
+                       record.get("request_failure", {}).get("response_excerpt"), dict))
+    reference = clipped["original"]
+    recovered = await RecallHistoryTool(history).run(step_id=reference["step_id"], section=reference["section"])
+    value = recovered.content["content"]
+    for key in reference["field_path"]:
+        value = value[key]
+    assert value == ("Unfinished reasoning " if summarized else "unaccepted provider payload ") * 10000
+    if archived:
+        store.close()
+
+
 @pytest.mark.parametrize("suffix", ["<slipagent_context>{broken}</slipagent_context>",
                                     "<slipagent_context>{\"step\":1", reply(9, "", "wrong ID")])
 def test_invalid_or_truncated_envelope_is_not_used_as_memory(suffix):

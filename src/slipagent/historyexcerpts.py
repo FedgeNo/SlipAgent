@@ -21,7 +21,7 @@ def excerpt_fields(record: dict[str, Any], budget: int,
     if original_cost <= budget:
         return None
     projected = copy.deepcopy(record)
-    projected["representation"] = "excerpt"
+    projected["representation"] = "compressed" if record.get("representation") == "compressed" else "excerpt"
     projected["excerpted_fields"] = []
 
     def candidates(value: Any, path: list[str | int]) -> list[tuple[int, list[str | int], Any]]:
@@ -56,6 +56,8 @@ def excerpt_fields(record: dict[str, Any], budget: int,
             call = record["tool_calls"][path[1]]
             reference.update(call_id=call["call_id"], section="tool_calls",
                              field_path=[0, "function", "arguments", *path[3:]])
+        elif path[0] == "request_failure":
+            reference.update(section="all", field_path=path)
         else:
             section = {"user_prompts": "user", "agent_response": "response"}.get(str(path[0]), str(path[0]))
             reference.update(section=section, field_path=path[1:])
@@ -81,6 +83,9 @@ def excerpt_fields(record: dict[str, Any], budget: int,
     groups = [*prose, results] if prefer_results else [results, *prose]
     for field in ("user_edits", "background_commands"):
         groups.append(candidates(record.get(field), [field]))
+    failure = record.get("request_failure")
+    if failure is not None:
+        groups.append(candidates(failure.get("response_excerpt"), ["request_failure", "response_excerpt"]))
     arguments = []
     for index, call in enumerate(record.get("tool_calls", [])):
         arguments.extend(candidates(call.get("arguments"), ["tool_calls", index, "arguments"]))

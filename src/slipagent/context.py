@@ -111,7 +111,8 @@ HISTORY_GUIDANCE: dict[str, Callable[[list[dict[str, Any]]], bool]] = {
         record.get("artifacts") or any(result.get("artifacts") for result in record.get("tool_results", []))
         for record in records),
     "history-compressed.md": lambda records: any("compressed_summary" in record for record in records),
-    "history-excerpts.md": lambda records: any(record.get("representation") == "excerpt" for record in records),
+    "history-excerpts.md": lambda records: any(
+        record.get("representation") == "excerpt" or record.get("excerpted_fields") for record in records),
     "history-failed-requests.md": lambda records: any("request_failure" in record for record in records),
     "history-narratives.md": lambda records: any(record.get("representation") == "historical_summary" for record in records),
     "history-eras.md": lambda records: any(record.get("representation") == "era_summary" for record in records),
@@ -904,13 +905,14 @@ class ConversationHistory:
             return True
 
         async def excerpt_step(index: int, *, results_only: bool) -> bool:
-            if level[index] != FULL and not (level[index] == PARTIAL and not results_only):
+            if level[index] not in (FULL, STEP) and not (level[index] == PARTIAL and not results_only):
                 return False
             from .historyexcerpts import excerpt_fields
             from .tools.blocking import run_blocking
-            # A partial observation must not inherit an optional whole-turn
-            # summary, particularly before the model has seen the actual result.
-            original = context_part(index, include_summary=False)[0].content
+            # Reduce the selected form: compressed records can still carry
+            # oversized reasoning. Unseen observations keep their original form.
+            original = (supplied(index, True)[0] if level[index] == STEP else
+                        context_part(index, include_summary=False))[0].content
             target = max(0, sizing.record_bytes(unit_costs[index]) - max(1, total_bytes() - available))
             def measure(record: dict[str, Any]) -> int:
                 return sizing.record_bytes(sizing.measure_record(record))

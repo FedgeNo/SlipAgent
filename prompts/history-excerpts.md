@@ -1,5 +1,7 @@
 `representation="excerpt"` marks bounded text and omissions. Treat missing text as unknown.
 
+Compressed records can also have `excerpted_fields` when attached reasoning or failure details need shortening. Their `compressed_summary` remains the step summary; listed fields use the same excerpt format and original references below.
+
 Excerpted calls use `result_excerpt`, `error_excerpt`, or `unclassified_result_excerpt` for bounded observations. `response_excerpts` contains bounded message text and call descriptions. Call arguments may be omitted; retrieve originals when exact arguments matter.
 
 Field excerpts retain the turn and its normal fields, with `excerpted_fields` listing paths into the original history record. Only listed fields are shortened; other call arguments, replies, reasoning, metadata, and smaller results remain unchanged. A clipped text value has `prefix`, `suffix`, `original_characters`, and `omitted_characters`. A clipped array has `prefix_items`, `suffix_items`, `original_items`, and `omitted_items`. Missing middle content is unknown. A result carrying any field excerpt uses an excerpt outcome key; other results in the same turn retain their full outcome keys.

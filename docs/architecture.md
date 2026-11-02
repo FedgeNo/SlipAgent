@@ -772,6 +772,12 @@ records use the same key in place of those fields. Selection compares older base
 representations before adding analysis, then budgets every field actually sent.
 Current-turn input and original archives are unchanged.
 
+The reduction pass also shortens oversized reasoning attached to compressed
+records and raw failed-response excerpts. Compressed records retain their summary
+and mark shortened fields with `excerpted_fields` and original retrieval paths.
+These fields must not force recovery to discard fitting history around an unseen
+tool batch after repeated provider failures.
+
 `CompletedStep` extends `HistoryStep` with independent `user_prompt`, `agent_response`,
 `reasoning`, `tool_calls`, and `tool_results` references, plus whole-step `summary`
 and separate `reasoning_summary` fields. Canonical messages retain their original

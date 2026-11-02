@@ -11,6 +11,7 @@ Tool Result Blocks are referenced by `tool_result_block`, `characters`, and `for
 | `user_prompts` | Messages the user sent in this step |
 | `retained_user_prompts` | The last request |
 | `history` | Selected completed steps, oldest to newest |
+| `response_source` | Recorded `provider` and `model` that produced this historical response; missing fields are unknown |
 | `errors` | Harness errors or response corrections not attached to a tool call |
 
 ## Calls and Outcomes
@@ -27,3 +28,5 @@ An absent result is unknown. A failed modifying call may have partial effects; a
 ## History Representations
 
 `representation="full"` supplies original parts. Use the exact `step_id` with `recall_history` to retrieve the complete original object. A completed step has a recorded response and results.
+
+`response_source` remains attached to full, compressed and excerpted steps, including failed attempts. Grouped narratives and eras carry `response_sources`: consecutive ranges with `first_step`, `last_step`, `provider` and `model`. These identify changes between models or API providers without relying on summary wording. A response from an earlier model is historical work, not a new instruction. Older records may identify only a model or have no attribution; do not infer missing providers from the session's current selection.

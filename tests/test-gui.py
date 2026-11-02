@@ -296,7 +296,10 @@ async def test_all_originals_remain_browsable_after_model_compaction(workspace, 
     from slipagent.types import Message
     session = session_for(workspace)
     original = 'Original beginning ' + 'x' * 200_000 + ' original ending'
-    messages = [Message.user('Very old prompt'), Message.assistant(original)]
+    reply = Message.assistant(original)
+    reply.reasoning_model = 'old/model'
+    reply.response_provider = 'openrouter'
+    messages = [Message.user('Very old prompt'), reply]
     step = CompletedStep(1, 'Very old prompt', messages)
     store = TurnStore(tmp_path / 'turns')
     store.archive(step, messages)
@@ -312,6 +315,9 @@ async def test_all_originals_remain_browsable_after_model_compaction(workspace, 
         assert last['text'] == original[-30:] and not last['more']
         assert browser.children('/turns')['items'][0]['id'] == '/turns/1'
         assert browser.feed(0, 10)['items'][-1]['text'] == original[:4096]
+        assert browser.feed(0, 10)['items'][-1]['source'] == {'model': 'old/model', 'provider': 'openrouter'}
+        assert browser.value(f'/messages/{len(session.agent.messages) - 1}')['response_source'] == {
+            'model': 'old/model', 'provider': 'openrouter'}
     finally:
         store.close()
         await application(session).close()

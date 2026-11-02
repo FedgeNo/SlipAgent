@@ -35,6 +35,11 @@ Collections page their rows. Original text has Previous/Next controls for readin
 all of it, including long tool results. Feed cards link to the corresponding
 message and tool-call objects for further inspection.
 
+Assistant cards show the recorded API provider and model beneath their heading.
+Inspect exposes the same attribution under `response_source` for messages and
+turns. Changing models does not relabel older responses. Older records display
+only the attribution they actually contain; an unknown provider stays unknown.
+
 ## Work With The Agent
 
 Send a prompt with Enter; Shift+Enter inserts a newline. During a run, **Queue**

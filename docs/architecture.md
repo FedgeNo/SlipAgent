@@ -762,6 +762,18 @@ and separate `reasoning_summary` fields. Canonical messages retain their origina
 order and native call/result structure. Continuation records retain the active
 request without registering it as new user input.
 
+Assistant messages retain the selected model in `reasoning_model` and the API
+provider in `response_provider`, including failed attempts with no reasoning.
+These are local metadata; they are not extra provider wire fields. Journals and
+turn originals preserve them across resume and model changes. `records.py`
+projects known values as `response_source` in working history and recalled turn
+parts. Full, compressed and excerpted steps keep it. Narratives and eras derive
+cached `response_sources` ranges from immutable original messages before the
+existing size index measures those views; summary prose cannot rewrite origins.
+Legacy missing fields remain unknown. The GUI feed and message inspector expose
+the same source. Adding the message field requires a CLI restart under the core
+type contract.
+
 `fileio.py` opens canonical regular-file paths through nonblocking descriptors
 and validates the opened file type. POSIX directory traversal refuses substituted
 symlinks. File tools, checkpoint reads, editor loading and indexed viewers share

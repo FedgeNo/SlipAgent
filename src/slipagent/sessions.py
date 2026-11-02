@@ -848,7 +848,7 @@ class SessionJournal:
                 # Current instructions outlive a history-store replacement and
                 # remain resident independently of archived conversation payloads.
                 canonical = materialize(canonical)
-            for key in ('name', 'tool_call_id', 'reasoning_model'):
+            for key in ('name', 'tool_call_id', 'reasoning_model', 'response_provider'):
                 if key in canonical:
                     canonical[key] = materialize(canonical[key])
             for call in canonical.get('tool_calls') or []:
@@ -861,6 +861,7 @@ class SessionJournal:
                     function['arguments'] = materialize(function['arguments'])
             message = Message.from_api(canonical)
             message.reasoning_model = canonical.get('reasoning_model')
+            message.response_provider = canonical.get('response_provider')
             if message.role == 'system':
                 messages.append(message)
             else:

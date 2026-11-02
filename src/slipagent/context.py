@@ -37,7 +37,7 @@ from .tools.base import Tool, ToolResult
 from .types import Message, ToolCall, ToolSpec, content_text
 from .protocol import COMPRESSED_FIELDS, ResponseRecord, response_format
 from .task import TaskMemory
-from .records import linked_tool_results, record_message, step_record
+from .records import linked_tool_results, record_message, response_source, step_record
 from .requestfailures import is_incomplete
 from .data_text import JSONInput, MessageSections, RenderedJSON, render_data
 from .sources import FileText, materialize
@@ -194,6 +194,9 @@ class HistoryStep:
         if compressed:
             record: dict[str, Any] = {"record_type": "history_step", "representation": "compressed",
                       "step_id": self.id, "compressed_summary": self.compressed_text()}
+            source = response_source(self.messages)
+            if source:
+                record['response_source'] = source
             references = step_record(self.messages).get("artifacts")
             if references:
                 record["artifacts"] = references
@@ -246,6 +249,7 @@ class HistoryStep:
             )
             return [record_message({"record_type": "history_step", "representation": "excerpt",
                                     "step_id": self.id, "user_prompts": prompts, "messages": entries,
+                                    **({'response_source': original['response_source']} if 'response_source' in original else {}),
                                     **({"artifacts": original["artifacts"]} if original.get("artifacts") else {}),
                                     "omitted_messages": len(observations) - count, "recall_instructions": note})]
 
@@ -360,11 +364,18 @@ class CompletedStep(HistoryStep):
 
     def parts(self, *, stream: bool = False) -> dict[str, Any]:
         if "_disk" in self.__dict__:
-            return dict(self._disk["parts"]) if stream else materialize(self._disk["parts"])
+            parts = dict(self._disk["parts"]) if stream else materialize(self._disk["parts"])
+            source = response_source(self.messages)
+            if source:
+                parts['response_source'] = source
+            return parts
         parts = {"prompt": self.user_prompt, "response": self.agent_response,
                 "reasoning": getattr(self, "reasoning", ""),
                 "tool_calls": [call.to_record() for call in self.tool_calls],
                 "tool_results": [{"call_id": result.tool_call_id, "content": result.content} for result in self.tool_results]}
+        source = response_source(self.messages)
+        if source:
+            parts['response_source'] = source
         failure = getattr(self, "request_failure", None)
         if failure is not None:
             parts.update(request_failure=failure, response=self.agent_response or None)
@@ -385,6 +396,8 @@ class CompletedStep(HistoryStep):
             source["user_edits"] = parts["user_edits"]
         if "background_commands" in parts:
             source["background_commands"] = parts["background_commands"]
+        if 'response_source' in parts:
+            source['response_source'] = parts['response_source']
         return source
 
     def record(self) -> dict[str, Any]:
@@ -398,13 +411,15 @@ class CompletedStep(HistoryStep):
     def context_messages(self, *, compressed: bool = False) -> list[Message]:
         if "_disk" in self.__dict__:
             original = self._disk["model"]
+            source = response_source(self.messages)
+            attribution = {'response_source': source} if source else {}
             if not compressed:
-                return [record_message(dict(original))]
+                return [record_message({**original, **attribution})]
             state = (self.summary, getattr(self, "reasoning_summary", None), self.compaction_status, self.compaction_error)
             if self.__dict__.get("_disk_summary_state") == state:
-                return [record_message(dict(self._disk_summary["model"]))]
+                return [record_message({**self._disk_summary["model"], **attribution})]
             record: dict[str, Any] = {"record_type": "history_step", "representation": "compressed",
-                      "step_id": self.id, "compressed_summary": self.compressed_text()}
+                      "step_id": self.id, "compressed_summary": self.compressed_text(), **attribution}
             for name in ("artifacts", "user_edits", "background_commands", "request_failure", "incomplete"):
                 if name in original:
                     record[name] = original[name]

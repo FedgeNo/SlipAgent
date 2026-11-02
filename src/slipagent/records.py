@@ -12,6 +12,15 @@ from typing import Any
 from .types import Message
 
 
+def response_source(messages: list[Message]) -> dict[str, str]:
+    """Read recorded attribution without inferring missing historical providers."""
+    assistant = next((message for message in messages if message.role == 'assistant'), None)
+    if assistant is None:
+        return {}
+    return {key: value for key, value in (('model', assistant.reasoning_model), ('provider', assistant.response_provider))
+            if value}
+
+
 def linked_tool_results(record: dict[str, Any]) -> dict[str, Any]:
     """Project each observation under its call without altering saved records."""
     if record.get("representation") == "excerpt" and "messages" in record:
@@ -87,6 +96,9 @@ def step_record(messages: list[Message], *, current: bool = False,
         record["is_tool_result_response"] = not prompts
     if step_id is not None:
         record["step_id"] = step_id
+    source = response_source(messages)
+    if source:
+        record['response_source'] = source
     references = [reference for result in results for reference in result.get("artifacts", [])]
     if references:
         record["artifacts"] = references

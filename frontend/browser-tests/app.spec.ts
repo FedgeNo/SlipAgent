@@ -32,6 +32,7 @@ test('submits through the shared CLI engine and remains bounded after refresh', 
     await page.getByRole('textbox', {name: 'Prompt', exact: true}).fill('A prompt sent from the GUI');
     await page.getByRole('button', {name: 'Send ↗', exact: true}).click();
     await expect(page.locator('.MessageCard').filter({hasText: 'The shared engine received your browser prompt.'})).toBeVisible({timeout: 20000});
+    await expect(page.locator('.MessageCard').filter({hasText: 'The shared engine received your browser prompt.'}).locator('.ResponseSource')).toContainText('openrouter · stub/one');
     await page.reload();
     await expect(page.locator('.MessageCard').filter({hasText: 'The shared engine received your browser prompt.'})).toBeVisible();
     expect(await page.locator('.FeedPosition').count()).toBeLessThan(30);

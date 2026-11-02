@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any, TypeGuard
 
 from .capabilities import RequestProfile, model_context_limit
 from .prompts import load_prompt
-from .records import step_record
+from .records import response_source, step_record
 from .types import Message
 
 if TYPE_CHECKING:
@@ -63,14 +63,36 @@ def servable(record: Any, interval: int) -> TypeGuard[dict[str, Any]]:
 
 def historical_records(steps: list[HistoryStep]) -> list[dict[str, Any]]:
     """Narratives, oldest first."""
-    return [getattr(step, "_disk_group", record) for step in steps
+    return [_with_response_sources(steps, step, getattr(step, "_disk_group", record), '_group_sources') for step in steps
             if servable(record := getattr(step, "historical_summary", None), MERGE_INTERVAL)]
 
 
 def era_records(steps: list[HistoryStep]) -> list[dict[str, Any]]:
     """Eras, oldest first."""
-    return [getattr(step, "_disk_era", record) for step in steps
+    return [_with_response_sources(steps, step, getattr(step, "_disk_era", record), '_era_sources') for step in steps
             if servable(record := getattr(step, "era_summary", None), ERA_INTERVAL)]
+
+
+def _with_response_sources(steps: list[HistoryStep], anchor: HistoryStep,
+                           record: dict[str, Any], cache_key: str) -> dict[str, Any]:
+    """Keep model transitions exact even when prose is merged into a narrative."""
+    cached: tuple[dict[str, Any], dict[str, Any]] | None = anchor.__dict__.get(cache_key)
+    if cached is not None and cached[0] is record:
+        return cached[1]
+    ranges: list[dict[str, Any]] = []
+    for step_id in record['step_ids']:
+        source = response_source(steps[step_id - 1].messages)
+        if not source:
+            continue
+        previous = ranges[-1] if ranges else None
+        if previous is not None and previous['last_step'] == step_id - 1 and {
+                key: value for key, value in previous.items() if key not in ('first_step', 'last_step')} == source:
+            previous['last_step'] = step_id
+        else:
+            ranges.append({'first_step': step_id, 'last_step': step_id, **source})
+    enriched = {**record, 'response_sources': ranges} if ranges else record
+    anchor.__dict__[cache_key] = (record, enriched)
+    return enriched
 
 
 def _model_record(step: HistoryStep) -> dict[str, Any] | None:

@@ -105,6 +105,8 @@ class Message:
     reasoning_model: str | None = None
     # Readable reasoning from this response only, concatenated before archival.
     reasoning: str | None = None
+    # API provider selected for this response, independent of later routing.
+    response_provider: str | None = None
 
     @classmethod
     def system(cls, content: Any) -> Self:
@@ -140,7 +142,7 @@ class Message:
         payload = {"role": self.role, "content": self.content}
         if self.tool_calls:
             payload["tool_calls"] = [call.to_record() for call in self.tool_calls]
-        for key in ("tool_call_id", "name", "reasoning_details", "reasoning"):
+        for key in ("tool_call_id", "name", "reasoning_details", "reasoning", "response_provider"):
             value = getattr(self, key)
             if value is not None:
                 payload[key] = value

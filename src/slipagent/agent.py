@@ -385,7 +385,7 @@ class Agent:
         # incomplete by the failure record. Tool calls are never kept: they did not run.
         content, reasoning = partial or ("", "")
         self.messages.append(Message(role="assistant", content=content or None, reasoning=reasoning or None,
-                                     reasoning_model=self.model if reasoning else None))
+                                     reasoning_model=self.model, response_provider=getattr(self.client, 'provider', None)))
         self.history.sync(self.messages)
         failed = self.history.steps[-1]
         setattr(failed, "request_failure", failure)
@@ -759,6 +759,7 @@ class Agent:
         message.reasoning = completion.message.reasoning
         message.reasoning_details = completion.message.reasoning_details
         message.reasoning_model = self.model
+        message.response_provider = getattr(self.client, 'provider', None)
         self.messages.append(message)
         self._record_edit_delivery(step, self.registry.services.pop("accepted_user_edits", []))
         await self._name_session(step, getattr(record, "session_title", ""))

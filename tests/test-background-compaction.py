@@ -241,7 +241,8 @@ async def test_reasoning_is_saved_recallable_and_compacted_separately():
         assert thoughts == ([first.message.reasoning] if index else [])
     for request in client.summary_requests:
         source = decode_json_content(request["messages"][1].content)
-        assert set(source) == {"user_prompt", "agent_response", "tool_calls", "tool_results", "reasoning", "history", "history_omitted"}
+        assert set(source) == {"user_prompt", "agent_response", "tool_calls", "tool_results", "reasoning", "history", "history_omitted", "response_source"}
+        assert source['response_source'] == {'model': 'test'}
         assert 'REASONING' in source['reasoning']
 
 

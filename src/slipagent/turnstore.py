@@ -29,7 +29,7 @@ class ArchivedMessage(Message):
         self._source_owner = owner
 
     def __getattribute__(self, name: str) -> Any:
-        if name in {"content", "reasoning", "reasoning_details", "reasoning_model", "tool_calls"} and "_stored" in self.__dict__:
+        if name in {"content", "reasoning", "reasoning_details", "reasoning_model", "response_provider", "tool_calls"} and "_stored" in self.__dict__:
             stored = object.__getattribute__(self, "_stored")
             value = materialize(stored.get(name))
             if name == "tool_calls":

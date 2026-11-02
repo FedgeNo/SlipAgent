@@ -14,6 +14,7 @@ from urllib.parse import quote, unquote
 from .application import application
 from .context import CompletedStep, HistoryStep
 from .fileio import open_regular
+from .records import response_source
 from .sessionstate import Session
 from .sources import TextSource, json_chunks, text_chunks
 from .turnstore import resident_content
@@ -91,6 +92,7 @@ class GuiBrowser:
             message = self.session.agent.messages[int(segments.pop(0))]
             stored = getattr(message, '_stored', None)
             value = {'role': message.role, 'content': resident_content(message),
+                     'response_source': response_source([message]),
                      'tool_calls': stored.get('tool_calls') if stored is not None else
                      [call.to_record() for call in message.tool_calls or []],
                      'reasoning': stored.get('reasoning') if stored is not None else message.reasoning,
@@ -367,6 +369,7 @@ class GuiBrowser:
                 tool_calls.append({'index': call_index, 'name': text_page(name, limit=128)['text']})
             value = resident_content(message)
             items.append({'index': index, 'id': f'/messages/{index}', 'role': message.role,
+                          'source': response_source([message]),
                           'toolCalls': tool_calls, 'toolCount': len(calls),
                           **text_page('' if value is None and message.role == 'assistant' else value, limit=4096)})
         return {'items': items, 'offset': offset, 'total': len(messages),

@@ -62,13 +62,13 @@ async def test_pacing_reports_remaining_time_and_queueing(monkeypatch):
 
 def test_status_line_shows_the_phase_with_elapsed_time():
     status = StatusLine()
-    assert status.activity(held=False, working=True, stopping=False, concise=False, frame="*")[1] == "* Working (esc to interrupt)"
+    assert status.activity(held=False, working=True, stopping=False, concise=False, frame="*")[1] == "* Working (Esc to interrupt)"
     status.set_phase("Waiting for output")
     text = status.activity(held=False, working=True, stopping=False, concise=False, frame="*")[1]
-    assert text.startswith("* Waiting for output (0s, esc to interrupt)")
+    assert text.startswith("* Waiting for output (0s, Esc to interrupt)")
     assert status.activity(held=False, working=True, stopping=False, concise=True, frame="*")[1].startswith("* Waiting for output (")
     status.retry = "Retrying in 5s"
     assert status.activity(held=False, working=True, stopping=False, concise=False, frame="*")[1] == "Retrying in 5s"
     status.set_phase("")
     status.retry = ""
-    assert status.activity(held=False, working=True, stopping=False, concise=False, frame="*")[1] == "* Working (esc to interrupt)"
+    assert status.activity(held=False, working=True, stopping=False, concise=False, frame="*")[1] == "* Working (Esc to interrupt)"

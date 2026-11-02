@@ -12,6 +12,32 @@ if TYPE_CHECKING:
     from .terminal import TerminalUI
 
 
+def interrupt_work(ui: TerminalUI) -> None:
+    callback = getattr(ui, '_interrupt_callback', None)
+    if callback is not None:
+        callback()
+
+
+def hold_model(ui: TerminalUI) -> bool:
+    callback = ui.__dict__.pop('_hold_callback', None)
+    if callback is None:
+        return False
+    callback()
+    return True
+
+
+def skip_model(ui: TerminalUI) -> None:
+    callback = ui.__dict__.pop('_skip_callback', None)
+    if callback is not None:
+        callback()
+
+
+def toggle_context(ui: TerminalUI) -> None:
+    ui.context_visible = not ui.context_visible
+    ui._focus.focus(ui.context_window if ui.context_visible else ui.input)
+    ui.app.invalidate()
+
+
 def build_bindings(ui: TerminalUI) -> KeyBindings:
     bindings = KeyBindings()
     in_search = Condition(lambda: ui._feed_search.active)
@@ -227,29 +253,21 @@ def build_bindings(ui: TerminalUI) -> KeyBindings:
         if ui._viewer_active:
             ui.close_viewer()
             return
-        hold = ui.__dict__.pop("_hold_callback", None)
-        if hold is not None:
-            hold()
+        if hold_model(ui):
             return
-        callback = getattr(ui, "_interrupt_callback", None)
-        if callback is not None:
-            callback()
+        interrupt_work(ui)
 
     @bindings.add("c-n", filter=Condition(lambda: ui.__dict__.get("_skip_callback") is not None) & ~in_menu & ~in_editor & ~in_setting)
-    def skip_model(event: KeyPressEvent) -> None:
-        callback = ui.__dict__.pop("_skip_callback", None)
-        if callback is not None:
-            callback()
+    def skip_model_key(event: KeyPressEvent) -> None:
+        skip_model(ui)
 
     @bindings.add(Keys.Any, filter=in_menu)
     def ignore_menu_text(event: KeyPressEvent) -> None:
         pass
 
     @bindings.add("c-\\", filter=~in_search & ~in_menu & ~in_viewer & ~in_editor & ~in_setting)
-    def toggle_context(event: KeyPressEvent) -> None:
-        ui.context_visible = not ui.context_visible
-        ui._focus.focus(ui.context_window if ui.context_visible else ui.input)
-        ui.app.invalidate()
+    def toggle_context_key(event: KeyPressEvent) -> None:
+        toggle_context(ui)
 
     in_context = Condition(lambda: ui.context_visible and ui.app.layout.current_window is ui.context_window) & ~in_menu & ~in_viewer & ~in_editor & ~in_setting & ~in_inspection
 

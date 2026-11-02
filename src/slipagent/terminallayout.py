@@ -89,10 +89,10 @@ def build_layout(ui: TerminalUI) -> Layout:
         ActionControl(lambda: ui._activity_notice([("class:menu-title", "Folder Opener")])),
         ui._options_panel.field, lambda: ui._options_panel.field, ui._bottom_row(menu=False))
     search_footer = menus.footer(
-        FormattedTextControl("Feed Search | Enter refreshes results | Esc closes search"),
+        ActionControl(lambda: ui._key_hint_fragments("Feed Search | Enter refreshes results | Esc closes search")),
         ui._feed_search.field, lambda: ui._feed_search.field, ui._bottom_row(menu=False))
     context = FocusCoordinator.panel(
-        FormattedTextControl("Context — latest model request | Ctrl+\\: close"),
+        ActionControl(lambda: ui._key_hint_fragments("Context — latest model request | Ctrl+\\: close")),
         ui.context_window, lambda: ui.context_window)
     # Overlay the prompt so switching between prompts of different heights
     # does not move the scroll position and select a different prompt again.

@@ -1616,6 +1616,11 @@ sizes toward the rolling target. Even incomplete attempt files reserve their num
 ## Terminal Components and Invocation Identity
 
 `terminalbindings.py` builds keyboard commands and their focus filters;
+`terminalhints.py` formats key labels and links the action words in application
+hints. Interrupt, hold, skip and context actions share the keyboard handlers;
+editor, viewer, search and menu actions delegate to their existing owners.
+Hint fragments retain their handlers through the status marquee. Link rendering
+is scoped to application-owned status, notices, menus and panel headers.
 `terminalmouse.py` routes pointer events among visible regions;
 `terminallayout.py` assembles the layout and styles around retained controls.
 `TerminalUI` delegates through its existing presentation entry points, so reload

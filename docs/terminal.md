@@ -154,6 +154,11 @@ renaming lasts only for the current conversation in the running process.
 Most inspection and menu actions have both mouse and keyboard paths. Type only
 when entering prompts, command arguments, configuration values, or file edits.
 
+Shortcut labels use `Esc`, `Ctrl`, `Shift`, `Alt`, and the usual key names.
+In application hints such as `Esc to interrupt`, the action words are clickable
+and use the same controls as the keyboard shortcut. These links remain active
+while long hints scroll across the status line.
+
 | Action | Mouse | Keyboard |
 | --- | --- | --- |
 | Browse commands | Commands link, then click an item | `/menu`, arrows, Enter |
@@ -161,14 +166,15 @@ when entering prompts, command arguments, configuration values, or file edits.
 | Focus regions and links | Click the region or link | Shift+Tab selects the next UI component; Tab also selects feed links outside the editor |
 | Activate a focused link | Click the link | Enter |
 | Scroll feed output | Mouse wheel | Arrows, Page Up/Down, Home/End with feed focus; Page Up/Down also work from the prompt |
-| Search feed output | Click a result to jump to its location | F3 opens search; Esc closes it |
+| Search feed output | Search link in the F3 hint; click a result to jump | F3 opens search; Esc closes it |
 | Open a touched item or saved call | Click its list entry | Focus its list, arrows, Enter |
 | Browse a selector | Wheel by one item; click to select | Up/Down, Enter; Esc to cancel |
 | Save or close an editor | Save File or Close Text Editor | Ctrl+S or Esc |
 | Open inspection options | Options link | F4 |
-| Inspect the actual model request | — | Ctrl+\ |
-| Skip a silent model (optimal mode) | — | Ctrl+N while the status line shows the countdown |
-| Keep waiting on a silent model | — | Esc while the countdown shows; Esc again cancels the turn |
+| Inspect the actual model request | Close link in the context header | Ctrl+\ |
+| Skip a silent model (optimal mode) | Next model link in the countdown notice | Ctrl+N while the status line shows the countdown |
+| Keep waiting on a silent model | Stay on this model link | Esc while the countdown shows; Esc again cancels the turn |
+| Interrupt active work | Interrupt or cancel the turn link | Esc |
 | Return to newest feed output | Scroll to Bottom link | Scroll to the end |
 | Copy or reuse selected feed text | Select, right-click, choose an action | `/copy` for the latest reply |
 

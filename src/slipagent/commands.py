@@ -1504,7 +1504,7 @@ class ExitCommand(Command):
     aliases: tuple[str, ...] = ("quit",)
     banner = '/exit /quit'
     help: tuple[CommandHelp, ...] = (
-        CommandHelp('/exit', 'quit (also ctrl-d)', '/exit'),
+        CommandHelp('/exit', 'quit (also Ctrl-D)', '/exit'),
         CommandHelp('/quit', 'same as /exit', '/quit'),
     )
 

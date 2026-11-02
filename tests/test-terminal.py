@@ -1451,7 +1451,7 @@ async def test_pending_editor_notification_flashes_without_changing_status(displ
             monkeypatch.setattr("slipagent.terminal.time", SimpleNamespace(monotonic=lambda: changed_at))
             for frame in PULSE_FRAMES:
                 ui._activity_frame = frame
-                assert ui._activity_status() == [("class:pulse", f"{frame} Working (esc to interrupt)")]
+                assert fragment_list_to_text(ui._activity_status()) == f"{frame} Working (Esc to interrupt)"
                 fragments = ui._activity()
                 assert any("class:status-flash" in part[0] and "Opening editor" in part[1] for part in fragments)
                 assert all("class:status-flash" not in part[0] for part in fragments if "Working" in part[1] or "Cancel" in part[1])
@@ -2806,14 +2806,15 @@ async def test_viewer_exit_link_replaces_commands_and_closes_only_on_its_words(d
             ui.input.text = "saved draft"
             ui.set_working(working)
             ui.open_viewer("Contents", "sample text", diff=working)
-            await wait_until(lambda: "ESC to exit viewer" in snapshot()[17])
+            await wait_until(lambda: "Esc to exit viewer" in snapshot()[17])
             row = snapshot()[17]
             assert "Commands" not in row
-            assert "esc to interrupt" not in row
+            assert "Esc to interrupt" not in row
             start = width(row[:row.index("exit viewer")])
             assert screen.buffer[17][start].underscore
             assert not screen.buffer[17][start - 2].underscore
-            blank = 21 if columns == 40 else 70
+            blank = next(index + 1 for index in range(columns - 1, -1, -1)
+                         if screen.buffer[17][index].data == ' ' and not screen.buffer[17][index].underscore)
             await send_keys(ui, pipe, f"\x1b[<35;{blank};18M\x1b[<0;{blank};18M\x1b[<0;{blank};18m")
             assert ui._viewer_active
             assert ui.__dict__.get("_hovered_control") != "exit-viewer"
@@ -3171,7 +3172,7 @@ async def test_menu_cancellation_preserves_input_history_scroll_and_running_turn
             await wait_until(lambda: "Commands" in snapshot()[17])
             pipe.send_text("ignored\x7f\x1b[A\x1c" + cancel_key)
             assert await asyncio.wait_for(choice, 3) is None
-            await wait_until(lambda: "Working (esc to interrupt)" in snapshot()[17])
+            await wait_until(lambda: "Working (Esc to interrupt)" in snapshot()[17])
             assert snapshot()[:17] == before
             assert ui.input.buffer.text == "draft in progress"
             assert ui.input.buffer.cursor_position == cursor
@@ -4626,3 +4627,105 @@ def test_redraws_are_capped_at_ten_per_second(display):
     with create_pipe_input() as pipe:
         ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output)
         assert ui.app.min_redraw_interval == pytest.approx(0.1)
+
+
+async def test_working_interrupt_hint_click_preserves_draft(display):
+    sink, _, output, _, snapshot = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: 'status', sink, input=pipe, output=output)
+        calls = []
+        ui.set_interrupt_handler(lambda: calls.append('interrupt'))
+        ui.input.text = 'Keep this draft'
+        ui.set_working(True)
+        task = asyncio.create_task(ui.run())
+        try:
+            await wait_until(lambda: any('Esc to interrupt' in row for row in snapshot()))
+            row_index, row = next((index, row) for index, row in enumerate(snapshot()) if 'Esc to interrupt' in row)
+            column = row.index('interrupt') + 2
+            pipe.send_text(f'\x1b[<0;{column};{row_index + 1}M\x1b[<0;{column};{row_index + 1}m')
+            await wait_until(lambda: calls == ['interrupt'])
+            assert ui.input.text == 'Keep this draft'
+            assert all(len(part) == 2 for part in ui._activity_status() if 'Esc to ' in part[1])
+        finally:
+            ui.close()
+            await task
+
+
+def test_model_wait_hint_actions_dispatch_once_and_leave_input_alone(display, monkeypatch):
+    from prompt_toolkit.data_structures import Point
+    from prompt_toolkit.mouse_events import MouseEvent, MouseButton, MouseEventType
+    from slipagent.cli import SKIP_NOTICE, HOLD_NOTICE
+    sink, _, output, _, _ = display
+    event = MouseEvent(Point(0, 0), MouseEventType.MOUSE_UP, MouseButton.LEFT, frozenset())
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: 'status', sink, input=pipe, output=output)
+        calls = []
+        monkeypatch.setattr(ui, '_activity_width', lambda: 250)
+        ui.input.text = 'Keep this draft'
+        ui.set_skip_handler(lambda: calls.append('skip'))
+        ui.set_hold_handler(lambda: calls.append('hold'))
+        ui.set_interrupt_handler(lambda: calls.append('interrupt'))
+        ui.set_retry_status('Waiting for output')
+        try:
+            ui.notify(SKIP_NOTICE)
+            links = {part[1]: part[2] for part in ui._activity() if len(part) == 3}
+            links['next model'](event)
+            links['next model'](event)
+            links['stay on this model'](event)
+            links['stay on this model'](event)
+            assert calls == ['skip', 'hold']
+            ui.notify(HOLD_NOTICE)
+            links = {part[1]: part[2] for part in ui._activity() if len(part) == 3}
+            links['cancel the turn'](event)
+            assert calls == ['skip', 'hold', 'interrupt']
+            assert ui.input.text == 'Keep this draft'
+        finally:
+            ui.close()
+
+
+@pytest.mark.parametrize('notice,label', [('Press F3 to search', 'search'),
+    ('Press f3 to search', 'search'),
+    ('shift+tab to select UI component.', 'select UI component'),
+    ('Shift+Tab to select UI component.', 'select UI component')])
+def test_navigation_hint_actions_use_existing_controls(display, monkeypatch, notice, label):
+    from prompt_toolkit.data_structures import Point
+    from prompt_toolkit.mouse_events import MouseEvent, MouseButton, MouseEventType
+    sink, _, output, _, _ = display
+    with create_pipe_input() as pipe:
+        ui = TerminalUI(lambda width: 'status', sink, input=pipe, output=output)
+        calls = []
+        monkeypatch.setattr(ui, '_activity_width', lambda: 250)
+        monkeypatch.setattr(ui._feed_search, 'open', lambda: calls.append('search'))
+        monkeypatch.setattr(ui, '_cycle_panel', lambda *, components=False: calls.append(components))
+        try:
+            ui.notify(notice)
+            links = {part[1]: part[2] for part in ui._activity() if len(part) == 3}
+            links[label](MouseEvent(Point(0, 0), MouseEventType.MOUSE_UP, MouseButton.LEFT, frozenset()))
+            assert calls == (['search'] if label == 'search' else [True])
+        finally:
+            ui.close()
+
+
+def test_shortcut_links_survive_notice_marquee(display, monkeypatch):
+    from prompt_toolkit.data_structures import Point
+    from prompt_toolkit.mouse_events import MouseEvent, MouseButton, MouseEventType
+    sink, _, output, _, _ = display
+    clock = [100.0]
+    with monkeypatch.context() as patch:
+        patch.setattr('slipagent.statusline.time.monotonic', lambda: clock[0])
+        with create_pipe_input() as pipe:
+            ui = TerminalUI(lambda width: 'status', sink, input=pipe, output=output)
+            calls = []
+            ui.set_interrupt_handler(lambda: calls.append('interrupt'))
+            try:
+                ui.notify('esc to interrupt')
+                assert ui._notification_text(200) == 'Esc to interrupt'
+                ui._notification_fragments(6)
+                clock[0] += 2.41
+                fragments = ui._notification_fragments(6)
+                assert any(len(part) == 3 for part in fragments)
+                handler = next(part[2] for part in fragments if len(part) == 3)
+                handler(MouseEvent(Point(0, 0), MouseEventType.MOUSE_UP, MouseButton.LEFT, frozenset()))
+                assert calls == ['interrupt']
+            finally:
+                ui.close()

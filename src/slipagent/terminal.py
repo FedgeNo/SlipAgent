@@ -51,6 +51,7 @@ from .statusline import NOTICE_SECONDS, PULSE_FRAMES, TIP_SECONDS, StatusLine
 from .mainarea import MainArea
 from .menulifecycle import MenuLifecycle
 from .terminalbindings import build_bindings
+from .terminalhints import link_hints
 from .terminalmouse import limit_mouse_reports, route_mouse
 from .terminalinput import TerminalInputMode
 from .terminallayout import build_layout, build_style
@@ -404,6 +405,9 @@ class TerminalUI:
         return TaskLink(label, key, self._link_hover(), operation, self.app.create_background_task,
                         style=style, enabled=enabled).fragments()
 
+    def _key_hint_fragments(self, text: str, *, style: str = '') -> StyleAndTextTuples:
+        return link_hints(self, text, style=style)
+
     def _feed_link(self, style: str, text: str) -> ActionLink | None:
         for token in style.split():
             for kind in ("file", "artifact", "directory", "suggestion"):
@@ -633,11 +637,11 @@ class TerminalUI:
             reference = dict(panel.reference)
             return [("", panel.title + " | "), *self._action_link(
                 "Comment on Diff", "comment-on-diff", lambda: self._comment_on_diff(reference)),
-                ("", " — Read Only | ↑↓ / Wheel / PgUp / PgDn | Esc: Close")]
+                    *self._key_hint_fragments(" — Read Only | ↑↓ / Wheel / PgUp / PgDn | Esc: Close")]
         if not self._viewer.panel.changed:
-            return [("", text)]
+            return self._key_hint_fragments(text)
         return [("class:retry", "File changed on disk. "),
-                *self._task_link("Reload [Ctrl+R]", "reload-viewer", self._reload_viewer), ("", " | " + text)]
+                *self._task_link("Reload [Ctrl+R]", "reload-viewer", self._reload_viewer), ("", " | "), *self._key_hint_fragments(text)]
 
     async def _reload_viewer(self) -> None:
         panel = self._viewer.panel
@@ -789,7 +793,7 @@ class TerminalUI:
                 columns = max(0, (self.output.get_size().columns - 18) // 2)
             prefix = fragment_list_to_text(self._activity_status())
             if self._editor_active or self._viewer_active:
-                prefix += "  ESC to Close Text Editor " if self._editor_active else "  ESC to exit viewer "
+                prefix += "  Esc to Close Text Editor " if self._editor_active else "  Esc to exit viewer "
         remaining = columns - display_width(prefix) - 2
         return max(1, remaining if remaining > 0 else columns)
 
@@ -878,6 +882,9 @@ class TerminalUI:
         return self.status_line.current_notification()
 
     def _notification_text(self, columns: int | None = None) -> str:
+        return fragment_list_to_text(self._notification_fragments(columns))
+
+    def _notification_fragments(self, columns: int | None = None, *, style: str = '') -> StyleAndTextTuples:
         notification = self._current_notification()
         text = self._navigation_tip() or notification
         if not text:
@@ -897,7 +904,7 @@ class TerminalUI:
             columns = self._notice_width()
             if notification and display_width(text) > columns:
                 columns = self._activity_width()
-        return fragment_list_to_text(self._marquee([("", text)], columns, "notice"))
+        return self._marquee(self._key_hint_fragments(text, style=style), columns, "notice")
 
     def _navigation_tip(self) -> str:
         return self.status_line.navigation_tip()
@@ -918,11 +925,7 @@ class TerminalUI:
             hint = "↑↓/wheel Enter/click Esc"
         if len(hint) > remaining:
             hint = hint[:remaining - 1] + "…" if remaining else ""
-        prefix, separator, tail = hint.partition("back")
-        if not separator:
-            return list(to_formatted_text(ANSI(hint + suffix)))
-        return [("", prefix), *self._action_link("back", "menu-back", lambda: self._finish_menu(None)),
-                ("", tail), *to_formatted_text(ANSI(suffix))]
+        return [*self._key_hint_fragments(hint), *to_formatted_text(ANSI(suffix))]
 
     def _menu_heading(self) -> StyleAndTextTuples:
         legend: StyleAndTextTuples = self.__dict__.get("_menu_legend", [])
@@ -1387,9 +1390,9 @@ class TerminalUI:
             label = "Close Text Editor" if self._editor_active else "exit viewer"
             link = (self._task_link(label, "exit-editor", self._close_editor) if mode == "editor" else
                     self._action_link(label, "exit-viewer", self.close_viewer))
-            if display_width(fragment_list_to_text(fragments)) + len("  ESC to " + label + " ") > self.output.get_size().columns - self._right_control_width():
+            if display_width(fragment_list_to_text(fragments)) + len("  Esc to " + label + " ") > self.output.get_size().columns - self._right_control_width():
                 fragments = []
-            fragments.extend([("", "  ESC to " if fragments else "ESC to "), *link, ("", " ")])
+            fragments.extend([("", "  Esc to " if fragments else "Esc to "), *link, ("", " ")])
         if self.__dict__.get("_diff_reference") is not None and self._input_label == "> ":
             return self._activity_notice(fragments, suffix=[("", "  "), *self._action_link(
                 "Remove Diff Reference", "remove-diff-reference", self._remove_diff_reference), ("", " ")])
@@ -1407,28 +1410,30 @@ class TerminalUI:
             return [*self._marquee(fragments, available, "activity"), *suffix]
         remaining = max(0, available - display_width(fragment_list_to_text(fragments)) - 2)
         text = ""
+        notice: StyleAndTextTuples = []
         if notification:
             if not remaining and fragments:
                 fragments = (fragments[:1] if self._menu_future is not None or self._options_field_active
                              else self._activity_status(compact=True))
                 remaining = max(0, available - display_width(fragment_list_to_text(fragments)) - 2)
-            text = self._notification_text(remaining)
+            notice = self._notification_fragments(remaining, style=self.status_line.notice_style(bool(notification)))
+            text = fragment_list_to_text(notice)
         elif self._navigation_tip() or self._menu_future is None and not self._options_field_active:
-            text = self._notification_text(remaining)
+            notice = self._notification_fragments(remaining, style=self.status_line.notice_style(bool(notification)))
+            text = fragment_list_to_text(notice)
         if text:
             if display_width(fragment_list_to_text(fragments)) + 2 + display_width(text) > available:
                 fragments = []
-            style = self.status_line.notice_style(bool(notification))
             if fragments:
                 fragments = [*fragments, ("", "  ")]
-            fragments = [*fragments, (style, text)]
+            fragments = [*fragments, *notice]
         return [*self._marquee(fragments, available, "activity"), *suffix]
 
     def _activity_status(self, *, compact: bool = False) -> StyleAndTextTuples:
         frame = self.__dict__.get("_activity_frame", PULSE_FRAMES[int(time.monotonic() * 4) % len(PULSE_FRAMES)])
         style, text, ready = self.status_line.activity(held=self._editor_active, working=self.working,
             stopping=self.stopping, pausing=self.pausing, concise=self._viewer_active or compact, frame=frame)
-        fragments: StyleAndTextTuples = [(style, text)]
+        fragments = self._key_hint_fragments(text, style=style)
         if ready and self._input_label == "> " and not self._viewer_active and not compact:
             fragments.extend([("", "  "), *self._task_link("Commands", "commands", self._choose_command), ("", " ")])
         return fragments

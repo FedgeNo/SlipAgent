@@ -51,6 +51,13 @@ is submitted. Browser and terminal input use the same turn driver.
 active work immediately while retaining completed results. The feed follows new
 activity only near its bottom; **Latest** returns to the newest messages.
 
+The conversation shows ordinary prompts and replies, with compact tool names and
+completion/error indicators. Tool arguments and raw results are available through
+Inspect and the explorer, rather than printed as JSON in chat. Live reasoning
+appears under **Thinking**, alongside streamed reply text. The live preview follows
+new output while you are at its bottom; scroll up to pause following. Full saved
+reasoning remains available through Inspect after the turn completes.
+
 History exposes the original stored prompts, responses, reasoning, calls, results
 and edit notifications. GUI browsing does not use the model's context window,
 compressed summaries or recent-turn selection. Paging and a bounded browser cache

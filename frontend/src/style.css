@@ -62,6 +62,8 @@ main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .MessageCard header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 9px; font-size: 10px; text-transform: uppercase; letter-spacing: .8px; color: #9ab8ca; }
 .MessageCard header button { font-size: 10px; text-transform: none; letter-spacing: 0; }
 .ResponseSource { margin-bottom: 9px; color: #8faec2; font: 10px ui-monospace, monospace; overflow-wrap: anywhere; }
+.MessageCard .ToolResultRow { padding-bottom: 0; text-transform: none; letter-spacing: 0; }
+.ToolResultRow .failed { color: #eab09e; }
 .MessageCard pre { font-family: inherit; font-size: 13px; }
 .MessageCard.tool pre { font-family: ui-monospace, monospace; }
 .ToolCards { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; }

@@ -35,6 +35,9 @@
     let revision = $state(0);
     let activity = $state('Ready');
     let streaming = $state('');
+    let reasoning = $state('');
+    let previewElement = $state<HTMLDivElement>();
+    let previewFollow = $state(true);
     let controls = $state<{settings: Record<string, boolean>; queue: [string, string][]}>({settings: {}, queue: []});
     let confirmAction = $state<{title: string; action: string; identifier?: string; text?: string} | null>(null);
     let renameText = $state('');
@@ -52,6 +55,11 @@
     let planData = $state<{objective?: string; stages?: {task: string; status: string; evidence: string}[]}>({});
     function openSearch() { searchMode = true; requestAnimationFrame(() => searchInput?.focus()); }
     function modal(node: HTMLDialogElement) { node.showModal(); }
+
+    $effect(() => {
+        streaming; reasoning;
+        if (previewElement && previewFollow) previewElement.scrollTop = previewElement.scrollHeight;
+    });
 
     function savePosition() { navigation.current = {...position, previous: [...pageCursors]}; }
     async function navigate(root: string, back = false) {
@@ -171,13 +179,14 @@
             const event = record.event;
             if (!event) return;
             if (event.kind === 'assistant_delta') streaming = (streaming + event.text).slice(-16384);
-            if (event.kind === 'step_start') { activity = `Working · turn ${event.step}`; streaming = ''; runError = ''; }
+            if (event.kind === 'reasoning_delta') reasoning = (reasoning + event.text).slice(-16384);
+            if (event.kind === 'step_start') { activity = `Working · turn ${event.step}`; streaming = ''; reasoning = ''; previewFollow = true; runError = ''; }
             if (event.kind === 'tool_start') activity = 'Running tools';
             if (event.kind === 'notice' || event.kind === 'warning') notice = event.text;
-            if (event.kind === 'retry') { activity = event.text; streaming = ''; notice = event.text; }
+            if (event.kind === 'retry') { activity = event.text; streaming = ''; reasoning = ''; notice = event.text; }
             if (event.kind === 'retry_wait') activity = event.text ? `Retrying in ${event.step}s · ${event.text}` : 'Working';
             if (event.kind === 'error') runError = event.text;
-            if (['step_end', 'stream_end', 'error'].includes(event.kind)) { activity = event.kind === 'error' ? event.text : 'Ready'; streaming = ''; }
+            if (['step_end', 'stream_end', 'error'].includes(event.kind)) { activity = event.kind === 'error' ? event.text : 'Ready'; streaming = ''; reasoning = ''; }
             if (['user_message', 'user_message_sent', 'tool_end', 'assistant_text', 'step_end', 'user_queue_changed', 'session_title'].includes(event.kind)) changed();
         }, (text) => connection = text);
         return () => { stop(); clearTimeout(refreshTimer); rootRequest?.abort(); detailRequest?.abort(); };
@@ -212,7 +221,9 @@
                     <div class="FeedLayer" class:search-hidden={searchMode}>{#if sessionState}<Feed {revision} sessionId={sessionState.sessionId} {inspect} {jump}/>{/if}</div>
                     {#if searchMode}<Search query={searchQuery} activate={(index) => { jump = -1; searchMode = false; requestAnimationFrame(() => jump = index); }}/>{/if}
                 </div>
-                {#if streaming}<div class="StreamPreview"><small>Streaming</small><pre>{streaming}</pre></div>{/if}
+                {#if streaming || reasoning}<div class="StreamPreview" bind:this={previewElement} onscroll={() => {
+                    if (previewElement) previewFollow = previewElement.scrollHeight - previewElement.scrollTop - previewElement.clientHeight < 24;
+                }}>{#if reasoning}<small>Thinking</small><pre>{reasoning}</pre>{/if}{#if streaming}<small>Streaming</small><pre>{streaming}</pre>{/if}</div>{/if}
                 {#if controls.queue.length}<div class="InputQueuePanel"><small>QUEUED INPUT</small><button class="TextButton" onclick={() => navigate('/queue')}>View Full Queue</button>{#each controls.queue as [id, text]}<div><span>{text}</span><button aria-label="Discard Queued Prompt" onclick={() => action('discard', {identifier: id})}>×</button></div>{/each}</div>{/if}
                 <form class="PromptForm" onsubmit={(event) => { event.preventDefault(); if (!searchMode) void submit(); }}>
                     {#if searchMode}

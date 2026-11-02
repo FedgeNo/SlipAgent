@@ -368,9 +368,19 @@ class GuiBrowser:
                 name = call['function']['name'] if isinstance(call, dict) else call.name
                 tool_calls.append({'index': call_index, 'name': text_page(name, limit=128)['text']})
             value = resident_content(message)
+            tool_result = None
+            if message.role == 'tool':
+                envelope = value if isinstance(value, dict) else {}
+                name = envelope.get('tool') or message.name or 'Tool'
+                status = envelope.get('status')
+                tool_result = {'name': text_page(name, limit=128)['text'],
+                               'status': status if status in ('success', 'error') else 'unknown'}
+                preview = {'text': '', 'more': False}
+            else:
+                preview = text_page('' if value is None and message.role == 'assistant' else value, limit=4096)
             items.append({'index': index, 'id': f'/messages/{index}', 'role': message.role,
                           'source': response_source([message]),
-                          'toolCalls': tool_calls, 'toolCount': len(calls),
-                          **text_page('' if value is None and message.role == 'assistant' else value, limit=4096)})
+                          'toolCalls': tool_calls, 'toolCount': len(calls), 'toolResult': tool_result,
+                          **preview})
         return {'items': items, 'offset': offset, 'total': len(messages),
                 'sessionId': self.session.agent.session_id}

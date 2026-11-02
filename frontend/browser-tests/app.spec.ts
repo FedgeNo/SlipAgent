@@ -1,4 +1,15 @@
-import {test, expect} from '@playwright/test';
+import {test, expect, type Page} from '@playwright/test';
+
+async function live_events(page: Page) {
+    let send: (kind: string, text: string) => void = () => { throw new Error('Socket not connected'); };
+    await page.routeWebSocket('**/api/events', (socket) => {
+        socket.connectToServer();
+        send = (kind, text) => socket.send(JSON.stringify({type: 'event', event: {kind, text, step: 1}}));
+    });
+    await page.reload();
+    await expect(page.locator('.ConnectionDot')).toHaveClass(/online/);
+    return send;
+}
 
 test.beforeEach(async ({page}) => {
     await page.goto('/#browser-test-capability');
@@ -8,6 +19,8 @@ test.beforeEach(async ({page}) => {
 test('browses original history and arbitrary file depths with Up and Back', async ({page}) => {
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
+    await expect(page.locator('.ToolResultRow').first()).toContainText('update_plan');
+    await expect(page.locator('.MessageCard.tool pre')).toHaveCount(0);
     await expect(page.locator('.ObjectRow').first()).toBeVisible();
     await page.locator('.HierarchyColumn .ObjectRow').first().click();
     await expect(page.locator('.DetailColumn .ObjectRow').filter({hasText: 'response'})).toBeVisible();
@@ -104,13 +117,7 @@ test('starts a fresh conversation while retaining readable session instructions'
 });
 
 test('keeps run errors and notices visible after the agent becomes idle', async ({page}) => {
-    let send: (kind: string, text: string) => void = () => { throw new Error('Socket not connected'); };
-    await page.routeWebSocket('**/api/events', (socket) => {
-        socket.connectToServer();
-        send = (kind, text) => socket.send(JSON.stringify({type: 'event', event: {kind, text, step: 1}}));
-    });
-    await page.reload();
-    await expect(page.locator('.ConnectionDot')).toHaveClass(/online/);
+    const send = await live_events(page);
     send('warning', 'The provider reported a warning.');
     await expect(page.getByRole('status')).toContainText('The provider reported a warning.');
     send('error', 'The provider request failed.');
@@ -121,4 +128,35 @@ test('keeps run errors and notices visible after the agent becomes idle', async 
     await expect(page.getByRole('alert')).toHaveCount(0);
     await page.getByRole('button', {name: 'Dismiss Notice'}).click();
     await expect(page.getByRole('status')).toHaveCount(0);
+});
+
+test('streams reasoning and follows long previews while preserving manual scroll', async ({page}) => {
+    const send = await live_events(page);
+    send('step_start', '');
+    send('reasoning_delta', 'Inspecting the problem.');
+    await expect(page.locator('.StreamPreview')).toContainText('Thinking');
+    send('reasoning_delta', ' Checking the implementation.');
+    await expect(page.locator('.StreamPreview pre').first()).toHaveText('Inspecting the problem. Checking the implementation.');
+    send('assistant_delta', Array.from({length: 40}, (_,index) => `Streamed line ${index}`).join('\n'));
+    const preview = page.locator('.StreamPreview');
+    await expect(preview).toContainText('Streamed line 39');
+    await expect.poll(() => preview.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThan(3);
+    await preview.evaluate((element) => { element.scrollTop = 0; });
+    await preview.dispatchEvent('scroll');
+    await expect.poll(() => preview.evaluate((element) => element.scrollTop)).toBe(0);
+    send('assistant_delta', '\nMore streamed output');
+    await expect(preview).toContainText('More streamed output');
+    await expect.poll(() => preview.evaluate((element) => element.scrollTop)).toBe(0);
+    await preview.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+    await preview.dispatchEvent('scroll');
+    send('assistant_delta', '\nLatest streamed output');
+    await expect(preview).toContainText('Latest streamed output');
+    await expect.poll(() => preview.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThan(3);
+    send('stream_end', '');
+    await expect(preview).toHaveCount(0);
+    send('step_start', '');
+    send('reasoning_delta', 'Fresh reasoning');
+    await expect(page.locator('.StreamPreview pre')).toHaveText('Fresh reasoning');
+    send('retry', 'Trying again');
+    await expect(preview).toHaveCount(0);
 });

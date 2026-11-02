@@ -5,7 +5,8 @@ export type SessionState = {
 export type BrowserNode = {id: string; label: string; kind: string; collection: boolean; preview: string; actionValue?: string; enabled?: boolean};
 export type Children = {node: string; parent: string | null; items: BrowserNode[]; nextCursor: string | null};
 export type Detail = {text: string; more: boolean};
-export type FeedItem = Detail & {index: number; id: string; role: string; source?: {model?: string; provider?: string}; toolCalls: {index: number; name: string}[]; toolCount: number};
+export type FeedItem = Detail & {index: number; id: string; role: string; source?: {model?: string; provider?: string};
+    toolResult?: {name: string; status: string} | null; toolCalls: {index: number; name: string}[]; toolCount: number};
 export type FeedPage = {items: FeedItem[]; offset: number; total: number; sessionId: string};
 export type Notification = {type: string; epoch: string; sequence: number; state?: SessionState;
     event?: {kind: string; text: string; step: number}};

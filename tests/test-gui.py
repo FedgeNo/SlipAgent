@@ -330,6 +330,26 @@ async def test_all_originals_remain_browsable_after_model_compaction(workspace, 
         await application(session).close()
 
 
+async def test_tool_results_are_compact_in_feed_and_originals_remain_inspectable(workspace):
+    from slipagent.guibrowser import GuiBrowser
+    from slipagent.types import Message
+    session = session_for(workspace)
+    payload = 'Full raw result must stay in the explorer. ' * 1000
+    message = Message.tool_result('call-one', {'tool': 'read_file', 'call_id': 'call-one',
+                                             'status': 'success', 'content': payload})
+    session.agent.messages.append(message)
+    browser = GuiBrowser(session)
+    try:
+        item = browser.feed()['items'][-1]
+        assert item['toolResult'] == {'name': 'read_file', 'status': 'success'}
+        assert item['text'] == '' and item['more'] is False
+        assert payload[:100] not in json.dumps(item)
+        original = browser.value(item['id'] + '/content')
+        assert original['content'] == payload
+    finally:
+        await application(session).close()
+
+
 async def test_structured_actions_use_shared_input_and_reject_stale_sessions(workspace):
     session = session_for(workspace)
     host = gui.GuiHost(session)

@@ -84,12 +84,17 @@
                 {#if cache.get(row.index)}
                     {@const item = cache.get(row.index)!}
                     <article class="MessageCard" class:user={item.role === 'user'} class:tool={item.role === 'tool'}>
-                        <header><span>{item.role === 'assistant' ? 'SlipAgent' : item.role === 'system' ? 'Session Instructions' : item.role}</span><button class="TextButton" onclick={() => inspect(item.id)}>Inspect ↗</button></header>
+                        <header class:ToolResultRow={item.role === 'tool'}><span class:failed={item.toolResult?.status === 'error'}>
+                            {#if item.role === 'tool'}{item.toolResult?.status === 'success' ? '✓' : item.toolResult?.status === 'error' ? '✗' : '·'} {item.toolResult?.name || 'Tool Result'} · {item.toolResult?.status === 'success' ? 'Completed' : item.toolResult?.status === 'error' ? 'Failed' : 'Result'}
+                            {:else}{item.role === 'assistant' ? 'SlipAgent' : item.role === 'system' ? 'Session Instructions' : item.role}{/if}
+                        </span><button class="TextButton" onclick={() => inspect(item.id)}>Inspect ↗</button></header>
+                        {#if item.role !== 'tool'}
                         {#if item.source && (item.source.model || item.source.provider)}<div class="ResponseSource" title="Response Provider and Model">{[item.source.provider, item.source.model].filter(Boolean).join(' · ')}</div>{/if}
                         {#if item.role === 'system'}<button class="TextButton" onclick={() => inspect(item.id + '/content')}>Read Full Instructions →</button>{:else if item.text}<pre>{item.text}</pre>{/if}
                         {#if item.toolCalls.length}<div class="ToolCards">{#each item.toolCalls as call}<button onclick={() => inspect(`${item.id}/tool_calls/${call.index}`)}><span>⌘</span>{call.name}<span>↗</span></button>{/each}</div>{/if}
                         {#if item.toolCount > item.toolCalls.length}<button class="TextButton" onclick={() => inspect(item.id + '/tool_calls')}>Inspect All {item.toolCount} Calls →</button>{/if}
                         {#if item.more}<button class="TextButton" onclick={() => inspect(item.id + '/content')}>Read Full Content →</button>{/if}
+                        {/if}
                     </article>
                 {:else}<div class="MessageCard loading">Loading original record…</div>{/if}
             </div>

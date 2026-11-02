@@ -165,6 +165,23 @@ def current_settings(session: Session) -> list[tuple[str, str, str]]:
     ]
 
 
+class GuiCommand(Command):
+    name = 'gui'
+    help = (CommandHelp('/gui', 'show the browser link for this session’s visual workspace', '/gui'),)
+
+    def background(self, argument: str) -> bool:
+        return True
+
+    async def run(self, context: CommandContext, argument: str) -> bool | None:
+        if argument:
+            print('  usage: /gui', file=context.out)
+            return None
+        from .gui import start_gui
+        host = await start_gui(context.session, port=context.session.extensions.get('gui_port', 0))
+        print(f'  Browser: {host.url}', file=context.out)
+        return None
+
+
 class StatusCommand(Command):
     name = 'status'
     aliases = ('config-show',)
@@ -1523,6 +1540,7 @@ class UpdateCommand(ExitCommand):
 
 COMMANDS: tuple[Command, ...] = (
     HelpCommand(),
+    GuiCommand(),
     StatusCommand(),
     SettingsCommand(),
     MenuCommand(),

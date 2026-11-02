@@ -1252,6 +1252,12 @@ class Launcher:
                 return 2
 
         events = JsonEventStream(sys.stdout) if getattr(args, "json_events", False) else None
+        if not 0 <= getattr(args, 'gui_port', 0) <= 65535:
+            print('slipagent: --gui-port must be between 0 and 65535.', file=sys.stderr)
+            return 2
+        if getattr(args, 'gui', False) and prompt:
+            print('slipagent: --gui requires a session without a one-shot prompt.', file=sys.stderr)
+            return 2
         interactive = not prompt and sys.stdin.isatty() and sys.stderr.isatty() and os.environ.get("TERM") != "dumb"
         if interactive and not args.api_key:
             from .config import load_dotenv
@@ -1268,6 +1274,8 @@ class Launcher:
                              error={"type": type(exc).__name__, "message": str(exc)})
             return 2
 
+        session.extensions['gui_port'] = getattr(args, 'gui_port', 0)
+        session.extensions['gui_on_start'] = getattr(args, 'gui', False)
         if prompt:
             if events is not None:
                 previous_handler = session.agent.on_event
@@ -1333,6 +1341,13 @@ class Repl:
                 return 2
             if not ready:
                 return 0
+            if session.extensions.pop('gui_on_start', False):
+                from .gui import start_gui
+                try:
+                    host = await start_gui(session, port=session.extensions.get('gui_port', 0))
+                    renderer.emit(f'  Browser: {host.url}')
+                except (OSError, RuntimeError, TimeoutError) as exc:
+                    renderer.emit(style.red(f'  Browser host could not start: {exc}'))
             if renderer.terminal is not None:
                 await PluginMenu(session, style, _RendererStream(renderer)).offer()
             if session.extensions.pop("restore_transcript", False):
@@ -1354,12 +1369,15 @@ class Repl:
                             break
                     continue
                 try:
-                    line = await self.read_line(style)
+                    line, queued = await self.read_idle_input(style)
                 except EOFError:
                     renderer.emit()
                     break
-                if line is None:
+                if line is None and not queued:
                     break
+                if queued:
+                    line = ''
+                assert line is not None
                 await self.wait_for_interrupt()
                 if cancelled(line):
                     continue
@@ -1367,7 +1385,7 @@ class Repl:
                 if not suggested:
                     line = line.strip()
 
-                if not line:
+                if not line and not queued:
                     continue
 
                 if not suggested and line.startswith("/"):
@@ -1383,7 +1401,9 @@ class Repl:
 
                 # The prompt stays live while the agent works: anything typed in
                 # the meantime is queued onto the step instead of being ignored.
-                if isinstance(line, Submission):
+                if queued:
+                    prompt = ''
+                elif isinstance(line, Submission):
                     if renderer.terminal is not None:
                         renderer.terminal.consume_submission(line)
                     session.agent.enqueue(line)
@@ -1422,6 +1442,27 @@ class Repl:
                 renderer.terminal = None
                 await self.shutdown()
         return 0
+
+    async def read_idle_input(self, style: Style) -> tuple[str | None, bool]:
+        """Let shared submissions wake the one CLI driver without a second reader."""
+        session = self.session
+        ready = application(session).input_ready
+        while True:
+            signalled = ready.is_set()
+            ready.clear()
+            if signalled and session.agent.has_queued_input:
+                return None, True
+            reader = asyncio.create_task(self.read_line(style))
+            wake = asyncio.create_task(ready.wait())
+            try:
+                done, _ = await asyncio.wait({reader, wake}, return_when=asyncio.FIRST_COMPLETED)
+                if reader in done:
+                    return reader.result(), False
+            finally:
+                for task in (reader, wake):
+                    if not task.done():
+                        task.cancel()
+                await _gather_quietly(reader, wake)
 
     async def start(self) -> bool:
         """Keep input live during startup, retaining prompts until initialization settles."""
@@ -3013,6 +3054,8 @@ def build_parser() -> argparse.ArgumentParser:
     display.add_argument("-v", "--verbose", action="store_true",
                          help="Show full tool output and per-step token usage.")
     display.add_argument("--no-session", action="store_true", help="Keep conversation and command logs only until reset or exit.")
+    display.add_argument('--gui', action='store_true', help='Print a link to the visual browser workspace alongside the CLI.')
+    display.add_argument('--gui-port', type=int, default=0, help='Loopback browser port (default: choose an available port).')
 
     automation = parser.add_argument_group("automation")
     automation.add_argument("--prompt-file", metavar="PATH", help="Read a UTF-8 one-shot prompt verbatim; use - for stdin.")

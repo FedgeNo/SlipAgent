@@ -23,6 +23,7 @@ In the REPL:
 | Command | Effect |
 | --- | --- |
 | `/help [command]` | Show all help or one command's help; `/help init` and `/help /init` are equivalent |
+| `/gui` | Start or reuse this session's browser workspace and print its link; available while the agent runs. See [browser access](gui.md). |
 | `/theme <name>` | Choose dark, light, monochrome, or ironbow colors |
 | `/markdown [source\|rendered]` | Toggle or select Markdown source/rendered view |
 | `/copy [auto\|text\|markdown\|code [number]]` | Copy the latest reply or a code block; `auto` (the default) copies Markdown source in source view, the only code block when there is exactly one, and readable text otherwise |

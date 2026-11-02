@@ -20,7 +20,7 @@ def test_repeated_saved_diff_is_published_once_and_revert_is_notified(tmp_path):
     store = SimpleNamespace(save=Mock(side_effect=["first", "second", "third", "fourth"]))
     agent.registry.services["artifact_store"] = store
     terminal = SimpleNamespace(_touched_items={}, write_artifact_reference=Mock(), notify=Mock(), write=Mock())
-    edits = UserEdits(SimpleNamespace(agent=agent, registry=agent.registry), TerminalEditor(terminal))
+    edits = UserEdits(SimpleNamespace(agent=agent, registry=agent.registry, extensions={}), TerminalEditor(terminal))
     path = tmp_path / "file"
     edits.record(path, "+first", "edit")
     edits.record(path, "+first", "edit")
@@ -42,7 +42,7 @@ def test_unchanged_save_retries_failed_diff_archive(tmp_path):
     store = SimpleNamespace(save=Mock(side_effect=[OSError("archive unavailable"), "record"]))
     agent.registry.services["artifact_store"] = store
     terminal = SimpleNamespace(_touched_items={}, write_artifact_reference=Mock(), notify=Mock(), write=Mock())
-    edits = UserEdits(SimpleNamespace(agent=agent, registry=agent.registry), TerminalEditor(terminal))
+    edits = UserEdits(SimpleNamespace(agent=agent, registry=agent.registry, extensions={}), TerminalEditor(terminal))
     path = tmp_path / "file"
     edits.record(path, "+first", "edit")
     edits.record(path, "+first", "edit")
@@ -57,7 +57,7 @@ async def test_edit_request_waits_for_batch_boundary_and_preserves_background_jo
         terminal._editor_active = True
     terminal._open_editor_now = AsyncMock(side_effect=opened)
     jobs = SimpleNamespace(stop_all=AsyncMock())
-    session = SimpleNamespace(agent=SimpleNamespace(running=True), registry=ToolRegistry(), reloader=None)
+    session = SimpleNamespace(agent=SimpleNamespace(running=True), registry=ToolRegistry(), reloader=None, extensions={})
     session.registry.services["command_jobs"] = jobs
     edits = UserEdits(session, TerminalEditor(terminal))
     await edits.request(tmp_path / "a", 12)
@@ -75,7 +75,7 @@ async def test_opening_notification_clears_at_boundary_and_preserves_newer_event
     terminal = SimpleNamespace(_editor_active=False, _notification="")
     terminal.notify = lambda text: setattr(terminal, "_notification", text)
     terminal._open_editor_now = AsyncMock()
-    session = SimpleNamespace(agent=SimpleNamespace(running=True), reloader=None)
+    session = SimpleNamespace(agent=SimpleNamespace(running=True), reloader=None, extensions={})
     edits = UserEdits(session, TerminalEditor(terminal))
     await edits.request(tmp_path / "a")
     assert terminal._notification == "Opening editor after this turn"
@@ -96,7 +96,7 @@ async def test_agent_finishes_all_tools_before_opening_editor_and_waits_before_n
         assert tool.seen == [{"value": "first"}, {"value": "second"}]
         terminal._editor_active = True
     terminal._open_editor_now = AsyncMock(side_effect=opened)
-    session = SimpleNamespace(agent=agent, registry=agent.registry, reloader=None)
+    session = SimpleNamespace(agent=agent, registry=agent.registry, reloader=None, extensions={})
     edits = UserEdits(session, TerminalEditor(terminal))
     agent.on_boundary = edits.checkpoint
     def event(event):
@@ -131,7 +131,7 @@ async def test_saved_user_edit_survives_resume_and_is_distinct_from_user_message
     journal = SessionJournal(str(tmp_path), tmp_path / "sessions")
     agent.registry.services["session_journal"] = journal
     terminal = SimpleNamespace(_touched_items={}, write_artifact_reference=Mock(), notify=Mock(), write=Mock())
-    session = SimpleNamespace(agent=agent, registry=agent.registry)
+    session = SimpleNamespace(agent=agent, registry=agent.registry, extensions={})
     edits = UserEdits(session, TerminalEditor(terminal))
     path = tmp_path / "file.txt"
     edits.record(path, "@@ -1 +1 @@\n-old\n+user\n", "edit1")
@@ -152,7 +152,7 @@ async def test_cancelling_held_agent_does_not_wait_again_in_final_boundary(tmp_p
     client = StubClient([])
     agent = Agent(client, ToolRegistry(), "test/model")
     terminal = SimpleNamespace(_editor_active=True, notify=Mock())
-    session = SimpleNamespace(agent=agent, registry=agent.registry, reloader=None)
+    session = SimpleNamespace(agent=agent, registry=agent.registry, reloader=None, extensions={})
     edits = UserEdits(session, TerminalEditor(terminal))
     edits.released.clear()
     agent.on_boundary = edits.checkpoint

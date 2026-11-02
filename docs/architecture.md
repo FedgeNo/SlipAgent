@@ -54,7 +54,7 @@ A browser launched from the CLI attaches to this same initialized session.
 `application.application(session)` returns the one `SessionApplication` retained
 in session extensions. It owns run tasks, queued-input operations, graceful stop,
 immediate interruption, continuation policy, background work, and idempotent
-shutdown. CLI and future browser controls call these operations instead of
+shutdown. CLI and browser controls call these operations instead of
 creating another agent, registry, history, or tool implementation. `start`
 returns the owned task; `wait` shields it so cancellation of a detached UI waiter
 does not cancel agent work. Explicit `interrupt` cancels and drains owned work;
@@ -66,13 +66,15 @@ hashline editing, and skill selection. State-changing operations reject active
 agent work or another mutation, hold reload while awaiting filesystem work, and
 persist successful changes. Live title changes remain available while the agent
 runs. Selection menus and destructive-action confirmations belong to the frontend.
-The CLI's ordered slash-command queue still supplies prompt and menu barriers;
-both interfaces can use the shared `next_run` continuation decision.
+The CLI's ordered slash-command queue still supplies prompt and menu barriers.
+`submit` sets the shared `input_ready` event; an idle CLI driver wakes alongside
+its terminal reader and starts its existing request loop. Both input sources
+therefore use the same continuation, deferred-command and interruption policy.
 
 Application event subscriptions fan out the same `AgentEvent` objects without
 copying or retaining their payloads. State subscriptions receive small immutable
 `ApplicationState` records. Listeners must be synchronous, nonblocking, and treat
-events as read-only; browser transport will need its own bounded queue and paging.
+events as read-only; browser transport owns a bounded queue and history needs paging.
 Unsubscribe on detach. A failing listener is logged and detached without preventing
 delivery to another interface. Provider notices and retry callbacks use the same
 agent event channel, so they are not bound to terminal output.
@@ -83,10 +85,76 @@ the same open/close/notification interface while sharing the existing boundary
 hold, artifact publication, edit receipts, and cancellation cleanup. File saving
 and conflict checks remain in their existing file/editor owners.
 
-This separation adds no web server or GUI dependencies. Saved journals and history
-formats are unchanged. The session class layout and editor constructor changed;
-restart is required when updating from the preceding layout, then saved sessions
-can resume normally.
+`guieditor.GuiEditor` borrows this port for one authenticated browser tab. It uses
+`FileEditor` for paged snapshots, conflict checks and saves, and `UserEdits.record`
+for the existing durable edit receipts. Saving runs in owned cleanup so a lost
+HTTP waiter cannot leave a saved file without its receipt. Disconnecting the last
+connection for that tab closes its editor and releases the hold. Session changes
+reject held editors; model runs may start but wait at that same boundary.
+
+Saved journals and history formats are unchanged. Restart after installing new
+dependencies; existing saved sessions resume through the same journal owner.
+
+### Browser Host And Observer Transport
+
+`gui.start_gui` attaches one loopback FastAPI/Uvicorn host to the existing session.
+The registry owns its shutdown; the host borrows the application and never closes
+agent work on browser detach. Concurrent launch requests serialize and reuse the
+host. Uvicorn does not replace the CLI's process signal handlers. Dependencies
+and browser assets ship with the Python application; no Node server is required.
+HTTP routes retain their constructed callbacks until host shutdown, so changing
+route definitions requires restarting the CLI rather than refreshing the page.
+
+The printed link carries a random capability in its fragment. The browser removes
+the fragment and retains the capability in session storage for refreshes. HTTP
+APIs require bearer authentication; WebSockets authenticate in their first
+text frame within five seconds. Loopback Host validation and exact same-origin
+checks apply; proxy headers are disabled. Mutations additionally require the
+same Origin and current session ID. No CORS access or arbitrary static paths are
+exposed. Access logging is disabled, and responses use
+no-store, no-referrer and a restrictive content security policy.
+
+`guitransport.GuiTransport` emits schema-versioned records with a host epoch and
+monotonic sequence. Each connection begins with a fresh snapshot and `resync=true`;
+there is no replay buffer. The frontend reloads originals through paged APIs on
+reconnect. Context/request bodies, tool arguments and tool-result payloads are
+excluded from notifications, rather than copied into another history buffer.
+Event text is capped at 2,048 characters plus an ellipsis, with an explicit
+truncation flag; call IDs/names and result availability identify observations.
+
+At most eight WebSocket connections, including unauthenticated handshakes, are
+accepted. Each subscriber has a 128-record queue; overflow evicts the subscriber
+with code 1013 so it can reconnect to a snapshot. Sending is bounded by five
+seconds. Incoming messages are limited to 4 KiB, with protocol read backpressure
+and compression disabled. The feed virtualizes the entire message count but
+caches at most six 40-message pages; hierarchy collections return at most 100 rows.
+Subscriptions and sockets close through owned cancellation-safe cleanup without
+blocking event publication.
+
+`guibrowser.GuiBrowser` reads `resident_content` and `CompletedStep.parts(stream=True)`
+so archived fields remain file references. Original details stream in 16,384-character
+pages; feed previews use 4,096 characters. Neither reads the model's context view
+or replaces originals with summaries. Turn IDs use the existing one-based step
+index. Generic object/list children allow arbitrary drill-down depth; paths nested
+under the active saved-session object retain their parent relationship. Saved
+sessions use `SessionJournal.listing_page`, a bounded heap and keyset cursor over
+metadata; it never reads first-prompt bodies. Queued inputs expose small previews
+plus paged full-content objects. Retained outputs reuse `ArtifactStore.read_page`.
+
+Search scans original message sources in bounded worker calls (at most 4 MiB or 512
+messages), with continuation cursors and one located excerpt per matching message.
+It remains available while the agent runs. File browsing uses confined regular
+files and a bounded keyset directory page. Disk reads, catalog scans and editor
+work run outside the main event loop. `guiapi` validates structured actions and
+delegates effects to the application/session owners; no CLI command parsing or
+separate model/tool implementation is used.
+Control envelopes use camelCase wire fields, including sessionId and clientId.
+Original archived objects retain their own field names and values when inspected.
+
+The frontend lives in `frontend/` (Svelte 5, TypeScript, TanStack Virtual and Vite).
+Production index/app.js/app.css are bundled in `src/slipagent/web/`, with explicit
+host routes. Node is a build/test dependency only. The installer copies frontend
+sources while pruning node_modules and browser-test outputs before traversal.
 
 ## A Request Is the Model's Entire Memory
 

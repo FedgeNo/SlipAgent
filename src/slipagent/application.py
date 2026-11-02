@@ -115,6 +115,9 @@ class SessionApplication:
                 raise RuntimeError('The application session is changing or closed.')
         else:
             self.require_idle()
+            edits = self.session.registry.resources.user_edits
+            if edits is not None and not edits.released.is_set():
+                raise RuntimeError('Close the current editor before changing the session.')
         self.changing = True
         frame = self.session.reloader
         if frame is not None:
@@ -168,11 +171,20 @@ class SessionApplication:
     def submit(self, text: str) -> bool:
         if cancelled(text):
             return False
+        if self.session.extensions.get('application_closed'):
+            raise RuntimeError('The application session is closed.')
         self.session.agent.enqueue(text)
         if self.session.agent.stop_requested:
             self.session.work.resume_after_commands = True
+        self.input_ready.set()
         self.changed()
         return True
+
+    @property
+    def input_ready(self) -> asyncio.Event:
+        """Wake a frontend driver when another interface has accepted new input."""
+        event: asyncio.Event = self.session.extensions.setdefault('input_ready', asyncio.Event())
+        return event
 
     def queued_input(self) -> list[tuple[str, str]]:
         return input_queue(self.session.agent).snapshot()
@@ -362,6 +374,27 @@ class SessionApplication:
                 self.session.registry.services.pop('selected_skill', None)
             else:
                 self.session.registry.services['selected_skill'] = await run_blocking(select, self.session.workspace, selector)
+
+    async def select_model(self, selector: str) -> None:
+        from .config import ConfigError, save_model_choice
+        with self.change():
+            model = next((model for model in await self.session.catalog() if model.selector == selector), None)
+            if model is None:
+                raise ValueError('Choose an available provider and model.')
+            await self.session.select_model(model)
+            try:
+                await run_blocking(save_model_choice, model.id, model.provider)
+            except (OSError, ConfigError) as exc:
+                self.session.notice(f'Model selected, but its preference could not be saved: {exc}')
+
+    async def enable_optimal(self) -> None:
+        from .config import ConfigError, save_optimal_choice
+        with self.change():
+            await self.session.model_routing().enable()
+            try:
+                await run_blocking(save_optimal_choice, True)
+            except (OSError, ConfigError) as exc:
+                self.session.notice(f'Optimal selection enabled, but its preference could not be saved: {exc}')
 
     async def close(self) -> None:
         """Drain active operations before closing any services they borrow."""

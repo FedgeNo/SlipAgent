@@ -1,6 +1,6 @@
 # SlipAgent
 
-**A terminal coding agent designed for free models with large context windows on
+**A coding agent with terminal and browser interfaces, designed for free models with large context windows on
 [OpenRouter](https://openrouter.ai), [NVIDIA](https://build.nvidia.com), [Kilo](https://kilo.ai/gateway), [Mistral](https://console.mistral.ai), [Google Gemini](https://ai.google.dev), and [Groq](https://console.groq.com), with a harness you can modify while it runs.**
 
 SlipAgent gives a model tools to read, search, edit, test, and commit code in a
@@ -38,6 +38,10 @@ open a new terminal if it asks you to. Then, in your project directory:
 slipagent                          # interactive session
 slipagent "add tests for parser"   # run one task and exit
 ```
+
+`slipagent --gui` or `/gui` opens access to the visual browser workspace: live chat,
+hierarchical history and file browsing, editing and session controls, sharing the
+same agent. The [browser guide](docs/gui.md) covers navigation and SSH forwarding.
 
 The first launch without an API key asks for one, lists providers that offer
 free models, and offers to save it. You can add keys for more providers later

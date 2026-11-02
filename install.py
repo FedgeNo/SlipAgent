@@ -22,10 +22,10 @@ from pathlib import Path
 from collections.abc import Mapping
 
 
-SOURCE_DIRECTORIES = ("src", "docs", "scripts", "tests", "prompts", "benchmarks")
+SOURCE_DIRECTORIES = ("src", "docs", "scripts", "tests", "prompts", "benchmarks", "frontend")
 SOURCE_FILES = ("pyproject.toml", "README.md", "CONTRIBUTING.md", "AGENTS.md", "LICENSE", "install.py", ".gitignore", ".env.example", "logo.png")
 HASH_MANIFEST = "file-hashes.json"
-IGNORED_NAMES = (".git", ".venv", "venv", "__pycache__", "*.pyc", "*.pyo", "*.egg-info", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".env", ".env.*", ".mcp.json")
+IGNORED_NAMES = (".git", ".venv", "venv", "__pycache__", "*.pyc", "*.pyo", "*.egg-info", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".env", ".env.*", ".mcp.json", "node_modules", "test-results", "playwright-report")
 
 
 def source_hashes(source: Path) -> dict[str, str]:
@@ -35,7 +35,12 @@ def source_hashes(source: Path) -> dict[str, str]:
         if directory.is_symlink():
             candidates.append(directory)
         elif directory.is_dir():
-            candidates.extend(directory.rglob("*"))
+            for parent, directories, files in os.walk(directory):
+                # Dependency/build trees must be pruned before descent, not just unhashed.
+                directories[:] = [name for name in directories if not any(
+                    fnmatch.fnmatch(name, pattern) for pattern in IGNORED_NAMES)]
+                candidates.extend(Path(parent) / name for name in directories if (Path(parent) / name).is_symlink())
+                candidates.extend(Path(parent) / name for name in files)
     hashes = {}
     for path in candidates:
         relative = path.relative_to(source)

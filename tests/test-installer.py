@@ -108,7 +108,7 @@ def test_fresh_download_replaces_application_directories_and_preserves_git(monke
     monkeypatch.setattr(installer.shutil, "copytree", copytree)
     monkeypatch.setattr(installer.shutil, "copy2", copyfile)
     installer.copy_source(checkout, destination)
-    directories = ("src", "docs", "scripts", "tests", "prompts", "benchmarks")
+    directories = ("src", "docs", "scripts", "tests", "prompts", "benchmarks", "frontend")
     assert [call.args[0] for call in remove.call_args_list] == [destination / name for name in directories]
     assert [call.args[:2] for call in copytree.call_args_list] == [(checkout / name, destination / name) for name in directories]
     assert any(call.args == (checkout / "install.py", destination / "install.py") for call in copyfile.call_args_list)
@@ -135,6 +135,33 @@ def test_installer_preserves_and_tracks_application_logo(tmp_path):
     installer.copy_source(source, destination)
     assert (destination / "logo.png").read_bytes() == logo.read_bytes()
     assert "logo.png" in installer.source_hashes(destination)
+
+
+def test_installer_copies_gui_source_and_assets_without_frontend_dependencies(tmp_path, monkeypatch):
+    source = tmp_path / 'download'
+    for directory in ('frontend/src', 'frontend/node_modules/dependency', 'frontend/test-results', 'src/slipagent/web'):
+        (source / directory).mkdir(parents=True)
+    (source / 'frontend/src/App.svelte').write_text('<main>GUI source</main>')
+    (source / 'frontend/package.json').write_text('{}')
+    (source / 'frontend/node_modules/dependency/index.js').write_text('not installed application code')
+    (source / 'frontend/test-results/output.txt').write_text('local test output')
+    (source / 'src/slipagent/web/app.js').write_text('bundled GUI')
+    scanned = []
+    real_scandir = installer.os.scandir
+    def scandir(path):
+        scanned.append(str(path))
+        return real_scandir(path)
+    monkeypatch.setattr(installer.os, 'scandir', scandir)
+    hashes = installer.source_hashes(source)
+    assert 'frontend/src/App.svelte' in hashes and 'src/slipagent/web/app.js' in hashes
+    assert not any('node_modules' in path or 'test-results' in path for path in hashes)
+    assert not any('node_modules' in path or 'test-results' in path for path in scanned)
+    destination = tmp_path / 'installed'
+    installer.copy_source(source, destination)
+    assert (destination / 'frontend/src/App.svelte').read_text() == '<main>GUI source</main>'
+    assert (destination / 'src/slipagent/web/app.js').read_text() == 'bundled GUI'
+    assert not (destination / 'frontend/node_modules').exists()
+    assert not (destination / 'frontend/test-results').exists()
 
 
 def test_updater_detects_edits_to_visible_prompt_files(tmp_path):

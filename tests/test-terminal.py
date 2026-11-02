@@ -880,7 +880,7 @@ async def test_opening_another_touched_file_keeps_agent_held(display, tmp_path, 
     with create_pipe_input() as pipe:
         ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output, project_directory=tmp_path)
         agent = SimpleNamespace(running=True, history=SimpleNamespace(steps=[]), _persist=Mock())
-        session = SimpleNamespace(agent=agent, registry=ToolRegistry(), reloader=SimpleNamespace(busy=0))
+        session = SimpleNamespace(agent=agent, registry=ToolRegistry(), reloader=SimpleNamespace(busy=0), extensions={})
         edits = UserEdits(session, TerminalEditor(ui))
         ui.__dict__["_user_edits"] = edits
         await edits.request(first)
@@ -1010,7 +1010,7 @@ async def test_repeated_wrap_toggles_and_saves_preserve_long_lines_and_diff(
     registry = ToolRegistry()
     registry.services["artifact_store"] = store
     agent = SimpleNamespace(history=SimpleNamespace(steps=[]), _persist=Mock())
-    session = SimpleNamespace(agent=agent, registry=registry, reloader=None)
+    session = SimpleNamespace(agent=agent, registry=registry, reloader=None, extensions={})
     with create_pipe_input() as pipe:
         ui = TerminalUI(lambda width: "readout", sink, input=pipe, output=output, project_directory=tmp_path)
         ui.__dict__["_user_edits"] = UserEdits(session, TerminalEditor(ui))
@@ -1433,7 +1433,7 @@ async def test_pending_editor_notification_flashes_without_changing_status(displ
     sink, _, output, _, _ = display
     with create_pipe_input() as pipe:
         ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
-        session = SimpleNamespace(agent=SimpleNamespace(running=True), registry=ToolRegistry(), reloader=None)
+        session = SimpleNamespace(agent=SimpleNamespace(running=True), registry=ToolRegistry(), reloader=None, extensions={})
         edits = UserEdits(session, TerminalEditor(ui))
         ui.__dict__["_user_edits"] = edits
         opened = AsyncMock()
@@ -1476,7 +1476,7 @@ async def test_pending_editor_cancel_link_beside_notification_releases_hold(disp
     with create_pipe_input() as pipe:
         ui = TerminalUI(lambda width: "status", sink, input=pipe, output=output, project_directory=tmp_path)
         frame = SimpleNamespace(busy=0)
-        session = SimpleNamespace(agent=SimpleNamespace(running=True), registry=ToolRegistry(), reloader=frame)
+        session = SimpleNamespace(agent=SimpleNamespace(running=True), registry=ToolRegistry(), reloader=frame, extensions={})
         jobs = SimpleNamespace(stop_all=AsyncMock())
         session.registry.services["command_jobs"] = jobs
         edits = UserEdits(session, TerminalEditor(ui))

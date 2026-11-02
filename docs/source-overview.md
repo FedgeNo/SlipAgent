@@ -16,6 +16,12 @@ src/slipagent/
 ├── agent.py          model-step logic and harness system prompt
 ├── application.py    shared run ownership, session actions and interface subscriptions
 ├── sessionfactory.py frontend-independent engine/session construction
+├── gui.py            authenticated loopback browser host and lifecycle
+├── guitransport.py   bounded live notifications and snapshots
+├── guiapi.py         typed browser controls and paged endpoints
+├── guibrowser.py     original-history and reusable hierarchy browsing
+├── guieditor.py      browser port for shared edit-boundary/file owners
+├── web/              bundled Svelte browser application
 ├── sessionstate.py   shared provider and session state without terminal dependencies
 ├── batching.py       bounded read concurrency and ordered observations
 ├── lifecycle.py      stable cancellation-safe resource ownership

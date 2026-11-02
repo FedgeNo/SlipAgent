@@ -25,7 +25,7 @@ def setup_edits(tmp_path, responses, **options):
     client = StubClient(responses)
     agent = Agent(client, registry, "test", **options)
     terminal = SimpleNamespace(_touched_items={}, write_artifact_reference=Mock(), notify=Mock(), write=Mock())
-    edits = UserEdits(SimpleNamespace(agent=agent, registry=registry), TerminalEditor(terminal))
+    edits = UserEdits(SimpleNamespace(agent=agent, registry=registry, extensions={}), TerminalEditor(terminal))
     return agent, client, edits, store
 
 

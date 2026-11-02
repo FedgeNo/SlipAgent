@@ -26,7 +26,7 @@ def editor(agent):
         terminal._editor_active = True
         opened.set()
     terminal._open_editor_now = open_editor
-    session = SimpleNamespace(agent=agent, registry=agent.registry, reloader=None)
+    session = SimpleNamespace(agent=agent, registry=agent.registry, reloader=None, extensions={})
     edits = UserEdits(session, TerminalEditor(terminal))
     async def checkpoint():
         waiting.set()

@@ -32,7 +32,12 @@ class UserEdits(WorkCoordinator):
         self.pending: tuple[Path, int] | None = None
         self.opening = False
 
-    async def request(self, path: Path, line: int = 1) -> None:
+    async def request(self, path: Path, line: int = 1, *, editor: EditorClient | None = None) -> None:
+        if editor is not None and editor is not self.editor:
+            if self.pending is not None or self.opening or self.editor.active:
+                raise RuntimeError('Close the current editor before opening another one.')
+            self.session.extensions['user_edit_previous_editor'] = self.editor
+            self.editor = editor
         if self.pending is not None or self.opening:
             self.editor.notify("An editor request is already pending.")
             return
@@ -107,6 +112,9 @@ class UserEdits(WorkCoordinator):
         self.pending = None
         self._clear_opening_notification()
         self.release()
+        previous: EditorClient | None = self.session.extensions.pop('user_edit_previous_editor', None)
+        if previous is not None:
+            self.editor = previous
 
     def _clear_opening_notification(self) -> None:
         self.editor.clear_pending_notice()

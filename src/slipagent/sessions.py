@@ -487,6 +487,58 @@ class SessionJournal:
                                "title": f"Damaged session {path.stem}", "prompt": "", "damaged": str(exc)})
         return sorted(result, key=lambda item: modified.get(item["id"], 0), reverse=True)
 
+    def listing_page(self, cursor: str = '', limit: int = 100) -> dict[str, Any]:
+        """Keyset-page metadata without reading message bodies or retaining all rows."""
+        import heapq
+        import io
+        from .fileio import open_regular, read_regular
+
+        boundary = None
+        if cursor:
+            parsed = json.loads(cursor)
+            if (not isinstance(parsed, list) or len(parsed) != 2
+                    or type(parsed[0]) is not int or not isinstance(parsed[1], str)):
+                raise ValueError('Invalid session-list cursor.')
+            boundary = (parsed[0], parsed[1])
+        if not self.failed:
+            self._drain_records()
+        try:
+            with os.scandir(self.directory) as entries:
+                def candidates() -> Iterator[tuple[int, str]]:
+                    for entry in entries:
+                        if entry.name.endswith('.jsonl') and entry.is_file(follow_symlinks=False):
+                            key = (-entry.stat(follow_symlinks=False).st_mtime_ns, entry.name[:-6])
+                            if boundary is None or key > boundary:
+                                yield key
+                selected = heapq.nsmallest(limit + 1, candidates())
+        except OSError as exc:
+            raise SessionError(f'Cannot list saved session metadata: {exc}') from exc
+        items = []
+        for _, identifier in selected[:limit]:
+            path = self.directory / (identifier + '.jsonl')
+            try:
+                with io.TextIOWrapper(open_regular(path), encoding='utf-8') as source:
+                    header_text = source.readline(1024 * 1024 + 1)
+                if len(header_text) > 1024 * 1024:
+                    raise ValueError('Header exceeds the metadata preview limit; originals remain stored.')
+                header = json.loads(header_text)
+                if header.get('type') != 'header' or header.get('project') != self.project:
+                    raise ValueError('Invalid session header.')
+                created = header['created']
+                datetime.fromisoformat(created)
+                title = header.get('title', session_title(self.project))
+                try:
+                    title = json.loads(read_regular(self.directory / (identifier + '.title.json'), 1024 * 1024))['title']
+                except FileNotFoundError:
+                    pass
+                title = _validate_title(title)
+                items.append({'id': identifier, 'title': title[:512] + ('…' if len(title) > 512 else ''),
+                              'created': created, 'current': identifier == self.session_id})
+            except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+                items.append({'id': identifier, 'title': f'Session {identifier[:12]}', 'created': '',
+                              'current': identifier == self.session_id, 'error': str(exc)})
+        return {'items': items, 'nextCursor': json.dumps(selected[limit - 1]) if len(selected) > limit else None}
+
     def delete_current(self) -> None:
         """Remove the current journal and its sidecars after owners are drained."""
         if self.path is None:

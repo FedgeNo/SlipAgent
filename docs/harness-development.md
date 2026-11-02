@@ -42,6 +42,7 @@ selection belongs to `environment.py`.
 | Terminal input, scrolling, and rendering | `terminal.py`, `terminallayout.py`, `terminalbindings.py`, `terminalmouse.py`, `statusline.py`, `transcript.py`, renderer in `cli.py` |
 | Slash-command behavior | `commands.py`, CLI command dispatch |
 | Shared session construction, controls, and lifecycle | `sessionfactory.py`, `sessionstate.py`, `application.py`; terminal presentation stays in `cli.py` |
+| Browser application, live data and controls | `gui.py`, `guitransport.py`, `guiapi.py`, `guibrowser.py`, `guieditor.py`; `frontend/` source builds bundled assets in `web/`; see [browser guide](gui.md) |
 | Repository orientation | `repomap.py`, `symbols.py` |
 | Optional local semantic retrieval | `semantic/`, `tools/semantic.py`; see [its contracts](semantic-search.md) |
 | Session resources, cancellation, and live reload | `resources.py`, `lifecycle.py`, `runtime.py` |
@@ -169,6 +170,33 @@ Check both the file changes and resulting behavior. For bugs, first reproduce a
 meaningful failure, then verify the fix. For prompt changes, inspect what reaches
 the actual request, rather than relying only on terminal output or a preview.
 Keep examples aligned with the parser and report skipped checks plainly.
+
+## Browser Frontend Development
+
+The browser source lives in `frontend/`; its production assets are committed under
+`src/slipagent/web/`. End users run those assets through Python and need no Node
+installation. Frontend development requires Node 22.12+ and npm:
+
+```bash
+cd frontend
+npm ci
+npm run build
+npm test
+npx playwright install chromium
+npm run test:browser
+```
+
+The build includes Svelte/TypeScript checks and produces index.html, app.js,
+app.css and bundled dependency-license notices. Rebuild before browser tests and when changing source; refresh the page
+to load the new assets. Commit sources, lockfile and generated assets together.
+HTTP route callbacks are constructed when the host starts; restart the CLI after
+changing backend route definitions. A page refresh updates frontend assets only.
+Playwright uses the real CLI driver, an offline stub provider and disposable
+workspace/session data. It does not use a live coding session. Dependency trees
+and browser-test outputs are excluded from Git, installer traversal and copies.
+Keep focused Python tests for API, original-data paging, editor boundaries and
+session lifetime alongside browser interaction tests. Run the required complete
+Python suite when preparing a push.
 
 ## Release And Update Baselines
 

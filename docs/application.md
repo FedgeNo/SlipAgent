@@ -1,7 +1,7 @@
 # Shared Application Interface
 
-SlipAgent has one engine per session. The terminal and a future browser interface
-attach to that engine through `application.py`. No network server is included yet.
+SlipAgent has one engine per session. The terminal and browser interfaces
+attach to that engine through `application.py`; see the [browser guide](gui.md).
 The [architecture contract](architecture.md#shared-application-controls) defines
 ownership and frontend boundaries.
 
@@ -33,6 +33,9 @@ than detaching one interface.
 
 Input controls are `submit(text)`, `queued_input()`, and `discard_input(id)`.
 Queue IDs come from the existing input owner and remain shared across interfaces.
+`submit` signals `input_ready`, waking an idle frontend driver. The CLI waits on
+that event alongside terminal input and uses its existing `run_request` loop for
+both sources. A browser does not create a competing driver or agent task.
 `stop()` requests completion of the current step and tools. `next_run` decides
 whether queued work continues with the existing request limit or a fresh run.
 
@@ -41,6 +44,8 @@ Session actions take structured arguments: `reset()`, `new_task()`, `rename(titl
 `rename_saved(id, title)`, and `rewind(checkpoint_id)`. Planning, overthinking,
 path confinement, hashline editing, and skill selection have corresponding
 typed methods. Frontends present confirmations before destructive operations.
+`select_model(selector)` and `enable_optimal()` reuse provider verification and
+preference persistence. Session changes also reject an active user-edit hold.
 An operation requiring idle state raises `RuntimeError` if agent work, another
 mutation, or an interactive command owned by another task is active. The CLI
 already queues those actions using its existing ordered command mechanism.
@@ -71,4 +76,9 @@ Subscriptions deliver existing event objects synchronously without creating an
 output archive or replay buffer. Large tool results stay under their existing
 storage owners. Transport adapters must queue notifications without blocking the
 engine, bound their buffers, and request archived content on demand. Browser
-protocols, authentication, and reconnection are subsequent implementation stages.
+protocols must preserve these boundaries. Browser notifications provide
+authenticated connections and fresh snapshots on reconnect, without retaining a
+second event history. `guibrowser` retrieves full original records through bounded
+pages, independently of the context view prepared for the model. `guieditor`
+temporarily borrows the shared edit coordinator's port, restoring the terminal
+adapter when the browser editor closes.

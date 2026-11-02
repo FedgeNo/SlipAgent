@@ -33,7 +33,7 @@ async def test_picker_links_use_existing_view_and_edit_calls(display, tmp_path, 
     path.write_text('file contents')
     with create_pipe_input() as pipe:
         ui = TerminalUI(lambda width: 'status', sink, input=pipe, output=output, project_directory=tmp_path)
-        session = SimpleNamespace(agent=SimpleNamespace(running=True), reloader=None)
+        session = SimpleNamespace(agent=SimpleNamespace(running=True), reloader=None, extensions={})
         edits = UserEdits(session, TerminalEditor(ui))
         ui.__dict__['_user_edits'] = edits
         ui._open_editor_now = AsyncMock()

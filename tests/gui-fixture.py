@@ -23,6 +23,8 @@ async def main():
         project = root / 'project'
         (project / 'src' / 'nested').mkdir(parents=True)
         (project / 'src' / 'nested' / 'hello.py').write_text('print("hello browser")\n')
+        (project / 'component-with-a-long-descriptive-name-for-testing-wrapped-breadcrumbs' /
+         'averylongunbrokencomponentnameusedtoverifybreadcrumbtextwrappingwithoutclipping').mkdir(parents=True)
         (project / 'README.md').write_text('# A disposable browser fixture\n')
         package = project / '.slipagent/skills/browser-fixture'
         package.mkdir(parents=True)

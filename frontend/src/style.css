@@ -87,8 +87,8 @@ main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .InputQueuePanel button { padding: 0 6px; }
 .StreamPreview { max-height: 140px; padding: 12px 22px; overflow: auto; border-top: 1px solid #273240; color: #a6bbcc; }
 .StreamPreview small { display: block; margin-bottom: 6px; color: #d3bc93; }
-.BreadcrumbNavigation { display: flex; align-items: center; gap: 4px; overflow: auto; padding: 10px 12px; min-height: 47px; border-bottom: 1px solid #202b37; white-space: nowrap; }
-.BreadcrumbNavigation button { background: none; border-color: transparent; padding: 4px 5px; color: #a5bacb; font-size: 10px; }
+.BreadcrumbNavigation { display: flex; flex-wrap: wrap; flex-shrink: 0; align-items: center; gap: 4px; padding: 10px 12px; min-height: 47px; border-bottom: 1px solid #202b37; }
+.BreadcrumbNavigation button { max-width: 100%; min-width: 0; white-space: normal; overflow-wrap: anywhere; text-align: left; background: none; border-color: transparent; padding: 4px 5px; color: #a5bacb; font-size: 10px; }
 .BreadcrumbNavigation span { color: #52667b; }
 .HierarchyToolbar button { padding: 4px 8px; font-size: 15px; }
 .ListScroll { flex: 1; min-height: 100px; overflow: auto; overscroll-behavior: contain; }

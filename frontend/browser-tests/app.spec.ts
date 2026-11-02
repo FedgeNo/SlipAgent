@@ -160,3 +160,31 @@ test('streams reasoning and follows long previews while preserving manual scroll
     send('retry', 'Trying again');
     await expect(preview).toHaveCount(0);
 });
+
+test('wraps deep breadcrumbs and long labels within the hierarchy column', async ({page}) => {
+    await page.setViewportSize({width: 1100, height: 950});
+    await page.getByRole('button', {name: 'Files', exact: true}).click();
+    for (const label of ['component-with-a-long-descriptive-name-for-testing-wrapped-breadcrumbs',
+                         'averylongunbrokencomponentnameusedtoverifybreadcrumbtextwrappingwithoutclipping']) {
+        await page.locator('.HierarchyColumn .ObjectRow').filter({hasText: label}).dblclick();
+    }
+    const breadcrumbs = page.getByRole('navigation', {name: 'Hierarchy Path'});
+    await expect(breadcrumbs.getByRole('button')).toHaveCount(4);
+    const geometry = await breadcrumbs.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        return {width: element.clientWidth, scrollWidth: element.scrollWidth, height: box.height,
+            buttons: [...element.querySelectorAll('button')].map((button) => {
+                const child = button.getBoundingClientRect();
+                return {left: child.left - box.left, right: child.right - box.left,
+                    bottom: child.bottom - box.top, width: button.clientWidth, scrollWidth: button.scrollWidth};
+            })};
+    });
+    expect(geometry.height).toBeGreaterThan(47);
+    expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.width + 1);
+    for (const button of geometry.buttons) {
+        expect(button.left).toBeGreaterThanOrEqual(0);
+        expect(button.right).toBeLessThanOrEqual(geometry.width + 1);
+        expect(button.bottom).toBeLessThanOrEqual(geometry.height + 1);
+        expect(button.scrollWidth).toBeLessThanOrEqual(button.width + 1);
+    }
+});

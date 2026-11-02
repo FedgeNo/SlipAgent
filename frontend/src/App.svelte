@@ -30,7 +30,7 @@
     let runError = $state('');
     let notice = $state('');
     let prompt = $state('');
-    let promptInput = $state<HTMLTextAreaElement>();
+    let promptInput = $state<HTMLInputElement>();
     let promptReference = $state<HistoryReference>();
     let sending = $state(false);
     let actionBusy = $state(false);
@@ -251,9 +251,9 @@
                         <div class="ComposerFooter"><small>Search works while the agent runs · Esc returns to your prompt</small></div>
                     {:else}
                     {#if promptReference}<div class="HistoryContext"><span>About {promptReference.label}</span><button type="button" aria-label="Remove History Reference" onclick={() => promptReference = undefined}>×</button></div>{/if}
-                    <textarea aria-label="Prompt" placeholder={promptReference ? 'Ask about this history selection…' : 'Describe what you want to build…'} bind:this={promptInput} bind:value={prompt} rows="3"
-                        onkeydown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void submit(); } }}></textarea>
-                    <div class="ComposerFooter"><small>{sessionState?.running ? activity : connection === 'Connected' ? 'Enter to send · Shift+Enter for a new line' : connection}</small><div>
+                    <input type="text" aria-label="Prompt" placeholder={promptReference ? 'Ask about this history selection…' : 'Describe what you want to build…'} bind:this={promptInput} bind:value={prompt}
+                        onkeydown={(event) => { if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); void submit(); } }}/>
+                    <div class="ComposerFooter"><small>{sessionState?.running ? activity : connection === 'Connected' ? 'Enter to send' : connection}</small><div>
                         {#if sessionState?.running}<button type="button" class="TextButton" onclick={() => action('stop')}>Stop After Turn</button><button type="button" class="DangerButton" onclick={() => action('interrupt')}>Interrupt</button>{/if}
                         <button class="Primary" disabled={sending || !prompt.trim() || connection !== 'Connected'}>{sessionState?.running ? 'Queue ↗' : 'Send ↗'}</button>
                     </div></div>

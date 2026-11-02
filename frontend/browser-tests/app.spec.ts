@@ -42,9 +42,14 @@ test('browses original history and arbitrary file depths with Up and Back', asyn
 });
 
 test('submits through the shared CLI engine and remains bounded after refresh', async ({page}) => {
+    let submissions = 0;
+    page.on('request', (request) => {
+        if (request.url().endsWith('/api/actions') && request.postDataJSON()?.action === 'submit') submissions++;
+    });
     await page.getByRole('textbox', {name: 'Prompt', exact: true}).fill('A prompt sent from the GUI');
-    await page.getByRole('button', {name: 'Send ↗', exact: true}).click();
+    await page.getByRole('textbox', {name: 'Prompt', exact: true}).press('Enter');
     await expect(page.locator('.MessageCard').filter({hasText: 'The shared engine received your browser prompt.'})).toBeVisible({timeout: 20000});
+    expect(submissions).toBe(1);
     await expect(page.locator('.MessageCard').filter({hasText: 'The shared engine received your browser prompt.'}).locator('.ResponseSource')).toContainText('openrouter · stub/one');
     await page.reload();
     await expect(page.locator('.MessageCard').filter({hasText: 'The shared engine received your browser prompt.'})).toBeVisible();

@@ -51,7 +51,7 @@ the attachment and keeps your draft so it cannot target unrelated history.
 
 ## Work With The Agent
 
-Send a prompt with Enter; Shift+Enter inserts a newline. During a run, **Queue**
+The compact prompt input uses a single line; press Enter to send. During a run, **Queue**
 adds a correction to the existing input queue. **View Full Queue** opens the
 pending prompts as browsable objects. A queued prompt can be discarded before it
 is submitted. Browser and terminal input use the same turn driver.

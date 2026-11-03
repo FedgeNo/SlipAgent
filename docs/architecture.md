@@ -319,9 +319,9 @@ Context construction proceeds in this order:
    The input uses system instructions followed by explicitly labelled historical JSON and literal tool-result blocks, then the clearly labelled current request last in the same user message. The inspector
    displays the final body rather than reconstructing it separately.
 3. Economical older records precede the recent full window. Each retained step
-   occupies one object. Full records contain originals plus available compressed
-   analysis. Older records use a summary if its estimated cost is lower than
-   the original representation before adding analysis. The budget includes all
+   occupies one object. Full records contain originals without their step summary.
+   Over budget, older records use a summary if its estimated cost is lower than
+   the original representation. The budget includes all
    fields actually sent, presentation indentation, and message overhead. Selection
    uses an additive representation-size index, including excerpts, against the allowance.
    Both native-tool and embedded-tool profiles receive the same record format;
@@ -334,8 +334,7 @@ Context construction proceeds in this order:
    Every step is sent in full while the history fits the budget. Over budget,
    `ConversationHistory.view` applies reductions from the oldest end until the
    indexed size fits within the limit: step
-   summaries outside the newest five turns up to two thirds of the steps, then
-   each eligible narrative and era, then remaining summaries outside that window.
+   summaries outside the newest five turns, then each eligible narrative and era.
    It then exhausts older turns through excerpts and omission before reducing
    any newer turn. The newest five remain original when they fit after those
    older reductions. Within that window, summaries, excerpts, and omission
@@ -766,10 +765,11 @@ in working history and their important conclusions are preserved in summaries.
 Overthinking Mode supplies recent original or filtered reasoning to the working
 model. The compactor processes thoughts separately from its factual summary.
 
-Working history uses one JSON object per step. Full records include available
-`compressed_summary` analysis alongside their original fields; compressed-only
-records use the same key in place of those fields. Selection compares older base
-representations before adding analysis, then budgets every field actually sent.
+Working history uses one JSON object per step. Full records contain original
+fields without `compressed_summary`; compressed records supply that summary
+in place of those fields. Each request starts by budgeting originals, then
+substitutes smaller summaries oldest first until the request fits. Selection
+retains the same cached records that were measured for the outgoing request.
 Current-turn input and original archives are unchanged.
 
 The reduction pass also shortens oversized reasoning attached to compressed

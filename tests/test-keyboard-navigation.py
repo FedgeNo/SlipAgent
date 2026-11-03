@@ -50,6 +50,14 @@ def selected(ui):
     return ui.app.layout.current_control, ui.app.layout.current_control.__dict__.get("_keyboard_key")
 
 
+def selected_link_text(ui):
+    info = ui.app.layout.current_window.render_info
+    if info is None:
+        return ''
+    return ''.join(fragment[1] for row in sorted(set(info.displayed_lines))
+                   for fragment in info.ui_content.get_line(row) if 'class:keyboard-focus' in fragment[0].split())
+
+
 def click(ui, window, x=0, y=0):
     render(ui)
     position = ui.app.renderer._last_screen.visible_windows_to_write_positions[window]
@@ -461,7 +469,7 @@ async def test_menu_list_and_back_link_are_separate_keyboard_stops(ui):
     render(terminal)
     press(terminal, Keys.Down)
     assert terminal._menu_index == 1
-    reach(terminal, lambda: selected(terminal)[1] == "menu-back")
+    reach(terminal, lambda: selected_link_text(terminal) == "back")
     press(terminal, Keys.Enter)
     assert await asyncio.wait_for(task, 1) is None
 
@@ -480,7 +488,7 @@ async def test_reloaded_focus_owner_skips_draft_hidden_by_editor_menu(ui, tmp_pa
         render(terminal)
         assert terminal._focus is owner
         assert all(window.content is not terminal.input.control for window, _, _, _ in owner.stops())
-        reach(terminal, lambda: selected(terminal)[1] == "menu-back")
+        reach(terminal, lambda: selected_link_text(terminal) == "back")
         press(terminal, Keys.Escape)
         assert await asyncio.wait_for(task, 1) is None
     finally:

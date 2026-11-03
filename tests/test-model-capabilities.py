@@ -223,14 +223,15 @@ async def test_reasoning_uses_only_advertised_choices(parameters, efforts, expec
 async def test_format_and_context_use_only_compatible_endpoints():
     params = ["tools", "response_format", "reasoning"]
     model = {"id": "test/model", "context_length": 1000000, "supported_parameters": params}
+    # The narrow route must still fit the fixed harness instructions.
     endpoints = [endpoint(params, 1000000, "loose"),
                  endpoint([*params, "structured_outputs"], 128000, "strict"),
-                 endpoint([*params, "structured_outputs"], 16000, "offline", status=1)]
+                 endpoint([*params, "structured_outputs"], 32000, "offline", status=1)]
     requests, gets = [], []
     async with OpenRouterClient("test", transport=transport_for([model], {"test/model": endpoints}, requests, gets)) as client:
         agent = Agent(client, ToolRegistry(), "test/model")
         assert await agent.run("Do the task.") == "Done."
-        assert await agent._context_length() == 16000
+        assert await agent._context_length() == 32000
     assert requests[0]["response_format"]["type"] == "json_schema"
     assert requests[0]["provider"] == {"require_parameters": True, "only": ["strict", "offline"]}
 

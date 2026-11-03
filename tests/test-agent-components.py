@@ -13,7 +13,11 @@ from slipagent.tools.base import Tool, ToolRegistry, ToolResult, current_invocat
 from slipagent.types import Message, ToolCall
 
 
-async def test_context_preview_preserves_history_and_budget_owners():
+async def test_context_preview_preserves_history_and_budget_owners(monkeypatch):
+    from slipagent import contextbuilder
+
+    environment = contextbuilder.session_environment()
+    monkeypatch.setattr(contextbuilder, 'session_environment', lambda: dict(environment))
     history = ConversationHistory()
     budget = ContextBudget()
     messages = [Message.system("System guidance."), Message.user("Inspect the project.")]

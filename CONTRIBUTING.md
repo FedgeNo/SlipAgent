@@ -192,15 +192,13 @@ valid recovery using disposable package copies when modifying this machinery.
   state, use the selected project environment, and report skipped/failed checks
   to the model without implying that edits themselves failed.
 - Store the original prompt, reply, tool calls, and results as independently
-  retrievable parts. Recent steps include originals and available compressed
-  analysis in one record. Older steps use a whole-step summary when it costs
-  fewer tokens than the original representation; otherwise they include originals
-  and available analysis. Budget the combined record. Use the model allowance,
+  retrievable parts. Each selected step uses its originals or a smaller whole-step
+  summary, never both. Budget the exact selected representation and send that
+  same record. Use the model allowance,
   subject to an explicit `--context-tokens` cap. Send every step in full until the
   history exceeds the budget, then compress from the oldest end only as far as
-  needed outside the newest five turns: step summaries up to two thirds of the
-  steps, then 20-turn narratives, then 100-turn eras, then remaining older
-  summaries. Excerpt and remove older turns before reducing newer ones. Keep
+  needed outside the newest five turns: individual step summaries, then available
+  narratives and eras. Excerpt and remove older turns before reducing newer ones. Keep
   the newest five original when they fit; otherwise reduce those turns oldest
   first, preserving fitting newest tool results ahead of oversized optional prose.
   Preserve unseen tool results, using labelled excerpts when necessary. Start each

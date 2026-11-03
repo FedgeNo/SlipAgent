@@ -726,13 +726,10 @@ class ConversationHistory:
             edit_view, edits_omitted = bounded_notifications(user_edits, edit_budget,
                 lambda edits, omitted: tokens([Message.user(RenderedJSON({"user_edits": edits, "user_edits_omitted": omitted}))]))
             tail_bytes = input_bytes()
-        def context_part(index: int, *, compressed: bool = False,
-                         include_summary: bool = True) -> list[Message]:
+        def context_part(index: int, *, compressed: bool = False) -> list[Message]:
             step = self.steps[index]
             part = step.context_messages(compressed=compressed)
             part = [record_message({**part[0].content, "run": runs[index]})]
-            if not compressed and include_summary and step.summary is not None:
-                part = [record_message({**part[0].content, "compressed_summary": step.compressed_text()})]
             if overthinking and index >= len(self.steps) - reasoning_history_steps:
                 reasoning = (step._disk["parts"].get("reasoning") if isinstance(step, CompletedStep) and "_disk" in step.__dict__
                              else next((message.reasoning for message in step.messages if message.role == "assistant"), None))
@@ -768,7 +765,7 @@ class ConversationHistory:
         sizing = HistorySizeIndex(TokenEstimates().history_bytes)
         indexes: dict[int, HistorySizeIndex] = {}
 
-        def part_cost(index: int, form: tuple[bool, bool], part: list[Message]) -> HistorySize:
+        def part_cost(index: int, compressed: bool, part: list[Message]) -> HistorySize:
             step = self.steps[index]
             disk = step.__dict__.get("_disk") if isinstance(step, CompletedStep) else None
             attached = overthinking and index >= len(self.steps) - reasoning_history_steps
@@ -782,7 +779,7 @@ class ConversationHistory:
                     indexes[index] = HistorySizeIndex(TokenEstimates().history_bytes)
                     if disk is not None:
                         step.__dict__['_size_index'] = (disk, state, indexes[index])
-            key = (*form, runs[index], attached, filtered_thoughts, step.id <= self.compact_through)
+            key = (compressed, runs[index], attached, filtered_thoughts, step.id <= self.compact_through)
             return indexes[index].get(key, part[0].content)
 
         def narrative_cost(record: dict[str, Any], cache: str = "_narrative_size") -> HistorySize:
@@ -801,16 +798,18 @@ class ConversationHistory:
         def supplied(index: int, compressed: bool) -> tuple[list[Message], HistorySize]:
             key = (index, compressed)
             if key not in parts:
-                include_summary = not (compressed and self.steps[index].id <= self.compact_through)
-                original = context_part(index, include_summary=include_summary)
-                chosen, cost = original, part_cost(index, (False, include_summary), original)
+                if compressed:
+                    original, original_cost = supplied(index, False)
+                else:
+                    original = context_part(index)
+                    original_cost = part_cost(index, False, original)
+                chosen, cost = original, original_cost
                 # An unavailable summary is not memory. Retain the original
                 # rather than replacing evidence with a failure notice.
                 if compressed and self.steps[index].summary is not None:
                     compact = context_part(index, compressed=True)
-                    compact_cost = part_cost(index, (True, True), compact)
-                    raw = context_part(index, include_summary=False)
-                    if sizing.record_bytes(compact_cost) < sizing.record_bytes(part_cost(index, (False, False), raw)):
+                    compact_cost = part_cost(index, True, compact)
+                    if sizing.record_bytes(compact_cost) < sizing.record_bytes(original_cost):
                         chosen, cost = compact, compact_cost
                 parts[key], costs[key] = chosen, cost
             return parts[key], costs[key]
@@ -931,7 +930,7 @@ class ConversationHistory:
             # Reduce the selected form: compressed records can still carry
             # oversized reasoning. Unseen observations keep their original form.
             original = (supplied(index, True)[0] if level[index] == STEP else
-                        context_part(index, include_summary=False))[0].content
+                        supplied(index, False)[0])[0].content
             target = max(0, sizing.record_bytes(unit_costs[index]) - max(1, total_bytes() - available))
             def measure(record: dict[str, Any]) -> int:
                 return sizing.record_bytes(sizing.measure_record(record))
@@ -956,18 +955,14 @@ class ConversationHistory:
             return True
 
         async def reductions() -> AsyncIterator[None]:
-            cap = min(2 * count // 3, recent_start)
-            for index in range(cap):
+            for index in range(recent_start):
                 if summarize_step(index):
                     yield
             for record in historical_records(self.steps):
-                if merge_into(record, NARRATIVE, "_narrative_size", cap):
+                if merge_into(record, NARRATIVE, "_narrative_size", recent_start):
                     yield
             for record in era_records(self.steps):
-                if merge_into(record, ERA, "_era_size", cap):
-                    yield
-            for index in range(cap, recent_start):
-                if summarize_step(index):
+                if merge_into(record, ERA, "_era_size", recent_start):
                     yield
             # Exhaust each older turn before touching a newer one. The newest
             # five stay original until reductions outside that window cannot fit.

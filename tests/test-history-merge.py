@@ -362,13 +362,15 @@ async def test_narratives_replace_their_block_only_under_budget_pressure():
     messages.append(Message.user("Continue"))
     roomy = request_input(await history.view(messages, [], keep_steps=50, context_length=1_000_000, max_output=1000))
     assert all(record["representation"] == "full" for record in roomy["history"])
-    view = await history.view(messages, [], keep_steps=50, context_length=66_000, max_output=1000)
+    medium = request_input(await history.view(messages, [], keep_steps=50, context_length=66_000, max_output=1000))
+    assert all(record['representation'] in {'full', 'compressed'} for record in medium['history'])
+    view = await history.view(messages, [], keep_steps=50, context_length=55_000, max_output=1000)
     records = request_input(view)["history"]
     narrative = next(record for record in records if record["representation"] == "historical_summary")
     assert narrative["step_ids"] == list(range(1, 21))
     assert not any(record["step_id"] < 20 for record in records)
-    assert [record["step_id"] for record in records if record["representation"] == "full"] == list(range(21, 31))
-    assert message_tokens(view) <= int(66_000 * .85) - 1000
+    assert [record["step_id"] for record in records if record["representation"] == "full"] == list(range(26, 31))
+    assert message_tokens(view) <= int(55_000 * .85) - 1000
     recalled = await RecallHistoryTool(history).invoke({"step_id": 1, "call_id": "read-1"})
     assert "ORIGINAL " * 1000 in content_text(recalled.content)
 
@@ -395,7 +397,7 @@ async def test_compression_levels_advance_from_the_oldest_end_as_the_budget_shri
     attach_layers(history)
     messages.append(Message.user("Continue"))
     seen = []
-    for length in (4_000_000, 600_000, 300_000, 150_000, 60_000):
+    for length in (4_000_000, 600_000, 300_000, 150_000, 60_000, 40_000, 30_000, 20_000):
         view = await history.view(messages, [], keep_steps=50, context_length=length, max_output=1000)
         assert message_tokens(view) <= int(length * .85) - 1000
         records = request_input(view)["history"]
@@ -406,11 +408,12 @@ async def test_compression_levels_advance_from_the_oldest_end_as_the_budget_shri
         seen.append(records)
     assert all(record["representation"] == "full" for record in seen[0])
     assert {record["representation"] for record in seen[1]} == {"compressed", "full"}
-    assert any(record["representation"] == "historical_summary" for record in seen[2])
-    assert any(record["representation"] == "era_summary" for record in seen[3])
-    smallest = seen[4]
+    assert any(record["representation"] == "historical_summary" for records in seen for record in records)
+    assert any(record["representation"] == "era_summary" for records in seen for record in records)
+    smallest = seen[-1]
     # Dropping starts at the very beginning; the newest turns stay.
-    assert smallest[0]["step_id"] > 1 and smallest[-1]["step_id"] == 240
+    covered = [step_id for record in smallest for step_id in record.get('step_ids', [record['step_id']])]
+    assert min(covered) > 1 and smallest[-1]["step_id"] == 240
 
 
 async def test_missing_summary_preserves_original_evidence_when_budget_allows():

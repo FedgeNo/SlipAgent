@@ -44,10 +44,10 @@ async def test_old_tool_summary_is_sent_once_at_its_own_post():
     messages = []
     for index in range(7):
         messages.extend([Message.user("request"), Message.assistant("response", [ToolCall(str(index), "tool", {})]),
-                         Message.tool_result(str(index), "original")])
+                             Message.tool_result(str(index), "original " * 3000)])
         history.sync(messages)
         history.steps[-1].summary = f"RESULT SUMMARY {index}"
-    view = await history.view(messages, [], keep_steps=1, context_length=100_000, max_output=1000)
+    view = await history.view(messages, [], keep_steps=1, context_length=70_000, max_output=1000)
     wire = "\n".join(content_text(m.content) for m in view)
     assert wire.count("RESULT SUMMARY 0") == 1
     assert wire.count("RESULT SUMMARY 1") == 1

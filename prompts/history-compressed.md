@@ -1,4 +1,4 @@
-A full record may also carry `compressed_summary`, the harness summary of the same step. These are two views of one event; prefer original evidence if they conflict. `representation="compressed"` supplies the summary instead of originals.
+`representation="compressed"` supplies `compressed_summary`, the harness summary replacing that step's original prompt, reply, calls and results. Full records supply those originals without appending the step summary. Each selected representation replaces the other; they are not duplicate events.
 
 Summary labels distinguish `User request`, tool-backed `Observations`, unverified `Agent claims`, and intended `Plans`; filtered reasoning may label `Thoughts` and `Plans`. These labels organize memory; older summaries may lack them.
 

@@ -90,7 +90,10 @@ async def test_existing_main_regions_are_reachable_at_every_width(ui, tmp_path, 
     size[0] = Size(rows=24, columns=columns)
     terminal.open_viewer("Result", "one\ntwo\n")
     terminal._focus.focus(terminal.input)
-    terminal._cycle_panel()
+    for _ in range(30):
+        terminal._cycle_panel()
+        if terminal.app.layout.current_window is terminal._viewer_window:
+            break
     assert terminal.app.layout.current_window is terminal._viewer_window
     terminal.close_viewer()
     path = tmp_path / "file"

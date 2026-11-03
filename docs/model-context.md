@@ -347,10 +347,9 @@ Older steps use their whole-step summary only when its
 estimated token cost is smaller than the original; otherwise they retain their
 full prompt, response, tool calls, and results. The comparison includes JSON fields,
 escaped content, and message overhead. Ties retain originals.
-Each full step also includes its available `compressed_summary` in the same JSON
-object, alongside the original fields. Compressed-only records use that same key.
-Both originals and their accompanying analysis count toward the context budget;
-the representation comparison above uses the original before adding its summary.
+Each step supplies originals or its `compressed_summary`, never both. The
+selector starts with originals and budgets exactly the records that it sends.
+Background summary completion does not enlarge a fitting full record.
 
 Each background compression attempt has a 20-minute timeout instead of the normal 10-minute HTTP timeout. Single-turn and multi-turn compression keep retrying rate limits, transient provider errors, and transport failures until recovery or cancellation. They share the working request retry schedule, then continue with waits of up to 60 seconds, honoring longer provider `Retry-After` cooldowns. Every retry selects the next available provider. Invalid replies and permanent failures use a bounded retry budget, expanded when needed to try the ranked candidates. Retry waits and additional attempts can extend the job beyond 20 minutes. Exhaustion preserves original steps for `recall_history`. Working requests retain their configured timeout and retry limit; reset and shutdown cancel pending summaries.
 
@@ -369,17 +368,19 @@ from the bytes of each record and scaled by measured calibration.
 When the full history does not fit, SlipAgent compresses **from the oldest end,
 only as far as needed**, and stops as soon as the request fits:
 
-1. Individual steps are replaced by their summaries, oldest first, until up to
-   **two thirds** of the steps are summarized. A step whose summary is missing or
+1. Individual steps outside the **latest five** are replaced by their summaries,
+   oldest first. A step whose summary is missing or
    no smaller keeps its original.
 2. Each narrative block that lies wholly in the summarized part is replaced by
    its **narrative**, oldest first. A block follows runs: it closes at the end of
    a run once it holds **10 steps**, and a longer run is cut every **20 steps**.
 3. Each **five consecutive narratives** are replaced by their **era**, oldest first.
-4. Steps in the newest third are summarized, oldest first. The latest tool
-   results the model has not seen stay full.
-5. Only then is history omitted, starting at the very beginning of the
-   conversation.
+4. If still over budget, older records are excerpted and then omitted, oldest
+   first, before reducing newer records. The newest five can use smaller summaries
+   and excerpts only after older optional history is exhausted.
+5. Required unseen tool results and the latest required step remain represented;
+   they can be excerpted last but cannot be omitted. Once the selection fits,
+   omitted records are restored newest first when space allows.
 
 Selection starts fresh on every request. Steps after any manual boundary return
 to full text whenever room allows, for example after a large result has moved

@@ -154,7 +154,7 @@ async def test_history_within_budget_stays_full_at_any_length(total):
     for step_id in range(1, total + 1):
         assert f"FULL_QUESTION_{step_id:03d}" in wire
         assert f"FULL_ANSWER_{step_id:03d}" in wire
-        assert f"STORED_SUMMARY_{step_id:03d}" in wire
+        assert f"STORED_SUMMARY_{step_id:03d}" not in wire
     assert not any(record["representation"] == "compressed" for record in context_records(view))
     assert len(history.steps) == total
     original = await RecallHistoryTool(history).invoke({"step_id": 1})
@@ -175,8 +175,9 @@ async def test_background_summary_contains_tool_findings_and_user_prompt():
     add_intermediate_posts(agent)
     await agent.run("next")
     archived = context_records(client.calls[2]["messages"])[0]
-    assert "User: read file" in archived["compressed_summary"]
-    assert "EXACT TOOL RESULT" in archived["compressed_summary"]
+    assert 'compressed_summary' not in archived
+    assert "User: read file" in agent.history.steps[0].summary
+    assert "EXACT TOOL RESULT" in agent.history.steps[0].summary
     assert agent.history.steps[0].results_summarized
     full = await agent.registry.invoke("recall_history", {"step_id": 1})
     assert "EXACT TOOL RESULT" in content_text(full.content)
@@ -251,7 +252,7 @@ async def test_small_model_does_not_arbitrarily_halve_the_recent_budget():
     view = await history.view(messages, [], keep_steps=50,
                               context_length=262144, max_output=8192)
     assert any(context_body(message.content) == answer for message in unpack_context(view))
-    assert context_records(view)[0]['compressed_summary'] == 'Short stored summary.'
+    assert 'compressed_summary' not in context_records(view)[0]
 
 
 async def test_older_window_uses_original_when_summary_is_larger():
@@ -268,10 +269,10 @@ async def test_older_window_uses_original_when_summary_is_larger():
     view = await history.view(messages, [], keep_steps=5,
                               context_length=1000000, max_output=8192)
     wire = "\n".join(content_text(message.content) for message in view)
-    assert "Short exact answer." in wire and "Latest answer compressed." in wire
-    assert context_records(view)[0]['compressed_summary'] == history.steps[0].summary
+    assert "Short exact answer." in wire and "Latest exact answer." in wire
+    assert 'compressed_summary' not in context_records(view)[0]
     assert "LARGE SECOND ANSWER" not in wire and "Second answer compressed." in wire
-    assert 'Latest answer compressed.' in wire
+    assert 'Latest answer compressed.' not in wire
     assert [context_body(message.content) for message in unpack_context(view) if message.role == "user"] == [
         "first request", "third request", "current request",  # continuation steps repeat no prompt
     ]
@@ -359,8 +360,8 @@ async def test_only_the_oldest_posts_needed_to_fit_are_summarized():
         "middle question", "latest question", "next question",
     ]
     assert history.steps[0].summary in wire
-    assert context_records(view)[1]['compressed_summary'] == history.steps[1].summary
-    assert context_records(view)[2]['compressed_summary'] == history.steps[2].summary
+    assert 'compressed_summary' not in context_records(view)[1]
+    assert 'compressed_summary' not in context_records(view)[2]
 
 
 async def test_missing_archived_summary_preserves_original_without_a_repair_call():
@@ -461,7 +462,9 @@ async def test_background_summaries_have_separate_requests_and_accounting():
     assert len(client.calls) == 2
     await agent.run("third question")
     assert len(client.calls) == 3
-    assert agent.history.steps[0].summary == context_records(client.calls[2]["messages"])[0]["compressed_summary"]
+    assert agent.history.steps[0].summary is not None
+    record = context_records(client.calls[2]["messages"])[0]
+    assert record['agent_response'] == original and 'compressed_summary' not in record
     assert len(client.summary_calls) == 3
     assert agent.usage.total_tokens == 45
     assert agent.total_cost == pytest.approx(.03)
@@ -794,7 +797,7 @@ async def test_stored_summaries_over_budget_preserve_originals_without_extra_cal
                               context_length=14000, max_output=1000, summarize=unused)
     wire = "\n".join(content_text(message.content) for message in view)
     assert history.steps[0].summary not in wire
-    assert context_records(view)[-2]['compressed_summary'] == history.steps[-1].summary
+    assert 'compressed_summary' not in context_records(view)[-2]
     assert message_tokens(view) <= int(14000 * .85) - 1000
     # Old history gives way before the most recent fitting response.
     assert any(context_body(message.content) == "answer 19 " * 300 for message in unpack_context(view))

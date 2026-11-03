@@ -241,7 +241,7 @@ async def test_oversized_recent_step_displaces_older_history_before_it_is_excerp
     assert [step.full_text() for step in history.steps] == originals
 
 
-async def test_ready_summary_joins_original_in_one_record_without_rewriting_history():
+async def test_ready_summary_does_not_change_a_fitting_original_record():
     history = ConversationHistory()
     messages = [Message.user('Inspect'), Message.assistant('Reading', [ToolCall('r', 'read_file', {'path': 'a.py'})]),
                 Message.tool_result('r', 'EXACT ORIGINAL'), Message.user('Continue')]
@@ -253,14 +253,14 @@ async def test_ready_summary_joins_original_in_one_record_without_rewriting_hist
     ready = await history.view(messages, [], **options)
     records = context_records(ready)
     assert len(records) == 2
-    assert records[0] == {**context_records(pending)[0], 'compressed_summary': history.steps[0].summary}
+    assert records[0] == context_records(pending)[0]
     assert records[1]['record_type'] == 'current_step'
     assert 'compressed_summary' not in records[1]
-    assert message_tokens(ready) > message_tokens(pending)
+    assert message_tokens(ready) == message_tokens(pending)
     assert history.steps[0].full_text() == original
 
 
-async def test_combined_history_is_budgeted_and_does_not_duplicate_steps():
+async def test_selected_history_is_budgeted_and_does_not_duplicate_steps():
     history, messages = conversation(['Original ' * 400 for _ in range(12)])
     for step in history.steps:
         step.summary = 'Observations: ' + 'Analysis ' * 500
@@ -273,8 +273,7 @@ async def test_combined_history_is_budgeted_and_does_not_duplicate_steps():
     assert any(record['representation'] == 'full' for record in records)
     for record in records:
         if record['representation'] == 'full':
-            if 'compressed_summary' in record:
-                assert record['compressed_summary'] == history.steps[record['step_id'] - 1].summary
+            assert 'compressed_summary' not in record
             assert record['agent_response'] == 'Original ' * 400
     assert message_tokens(view) <= int(20000 * .85) - 1000
     assert len(history.steps) == 12
@@ -287,6 +286,35 @@ async def test_history_that_fits_is_never_summarized():
                               context_length=1_000_000, max_output=8192)
     supplied = [context_body(message.content) for message in unpack_context(view) if message.role == "assistant"]
     assert supplied == answers
+    assert all('compressed_summary' not in record for record in context_records(view)
+               if record['record_type'] == 'history_step')
+
+
+@pytest.mark.parametrize('archived', [False, True])
+@pytest.mark.parametrize('native', [False, True])
+async def test_unused_large_summaries_do_not_consume_the_original_history_budget(tmp_path, archived, native):
+    from data_text_reader import request_input
+    from slipagent.turnstore import TurnStore
+
+    answers = [f'EXACT ORIGINAL {index}' for index in range(8)]
+    history, messages = conversation(answers)
+    for step in history.steps:
+        step.summary = 'UNUSED SUMMARY ' * 10000
+    store = TurnStore(tmp_path / 'turns')
+    try:
+        if archived:
+            for step in history.steps:
+                store.archive(step, messages)
+        view = await history.view(messages, [], keep_steps=5, context_length=16000,
+                                  max_output=1000, native_tools=native, text_tool_history=not native)
+        records = request_input(view)['history']
+        assert [record['agent_response'] for record in records] == answers
+        assert all(record['representation'] == 'full' and 'compressed_summary' not in record for record in records)
+        assert 'UNUSED SUMMARY' not in content_text(view[-1].content)
+        assert message_tokens(view) <= int(16000 * .85) - 1000
+        assert all(step.summary == 'UNUSED SUMMARY ' * 10000 for step in history.steps)
+    finally:
+        store.close()
 
 
 async def test_over_budget_summarizes_only_the_oldest_steps_needed():
@@ -301,6 +329,39 @@ async def test_over_budget_summarizes_only_the_oldest_steps_needed():
     assert 0 < len(summarized) <= 3
     assert supplied == [f"SUMMARY {index}" for index in range(1, len(summarized) + 1)] + answers[len(summarized):]
     assert message_tokens(view) <= int(length * .85) - 1000
+
+
+@pytest.mark.parametrize('archived', [False, True])
+@pytest.mark.parametrize('native', [False, True])
+async def test_budget_selection_sends_exactly_one_oldest_summary(tmp_path, archived, native):
+    from data_text_reader import request_input
+    from slipagent.turnstore import TurnStore
+
+    answers = [f'ORIGINAL ANSWER {index} ' * 3000 for index in range(8)]
+    history, messages = conversation(answers)
+    store = TurnStore(tmp_path / 'turns')
+    try:
+        if archived:
+            for step in history.steps:
+                store.archive(step, messages)
+        options = dict(keep_steps=5, max_output=1000, native_tools=native, text_tool_history=not native)
+        full = await history.view(messages, [], context_length=1_000_000, **options)
+        first = history.steps[0]
+        saving = message_tokens(first.context_messages()) - message_tokens(first.context_messages(compressed=True))
+        length = int((message_tokens(full) - saving // 2 + 1000) / .85)
+        view = await history.view(messages, [], context_length=length, **options)
+        records = request_input([message.to_api() for message in view])['history']
+        assert [record['representation'] for record in records] == ['compressed', *['full'] * 7]
+        assert records[0]['compressed_summary'] == 'SUMMARY 1'
+        assert 'agent_response' not in records[0]
+        assert [record['agent_response'] for record in records[1:]] == answers[1:]
+        assert all('compressed_summary' not in record for record in records[1:])
+        assert message_tokens(view) <= int(length * .85) - 1000
+        expanded = await history.view(messages, [], context_length=1_000_000, **options)
+        assert all(record['representation'] == 'full' and 'compressed_summary' not in record
+                   for record in request_input([message.to_api() for message in expanded])['history'])
+    finally:
+        store.close()
 
 
 @pytest.mark.parametrize("native_tools", [False, True])
@@ -320,7 +381,7 @@ async def test_larger_summary_falls_back_to_original_roles_and_tool_pairing(nati
     assert [message.role for message in restored[1:4]] == ["user", "assistant", "tool"]
     assert restored[2].tool_calls == messages[1].tool_calls
     assert restored[3].tool_call_id == "read" and context_body(restored[3].content) == "EXACT TOOL RESULT"
-    assert context_records(view)[0]['compressed_summary'] == history.steps[0].summary
+    assert 'compressed_summary' not in context_records(view)[0]
     assert [step.full_text() for step in history.steps] == originals
 
 
@@ -392,7 +453,7 @@ async def test_equal_cost_summary_keeps_the_original(token_scale):
     view = await history.view(messages, [], keep_steps=5, context_length=1_000_000,
                               max_output=8192, token_scale=token_scale)
     assert context_records(view)[0]["agent_response"] == "ORIGINAL " * 100
-    assert context_records(view)[0]['compressed_summary'] == step.summary
+    assert 'compressed_summary' not in context_records(view)[0]
 
 
 async def test_mixed_older_originals_and_summaries_keep_chronological_order():
@@ -404,7 +465,7 @@ async def test_mixed_older_originals_and_summaries_keep_chronological_order():
     # The larger summary keeps step 2's original; step 3 stays full once step 1 fits.
     assert wire.index("SUMMARY 1") < wire.index("Second original") < wire.index("THIRD ") < wire.index("Recent 2")
     assert "FIRST " not in wire
-    assert context_records(view)[1]['compressed_summary'] == history.steps[1].summary
+    assert 'compressed_summary' not in context_records(view)[1]
     assert [context_body(message.content) for message in unpack_context(view) if message.role == "user"] == [
         *[f"Question {index}" for index in range(2, 9)], "Current question",
     ]

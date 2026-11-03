@@ -15,6 +15,30 @@ from slipagent.types import Message
 Router = import_module("test-native-tools").Router
 
 
+@pytest.mark.parametrize('native', [False, True])
+async def test_provider_receives_originals_without_unselected_summaries(native, free_compaction):
+    from data_text_reader import request_input
+
+    parameters = ['max_tokens', *(['tools'] if native else ['response_format'])]
+    reply = {'role': 'assistant', 'content': json.dumps({'response': 'Done', 'tool_calls': []})}
+    router = Router({'test/model': parameters}, [reply])
+    async with OpenRouterClient('test', transport=httpx.MockTransport(router.handle)) as client:
+        agent = Agent(client, ToolRegistry(), 'test/model', context_tokens=20000, max_tokens=1000)
+        free_compaction(agent, client)
+        answers = [f'EXACT ANSWER {index}' for index in range(8)]
+        agent.extend([message for index, answer in enumerate(answers)
+                      for message in (Message.user(f'Question {index}'), Message.assistant(answer))])
+        for step in agent.history.steps:
+            step.summary = 'UNSELECTED SUMMARY ' * 300
+        assert await agent.run('Current request') == 'Done'
+        records = request_input(router.requests[0]['messages'])['history']
+        assert len(router.requests) == 1
+        assert [record['agent_response'] for record in records] == answers
+        assert all(record['representation'] == 'full' and 'compressed_summary' not in record for record in records)
+        assert 'UNSELECTED SUMMARY' not in json.dumps(router.requests[0])
+        await agent.registry.aclose()
+
+
 def test_calibration_averages_recent_measurements_and_metadata_refresh_invalidates_it():
     budget, profile = ContextBudget(), object()
     request = json.dumps({"messages": [{"role": "user", "content": "hello"}]})

@@ -90,10 +90,13 @@ async def test_archived_index_tracks_updated_representation(tmp_path, change):
             history.store.refresh_input(step)
         second = await history.view(messages, [], keep_steps=5, context_length=30000, max_output=512)
         assert first[-1].to_api()['content'] == first_wire
-        assert second[-1].to_api()['content'] != first_wire
+        if change == 'summary':
+            assert second[-1].to_api()['content'] == first_wire
+        else:
+            assert second[-1].to_api()['content'] != first_wire
         record = read_json_input(second[-1].to_api()['content'])['history'][0]
         snapshot = json.loads((history.store.directory / '00000001.sizes.json').read_text())
-        entry = next(entry for entry in snapshot['representations'] if entry['form'][:2] == [False, True])
+        entry = next(entry for entry in snapshot['representations'] if entry['form'][0] is False)
         from slipagent.historyindex import number_bytes
         predicted = entry['content_bytes'] + snapshot['join_bytes'] + 2 * number_bytes(entry['blocks'])
         raw = second[-1].content.data['history'][0]

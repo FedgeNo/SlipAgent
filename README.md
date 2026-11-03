@@ -165,3 +165,9 @@ imports so a candidate generation stays coherent. Add behavior tests, run the
 suite and strict mypy, and test reload behavior against temporary source copies.
 Most changes can be developed and applied in the same live session. Changes to
 the stable frame or shared contracts need a deliberate restart.
+
+## License
+
+MIT, see [LICENSE](LICENSE). Bundled third-party components keep their own licenses:
+see `src/slipagent/semantic/model/bge-small-en-v1.5/LICENSE` and
+`src/slipagent/web/third-party-notices.md`.

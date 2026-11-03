@@ -775,8 +775,11 @@ Current-turn input and original archives are unchanged.
 The reduction pass also shortens oversized reasoning attached to compressed
 records and raw failed-response excerpts. Compressed records retain their summary
 and mark shortened fields with `excerpted_fields` and original retrieval paths.
-These fields must not force recovery to discard fitting history around an unseen
-tool batch after repeated provider failures.
+One selection pass owns all representations and accounting, including excerpts
+of required unseen observations and the latest failed attempt. Required records
+cannot be dropped, but do not block reductions of later optional records.
+Once the selection fits, omitted records are restored newest first when space
+allows. There is no separate reduced-history recovery return path.
 
 `CompletedStep` extends `HistoryStep` with independent `user_prompt`, `agent_response`,
 `reasoning`, `tool_calls`, and `tool_results` references, plus whole-step `summary`

@@ -759,7 +759,9 @@ class ConversationHistory:
                 batch = self.steps[previous]
                 if batch.has_results and not (batch.observed if isinstance(batch, CompletedStep) else batch.results_summarized):
                     unseen_results = previous
-        required_start = unseen_results if unseen_results is not None else len(self.steps) - int(required_last)
+        required = {len(self.steps) - 1} if required_last else set()
+        if unseen_results is not None:
+            required.add(unseen_results)
         from .historymerge import era_records, historical_records
         parts: dict[tuple[int, bool], list[Message]] = {}
         costs: dict[tuple[int, bool], HistorySize] = {}
@@ -890,9 +892,8 @@ class ConversationHistory:
             record_costs[id(record)] = cost
             return True
 
-        def drop_oldest() -> bool:
-            index = next((index for index in range(count) if level[index] != DROPPED), None)
-            if index is None or index >= required_start or index == unseen_results:
+        def drop_step(index: int) -> bool:
+            if index in required or level[index] == DROPPED:
                 return False
             if level[index] in (NARRATIVE, ERA):
                 record = unit_records[index]
@@ -906,6 +907,20 @@ class ConversationHistory:
             change_cost([cost], [])
             for member in members:
                 level[member] = DROPPED
+            return True
+
+        def excerpt_required(index: int) -> bool:
+            target = max(0, sizing.record_bytes(unit_costs[index]) - max(1, total_bytes() - available))
+            part = self.steps[index].excerpt_context_messages(max(0, target // 3 - 32))
+            if part is None:
+                return False
+            record = {**part[0].content, "run": runs[index]}
+            cost = sizing.measure_record(record)
+            if sizing.record_bytes(cost) >= sizing.record_bytes(unit_costs[index]):
+                return False
+            change_cost([unit_costs[index]], [cost])
+            level[index], unit_costs[index] = PARTIAL, cost
+            partials[index] = [record_message(record)]
             return True
 
         async def excerpt_step(index: int, *, results_only: bool) -> bool:
@@ -957,15 +972,31 @@ class ConversationHistory:
             # Exhaust each older turn before touching a newer one. The newest
             # five stay original until reductions outside that window cannot fit.
             for index in range(count):
-                if level[index] == DROPPED:
+                if level[index] == DROPPED or index in required:
                     continue
                 if index >= recent_start and summarize_step(index):
                     yield
                 for results_only in (True, False):
                     if await excerpt_step(index, results_only=results_only):
                         yield
-                if drop_oldest():
+                if drop_step(index):
                     yield
+            # Required observations and the latest failure share the same
+            # selection and backfill accounting; they can shrink but cannot drop.
+            changed = True
+            while changed:
+                changed = False
+                for index in sorted(required):
+                    if summarize_step(index):
+                        changed = True
+                        yield
+                    for results_only in (True, False):
+                        if await excerpt_step(index, results_only=results_only):
+                            changed = True
+                            yield
+                    if excerpt_required(index):
+                        changed = True
+                        yield
 
         def selection() -> list[Message]:
             entries: list[tuple[int, list[Message]]] = []
@@ -1007,32 +1038,6 @@ class ConversationHistory:
         async for _ in reductions():
             if total_bytes() <= available:
                 return backfill()
-        if required_last:
-            failure_context: list[Message] = []
-            excerpt_index = len(self.steps) - 1
-            if unseen_results is not None:
-                # A failed response cannot acknowledge the preceding batch.
-                # Keep that batch and the latest failure even at tiny budgets.
-                failure_context = self.steps[-1].context_messages()
-                record = dict(failure_context[0].content)
-                record["request_failure"] = {key: value for key, value in record["request_failure"].items()
-                                             if key != "response_excerpt"}
-                failure_context = [record_message(record)]
-                excerpt_index = unseen_results
-            failure_sizes = [sizing.measure_record(message.content) for message in failure_context]
-            failure_bytes = sizing.total_bytes(sum(cost.content_bytes for cost in failure_sizes),
-                                               sum(cost.blocks for cost in failure_sizes), len(failure_sizes))
-            excerpt_budget = available - tail_bytes - failure_bytes
-            while excerpt_budget > 0:
-                excerpt = self.steps[excerpt_index].excerpt_context_messages(max(0, excerpt_budget // 3 - 32))
-                if excerpt is None:
-                    break
-                sizes = [sizing.measure_record(message.content) for message in excerpt] + failure_sizes
-                cost = tail_bytes + sizing.total_bytes(sum(item.content_bytes for item in sizes),
-                                                       sum(item.blocks for item in sizes), len(sizes))
-                if cost <= available:
-                    return finish(excerpt + failure_context)
-                excerpt_budget -= max(1, cost - available)
         raise ContextError("Current input and latest tool results exceed the context budget even without older history; originals and summaries are preserved.")
 
 

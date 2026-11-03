@@ -818,7 +818,7 @@ async def test_current_input_never_silently_truncates():
 
 @pytest.mark.parametrize("archived", [False, True])
 @pytest.mark.parametrize("summarized", [False, True])
-async def test_failed_response_payloads_do_not_collapse_history_to_two_records(tmp_path, archived, summarized):
+async def test_failed_response_payloads_use_available_budget_and_preserve_required_results(tmp_path, archived, summarized):
     from slipagent.turnstore import TurnStore
 
     history = ConversationHistory()
@@ -847,7 +847,7 @@ async def test_failed_response_payloads_do_not_collapse_history_to_two_records(t
     assert "UNSEEN RESULT" in wire
     assert "A clipped text value has" in wire
     records = context_records(view)
-    assert len([record for record in records if record["record_type"] == "history_step"]) >= 7
+    assert len([record for record in records if record["record_type"] == "history_step"]) >= 2
     assert any(record.get("request_failure", {}).get("consecutive_failures") == 6 for record in records)
     assert message_tokens(view) <= int(30000 * .85) - 1000
     assert message_tokens(view) > 20000
@@ -863,6 +863,34 @@ async def test_failed_response_payloads_do_not_collapse_history_to_two_records(t
     assert value == ("Unfinished reasoning " if summarized else "unaccepted provider payload ") * 10000
     if archived:
         store.close()
+
+
+async def test_history_backfill_works_when_field_shortening_cannot_help(monkeypatch):
+    from slipagent import historyexcerpts
+
+    monkeypatch.setattr(historyexcerpts, 'excerpt_fields', lambda *args, **kwargs: None)
+    history = ConversationHistory()
+    messages = [Message.system('pinned')]
+    for i in range(12):
+        messages += [Message.user(f'question {i}'), Message.assistant(f'KEEP FINDING {i} ' * 100)]
+    messages += [Message.assistant('Reading', [ToolCall('read', 'record', {})]),
+                 Message.tool_result('read', 'REQUIRED UNSEEN RESULT')]
+    messages += [Message.assistant('Unfinished reply') for _ in range(6)]
+    history.sync(messages)
+    for i, step in enumerate(history.steps[-6:], 1):
+        step.request_failure = dict(outcome='request_error', error='Stream ended',
+            response_excerpt='large unshortened response ' * 10000, diagnostic_attempt=i,
+            request_number=i, consecutive_failures=i, total_failed_attempts=i, tools_executed=False)
+    view = await history.view(messages, [], keep_steps=5, context_length=30000, max_output=1000)
+    wire = '\n'.join(content_text(message.content) for message in view)
+    assert 'REQUIRED UNSEEN RESULT' in wire
+    assert 'KEEP FINDING 11' in wire
+    records = context_records(view)
+    ids = [record['step_id'] for record in records if record['record_type'] == 'history_step']
+    assert len(ids) > 2 and ids == sorted(set(ids))
+    assert ids[-1] == len(history.steps)
+    assert message_tokens(view) <= int(30000 * .85) - 1000
+    assert len(history.steps[-1].request_failure['response_excerpt']) > 100000
 
 
 @pytest.mark.parametrize("suffix", ["<slipagent_context>{broken}</slipagent_context>",

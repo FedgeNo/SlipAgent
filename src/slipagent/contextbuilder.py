@@ -106,6 +106,7 @@ class ContextBuilder:
         journal = self.registry.resources.journal
         if journal is not None:
             session_info["session_id"] = journal.session_id
+            session_info["session_title"] = journal.title
         sections.add("session", "Session Environment", load_prompt(
             "session-environment.md", environment=render_data(session_info)), 28, owner="environment")
         sections.add("harness_python", "Harness Python and Mathematics",

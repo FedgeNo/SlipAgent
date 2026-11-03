@@ -60,6 +60,7 @@ async def test_untitled_session_takes_the_model_title_and_stops_asking(tmp_path)
     assert await agent.run("Thanks.") == "Done."
     await agent.wait_for_compaction()
     assert ASKS_FOR_TITLE not in prompts[1]
+    assert "Model Title | SlipAgent" in prompts[1]
     assert sum(event.kind == "session_title" for event in events) == 1
 
 
@@ -71,4 +72,9 @@ async def test_a_name_the_user_chose_is_never_replaced(tmp_path):
     await agent.wait_for_compaction()
     assert journal.title == "Mine | SlipAgent"
     assert ASKS_FOR_TITLE not in prompts[0]
+    assert "Mine | SlipAgent" in prompts[0]
     assert not any(event.kind == "session_title" for event in events)
+    journal.rename("Renamed")
+    assert await agent.run("Continue.") == "Done."
+    await agent.wait_for_compaction()
+    assert "Renamed | SlipAgent" in prompts[1]

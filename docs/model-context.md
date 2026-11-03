@@ -481,6 +481,14 @@ The terminal transcript continues to show the full conversation.
 Token counts use a UTF-8 size estimate rather than a model-specific tokenizer.
 Reported prompt usage calibrates that estimate using the average measured-to-estimated ratio from the latest five working requests, plus a 10% safety margin. The multiplier can rise or fall as measurements change; the configured context and output limits remain unchanged. Calibration resets when the model or endpoint
 profile changes; background-summary usage does not calibrate working context.
+Context readouts receive `context_usage` events whose JSON text contains the
+request's `model`, `provider`, `tokens`, and `estimated` flag. In-flight counts
+use the same calibration as budgeting; completed counts use that individual
+provider request's reported prompt usage. Step/session totals must not replace
+request usage. A readout must match the active model and provider and mark
+estimates explicitly. Raw UTF-8 estimates are not model-token counts and must
+not be compared directly with the model's token window. Counts are not clamped
+to the limit, so a genuine overrun remains visible for diagnosis.
 Explicit provider context overflow triggers up to two retries with smaller
 history budgets, counted against the step limit. An identical, unshrinkable
 request is not resent. Originals remain available throughout.

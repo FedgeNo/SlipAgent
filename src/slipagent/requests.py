@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -140,6 +141,12 @@ class RequestDriver:
                 run_step += 1
                 step_usage = Usage()
                 start_next_step = True
+            def report_context_usage(tokens: int, *, estimated: bool) -> None:
+                self.hooks.emit(AgentEvent(kind='context_usage', step=step, text=json.dumps({
+                    'model': self.settings.model, 'provider': getattr(self.client, 'provider', ''),
+                    'tokens': tokens, 'estimated': estimated,
+                })))
+
             async def request_sent(request: Any) -> None:
                 nonlocal request_estimate, diagnostic_id, provider, first_output, preparation
                 timings.finish(preparation)
@@ -161,6 +168,7 @@ class RequestDriver:
                 if instructions is not None:
                     instructions.presented(self.registry.services.get("instruction_snapshot", {}))
                 self.hooks.emit(AgentEvent(kind="context", step=step, request_body=request))
+                report_context_usage(math.ceil(request_estimate * self.budget.scale), estimated=True)
                 provider = timings.start('provider_response', step)
                 first_output = timings.start('provider_first_output', step)
             def delta(kind: str, chunk: str) -> None:
@@ -317,6 +325,8 @@ class RequestDriver:
                 raise
             attempts += 1
             self.budget.observe_estimate(request_estimate, completion.usage.prompt_tokens)
+            if completion.usage.prompt_tokens > 0:
+                report_context_usage(completion.usage.prompt_tokens, estimated=False)
             self.hooks.account(completion.usage)
             self.hooks.persist()
             step_usage = step_usage + completion.usage

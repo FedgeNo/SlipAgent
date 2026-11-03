@@ -9,6 +9,7 @@ from .types import ToolCall, Usage
 
 EventKind = Literal[
     "context",
+    "context_usage",
     "phase",
     "step_start",
     "assistant_text",

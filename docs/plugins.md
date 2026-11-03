@@ -214,6 +214,13 @@ attribute it reads is renamed.
 
 ## Commands
 
+Context-usage plugins should consume `context_usage` events. Their JSON text
+contains `model`, `provider`, `tokens` and `estimated`. Request-body `estimate`
+is uncalibrated, while `step_end.usage` can aggregate several requests; neither
+is the displayed size of the latest provider request. Hide stale observations
+when the active model or provider changes, and distinguish estimates from actual
+prompt usage. This event carries counts only, without request contents.
+
 | Command | Use |
 | --- | --- |
 | `/plugins` | List plugins and override states, then approve overrides or resolve conflicts |

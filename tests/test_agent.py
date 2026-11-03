@@ -662,7 +662,9 @@ async def test_events_cover_the_full_cycle() -> None:
     await agent.run("go")
     kinds = [event.kind for event in events]
 
-    assert kinds[0] == "step_start"
+    assert kinds[0] == 'phase' and events[0].text == 'Starting up…'
+    assert next(kind for kind in kinds if kind != 'phase') == 'step_start'
+    assert events[-1].kind == 'phase' and events[-1].text == ''
     assert "tool_start" in kinds
     assert "tool_end" in kinds
     assert kinds.count("step_end") == 2

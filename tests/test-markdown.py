@@ -74,17 +74,20 @@ def test_entire_heading_is_bold_in_answers_and_reasoning(renderer_type, heading)
 
 
 @pytest.mark.parametrize("theme", THEMES)
-def test_syntax_roles_and_background_follow_theme(theme):
-    renderer = MarkdownRenderer(theme)
+@pytest.mark.parametrize("renderer_type", [MarkdownRenderer, ReasoningMarkdownRenderer])
+def test_syntax_roles_and_background_follow_theme(theme, renderer_type):
+    renderer = renderer_type(theme)
     source = '```python\nreturn "hi" + 42\n```'
     rows = renderer.render(source, 80)
     assert visible(rows)[0].strip() == 'return "hi" + 42'
     assert "python" not in "".join(visible(rows))
-    if theme == "monochrome":
+    if theme == "monochrome" and renderer_type is MarkdownRenderer:
         assert all("#" not in style and "bg:" not in style for style, _ in rows[0].fragments)
-    else:
+    elif renderer_type is MarkdownRenderer:
         assert any(THEMES[theme]["keyword"] in style for style, _ in rows[0].fragments)
-        assert all("bg:" + THEMES[theme]["code-bg"] in style for style, _ in rows[0].fragments)
+    if theme != 'monochrome' or renderer_type is ReasoningMarkdownRenderer:
+        background = next(part for part in renderer.style('inline').split() if part.startswith('bg:'))
+        assert all(background in style.split() for row in rows for style, text in row.fragments if text)
 
 
 def test_links_tables_and_literal_controls():

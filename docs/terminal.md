@@ -191,6 +191,10 @@ your draft and prompt history. Scrolling back pauses automatic scrolling until y
 return to the bottom. The CWD is the workspace where tools run; long paths
 and model names shorten to fit narrow terminals.
 
+Code blocks share the background color of inline backtick code. Response code
+uses the selected theme; reasoning code uses the same neutral grey background
+for both forms.
+
 Click the workspace path at the bottom left to open it with the folder opener
 selected in Options, or the system default when no custom opener is configured.
 Linux delegates to `xdg-open` or `gio open` without requiring display environment

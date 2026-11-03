@@ -35,14 +35,14 @@ THEMES: dict[str, dict[str, str]] = {
     },
     "light": {
         "body": "#404040", "heading": "#101010", "code": "#005f73",
-        "code-bg": "#edf0f4", "inline-bg": "#dce8ec", "link": "#204db5",
+        "code-bg": "#dce8ec", "inline-bg": "#dce8ec", "link": "#204db5",
         "quote": "#7030a0", "marker": "#306c35", "keyword": "#7030a0",
         "string": "#266b31", "number": "#934900", "comment": "#596373",
         "name": "#005f73", "operator": "#a12648", "syntax": "#282828",
     },
     "ironbow": {
         "body": "#e6e6e6", "heading": "#ffffff", "code": "#ffd166",
-        "code-bg": "#22162e", "inline-bg": "#38223d", "link": "#c5adff",
+        "code-bg": "#38223d", "inline-bg": "#38223d", "link": "#c5adff",
         "quote": "#f5a6d8", "marker": "#ffb86b", "keyword": "#df9aff",
         "string": "#ffd166", "number": "#ffb86b", "comment": "#b5a5bc",
         "name": "#ff99c8", "operator": "#ff8e80", "syntax": "#fff0cf",
@@ -55,6 +55,7 @@ CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 WHITESPACE_RUNS = re.compile(r"(\s+)")
 PLAIN_TEXT = re.compile(r"[\n -~]*")
 CODE_LINES = re.compile(r"(\n)")
+CODE_ROLES = {"code", "syntax", "keyword", "string", "number", "comment", "name", "operator"}
 
 
 def literal(text: str) -> str:
@@ -103,7 +104,7 @@ class MarkdownRenderer:
         parts = list(attributes)
         if role in colors:
             parts.append(colors[role])
-        if role in {"code", "syntax", "keyword", "string", "number", "comment", "name", "operator"} and "code-bg" in colors:
+        if role in CODE_ROLES and "code-bg" in colors:
             parts.append("bg:" + colors["code-bg"])
         if role == "inline" and "code" in colors:
             parts.extend([colors["code"], "bg:" + colors["inline-bg"]])
@@ -436,7 +437,7 @@ class ReasoningMarkdownRenderer(MarkdownRenderer):
         parts = list(attributes)
         if self.color:
             parts.append(THOUGHT_COLOR)
-            if role == "inline":
+            if role == "inline" or role in CODE_ROLES:
                 parts.append("bg:" + THOUGHT_CODE_BACKGROUND_COLOR)
         return " ".join(parts)
 

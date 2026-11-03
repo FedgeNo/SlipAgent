@@ -506,10 +506,14 @@ Selection preflight publishes neither the model nor its profile on failure.
 `modelscores.py` stores calibrated text-coding scores; `ModelInfo.score` exposes
 the same model/version estimate across providers. Higher scores sort first,
 after free/paid grouping, with provider/model IDs breaking ties. Zero is a valid
-score; `None` indicates missing evidence. Catalog discovery announces newly
-encountered unscored free models once, asking the user to update SlipAgent.
-Reviewed evidence gaps and generic routers remain manual choices without a
-new-release notice. Cached catalogs refresh known scores from the curated table
+score; `None` indicates missing evidence. `modelscores.UNKNOWN_MODEL_SCORE`
+sets the routing priority for unscored free models to 95.7, above Gemini 3.8
+Flash at 95.6. `modelpricing.selection_score` applies that preference to catalog
+ordering and both routing purposes without changing `ModelInfo.score`.
+Catalog discovery announces newly encountered unscored free models once and
+identifies their default priority. Reviewed evidence gaps use the same priority
+without a new-release notice; generic routers remain manual choices.
+Cached catalogs refresh known scores from the curated table
 on each access, so compatible table edits apply without a catalog request.
 The offline maintenance script uses saved benchmark calibration; runtime code
 loads only final scores and exact aliases. See [model scoring](model-scores.md).
@@ -527,8 +531,9 @@ CLI startup enables optimal mode unless `--model` or `--provider` explicitly
 selects manual mode. Fetch candidate catalogs alongside the other startup
 services, then preflight selection after MCP, environment, and history restore
 finish. Startup failure closes any provider client selected during this phase.
-Automatic eligibility requires a configured key, verified free pricing/tier,
-and a known score. Billed Google accounts are excluded. `/model optimal` and
+Automatic eligibility requires a configured key and verified free pricing/tier;
+unscored models use the unknown priority. Generic routers and billed Google
+accounts are excluded. `/model optimal` and
 `/model reset` clear all exclusions and preflight candidates by descending score;
 manual selection disables working fallback until `/model optimal` is used again. This mode and
 failure state are process-local; automatic selection does not save the model, but whether optimal is on is a remembered preference.

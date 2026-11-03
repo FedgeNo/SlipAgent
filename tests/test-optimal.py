@@ -34,6 +34,28 @@ def test_score_metadata_is_shared_across_hosts_and_unknowns_stay_unscored():
     assert ModelInfo("gemini-3.8-flash", provider="google").score == ModelInfo("google/gemini-3.8-flash").score
 
 
+@pytest.mark.parametrize('purpose', ['working', 'compression'])
+async def test_unknown_free_models_are_candidates_above_gemini(optimal_session, purpose):
+    session, _, _ = optimal_session
+    free = {'prompt': '0', 'completion': '0'}
+    unknown = ModelInfo('stealth/crouton-alpha', pricing=free)
+    session._catalog = [ModelInfo('google/gemini-3.8-flash', pricing=free), unknown,
+                        ModelInfo('openrouter/free', pricing=free), entry('openrouter', 'paid', 0, free=False),
+                        ModelInfo('paid-unknown', pricing={'prompt': '1', 'completion': '1'}),
+                        ModelInfo('zero', score=0.0, pricing=free)]
+    routing = session.model_routing()
+    try:
+        assert [model.id for model in await routing.candidates(purpose)] == [
+            'stealth/crouton-alpha', 'google/gemini-3.8-flash', 'zero']
+        await routing.enable()
+        assert session.agent.model == unknown.id
+        assert 'benchmark unknown' in session.renderer.stream.getvalue()
+        assert unknown.score is None
+    finally:
+        await session.agent._compactor().aclose()
+        await session.client.aclose()
+
+
 @pytest.mark.parametrize("model", ["stepfun-ai/step-5-preview", "z-ai/glm-5.3-flash"])
 async def test_optimal_selects_ranked_nvidia_catalog_models_through_preflight(tmp_path, monkeypatch, model):
     monkeypatch.delenv("OPENROUTER_API_KEY")
@@ -336,14 +358,14 @@ async def test_optimal_command_at_tool_boundary_keeps_task_running(optimal_sessi
 
 async def test_all_failed_routes_stay_stopped_until_reset(optimal_session):
     session, responses, requests = optimal_session
-    responses.extend([400, 400, {"content": "Reset worked."}])
+    responses.extend([400, 400, 400, {"content": "Reset worked."}])
     try:
         await session.model_routing().enable()
         with pytest.raises(APIConfigError, match="exhausted"):
             await session.agent.run("Work")
         with pytest.raises(APIConfigError, match="exhausted"):
             await session.agent.run("Try the available models")
-        assert [r["model"] for r in requests] == ["first", "second"]
+        assert [r["model"] for r in requests] == ["first", "second", "unknown"]
         await session.model_routing().enable()
         assert await session.agent.run("Retry from the top") == "Reset worked."
         assert requests[-1]["model"] == "first"

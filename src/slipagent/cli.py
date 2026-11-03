@@ -49,7 +49,7 @@ from .api import (
 )
 from .providers import PROVIDERS, active_providers, provider_class, fetch_catalog, key_provider
 from .model_catalog import coding_models
-from .modelpricing import free_label, model_order, price_label
+from .modelpricing import free_label, model_order, price_label, score_label
 from .tools.base import ToolRegistry, ToolResult
 from .tools.discovery import UNAVAILABLE_BATCH
 from .tools.editing import edit_result_line
@@ -2686,7 +2686,7 @@ class ModelPicker:
         session = self.session
         terminal = session.renderer.terminal
         columns = terminal.output.get_size().columns if terminal is not None else shutil.get_terminal_size((80, 24)).columns
-        rows = [[f"{model.provider}::\n{model.id}" + (f"\nEst. coding score: {model.score:.1f}/100" if model.score is not None else ""),
+        rows = [[f"{model.provider}::\n{model.id}" + (f"\nEst. coding score: {model.score:.1f}/100" if model.score is not None else f"\n{score_label(model)}"),
                  f"{model.context_length:,}" if model.context_length else "-", _price_cell(model.pricing)] for model in models]
         headers = ["Model", "Context", "In/Out $/Mtok"]
         if not any(row[2] for row in rows):
@@ -2718,7 +2718,7 @@ class ModelPicker:
             price += "/Mtok"
         price = f"  {price}" if price else ""
         context = f"{model.context_length:,}" if model.context_length else "unknown"
-        score = f"  estimated coding score: {model.score:.1f}/100" if model.score is not None else ""
+        score = '  ' + score_label(model)
         return f"{model.selector}{name}{price}  context: {context}{score}"
 
     def describe(self, model: ModelInfo) -> str:

@@ -6,6 +6,7 @@ import math
 from typing import Any
 
 from .types import ModelInfo
+from .modelscores import MODEL_ROUTERS, UNKNOWN_MODEL_SCORE
 
 
 def free_label(pricing: dict[str, Any]) -> str | None:
@@ -33,6 +34,23 @@ def price_label(pricing: dict[str, Any]) -> str:
     return f"${prompt:.2f}/${completion:.2f}"
 
 
+def selection_score(model: ModelInfo) -> float:
+    """Use a routing preference for unscored free models without changing evidence."""
+    if model.score is not None:
+        return model.score
+    if free_label(model.pricing) is not None and model.id not in MODEL_ROUTERS:
+        return UNKNOWN_MODEL_SCORE
+    return -math.inf
+
+
+def score_label(model: ModelInfo) -> str:
+    if model.score is not None:
+        return f'estimated coding score: {model.score:.1f}/100'
+    priority = selection_score(model)
+    if math.isfinite(priority):
+        return f'benchmark unknown; routing priority: {priority:.1f}/100'
+    return 'benchmark unknown'
+
+
 def model_order(model: ModelInfo) -> tuple[bool, float, str, str]:
-    return (free_label(model.pricing) is None,
-            -model.score if model.score is not None else math.inf, model.provider, model.id)
+    return (free_label(model.pricing) is None, -selection_score(model), model.provider, model.id)

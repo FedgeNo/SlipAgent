@@ -88,10 +88,22 @@ def test_model_display_uses_estimated_score_and_sorts_highest_first():
     low = ModelInfo("low", score=0.0, pricing=free)
     unknown = ModelInfo("unknown", pricing=free)
     paid = ModelInfo("paid", score=100.0, pricing={"prompt": "1", "completion": "1"})
-    assert sorted([paid, low, unknown, high], key=model_order) == [high, low, unknown, paid]
+    assert sorted([paid, low, unknown, high], key=model_order) == [unknown, high, low, paid]
     assert "estimated coding score: 90.5/100" in ModelPicker(None, Style(False), io.StringIO()).label(high)
     assert "estimated coding score: 0.0/100" in ModelPicker(None, Style(False), io.StringIO()).label(low)
-    assert "score:" not in ModelPicker(None, Style(False), io.StringIO()).label(unknown)
+    assert 'benchmark unknown' in ModelPicker(None, Style(False), io.StringIO()).label(unknown)
+
+
+def test_unknown_free_models_rank_above_gemini_without_inventing_benchmarks():
+    from slipagent.modelpricing import model_order
+    free = {'prompt': '0', 'completion': '0'}
+    models = [ModelInfo(name, pricing=free) for name in (
+        'google/gemini-3.8-flash', 'stealth/crouton-alpha', 'minimax/minimax-m3.1-flash',
+        'deepseek/deepseek-v4.1-flash', 'openrouter/free')]
+    assert [model.id for model in sorted(models, key=model_order)] == [
+        'minimax/minimax-m3.1-flash', 'deepseek/deepseek-v4.1-flash',
+        'stealth/crouton-alpha', 'google/gemini-3.8-flash', 'openrouter/free']
+    assert models[1].score is None
 
 
 @pytest.mark.parametrize("model, native, limit, output", [

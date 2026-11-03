@@ -6,6 +6,10 @@ for benchmark calibration, validation, and uncertainty.
 
 from __future__ import annotations
 
+# Routing preference for missing benchmarks, just above Gemini 3.8 Flash (95.6).
+# This is not a measured or calibrated coding score.
+UNKNOWN_MODEL_SCORE = 95.7
+
 # Adding a model never renumbers existing models. Keep unavailable IDs so their
 # scores apply if a provider lists them again. None records a reviewed gap.
 SCORES: dict[str, float | None] = {

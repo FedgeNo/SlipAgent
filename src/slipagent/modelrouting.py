@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING
 
 from .api import APIError, APIConfigError, APIConnectionError, APIResponseError, APITransportError, RETRYABLE_STATUS
 from .context import ContextError
-from .modelpricing import free_label, model_order
-from .modelscores import MODEL_ROUTERS, reviewed_model
+from .modelpricing import free_label, model_order, score_label
+from .modelscores import MODEL_ROUTERS, UNKNOWN_MODEL_SCORE, reviewed_model
 from .providers import provider_class
 from .types import ModelInfo
 
@@ -93,7 +93,8 @@ class ModelRouting:
         if new:
             self.notified.update(new)
             self.notice("New free models have been released: " + ", ".join(sorted(new))
-                        + ". Update SlipAgent for updated coding scores.")
+                        + f". Benchmark unknown; using routing priority {UNKNOWN_MODEL_SCORE:.1f}/100. "
+                        + "Update SlipAgent for updated coding scores.")
 
     async def candidates(self, purpose: str, *, include_failed: bool = False) -> list[ModelInfo]:
         options = self.session.compression_options()
@@ -110,7 +111,7 @@ class ModelRouting:
         async with self.catalog_lock:
             models = await self.session.catalog()
         self.catalog_notice(models)
-        ranked = sorted((model for model in models if model.score is not None
+        ranked = sorted((model for model in models if model.id not in MODEL_ROUTERS
                          and model.provider in credentials and model.provider not in self.failed_providers
                          and eligible_free(model)), key=model_order)
         healthy = [model for model in ranked if model.selector not in self.failed[purpose]]
@@ -172,7 +173,7 @@ class ModelRouting:
                 self.reject_working(model, exc)
                 self.notice(f"Optimal skipped {model.selector}: {exc}")
                 continue
-            self.notice(f"Optimal selected {model.selector} (estimated coding score {model.score:.1f}/100).")
+            self.notice(f"Optimal selected {model.selector} ({score_label(model)}).")
             return
         raise APIConfigError("Optimal exhausted the eligible ranked free models. "
                              "Use /model reset to retry from the top, or /model to select a model.")

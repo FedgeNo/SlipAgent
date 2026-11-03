@@ -10,6 +10,19 @@ provider availability, context limits, and request failures remain separate
 selection checks. A paid model can help calibrate scores without becoming an
 automatic routing candidate. Visual benchmark results contribute nothing.
 
+## Unknown Benchmarks
+
+Missing benchmarks remain `None` in model metadata and display as **benchmark
+unknown**. Free models with missing benchmarks participate in automatic working
+and compression selection using `UNKNOWN_MODEL_SCORE` in `modelscores.py`.
+The current routing priority is **95.7**, immediately above Gemini 3.8 Flash
+(95.6), below DeepSeek V4.1 Flash (96.1) and MiniMax M3.1 Flash (96.4).
+This is a user-selected routing preference, not a benchmark result or calibrated
+estimate. New free previews such as `stealth/crouton-alpha` use it automatically;
+reviewed evidence gaps use it too. Published scores replace the preference when
+available. Generic routers remain excluded; pricing, credentials, billing tier,
+model exclusions and failure handling still determine eligibility.
+
 ## Calibration reviewed October 30, 2026
 
 The scores are computed from raw published results saved in
@@ -102,8 +115,8 @@ LiveCodeBench, and SciCode results, which disagree about their relative strength
 
 No score is carried over from an earlier review: every score in the table has recorded
 results, and the update command refuses a scored entry that has none. A model with no usable
-coding result is a reviewed gap with no score, which keeps it manually selectable and out of
-automatic rotation: Nemotron 3.5 Bolt E4B, Llama 3.1 Nemotron 51B, Glyph Cluster, SEA-LION,
+coding result is a reviewed gap with no benchmark score, which uses the unknown
+routing priority when free: Nemotron 3.5 Bolt E4B, Llama 3.1 Nemotron 51B, Glyph Cluster, SEA-LION,
 and gpt-oss-safeguard. Searches found no coding result for the first three. Bolt's card
 compares it with Gemma 4 E4B-it, Qwen3.5 4B, and Nemotron 3 Nano 4B but reports no coding
 benchmark, the 51B's card lists only MT-Bench and general benchmarks, and Glyph Cluster has an
@@ -123,10 +136,10 @@ software ability; the score is a proof-engineering placement, not evidence of ge
 strength. Gemini 3 Flash combines Google's 78% SWE Verified with Terminal-Bench 2.0 (47.6%)
 and 2.1 (58.0%), and scores 76.0.
 
-SEA-LION v1 7B Instruct remains the one unscored model. Its published linguistic
+SEA-LION v1 7B Instruct remains unscored. Its published linguistic
 evaluations and code-security risk measurements do not establish a comparable
-code-correctness result. Its `None` score keeps manual selection available and
-prevents an unsupported automatic placement.
+code-correctness result. Its benchmark metadata remains `None`; the configured
+unknown priority supplies its automatic placement when free.
 
 Mistral Large 4 (`mistralai/mistral-large-4-1t-a52b` on NVIDIA) scores **93.9**
 from Mistral's developer-reported **61.7% DeepSWE 1.1** result in its

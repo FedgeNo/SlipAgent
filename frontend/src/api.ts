@@ -10,8 +10,8 @@ export type Detail = {text: string; more: boolean; historyReference?: HistoryRef
 export type FeedItem = Detail & {index: number; id: string; role: string; source?: {model?: string; provider?: string};
     historyContext?: string | null; toolResult?: {name: string; status: string} | null; toolCalls: {index: number; name: string}[]; toolCount: number};
 export type FeedPage = {items: FeedItem[]; offset: number; total: number; sessionId: string};
-export type Notification = {type: string; epoch: string; sequence: number; state?: SessionState;
-    event?: {kind: string; text: string; step: number}};
+export type Notification = {type: string; epoch: string; sequence: number; state?: SessionState; activity?: string;
+    event?: {kind: string; text: string; step: number; toolCall?: {id: string; name: string} | null}};
 
 const capability = location.hash.slice(1) || sessionStorage.getItem('slipagentToken') || '';
 history.replaceState(null, '', location.pathname);

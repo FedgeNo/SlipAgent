@@ -31,6 +31,21 @@ def session_for(workspace):
                    base_url='http://unused.invalid', http_referer=None, app_title='test')
 
 
+async def test_reconnecting_browser_receives_current_operation(workspace):
+    session = session_for(workspace)
+    controller = application(session)
+    session.agent.running = True
+    session.agent._emit(AgentEvent(kind='phase', text='Building context'))
+    transport = guitransport.GuiTransport(controller)
+    try:
+        assert transport.snapshot()['activity'] == 'Building context…'
+        session.agent.running = False
+        assert transport.snapshot()['activity'] == ''
+    finally:
+        transport.close()
+        await controller.close()
+
+
 async def receive(ws):
     return json.loads(await asyncio.wait_for(ws.recv(), 5))
 
@@ -140,6 +155,8 @@ async def test_payloads_are_bounded_and_slow_client_is_evicted(workspace, monkey
             session.agent._emit(AgentEvent(kind='tool_end', text='x' * 100_000,
                                           tool_call=ToolCall('1', 'read_file', {'secret': 'not exported'}),
                                           result=ToolResult.ok('large original result')))
+            phase = fast.get_nowait()['event']
+            assert phase['kind'] == 'phase' and phase['text'] == 'Finishing tool call…'
             event = fast.get_nowait()['event']
             assert len(event['text']) == guitransport.TEXT_LIMIT + 1
             assert event['text'].endswith('…') and event['truncated']

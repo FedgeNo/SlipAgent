@@ -96,11 +96,12 @@ class StatusLine:
             return "class:idle", "Ready", True
         # A queued command pauses the run only to apply it; the work then continues.
         label = ("Stopping After This Step" if stopping else "Applying Command After This Step" if pausing
-                 else "Working" if concise else "Working (Esc to interrupt)")
+                 else "Starting up…" if concise else "Starting up… (Esc to interrupt)")
         if self.phase and not stopping and not pausing:
             elapsed = int(time.monotonic() - self.phase_since)
-            label = (f"{self.phase} ({elapsed}s)" if concise
-                     else f"{self.phase} ({elapsed}s, Esc to interrupt)")
+            phase = self.phase.rstrip('.…') + '…'
+            label = (f"{phase} ({elapsed}s)" if concise
+                     else f"{phase} ({elapsed}s, Esc to interrupt)")
         return "class:pulse", f"{frame} {label}", False
 
     def marquee(self, fragments: StyleAndTextTuples, columns: int, key: str) -> StyleAndTextTuples:

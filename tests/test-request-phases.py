@@ -33,7 +33,7 @@ async def test_tool_call_output_clears_the_waiting_phase():
     async with OpenRouterClient("dummy", transport=httpx.MockTransport(lambda request: stream(call))) as client:
         await client.chat(model="test", messages=[Message.user("work")], on_delta=lambda *args: None,
                           single_attempt=True, first_output_timeout=60, on_phase=phases.append)
-    assert phases[:2] == ["Sending request to openrouter", "Waiting for output"] and phases[-2:] == ["", ""]
+    assert phases[:2] == ["Sending request to openrouter", "Waiting for output"] and phases[-2:] == ["Receiving tool call", ""]
 
 
 async def test_pacing_reports_remaining_time_and_queueing(monkeypatch):
@@ -62,13 +62,33 @@ async def test_pacing_reports_remaining_time_and_queueing(monkeypatch):
 
 def test_status_line_shows_the_phase_with_elapsed_time():
     status = StatusLine()
-    assert status.activity(held=False, working=True, stopping=False, concise=False, frame="*")[1] == "* Working (Esc to interrupt)"
+    assert status.activity(held=False, working=True, stopping=False, concise=False, frame="*")[1] == "* Starting up… (Esc to interrupt)"
     status.set_phase("Waiting for output")
     text = status.activity(held=False, working=True, stopping=False, concise=False, frame="*")[1]
-    assert text.startswith("* Waiting for output (0s, Esc to interrupt)")
-    assert status.activity(held=False, working=True, stopping=False, concise=True, frame="*")[1].startswith("* Waiting for output (")
+    assert text.startswith("* Waiting for output… (0s, Esc to interrupt)")
+    assert status.activity(held=False, working=True, stopping=False, concise=True, frame="*")[1].startswith("* Waiting for output… (")
     status.retry = "Retrying in 5s"
     assert status.activity(held=False, working=True, stopping=False, concise=False, frame="*")[1] == "Retrying in 5s"
     status.set_phase("")
     status.retry = ""
-    assert status.activity(held=False, working=True, stopping=False, concise=False, frame="*")[1] == "* Working (Esc to interrupt)"
+    assert status.activity(held=False, working=True, stopping=False, concise=False, frame="*")[1] == "* Starting up… (Esc to interrupt)"
+
+
+async def test_agent_names_context_and_tools_and_clears_activity_after_run(workspace):
+    from slipagent.agent import Agent
+    from slipagent.tools import build_default_registry
+    from test_agent import StubClient, completion, call
+    events = []
+    registry = build_default_registry(workspace)
+    client = StubClient([completion(tool_calls=[call('list_dir')]), completion('Done')])
+    agent = Agent(client, registry, 'test', on_event=events.append)
+    try:
+        await agent.run('Inspect files')
+        phases = [event.text for event in events if event.kind == 'phase']
+        assert 'Starting up…' in phases
+        assert 'Building context…' in phases
+        assert 'Running list_dir…' in phases
+        assert phases[-1] == ''
+        assert all('Working' not in phase and '...' not in phase for phase in phases)
+    finally:
+        await registry.aclose()

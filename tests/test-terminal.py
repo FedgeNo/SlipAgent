@@ -1451,17 +1451,17 @@ async def test_pending_editor_notification_flashes_without_changing_status(displ
             monkeypatch.setattr("slipagent.terminal.time", SimpleNamespace(monotonic=lambda: changed_at))
             for frame in PULSE_FRAMES:
                 ui._activity_frame = frame
-                assert fragment_list_to_text(ui._activity_status()) == f"{frame} Working (Esc to interrupt)"
+                assert fragment_list_to_text(ui._activity_status()) == f"{frame} Starting up… (Esc to interrupt)"
                 fragments = ui._activity()
-                assert any("class:status-flash" in part[0] and "Opening editor" in part[1] for part in fragments)
-                assert all("class:status-flash" not in part[0] for part in fragments if "Working" in part[1] or "Cancel" in part[1])
+                assert 'Opening editor' in ''.join(part[1] for part in fragments if 'class:status-flash' in part[0])
+                assert all("class:status-flash" not in part[0] for part in fragments if "Starting up…" in part[1] or "Cancel" in part[1])
             with monkeypatch.context() as narrow:
                 narrow.setattr(ui, "_activity_width", lambda: 16)
                 assert display_width(fragment_list_to_text(ui._activity())) <= 16
             edits.close()
             assert ui._notification == "" and ui._status_changed_at is None
             assert all("class:status-flash" not in part[0] for part in ui._activity())
-            assert "Working" in ui._activity_status()[0][1]
+            assert "Starting up…" in ui._activity_status()[0][1]
         finally:
             ui._close_transcript()
 
@@ -1493,8 +1493,8 @@ async def test_pending_editor_cancel_link_beside_notification_releases_hold(disp
         try:
             await wait_until(lambda: "Cancel Opening Editor" in snapshot()[17])
             row = snapshot()[17]
-            assert "Working" in row
-            assert "Opening editor after this turn  Cancel Opening Editor" in row
+            assert "Starting up…" in row
+            assert 'Opening editor' in row and 'Cancel Opening Editor' in row
             assert "status" not in row and "Saved changes." not in row
             start = row.index("Cancel Opening Editor") + 8
             pipe.send_text(f"\x1b[<35;{start};18M")
@@ -2583,7 +2583,7 @@ async def test_startup_scrolls_welcome_keeps_input_live_and_drains(display, tmp_
         task = asyncio.create_task(Repl(session).start())
         try:
             await wait_until(lambda: "SlipAgent — coding" in "\n".join(snapshot()))
-            assert "Working" in "\n".join(snapshot())
+            assert "Starting up…" in "\n".join(snapshot())
             assert "Use /help" not in "\n".join(snapshot())
             await entered.wait()
             await wait_until(lambda: "MCP: stub connected" in "\n".join(snapshot()))
@@ -3172,7 +3172,7 @@ async def test_menu_cancellation_preserves_input_history_scroll_and_running_turn
             await wait_until(lambda: "Commands" in snapshot()[17])
             pipe.send_text("ignored\x7f\x1b[A\x1c" + cancel_key)
             assert await asyncio.wait_for(choice, 3) is None
-            await wait_until(lambda: "Working (Esc to interrupt)" in snapshot()[17])
+            await wait_until(lambda: "Starting up… (Esc to interrupt)" in snapshot()[17])
             assert snapshot()[:17] == before
             assert ui.input.buffer.text == "draft in progress"
             assert ui.input.buffer.cursor_position == cursor
@@ -3198,7 +3198,7 @@ async def test_escape_interrupts_directly_and_preserves_draft(display):
         ui.set_working(True)
         task = asyncio.create_task(ui.run())
         try:
-            await wait_until(lambda: "Working" in snapshot()[17])
+            await wait_until(lambda: "Starting up…" in snapshot()[17])
             pipe.send_text("keep this draft")
             await wait_until(lambda: ui.input.buffer.text == "keep this draft")
             pipe.send_text("\x1b")
@@ -3253,7 +3253,7 @@ async def test_footer_stays_fixed_while_transcript_scrolls_and_input_survives(di
             ui.set_working(True)
             await wait_until(lambda: "output 49" in "\n".join(snapshot()[:17]))
             rows = snapshot()
-            assert "Working" in rows[17]
+            assert "Starting up…" in rows[17]
             assert "partially typed" in rows[18]
             assert ui._notification_text() in rows[17]
             assert "model: stub/model" in rows[23]
@@ -3622,7 +3622,7 @@ async def test_working_indicator_pulses_and_becomes_idle(display) -> None:
         task = asyncio.create_task(ui.run())
         try:
             ui.set_working(True)
-            await wait_until(lambda: "Working" in snapshot()[17])
+            await wait_until(lambda: "Starting up…" in snapshot()[17])
             first = snapshot()[17]
             await wait_until(lambda: snapshot()[17] != first)
             ui.set_working(True, stopping=True)
@@ -3638,7 +3638,7 @@ async def test_working_indicator_pulses_and_becomes_idle(display) -> None:
             assert not ui.working
             ui.set_command_status("")
             ui.set_working(True)
-            await wait_until(lambda: "Working" in snapshot()[17])
+            await wait_until(lambda: "Starting up…" in snapshot()[17])
         finally:
             ui.close()
             await task
@@ -3726,7 +3726,7 @@ def test_long_notification_keeps_agent_state_visible(display, working, columns):
             ui.set_working(working)
             ui.notify("Opening file manager " * 10)
             fragments = ui._activity()
-            assert ("Working" if working else "Ready") in "".join(part[1] for part in fragments)
+            assert ("Starting up…" if working else "Ready") in "".join(part[1] for part in fragments)
             assert any(part[1] and "status-flash" in part[0] for part in fragments)
         finally:
             ui.close()

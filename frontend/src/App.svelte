@@ -183,6 +183,8 @@
                 const previous = sessionState?.sessionId;
                 const switched = sessionState?.sessionId !== record.state.sessionId;
                 sessionState = record.state;
+                if (!record.state.running) activity = 'Ready';
+                else if (record.type === 'snapshot') activity = record.activity || 'Starting up…';
                 if (promptReference && promptReference.sessionId !== record.state.sessionId) {
                     promptReference = undefined;
                     notice = 'History reference cleared because the session changed. Your draft is preserved.';
@@ -198,15 +200,16 @@
             }
             const event = record.event;
             if (!event) return;
-            if (event.kind === 'assistant_delta') streaming = (streaming + event.text).slice(-16384);
-            if (event.kind === 'reasoning_delta') reasoning = (reasoning + event.text).slice(-16384);
-            if (event.kind === 'step_start') { activity = `Working · turn ${event.step}`; streaming = ''; reasoning = ''; previewFollow = true; runError = ''; }
-            if (event.kind === 'tool_start') activity = 'Running tools';
+            if (event.kind === 'phase') activity = event.text ? event.text.replace(/[.…]+$/, '') + '…' : 'Ready';
+            if (event.kind === 'assistant_delta') { activity = 'Receiving reply…'; streaming = (streaming + event.text).slice(-16384); }
+            if (event.kind === 'reasoning_delta') { activity = 'Receiving reasoning…'; reasoning = (reasoning + event.text).slice(-16384); }
+            if (event.kind === 'step_start') { activity = 'Building context…'; streaming = ''; reasoning = ''; previewFollow = true; runError = ''; }
+            if (event.kind === 'tool_start') activity = `Running ${event.toolCall?.name || 'tools'}…`;
             if (event.kind === 'notice' || event.kind === 'warning') notice = event.text;
             if (event.kind === 'retry') { activity = event.text; streaming = ''; reasoning = ''; notice = event.text; }
-            if (event.kind === 'retry_wait') activity = event.text ? `Retrying in ${event.step}s · ${event.text}` : 'Working';
+            if (event.kind === 'retry_wait') activity = event.text ? `Retrying in ${event.step}s · ${event.text}` : 'Retrying request…';
             if (event.kind === 'error') runError = event.text;
-            if (['step_end', 'stream_end', 'error'].includes(event.kind)) { activity = event.kind === 'error' ? event.text : 'Ready'; streaming = ''; reasoning = ''; }
+            if (['step_end', 'stream_end', 'error'].includes(event.kind)) { activity = event.kind === 'error' ? event.text : event.kind === 'stream_end' ? 'Recording response…' : 'Finishing turn…'; streaming = ''; reasoning = ''; }
             if (['user_message', 'user_message_sent', 'tool_end', 'assistant_text', 'step_end', 'user_queue_changed', 'session_title'].includes(event.kind)) changed();
         }, (text) => connection = text);
         return () => { stop(); clearTimeout(refreshTimer); rootRequest?.abort(); detailRequest?.abort(); };
@@ -216,7 +219,7 @@
     })));
 </script>
 
-<svelte:head><title>{sessionState?.running ? 'Working · ' : ''}SlipAgent</title></svelte:head>
+<svelte:head><title>{sessionState?.running ? `${activity} · ` : ''}SlipAgent</title></svelte:head>
 <svelte:window onkeydown={(event) => { if (event.key === 'F3') { event.preventDefault(); openSearch(); } else if (event.key === 'Escape' && searchMode) { event.preventDefault(); searchMode = false; } }}/>
 <div class="AppShell">
     <nav class="NavigationRail" aria-label="Workspace Sections">
@@ -230,7 +233,7 @@
     <main>
         <header class="AppHeader">
             <div><h1>{sessionState?.workspace.split(/[\\/]/).filter(Boolean).at(-1) || 'SlipAgent'}<span class="WorkspaceTag">WORKSPACE</span></h1><p title={sessionState?.workspace}>{sessionState?.workspace || connection}</p></div>
-            <div class="ModelStatus"><span class="StatusPill" class:working={sessionState?.running}>{sessionState?.running ? '● Working' : '○ Ready'}</span><span>{sessionState?.model || 'Connecting…'}</span></div>
+            <div class="ModelStatus"><span class="StatusPill" class:working={sessionState?.running}>{sessionState?.running ? `● ${activity === 'Ready' ? 'Starting up…' : activity}` : '○ Ready'}</span><span>{sessionState?.model || 'Connecting…'}</span></div>
         </header>
         {#if error || runError}<div class="ErrorBanner" role="alert">{error || runError}<button aria-label="Dismiss Error" onclick={() => { error = ''; runError = ''; }}>×</button></div>{/if}
         {#if notice}<div class="NoticeBanner" role="status">{notice}<button aria-label="Dismiss Notice" onclick={() => notice = ''}>×</button></div>{/if}

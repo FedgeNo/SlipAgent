@@ -1,10 +1,12 @@
 import {test, expect, type Page} from '@playwright/test';
 
-async function live_events(page: Page) {
-    let send: (kind: string, text: string) => void = () => { throw new Error('Socket not connected'); };
+async function live_events(page: Page, running = false) {
+    const state = running ? (await (await page.request.get('/api/snapshot', {headers: {Authorization: 'Bearer browser-test-capability'}})).json()).state : undefined;
+    let send: (kind: string, text: string, toolCall?: {id: string; name: string}) => void = () => { throw new Error('Socket not connected'); };
     await page.routeWebSocket('**/api/events', (socket) => {
         socket.connectToServer();
-        send = (kind, text) => socket.send(JSON.stringify({type: 'event', event: {kind, text, step: 1}}));
+        send = (kind, text, toolCall) => socket.send(JSON.stringify({type: 'event',
+            ...(state ? {state: {...state, running: true}} : {}), event: {kind, text, step: 1, toolCall}}));
     });
     await page.reload();
     await expect(page.locator('.ConnectionDot')).toHaveClass(/online/);
@@ -14,6 +16,22 @@ async function live_events(page: Page) {
 test.beforeEach(async ({page}) => {
     await page.goto('/#browser-test-capability');
     await expect(page.getByRole('button', {name: 'Send ↗', exact: true})).toBeVisible();
+});
+
+test('names the active operation in the badge, title, and prompt footer', async ({page}) => {
+    const send = await live_events(page, true);
+    send('step_start', '');
+    await expect(page.locator('.StatusPill')).toContainText('Building context…');
+    send('phase', 'Sending request to openrouter');
+    await expect(page.locator('.StatusPill')).toContainText('Sending request to openrouter…');
+    await expect(page).toHaveTitle('Sending request to openrouter… · SlipAgent');
+    await expect(page.locator('.ComposerFooter')).toContainText('Sending request to openrouter…');
+    send('tool_start', '', {id: 'read', name: 'read_file'});
+    await expect(page.locator('.StatusPill')).toContainText('Running read_file…');
+    send('retry_wait', '');
+    await expect(page.locator('.StatusPill')).toContainText('Retrying request…');
+    await expect(page.locator('.StatusPill')).not.toContainText('Working');
+    await expect(page.locator('.StatusPill')).not.toContainText('...');
 });
 
 test('browses original history and arbitrary file depths with Up and Back', async ({page}) => {

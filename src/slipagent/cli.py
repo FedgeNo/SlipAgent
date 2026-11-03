@@ -674,7 +674,9 @@ class Renderer:
                     self.terminal.write_file_reference(match[1], line=int(match[2]))
 
     def handle(self, event: AgentEvent) -> None:
-        if event.kind == "context":
+        if event.kind == 'phase':
+            self.request_phase(event.text)
+        elif event.kind == "context":
             self.__dict__["_reply_preview"] = []
             if self.terminal is not None:
                 self.terminal.set_context(event.request_body if event.request_body is not None else event.text)
@@ -877,7 +879,6 @@ class Launcher:
             on_event=lambda event: renderer.handle(event)))
         session.registry.services['first_output_wait'] = lambda deadline: renderer.first_output_wait(
             deadline, skippable=session.model_routing().enabled)
-        session.registry.services['request_phase'] = renderer.request_phase
         try:
             if defer_startup:
                 session.extensions['startup'] = lambda: self.initialize(session, config, announce=True)

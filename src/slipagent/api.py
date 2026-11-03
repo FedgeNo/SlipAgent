@@ -371,7 +371,7 @@ class APIClient:
                                 first_output.reschedule(None)
                                 if not announced:
                                     # Output that is neither reasoning nor reply text, such as a tool call.
-                                    phase("")
+                                    phase("Receiving tool call")
                                 if on_first_output is not None:
                                     on_first_output(None)
                     if data:

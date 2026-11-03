@@ -192,6 +192,11 @@ class RequestDriver:
                 if diagnostics is not None:
                     diagnostics.capture_response(diagnostic_id, response)
             stream_guard = StreamLoopGuard()
+            def report_phase(text: str) -> None:
+                callback = self.registry.services.get('request_phase')
+                if callback is not None:
+                    callback(text)
+                self.hooks.emit(AgentEvent(kind='phase', text=text or 'Validating response…'))
             options: dict[str, Any] = {
                 "on_delta": delta,
                 "on_request_body": request_sent,
@@ -200,10 +205,11 @@ class RequestDriver:
                 "single_attempt": True,
                 "first_output_timeout": FIRST_OUTPUT_TIMEOUT,
                 "on_first_output": self.registry.services.get("first_output_wait"),
-                "on_phase": self.registry.services.get("request_phase"),
+                "on_phase": report_phase,
             } if isinstance(self.client, APIClient) else {}
             try:
                 if not options:
+                    report_phase('Waiting for model output…')
                     self.hooks.delivered()
                     instructions = self.registry.resources.instructions
                     if instructions is not None:

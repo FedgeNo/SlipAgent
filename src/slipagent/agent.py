@@ -565,6 +565,7 @@ class Agent:
         # Context preparation can yield to input. Rebuild if more prompts arrive
         # so every message waiting at submission joins the same request.
         while True:
+            self._emit(AgentEvent(kind='phase', text='Building context…'))
             self._drain_pending()
             activated = self.registry.services.setdefault('skill_invocations', {})
             for index, text in list(self.queued_messages.items()):
@@ -579,6 +580,18 @@ class Agent:
                 return context
 
     def _emit(self, event: AgentEvent) -> None:
+        if event.kind == 'phase':
+            if event.text:
+                event.text = event.text.rstrip('.…') + '…'
+            self.registry.services['activity_phase'] = event.text
+        elif event.kind == 'tool_start' and event.tool_call is not None:
+            self._emit(AgentEvent(kind='phase', text=f'Running {event.tool_call.name}…'))
+        elif event.kind == 'tool_end':
+            self._emit(AgentEvent(kind='phase', text='Finishing tool call…'))
+        elif event.kind == 'step_end':
+            self._emit(AgentEvent(kind='phase', text='Finishing turn…'))
+        elif event.kind == 'stream_end':
+            self._emit(AgentEvent(kind='phase', text='Recording response…'))
         if self.on_event is not None:
             self.on_event(event)
 
@@ -598,6 +611,7 @@ class Agent:
             self._loop_guard().reset()
         self.registry.context_notes.pop("progress", None)
         self.running = True
+        self._emit(AgentEvent(kind='phase', text='Starting up…'))
         journal = self.registry.resources.journal
         with journal.defer_appends() if journal is not None else nullcontext():
             try:
@@ -616,6 +630,7 @@ class Agent:
                         await save_timings(self.registry)
                     finally:
                         self.running = False
+                        self._emit(AgentEvent(kind='phase', text=''))
                         if self.stop_requested:
                             self.stopped = True
 
@@ -724,6 +739,7 @@ class Agent:
 
     async def _step(self, step: int) -> str | None:
         """One response and its complete tool batch; behavior reloads between steps."""
+        self._emit(AgentEvent(kind='phase', text='Preparing model…'))
         prepare_model = self.registry.services.get("prepare_model_request")
         if prepare_model is not None:
             await prepare_model()
@@ -732,6 +748,7 @@ class Agent:
         self._notify_jobs()
         servers = self.registry.resources.servers
         if servers is not None:
+            self._emit(AgentEvent(kind='phase', text='Refreshing MCP tools…'))
             await servers.refresh()
         specs = self._filter_specs(self.registry.specs())
         self._emit(AgentEvent(kind="step_start", step=step))

@@ -34,7 +34,9 @@ class GuiTransport:
         self.unsubscribe_state = controller.states.subscribe(self.state)
 
     def snapshot(self) -> dict[str, Any]:
-        return self.envelope('snapshot', state=state_record(self.controller.state()), resync=True)
+        state = self.controller.state()
+        activity = self.controller.session.registry.services.get('activity_phase', '') if state.running else ''
+        return self.envelope('snapshot', state=state_record(state), activity=activity, resync=True)
 
     def envelope(self, kind: str, **values: Any) -> dict[str, Any]:
         return {'schemaVersion': 1, 'epoch': self.epoch, 'sequence': self.sequence,

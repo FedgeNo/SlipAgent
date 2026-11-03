@@ -1607,7 +1607,7 @@ def test_tty_footer_stop_and_explicit_resume(project_dir: Path) -> None:
             pytest.fail("terminal state timed out: " + repr(screen.display)
                         + '\nTerminal output: ' + repr(terminal_output.decode('utf-8', errors='replace')[-20000:]))
         try:
-            wait_for(lambda: "openrouter::stub/one" in screen.display[23] and "Working" in screen.display[17])
+            wait_for(lambda: "openrouter::stub/one" in screen.display[23] and "Starting up…" in screen.display[17])
             assert screen.title.endswith(f"{project_dir} | SlipAgent")
             wait_for(lambda: "/quit" in "\n".join(screen.display[:17]))
             startup = "\n".join(screen.display[:17])

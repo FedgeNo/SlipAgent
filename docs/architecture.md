@@ -121,6 +121,8 @@ reconnect. Context/request bodies, tool arguments and tool-result payloads are
 excluded from notifications, rather than copied into another history buffer.
 Event text is capped at 2,048 characters plus an ellipsis, with an explicit
 truncation flag; call IDs/names and result availability identify observations.
+Operation names arrive as `phase` events shared with the terminal. Snapshots
+include the current `activity` so reconnecting browsers show the active operation.
 
 At most eight WebSocket connections, including unauthenticated handshakes, are
 accepted. Each subscriber has a 128-record queue; overflow evicts the subscriber

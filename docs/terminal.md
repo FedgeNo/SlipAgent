@@ -2,6 +2,9 @@
 
 [Back to the README](../README.md)
 
+While a task runs, the status line names its current operation, such as
+“Starting up…”, “Building context…” or “Running grep…”, with elapsed phase time.
+
 ## Use
 
 One-shot mode runs a task, prints the final answer, and exits:

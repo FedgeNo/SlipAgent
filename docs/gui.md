@@ -1,5 +1,9 @@
 # Browser Workspace
 
+The activity badge, browser title and prompt footer name the current operation,
+such as “Building context…”, “Sending request to openrouter…” or “Running grep…”.
+Reconnect restores the active operation instead of a generic busy message.
+
 The browser workspace shares the CLI's running agent, tools, original history and
 saved sessions. Start SlipAgent with a browser link:
 

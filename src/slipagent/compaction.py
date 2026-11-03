@@ -122,8 +122,12 @@ class StepCompactor:
             # Summaries cancelled by an interrupt, credential or model change,
             # or interrupted by a restart, are requested again with this route.
             for index, earlier in enumerate(conversation):
-                if (earlier is not step and isinstance(earlier, CompletedStep) and earlier.summary is None
+                if (earlier is not step and isinstance(earlier, CompletedStep)
+                        and (earlier.summary is None or (getattr(earlier, "request_failure", None) is not None
+                             and earlier.reasoning_summary is None))
                         and (getattr(earlier, "compaction_status", None) in {"cancelled", "interrupted"}
+                             or (getattr(earlier, "request_failure", None) is not None
+                                 and earlier.reasoning_summary is None and earlier.compaction_status == "complete")
                              or (getattr(earlier, "compaction_status", None) == "failed"
                                  and earlier.compaction_error == LEGACY_OVERSIZED_ERROR))
                         and earlier.__dict__.get("_compaction_request") is None):

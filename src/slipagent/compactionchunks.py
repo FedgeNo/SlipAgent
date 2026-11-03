@@ -61,6 +61,10 @@ def plan_chunks(step_id: int, source: dict[str, Any], budget: int) -> ChunkPlan:
               "user_request_truncated": len(request) > SHARED_REQUEST_CHARACTERS,
               "original": {"tool": "recall_history", "step_id": step_id},
               "contextual_history_omitted": source.get("history_omitted", 0) + len(source.get("history", []))}
+    if source.get("request_failure") is not None:
+        shared["request_failure"] = {key: value for key, value in source["request_failure"].items()
+                                     if key != "response_excerpt"}
+        shared["incomplete"] = source.get("incomplete", False)
     plan = ChunkPlan(directory, shared, [])
 
     def fits(records: list[dict[str, Any]]) -> bool:
@@ -138,7 +142,7 @@ def plan_chunks(step_id: int, source: dict[str, Any], budget: int) -> ChunkPlan:
             raise ValueError("The compaction model cannot fit an empty source field and its metadata")
 
     def records() -> Iterator[dict[str, Any]]:
-        for field in ("user_prompt", "agent_response", "reasoning", "user_edits", "background_commands"):
+        for field in ("user_prompt", "agent_response", "reasoning", "user_edits", "background_commands", "request_failure"):
             if field in source:
                 yield from split([field], source[field])
         used: set[int] = set()

@@ -260,7 +260,29 @@ async def test_rejected_response_reasoning_does_not_enter_accepted_record():
     assert agent.history.steps[0].request_failure["outcome"] == "rejected"
     assert agent.history.steps[1].reasoning == "ACCEPTED THOUGHTS"
     assert "REJECTED THOUGHTS" not in agent.history.steps[1].full_text()
-    assert len(client.summary_requests) == 1
+    assert len(client.summary_requests) == 2
+    source = decode_json_content(client.summary_requests[0]['messages'][1].content)
+    assert source['request_failure']['outcome'] == 'rejected'
+    assert source['tool_calls'] == source['tool_results'] == []
+
+
+@pytest.mark.parametrize('status', ['complete', 'cancelled', 'interrupted'])
+async def test_old_failed_turn_without_ai_thoughts_is_summarized_when_work_resumes(status):
+    client = Client([reply('[Harness context metadata]\nnone'), reply('Recovered'), reply('Next')])
+    agent = Agent(client, ToolRegistry(), 'test')
+    await agent.run('Work')
+    await agent.wait_for_compaction()
+    failed = agent.history.steps[0]
+    failed.summary = 'Harness-recorded failed model request: rejected. No tools executed.'
+    failed.reasoning_summary = None
+    failed.compaction_status = status
+    before = len(client.summary_requests)
+    await agent.run('Continue')
+    await agent.wait_for_compaction()
+    assert len(client.summary_requests) == before + 2
+    assert failed.compaction_status == 'complete'
+    assert failed.reasoning_summary == ''
+    assert failed.summary != 'Harness-recorded failed model request: rejected. No tools executed.'
 
 
 async def test_recall_can_select_one_or_several_original_parts():

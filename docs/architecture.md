@@ -801,6 +801,14 @@ and validates the opened file type. POSIX directory traversal refuses substitute
 symlinks. File tools, checkpoint reads, editor loading and indexed viewers share
 that reader. Built-in text reads and exact-edit inputs keep the 32 MB bound.
 
+Failed requests also enter the background summary queue, with their partial
+reply, reasoning, failure status and explicit record that no tools executed.
+A deterministic failure notice remains available until the AI summary arrives.
+The summarizer condenses and attributes source material without independently
+judging claims. Originals and structured failure metadata remain unchanged.
+Older failed turns with canned summaries and no AI reasoning summary are queued
+when work resumes; interruption still cancels background work.
+
 After archiving a complete batch, `Agent._archive_step` submits it to
 `StepCompactor`, a registry-owned service. One dispatcher runs step summaries
 (oldest first), then due narratives and eras, with at most one job per

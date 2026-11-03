@@ -31,6 +31,23 @@ def profile():
     return RequestProfile(parameters={"max_tokens"}, context_length=32768, max_completion_tokens=8192)
 
 
+def test_failed_turn_chunks_preserve_failure_status_and_full_failure_payload():
+    step, source, _ = large_step()
+    failure = dict(outcome='request_error', error='Stream ended', tools_executed=False,
+                   response_excerpt='Partial response ' * 10000)
+    source.update(request_failure=failure, incomplete=True, tool_calls=[], tool_results=[])
+    plan = plan_chunks(step.id, source, int(profile().context_length * .85) - 8192)
+    try:
+        assert plan.shared['request_failure'] == {key: value for key, value in failure.items()
+                                                 if key != 'response_excerpt'}
+        assert plan.shared['incomplete'] is True
+        fragments = [materialize(record) for chunk in plan.chunks for record in chunk['records']
+                     if record['path'] == ['request_failure', 'response_excerpt']]
+        assert ''.join(record['text'] for record in fragments) == failure['response_excerpt']
+    finally:
+        plan.close()
+
+
 @pytest.mark.parametrize("file_backed", [False, True])
 def test_chunks_cover_the_original_exactly_with_original_overlap_and_stable_identity(tmp_path, file_backed):
     step, source, text = large_step()

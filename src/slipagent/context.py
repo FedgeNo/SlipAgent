@@ -391,8 +391,12 @@ class CompletedStep(HistoryStep):
     def compaction_input(self) -> dict[str, Any]:
         parts = self.parts(stream=True)
         source = {"user_prompt": parts["prompt"],
-                "agent_response": parts["response"], "tool_calls": parts["tool_calls"],
+                "agent_response": parts["response"] or "", "tool_calls": parts["tool_calls"],
                 "tool_results": parts["tool_results"], "reasoning": parts["reasoning"]}
+        if "request_failure" in parts:
+            source["request_failure"] = parts["request_failure"]
+            if parts.get("incomplete"):
+                source["incomplete"] = True
         if "user_edits" in parts:
             source["user_edits"] = parts["user_edits"]
         if "background_commands" in parts:

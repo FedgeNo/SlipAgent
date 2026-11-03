@@ -392,12 +392,15 @@ class Agent:
         failed.summary = summary
         failed.results_summarized = True
         if isinstance(failed, CompletedStep):
-            # No compactor runs for a failed step, so no filtered thoughts exist;
-            # the original reasoning is shown.
             failed.reasoning_summary = None
-            failed.compaction_status = "complete"
+            failed.compaction_status = "cancelled" if self.registry.services.get("interrupt_requested") else "pending"
             failed.observed = False
         self._persist()
+        if isinstance(failed, CompletedStep) and failed.compaction_status == "pending":
+            self._compactor().submit(
+                failed, self.client, self.model, self._budget().profile, self.max_tokens,
+                history=self.history.steps[:-1][-25:], conversation=self.history.steps,
+            )
         self._emit(AgentEvent(kind="step_end", step=failed.id, usage=usage))
         return failed.id + 1
 

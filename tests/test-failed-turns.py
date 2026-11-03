@@ -7,7 +7,7 @@ import json
 import httpx
 import pytest
 
-from data_text_reader import current_input, request_input
+from data_text_reader import current_input, request_input, input_data
 from slipagent.agent import Agent
 from slipagent.api import APITransportError
 from slipagent.capabilities import ModelCapabilities
@@ -35,6 +35,46 @@ def client_for(handle, retries=3):
         "tag": "test", "context_length": 1_000_000, "supported_parameters": ["tools"],
     }])
     return client
+
+
+async def test_failed_turn_receives_ai_summary_and_filtered_reasoning(tmp_path, free_compaction):
+    summaries = []
+    working = []
+
+    def handle(request):
+        body = json.loads(request.content)
+        if body['messages'][0]['content'].lstrip().startswith('# Summarizing the Previous Turn'):
+            source = input_data(body['messages'][1]['content'])
+            summaries.append(source)
+            return httpx.Response(200, json={'choices': [{'message': {'role': 'assistant', 'content': json.dumps({
+                'summary': 'The stream failed; no tools ran.',
+                'reasoning_summary': 'Thoughts: considered expanding the product; unverified.',
+            })}, 'finish_reason': 'stop'}]})
+        working.append(body)
+        if len(working) == 1:
+            return response(packet({'reasoning': 'Consider expanding the product.'}), packet(finish='error'))
+        return response(packet({'content': 'Recovered.'}, 'stop'))
+
+    async with client_for(handle) as client:
+        agent = Agent(client, ToolRegistry(), 'test')
+        free_compaction(agent, client)
+        journal = SessionJournal(str(tmp_path), directory=tmp_path / 'state')
+        agent.registry.resources.journal = journal
+        assert await agent.run('Prove it') == 'Recovered.'
+        await agent.wait_for_compaction()
+        failed = agent.history.steps[0]
+        assert failed.summary == 'The stream failed; no tools ran.'
+        assert failed.reasoning_summary == 'Thoughts: considered expanding the product; unverified.'
+        source = next(source for source in summaries if source.get('request_failure'))
+        assert source['incomplete'] is True
+        assert source['request_failure']['tools_executed'] is False
+        assert source['reasoning'] == 'Consider expanding the product.'
+        assert source['tool_calls'] == source['tool_results'] == []
+        restored = journal.load(journal.session_id)['history'].steps[0]
+        assert restored.reasoning_summary == failed.reasoning_summary
+        assert restored.request_failure == failed.request_failure
+        assert restored.reasoning == source['reasoning']
+        await agent.registry.aclose()
 
 
 async def test_provider_error_turn_reaches_model_before_it_decides_whether_to_retry(tmp_path):

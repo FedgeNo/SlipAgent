@@ -29,7 +29,7 @@ src/slipagent/
 ├── prompts.py        named, ordered prompt sections
 ├── diagnostics.py    exact request snapshots and failed-attempt records
 ├── jobs.py           session-owned background commands and job controls
-├── skills.py         explicit package discovery and pinned skill instructions
+├── skills.py         shared package discovery, activation and pinned skill instructions
 ├── filepicker.py     bounded asynchronous fuzzy file selection for the user
 ├── review.py         read-only review profile, validated reports and source navigation
 ├── lsp.py            optional configured language-server navigation

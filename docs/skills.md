@@ -1,45 +1,52 @@
 # Skill Packages
 
-Skills are reusable workflow instructions selected explicitly by the user.
-They do not modify Python classes or automatically run scripts.
+Skills are reusable workflow instructions using the Agent Skills `SKILL.md`
+format, with common Claude and Codex metadata supported. They do not modify
+Python classes or automatically execute scripts.
 
 ## Discover And Select
 
-`/skills` lists names, descriptions, source paths, and disabled packages from:
+`/skills` lists names, descriptions, paths, and disabled packages from:
 
-1. The current project's `.slipagent/skills/` directory.
-2. The `skills/` directory under SlipAgent's user data directory, including any
-   `SLIPAGENT_STATE_DIR` override. See [installation locations](installation.md#installation-and-data-locations).
-3. SlipAgent's bundled `prompts/skills/` directory, included in source and
-   installed packages.
+1. `.slipagent/skills`, `.agents/skills`, `.claude/skills`, `.github/skills`,
+   `.copilot/skills`, and `.codex/skills` in the workspace and its ancestors up
+   to the nearest Git root. Outside a Git repository only the workspace is used.
+2. SlipAgent's user-data `skills/` directory, then the same hidden directories
+   under the user's home. `SLIPAGENT_STATE_DIR` still controls SlipAgent data.
+3. System-wide `/etc/codex/skills/`, then bundled `prompts/skills/`.
 
-Each package is an immediate child directory containing `SKILL.md`. Discovery
-does not recursively search resources or follow linked package directories.
-Invalid or unreadable metadata is reported without hiding other packages.
+Each package is an immediate child directory containing `SKILL.md`. Linked
+packages and linked `SKILL.md` files resolve to their physical package directory;
+identical physical files are listed once. Invalid metadata is reported without
+hiding other packages. Name precedence is **project → user → system → bundled**.
+Duplicate names within the winning scope require an explicit path. Disabled overrides
+continue to shadow lower-priority namesakes.
 
-Use `/skill release` to select a package by its metadata name. Name precedence
-is **project → user → bundled**, including disabled packages: a disabled project
-or user override prevents selection of a lower-priority namesake. Duplicate names within the selected scope require
-an explicit path. `/skills` displays all paths so duplicates remain identifiable.
+Use `/skill release arguments`, `/release arguments`, or `$release arguments`
+to activate a named workflow. `/skill "PATH/TO/SKILL.md" arguments` accepts an
+explicit package path, including outside the workspace. Built-in slash commands
+win name collisions; `/skill` and `$name` remain available. `/name` is a CLI
+shortcut; `$name` works in CLI and browser chat. Arguments retain their original
+text, with shell-style quoting used only for positional/named substitution.
 
-`/skill .slipagent/skills/release` or `/skill PATH/TO/SKILL.md` selects by path.
-Paths are relative to the workspace unless absolute; quote a path when needed.
-Catalogued user and bundled packages are permitted instruction sources. Other explicit
-paths follow ordinary workspace access rules. Missing, invalid, or disabled
-packages leave the current selection unchanged.
+Up to 16 skills can be active. Selecting an existing path refreshes it; selecting
+another adds it. `/skill` shows active snapshots; `/skill off` clears all.
+Commands apply at the normal agent boundary while work is active. Chat
+invocations activate when that input is prepared for its next request.
 
-One skill is active at a time; selecting another replaces it. `/skill` shows
-the selected name, source path, and source SHA-256. `/skill off` clears it.
-Selection and clearing queue at the normal agent boundary while work is active;
-listing and status remain available during a turn. There is no model-selected
-activation or automatic catalog injection into model requests.
+The model receives a bounded metadata catalog and the `use_skill` tool. It can
+list/search packages, load an applicable workflow, or unload active skills.
+Instructions join the next request; tool results contain activation status
+without duplicating the instruction body. Listing alone does not activate a
+package. Missing, invalid, disabled, or incompatible packages leave active
+snapshots unchanged.
 
 ## Bundled Workflows
 
 These optional starter workflows provide concise procedures with completion
 conditions and recovery guidance. They have been reviewed and checked for
 loading and selection, without comparative model-performance testing or claims
-of proven improvements for lower-end models. They activate only when selected.
+of proven improvements for lower-end models. They activate through user selection or model loading.
 
 | Selection | Purpose |
 | --- | --- |
@@ -81,7 +88,6 @@ Example `SKILL.md`:
 ---
 name: release
 description: Review a release using the project's checklist.
-enabled: true
 ---
 # Release Review
 
@@ -90,26 +96,60 @@ Review the pending changes and report any unmet release requirements.
 Run scripts/inspect-release.py only when authorized by the user's task.
 ```
 
-YAML front matter must begin on the first line and end with `---`. `name` and
-`description` are required nonempty strings, limited to 128 and 2,048 characters
-respectively. Descriptions can use YAML multiline scalars. `enabled` is an
-optional boolean, defaulting to `true`; `enabled: false` disables selection.
-Metadata is limited to 16 KiB and the full selected file to 256 KiB. Instructions
-after the front matter must be nonempty UTF-8 text. Metadata uses a safe YAML
-parser, without Python object construction.
+For portable Agent Skills packages, YAML front matter starts on the first
+line and ends with `---`. Names use lowercase letters, digits and single hyphens,
+up to 64 characters; descriptions contain up to 1,024 characters. Matching the
+package directory name gives strict portability. Claude-style aliases are
+accepted with a warning. Headerless Claude workflows and omitted names or
+descriptions use the directory name and first nonempty body line as defaults.
+Metadata is limited to 16 KiB and a selected file or expanded body to 256 KiB.
+Instructions must be nonempty UTF-8 text. YAML uses a safe parser.
 
-Discovery reads metadata only. Selection reads and pins the instructions;
-referenced resources and scripts are loaded only when the agent needs them
-through its existing tools. Their paths are resolved relative to the package
-directory supplied in context. Skill selection grants no additional file/tool
-access. In particular, user-package resources outside the workspace still need
-the access permitted by the current tools and access mode.
+Metadata is retained in saved snapshots and model context, including `license`,
+`compatibility`, `metadata`, `allowed-tools`, invocation controls, and
+`agents/openai.yaml` interface, policy, and MCP dependencies. The legacy
+SlipAgent `enabled: false` disables a package; omit this nonstandard key from
+packages intended for strict external validators.
+
+`disable-model-invocation: true` or OpenAI
+`policy.allow_implicit_invocation: false` requires explicit user invocation.
+`user-invocable: false` allows model loading only. `allowed-tools` describes host
+preapproval and does not grant permissions or form a whitelist in SlipAgent.
+`disallowed-tools` removes matching tools, with common Claude names mapped to
+SlipAgent names and optional command/path patterns checked at invocation.
+These restrictions supplement existing access rules; they are not an OS sandbox.
+OpenAI MCP dependencies require already configured servers; missing servers
+produce a configuration error rather than an automatic install. The model uses
+`load_tools` to select needed definitions through normal deferred discovery.
+
+Bodies support `$ARGUMENTS`, `$ARGUMENTS[N]`, `$N`, and named `$argument` values
+from the optional `arguments` list or space-separated names. Indices start at
+zero; missing positional values expand to empty text. If arguments are supplied
+and no argument placeholder is used, the original text is appended as
+`ARGUMENTS: ...`. Substitution is a single pass and preserves unrelated shell
+variables. Escape a placeholder with a backslash to keep it literal.
+`${CLAUDE_SKILL_DIR}`, `${CLAUDE_PROJECT_DIR}`, and `${CLAUDE_SESSION_ID}` expand
+to the package directory, workspace root, and current session ID.
+
+Discovery reads metadata only. Selected packages grant read-only access for
+`read_file`, `list_dir`, `grep`, and `glob` to their supporting resources, including
+packages outside the workspace. References resolve against the package directory.
+Clearing a skill revokes its extra resource access. Writes and script execution
+retain their existing restrictions; loading never executes a script.
+
+Host-specific `context: fork`, agent selection, model overrides other than
+`inherit`, hooks, dynamic `!`-backtick command preprocessing, and Claude plugin
+path substitutions require runtimes SlipAgent does not implement. These produce
+explicit compatibility errors instead of silently ignoring requested behavior.
+Use a portable inline workflow for these packages. OpenAI interface fields are
+preserved as metadata; they do not install another host's UI or plugins.
 
 ## Lifetime And Context
 
-The active snapshot includes its instructions, package directory, source path,
-and source hash. It is included in every working request, including custom
-system prompts and repair requests, independently of compressed history. The
+Each active snapshot includes expanded instructions, arguments, metadata,
+package directory, source path, and a hash of its source plus OpenAI sidecar.
+It is included in every working request, including custom system prompts and
+repair requests, independently of compressed history. The
 instructions consume the normal input budget and are not silently truncated;
 an oversized current input is reported through the existing context error.
 Background summarizers do not activate skills.

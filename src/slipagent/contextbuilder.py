@@ -96,8 +96,16 @@ class ContextBuilder:
         if self.registry.services.get('active_review') is not None:
             selected_skill = None
         if selected_skill is not None:
-            from .skills import render
-            sections.add('skill', 'Selected Skill', render(selected_skill), 21, owner='skills')
+            from .skills import active as active_skills, render, sync_access
+            sync_access(self.registry.services)
+            sections.add('skill', 'Active Skills', '\n\n'.join(render(snapshot) for snapshot in active_skills(self.registry.services)),
+                         21, owner='skills')
+        if workspace is not None and any(spec.name == 'use_skill' for spec in specs):
+            from .skills import catalog_hint
+            inventory = await run_blocking(catalog_hint, workspace)
+            if inventory:
+                sections.add('skill_catalog', 'Available Skills', load_prompt('skill-catalog.md', catalog=inventory),
+                             22, owner='skills')
         session_info = await run_blocking(session_environment)
         session_info["model"] = self.settings.model
         if workspace is not None:

@@ -42,7 +42,7 @@ def test_catalog_reads_metadata_only_and_reports_invalid_packages(workspace, mon
     disabled = package(user, 'disabled', 'disabled', enabled=False)
     bad = project / 'bad' / 'SKILL.md'
     bad.parent.mkdir()
-    bad.write_text('no front matter')
+    bad.write_text('---\nname: Invalid Name\ndescription: invalid\n---\nbody')
     packages, errors = catalog(workspace)
     assert {skill.name for skill in packages} == {'release', 'disabled'}
     assert next(skill.description for skill in packages if skill.name == 'release') == 'Release workflow for this project.'
@@ -78,7 +78,7 @@ def test_project_precedence_duplicate_names_paths_and_no_script_execution(worksp
 
 @pytest.mark.parametrize('content', [
     '---\nname: wrong\ndescription: text\nenabled: maybe\n---\nbody',
-    '---\nname: wrong\n---\nbody',
+    '---\nname: wrong\ndescription: 42\n---\nbody',
     '---\nname: wrong\ndescription: text\n---\n',
     '---\nname: ' + 'a' * 17000,
 ])
@@ -229,7 +229,7 @@ async def test_restoring_unselected_session_clears_active_skill(workspace, monke
         await restored.registry.aclose()
 
 
-def test_catalog_does_not_follow_linked_packages_or_instruction_files(workspace, monkeypatch, tmp_path):
+def test_catalog_follows_links_once_and_keeps_project_precedence(workspace, monkeypatch, tmp_path):
     project, user = roots(workspace, monkeypatch, tmp_path)
     external = package(user)
     project.mkdir(parents=True)
@@ -238,5 +238,6 @@ def test_catalog_does_not_follow_linked_packages_or_instruction_files(workspace,
     folder.mkdir()
     (folder / 'SKILL.md').symlink_to(external)
     packages, errors = catalog(workspace)
-    assert [skill.scope for skill in packages] == ['user']
-    assert len(errors) == 1 and 'linked-file' in errors[0]
+    assert [skill.scope for skill in packages] == ['project']
+    assert packages[0].path == external.resolve()
+    assert not errors

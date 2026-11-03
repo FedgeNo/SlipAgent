@@ -37,6 +37,7 @@ The complete built-in tool set is:
 | Tool | Purpose |
 | --- | --- |
 | `load_tools` | Load full definitions for selected catalog names without executing them. |
+| `use_skill` | Search, activate, refresh, or unload shared workflow skills; instructions are pinned in the next request. |
 | `answer` | Display `text`; end the run when called without other tools, or continue after a mixed tool batch. Also accepts `<tool_call><answer>text</answer></tool_call>`. |
 | `read_file` | Read a whole UTF-8 file up to 32 MB with numbered lines; optional offset/limit ranges, without a line cap. Model context limits still apply. |
 | `write_file` | Create or overwrite a file, making parent directories. |

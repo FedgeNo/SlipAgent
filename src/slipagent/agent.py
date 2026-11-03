@@ -273,7 +273,9 @@ class Agent:
         self.registry.services.pop("background_snapshot", None)
         self.registry.context_notes.pop("request_diagnostics", None)
         self.registry.context_notes.pop("user_edits", None)
-        self.registry.services.pop('selected_skill', None)
+        from .skills import set_active
+        set_active(self.registry.services, None)
+        self.registry.services.pop('skill_invocations', None)
         self.registry.services.pop("step_user_edits", None)
         self.registry.services.pop("accepted_user_edits", None)
         journal = self.registry.resources.journal
@@ -552,6 +554,7 @@ class Agent:
         input_queue(self).sent(len(self.queued_messages))
         delivered = list(self.queued_messages.values())
         self.queued_messages.clear()
+        self.registry.services.pop('skill_invocations', None)
         if delivered:
             self._persist()
             for text in delivered:
@@ -563,6 +566,11 @@ class Agent:
         # so every message waiting at submission joins the same request.
         while True:
             self._drain_pending()
+            activated = self.registry.services.setdefault('skill_invocations', {})
+            for index, text in list(self.queued_messages.items()):
+                if activated.get(index) != text:
+                    await self._activate_skill_invocation(text)
+                    activated[index] = text
             queue = input_queue(self)
             signature = queue.signature()
             context = await self._context_view(specs, step, repair=repair, budget_fraction=budget_fraction)
@@ -613,6 +621,7 @@ class Agent:
 
     async def _run(self, prompt: str) -> str:
         if prompt:
+            await self._activate_skill_invocation(prompt)
             self.messages.append(Message.user(prompt))
         self._persist()
         for run_step in range(self._requests + 1, self.max_steps + 1):
@@ -630,6 +639,22 @@ class Agent:
         self._emit(AgentEvent(kind="warning", step=len(self.history.steps) + 1, text=STEP_LIMIT_NOTICE))
         return STEP_LIMIT_NOTICE
 
+    async def _activate_skill_invocation(self, text: str) -> None:
+        from .skills import invocation, select, required_tools, set_active
+        from .tools.blocking import run_blocking
+        workspace = self.registry.resources.workspace
+        if workspace is None or self.registry.services.get('active_review') is not None:
+            return
+        selected = await run_blocking(invocation, workspace, text)
+        if selected is None:
+            return
+        selector, arguments = selected
+        journal = self.registry.resources.journal
+        snapshot = await run_blocking(select, workspace, selector, arguments=arguments,
+                                     session_id=journal.session_id if journal is not None else '')
+        required_tools(snapshot, self.registry.names)
+        set_active(self.registry.services, snapshot)
+
     def set_planning(self, enabled: bool) -> None:
         """Change plan availability without discarding the retained plan."""
         from .tools.planning import UpdatePlanTool
@@ -641,6 +666,8 @@ class Agent:
             self.registry.unregister("update_plan")
 
     def _filter_specs(self, specs: list[ToolSpec]) -> list[ToolSpec]:
+        from .skills import denied_tool
+        specs = [spec for spec in specs if denied_tool(self.registry.services, spec.name) is None]
         if self.registry.services.get('active_review') is not None:
             from .review import READ_TOOLS
             return [spec for spec in specs if spec.name in READ_TOOLS]

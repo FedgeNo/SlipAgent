@@ -1180,7 +1180,9 @@ def test_followup_during_final_response_is_answered(project_dir: Path) -> None:
         try:
             proc.stdin.write("go\n")
             proc.stdin.flush()
-            assert requested.wait(5)
+            # Cold startup uses the same allowance as the cancellation trial;
+            # the queued follow-up below still has a five-second deadline.
+            assert requested.wait(15), f'Model request did not start; CLI return code {proc.poll()}: {"".join(output)}'
             proc.stdin.write("followup task\n")
             proc.stdin.flush()
             assert queued.wait(5)

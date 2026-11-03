@@ -1302,22 +1302,33 @@ without treating the harness interpreter as the project's environment.
 
 ## Selected Skill Ownership
 
-`skills.py` reads metadata from immediate project/user/bundled package directories and
-loads one explicitly selected `SKILL.md`. The selected snapshot is plain data
-under `ToolRegistry.services['selected_skill']`, so reload candidates borrow it
-without I/O or resource ownership. Commands discover/load through owned blocking
-workers and publish a new selection only after a successful read. The model has
-no activation tool. `ContextBuilder` renders the snapshot with
-`prompts/selected-skill.md` in every working request, outside the compressible
-history and within ordinary context budgeting. Journal state validates and
-persists the snapshot; resume/fork restore it without package access, while
-reset or restoring an unselected session clears it. Selection never executes
-scripts or grants additional tool/path access. Resource references resolve
-against the recorded package directory. See [skill packages](skills.md) for
-format, precedence, limits, and snapshot lifetime. Bundled instructions live in
-`prompts/skills/` and use the existing prompt resource location for both checkout
-and installed layouts. Name selection prefers project, then user, then bundled
-packages; duplicates within the winning scope require an explicit path.
+`skills.py` discovers shared project, ancestor, user, system, and bundled skill roots,
+resolves linked packages, validates metadata, and snapshots selected instructions.
+`ToolRegistry.services['active_skills']` owns an ordered stack; `selected_skill`
+retains its last entry for legacy consumers and old saved sessions. Commands,
+chat invocations, and `tools/skills.py` use owned blocking workers for discovery
+and loading, then publish only validated snapshots. The core `use_skill` tool
+supports paged discovery and model-driven activation. Explicit invocation
+controls and host-specific incompatibilities are checked before activation.
+
+`ContextBuilder` supplies a bounded catalog and renders active snapshots through
+`prompts/selected-skill-v2.md` outside compressible history, within ordinary input
+budgeting, including custom prompts and repairs. The unversioned template remains
+compatible with older running generations until restart. Tool results do not duplicate
+skill bodies. Review mode suppresses active workflow instructions. Session
+journals validate and persist the stack; resume/fork restore without reopening
+packages. Reset clears it. Legacy single snapshots remain readable.
+
+`WorkspaceAccess.read_roots` grants selected package resources read-only path
+access; file/navigation/search tools opt into this policy explicitly. Write
+resolution remains unchanged. Project-instruction guards do not promote external
+resource directories to instruction roots. `disallowed-tools` filters advertised
+definitions and is checked again by `ToolRegistry.invoke`, including same-batch
+loads. OpenAI MCP dependencies validate already registered servers; their tools
+retain normal deferred discovery through `load_tools`. Metadata
+never installs servers, executes scripts, or grants write permissions.
+See [skill packages](skills.md) for format, roots, precedence, substitutions,
+limits, and snapshot lifetime.
 
 ## Background Command Ownership
 

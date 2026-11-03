@@ -455,6 +455,10 @@ class ToolRegistry:
                 f"Unknown tool '{name}'. Available tools: {available}."
             )
         try:
+            from ..skills import denied_tool
+            problem = denied_tool(self.services, name, raw_arguments)
+            if problem is not None:
+                return ToolResult.error(problem)
             instructions = self.services.get("project_instructions")
             if instructions is not None:
                 # Resolve the accepted helper at dispatch: this registry is a

@@ -367,13 +367,17 @@ class SessionApplication:
                 frame._builtin_tools = tuple(tool for tool in self.session.registry.tools
                                              if tool.name in self.session.registry.builtin_names)
 
-    async def select_skill(self, selector: str | None) -> None:
-        from .skills import select
+    async def select_skill(self, selector: str | None, arguments: str = '') -> None:
+        from .skills import select, set_active, required_tools
         with self.change():
             if selector is None:
-                self.session.registry.services.pop('selected_skill', None)
+                set_active(self.session.registry.services, None)
             else:
-                self.session.registry.services['selected_skill'] = await run_blocking(select, self.session.workspace, selector)
+                journal = self.session.registry.resources.journal
+                snapshot = await run_blocking(select, self.session.workspace, selector, arguments=arguments,
+                                              session_id=journal.session_id if journal is not None else '')
+                required_tools(snapshot, self.session.registry.names)
+                set_active(self.session.registry.services, snapshot)
 
     async def select_model(self, selector: str) -> None:
         from .config import ConfigError, save_model_choice

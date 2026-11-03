@@ -158,7 +158,9 @@ class ProjectInstructions:
         for value in targets:
             if not isinstance(value, str):
                 continue
-            target = self.workspace.resolve(value)
+            target = self.workspace.resolve(value, read=not tool.mutates_workspace)
+            if not self.workspace.allows(target):
+                continue  # A selected package's data does not introduce project instructions.
             directory = target if target.is_dir() else target.parent
             while directory != self.workspace.root:
                 relevant.add(self.workspace.relative(directory))

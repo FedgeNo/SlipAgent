@@ -185,8 +185,8 @@ def test_grep_rejects_a_file_replaced_by_a_symlink_after_resolution(tmp_path, mo
     outside.write_text("private outside text")
     resolve = Workspace.resolve
 
-    def swapped(owner, path):
-        resolved = resolve(owner, path)
+    def swapped(owner, path, *, read=False):
+        resolved = resolve(owner, path, read=read)
         if resolved == target:
             target.unlink()
             target.symlink_to(outside)

@@ -27,11 +27,11 @@ async def test_blocked_filesystem_call_keeps_input_loop_responsive(workspace, mo
     release = threading.Event()
     resolve = Workspace.resolve
 
-    def blocked_resolve(self, path):
+    def blocked_resolve(self, path, *, read=False):
         loop.call_soon_threadsafe(entered.set)
         if not release.wait(1):
             raise RuntimeError("The terminal loop could not release the filesystem operation.")
-        return resolve(self, path)
+        return resolve(self, path, read=read)
 
     registry = build_default_registry(workspace)
     tracker = registry.services["project_instructions"]

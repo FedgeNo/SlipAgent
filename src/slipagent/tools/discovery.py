@@ -12,7 +12,7 @@ from .base import Tool, ToolRegistry, ToolResult
 if TYPE_CHECKING:
     from ..context import ConversationHistory
 
-CORE_TOOLS = frozenset({"read_file", "write_file", "list_dir", "grep", "edit_file", "run_command", "run_python", "load_tools", "update_plan"})
+CORE_TOOLS = frozenset({"read_file", "write_file", "list_dir", "grep", "edit_file", "run_command", "run_python", "load_tools", "use_skill", "update_plan"})
 UNAVAILABLE_BATCH = "No tools were executed. The entire batch was rejected because these tools are not available "
 
 

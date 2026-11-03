@@ -117,7 +117,7 @@ class GrepTool(Tool):
         include: str | None, max_results: int,
     ) -> ToolResult:
         try:
-            base = self.workspace.resolve(path) if path else self.workspace.root
+            base = self.workspace.resolve(path, read=True) if path else self.workspace.root
         except WorkspaceError as exc:
             return ToolResult.error(str(exc))
 
@@ -131,7 +131,7 @@ class GrepTool(Tool):
 
         # Direct run() calls use the same result ceiling as validated calls.
         max_results = min(max_results, MAX_GREP_RESULTS)
-        candidates = self.workspace.iter_files(base)
+        candidates = self.workspace.iter_files(base, read=True)
         cancelled = threading.Event()
         done = False
         while not done and not truncated:
@@ -198,7 +198,7 @@ class GrepTool(Tool):
 
     def _read_file(self, candidate: Path) -> bytes | None:
         try:
-            candidate = self.workspace.resolve(candidate)
+            candidate = self.workspace.resolve(candidate, read=True)
             raw = read_regular(candidate, MAX_GREP_FILE_BYTES)
         except (OSError, WorkspaceError):
             return None
@@ -251,7 +251,7 @@ class GlobTool(Tool):
     def _scan(self, pattern: str, path: str | None, max_results: int,
               cancelled: threading.Event) -> ToolResult:
         try:
-            base = self.workspace.resolve(path) if path else self.workspace.root
+            base = self.workspace.resolve(path, read=True) if path else self.workspace.root
         except WorkspaceError as exc:
             return ToolResult.error(str(exc))
 
@@ -267,7 +267,7 @@ class GlobTool(Tool):
 
         def matches() -> Iterator[tuple[str, bool]]:
             nonlocal count
-            for entry, is_dir in self.workspace.iter_entries(base):
+            for entry, is_dir in self.workspace.iter_entries(base, read=True):
                 if cancelled.is_set():
                     return
                 if _matches_glob(entry.relative_to(match_root).as_posix(), pattern):

@@ -210,7 +210,7 @@ class ReadFileTool(Tool):
 
     def _read(self, path: str, offset: int, limit: int | None) -> ToolResult:
         try:
-            target = self.workspace.resolve(path)
+            target = self.workspace.resolve(path, read=True)
         except WorkspaceError as exc:
             return ToolResult.error(str(exc))
 

@@ -36,7 +36,7 @@ class ListDirTool(Tool):
 
     def _list(self, path: str | None) -> ToolResult:
         try:
-            target = self.workspace.resolve(path) if path else self.workspace.root
+            target = self.workspace.resolve(path, read=True) if path else self.workspace.root
         except WorkspaceError as exc:
             return ToolResult.error(str(exc))
 

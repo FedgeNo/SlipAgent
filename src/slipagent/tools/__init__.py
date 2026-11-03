@@ -20,6 +20,7 @@ from .output import CommandArchive, ReadCommandOutputTool
 from .python import CreatePythonEnvironmentTool, RunPythonTool
 from .discovery import LoadToolsTool
 from .http import HttpFetchTool
+from .skills import UseSkillTool
 from .semantic import SemanticSearchTool
 from .hashline import HASHLINE_NAMES, hashline_tools
 
@@ -92,6 +93,7 @@ def build_default_registry(
         [
             AnswerTool(),
             LoadToolsTool(services),
+            UseSkillTool(workspace, services),
             CreatePythonEnvironmentTool(services["project_environment"]),
             RunPythonTool(workspace, archive),
             *file_tools(workspace, artifacts),

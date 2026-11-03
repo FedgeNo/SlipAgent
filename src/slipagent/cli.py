@@ -2029,7 +2029,13 @@ class CommandRunner:
         if isinstance(line, Submission) and session.renderer.terminal is not None:
             session.renderer.terminal.consume_submission(line)
         if command is None:
-            session.renderer.emit(session.renderer.style.red(f"  unknown command: /{name} (try /help)"))
+            from .skills import invocation
+            from .tools.blocking import run_blocking
+            selected = await run_blocking(invocation, session.workspace, line)
+            if selected is not None:
+                application(session).submit(line)
+            else:
+                session.renderer.emit(session.renderer.style.red(f"  unknown command: /{name} (try /help)"))
         else:
             result = await command.run(CommandContext(session, session.renderer.style, _RendererStream(session.renderer)), argument)
             if result is not None:

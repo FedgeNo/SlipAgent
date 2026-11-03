@@ -47,6 +47,10 @@ def isolated_session_storage(tmp_path: Path, system_temp_root: Path, verified_ma
     system_temp.mkdir()
     state = system_temp_root / f"{tmp_path.name}-state"
     state.mkdir()
+    home = state / 'home'
+    home.mkdir()
+    monkeypatch.setenv('HOME', str(home))
+    monkeypatch.setenv('USERPROFILE', str(home))
     monkeypatch.setenv("SLIPAGENT_STATE_DIR", str(state))
     (state / "math-environment-cache.json").write_text(verified_math_cache, encoding="utf-8")
     for name in ("TMPDIR", "TEMP", "TMP"):

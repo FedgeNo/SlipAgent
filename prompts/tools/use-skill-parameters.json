@@ -1,0 +1,8 @@
+{
+    "properties/action": "List/search available skills, load instructions, or unload active skills.",
+    "properties/selector": "Exact metadata name or package/SKILL.md path; optional for unload-all.",
+    "properties/arguments": "Argument text for the skill's declared placeholders; quote multi-word arguments.",
+    "properties/query": "Case-insensitive substring of a skill name or description when listing.",
+    "properties/offset": "Zero-based list offset.",
+    "properties/limit": "Maximum number of entries to return, from 1 to 50."
+}

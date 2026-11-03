@@ -2,6 +2,7 @@
 
 These tools funnel project paths through `Workspace.resolve`, which
 resolves symlinks and allows the project root and configured system temp directory.
+Active skill package directories additionally allow read-only resource access.
 Other paths require danger mode. This is not an OS
 sandbox: shell/MCP subprocesses have process permissions, and session log
 storage is owned separately by the harness. Danger mode lifts path confinement
@@ -48,6 +49,7 @@ class WorkspaceAccess:
     """Session-owned access mode shared by tools and retained across reloads."""
 
     danger: bool = False
+    read_roots: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,7 +66,7 @@ class Workspace:
         object.__setattr__(self, "root", resolved)
         object.__setattr__(self, "access", WorkspaceAccess(danger=danger))
 
-    def resolve(self, raw: str | Path) -> Path:
+    def resolve(self, raw: str | Path, *, read: bool = False) -> Path:
         """Resolve a model-supplied path, enforcing the current access mode.
 
         Relative paths are anchored to the root. Absolute paths are allowed but
@@ -80,7 +82,7 @@ class Workspace:
             candidate = self.root / candidate
 
         resolved = candidate.resolve()
-        if not self.allows(resolved):
+        if not self.allows(resolved, read=read):
             raise WorkspaceError(
                 f"path is outside the workspace: {text!r} "
                 f"(workspace root is {self.root})"
@@ -92,10 +94,11 @@ class Workspace:
         """The system-configured temporary directory, resolved through symlinks."""
         return Path(tempfile.gettempdir()).resolve()
 
-    def allows(self, path: Path) -> bool:
+    def allows(self, path: Path, *, read: bool = False) -> bool:
         """Whether a resolved path is accessible under the current policy."""
         return (self.access.danger or self.contains(path)
-                or path.is_relative_to(self.temporary_directory))
+                or path.is_relative_to(self.temporary_directory)
+                or read and any(path.is_relative_to(root) for root in self.access.read_roots))
 
     def contains(self, path: Path) -> bool:
         """True when `path` is the root itself or lives beneath it."""
@@ -112,7 +115,7 @@ class Workspace:
             return "." if str(relative) == "." else relative.as_posix()
         return str(path)
 
-    def iter_files(self, start: Path | str | None = None) -> Iterator[Path]:
+    def iter_files(self, start: Path | str | None = None, *, read: bool = False) -> Iterator[Path]:
         """Yield candidate files beneath `start`, pruning ignored directories.
 
         Uses `os.walk` with in-place pruning so a large `.git` or `node_modules`
@@ -123,7 +126,7 @@ class Workspace:
         `filenames`, and reading one would hand out content from beyond the
         sandbox even though `resolve` refuses the same path when asked directly.
         """
-        base = self.resolve(start) if start is not None else self.root
+        base = self.resolve(start, read=read) if start is not None else self.root
         if base.is_file():
             yield base
             return
@@ -133,17 +136,17 @@ class Workspace:
             current = Path(dirpath)
             for filename in filenames:
                 candidate = current / filename
-                if candidate.is_symlink() and not self.allows(candidate.resolve()):
+                if candidate.is_symlink() and not self.allows(candidate.resolve(), read=read):
                     continue
                 yield candidate
 
-    def iter_entries(self, start: Path | str | None = None) -> Iterator[tuple[Path, bool]]:
+    def iter_entries(self, start: Path | str | None = None, *, read: bool = False) -> Iterator[tuple[Path, bool]]:
         """Yield `(path, is_dir)` for every entry beneath `start`, pruned.
 
         As in `iter_files`, confinement skips entries whose symlink target lands
         outside the project and system temp directory. Danger mode includes them.
         """
-        base = self.resolve(start) if start is not None else self.root
+        base = self.resolve(start, read=read) if start is not None else self.root
         if not base.is_dir():
             yield base, base.is_dir()
             return
@@ -153,11 +156,11 @@ class Workspace:
             current = Path(dirpath)
             for name in dirnames:
                 entry = current / name
-                if entry.is_symlink() and not self.allows(entry.resolve()):
+                if entry.is_symlink() and not self.allows(entry.resolve(), read=read):
                     continue
                 yield entry, True
             for name in filenames:
                 entry = current / name
-                if entry.is_symlink() and not self.allows(entry.resolve()):
+                if entry.is_symlink() and not self.allows(entry.resolve(), read=read):
                     continue
                 yield entry, False

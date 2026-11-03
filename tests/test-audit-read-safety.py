@@ -30,8 +30,8 @@ def test_swapped_instruction_settings_and_outline_files(tmp_path, monkeypatch, r
     workspace = Workspace(root)
     resolve = Workspace.resolve
 
-    def swapped(owner, path):
-        resolved = resolve(owner, path)
+    def swapped(owner, path, *, read=False):
+        resolved = resolve(owner, path, read=read)
         if resolved == target:
             target.unlink()
             target.symlink_to(outside)

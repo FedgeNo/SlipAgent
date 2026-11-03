@@ -27,7 +27,7 @@ async def blocked_scan(workspace, monkeypatch, request):
         loop.call_soon_threadsafe(entered.set)
         assert release.wait(3), "Test did not release the filesystem operation"
 
-    def candidates(self, base=None):
+    def candidates(self, base=None, *, read=False):
         for path in paths:
             visited.append(path)
             if phase == "traversal":
@@ -150,7 +150,7 @@ async def test_scan_batches_count_rejected_candidates(workspace, monkeypatch, sk
     tool = search.GrepTool(workspace)
     read_batch = tool._read_batch
 
-    def candidates(self, base=None):
+    def candidates(self, base=None, *, read=False):
         for path in paths:
             visited.append(path)
             yield path

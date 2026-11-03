@@ -68,7 +68,7 @@ In the REPL:
 | `/files [query]` | Fuzzy-find a workspace file to view or edit; Ctrl+P opens the same picker |
 | `/update` | Close this session cleanly and install the latest GitHub commit, preserving installer edit checks |
 | `/skills` | List project and user skill packages; see [skills](skills.md) |
-| `/skill [name\|path\|off]` | Show, explicitly select, or clear a pinned workflow skill |
+| `/skill [name\|path [arguments]\|off]` | Show, activate, refresh, or clear workflow skills; `/name args` and `$name args` invoke named skills |
 | `/review [scope]` | Review working changes or a requested scope with enforced read-only tools and structured findings |
 | `/review results` | Open the latest review report or jump to a finding's source line |
 | `/resume` | Choose a saved session with Up/Down and Enter; Escape cancels (interactive terminal; queues while working) |

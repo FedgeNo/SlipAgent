@@ -72,13 +72,14 @@ The `z-ai/glm-5.3` and `z-ai/glm-5.3-flash` profiles use the GLM XML channel and
 | `compaction-chunk.md`, `compaction-boundary.md`, `compaction-merge.md` | Oversized-step source chunks, original-text boundary reviews, and ordered merges; background-only consumers |
 | `historical-summary-prompt.md` | Narrative for each run-aligned block of up to 20 turns, merged from first-pass summaries, organized by run with original turn citations and retrieval metadata |
 | `era-summary-prompt.md` | Era for each five consecutive narratives, organized by run with original turn citations |
+| `aeon-summary-prompt.md` | Aeon for each five consecutive eras, preserving durable outcomes, constraints, unresolved work and original citations |
 | `request-retry.md` | Failed-turn interpretation, retry counts, and respect for user stop/retry instructions |
 | `user-edits.md` | Bounded saved-edit notifications, revision acknowledgement and full-diff retrieval; included only with pending or selected historical edit observations |
 | `diff-comment.md` | Whole-diff target and retrieval guidance, included only while the current user turn carries saved-diff references |
 | `monitor-setup.md`, `monitor-active.md`, `monitor-results.md` | Available command-monitor setup, active reminders, and inline ready results with initialization turns; omitted when the tool is unavailable |
 | `working-plan.md`, `working-plan-record.md` | Persistent plan guidance and last successful update step, subordinate to user instructions |
 | `json-tools.md`, `native-tools.md`, `response-*.md` | Response formats and tool-calling protocols |
-| `history-*.md`, `summary-unavailable.md` | History interpretation and retrieval: record fields, excerpts, compressed summaries, narratives, eras, saved artifacts, failed requests, and unclassified results; `history-records.md` is always sent, and each field note only when the selected history contains its records |
+| `history-*.md`, `summary-unavailable.md` | History interpretation and retrieval: record fields, excerpts, compressed summaries, narratives, eras, aeons, saved artifacts, failed requests, and unclassified results; `history-records.md` is always sent, and each field note only when the selected history contains its records |
 | `legacy-*.md` | Records and summaries kept for conversations saved in older history formats |
 | `user-request.md`, `new-user-request.md`, `tool-result-response.md`, `continuation.md` | Current request, new input, automatic return after tools, and continuation without new input |
 | `history-question.md` | Guidance carried inside a user-request envelope when the browser attaches a validated indexed history reference; original content is retrieved through `recall_history`, while chat renders the question and source label |

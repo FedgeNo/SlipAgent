@@ -197,7 +197,7 @@ valid recovery using disposable package copies when modifying this machinery.
   same record. Use the model allowance,
   subject to an explicit `--context-tokens` cap. Send every step in full until the
   history exceeds the budget, then compress from the oldest end only as far as
-  needed: individual summaries, then available narratives and eras in the older
+  needed: individual summaries, then available narratives, eras and aeons in the older
   two thirds before repeating those levels outside the newest five turns.
   Excerpt and remove older turns before reducing newer ones. Keep
   the newest five original when they fit; otherwise reduce those turns oldest

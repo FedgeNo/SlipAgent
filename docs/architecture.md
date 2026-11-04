@@ -336,7 +336,7 @@ Context construction proceeds in this order:
    Every step is sent in full while the history fits the budget. Over budget,
    `ConversationHistory.view` applies reductions from the oldest end until the
    indexed size fits within the limit: step summaries in the older two thirds,
-   then each eligible narrative and era wholly within that region. If needed,
+   then each eligible narrative, era and aeon wholly within that region. If needed,
    repeat those levels outside the newest five turns. The newer third is rounded
    up and the five-turn protection takes precedence for short histories.
    It then exhausts older turns through excerpts and omission before reducing
@@ -822,7 +822,7 @@ when work resumes; interruption still cancels background work.
 
 After archiving a complete batch, `Agent._archive_step` submits it to
 `StepCompactor`, a registry-owned service. One dispatcher runs step summaries
-(oldest first), then due narratives and eras, with at most one job per
+(oldest first), then due narratives, eras and aeons, with at most one job per
 background provider at a time; a single slot runs jobs in order on the
 dispatcher task. The ready queue holds at most 32 original-step references. Further steps retain deferred request
 metadata on their originals and refill the queue as it drains. Only the active
@@ -897,7 +897,7 @@ Both compactors omit temperature regardless of the
 working model's explicit setting, and use the selected destination's
 reasoning/routing settings for each attempt.
 
-`historymerge.py` provides the narrative and era jobs. `run_numbers` derives each
+`historymerge.py` provides the narrative, era and aeon jobs. `run_numbers` derives each
 turn's run from saved records: a turn with user input starts a run, as does a turn
 after a reply without tool calls. `blocks` cuts history into narrative blocks that
 close at a run boundary once they hold ten turns, or at 20 turns within a run; a
@@ -923,9 +923,15 @@ not a list of per-step recaps. Its prompt preserves attribution, uncertainty,
 source turn citations and exact retrieval identifiers.
 
 The block's last `CompletedStep` owns its `historical_summary` record, and the
-last step of an era's fifth block owns its `era_summary`. Narratives retain
+last step of an era's fifth block owns its `era_summary`. Five consecutive eras
+form an aeon of up to 500 turns, owned by their last anchor as `aeon_summary`.
+The existing free-only dispatcher builds it from complete era summaries and
+publishes only a smaller, validated result. Context selection tries aeons after
+eras and before omission, respecting the older-two-thirds and newest-five
+boundaries. Narratives retain
 `step_ids`, `runs`, and `sources` (turn IDs, runs, call IDs, names and artifact references)
-copied by the harness, independent of generated prose; eras retain `step_ids` and `runs`.
+copied by the harness, independent of generated prose; eras and aeons retain
+`step_ids`, `runs` and original model/provider attribution ranges.
 Model-facing artifact references retain record/step/call IDs, tool name when
 present, kind, filename/path, and byte size. Full command scripts, embedded
 documents, error bodies, and storage payload descriptors remain original data;
@@ -936,8 +942,10 @@ Background-job notifications use the same artifact projection. Their command
 identity is a first-line preview of at most 120 characters with an explicit
 truncation flag; complete commands remain in logs and original calls. This also
 applies to saved background notifications and current monitor references.
-Anchors store `history_merge_attempt` and `era_attempt` before dispatch; journal
-`history_merge` events persist all four fields. Resume validates IDs and metadata
+Anchors store `history_merge_attempt`, `era_attempt` and `aeon_attempt` before dispatch;
+`history_merge` events persist the records and attempts, including optional `aeon`
+and `aeon_attempted_at` fields. TurnStore saves immutable `.aeon.json` sidecars;
+resume and fork retain them without replacing originals. Resume validates IDs and metadata
 shape; a narrative without `runs` must match a fixed 20-turn block, and one that
 does not is not restored, so its turns are summarized again. Fork retains the records and
 attempt markers. These optional

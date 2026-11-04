@@ -1,7 +1,7 @@
 """Whole-step summaries and filtered thoughts, queued after complete tool batches.
 
 One dispatcher runs every background summary: completed steps oldest first,
-then 20-turn narratives, then 100-turn eras (see `historymerge`). It runs one
+then narratives, eras and aeons (see `historymerge`). It runs one
 job per background provider at a time, so a single provider serializes them all.
 A bounded ready queue holds step references; deferred steps retain request
 metadata on their originals. Each step job materializes its request when it

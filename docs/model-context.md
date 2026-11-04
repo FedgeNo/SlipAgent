@@ -380,10 +380,11 @@ only as far as needed**, and stops as soon as the request fits:
    its **narrative**, oldest first. A block follows runs: it closes at the end of
    a run once it holds **10 steps**, and a longer run is cut every **20 steps**.
 3. Each available **era** wholly within that region replaces its source records,
-   oldest first. An era summarizes **five consecutive narratives**. If still over
-   budget, repeat these three levels for the remaining turns outside the latest
+   oldest first. An era summarizes **five consecutive narratives**. Then try each
+   available **aeon**, combining **five consecutive eras** (up to 500 turns),
+   wholly within that region. If still over budget, repeat these levels for the remaining turns outside the latest
    five. The newest third (rounded up) therefore stays full until available older
-   narratives and eras have been tried; it is a preference, not a hard reservation.
+   narratives, eras and aeons have been tried; it is a preference, not a hard reservation.
 4. If still over budget, older records are excerpted and then omitted, oldest
    first, before reducing newer records. The newest five can use smaller summaries
    and excerpts only after older optional history is exhausted.
@@ -406,12 +407,17 @@ explicit excerpts if even the latest batch cannot fit. Originals remain
 retrievable even when omitted. Project instructions and the retained user prompt
 stay pinned outside the history.
 
-Narratives and eras are written in the background as soon as their inputs
+Narratives, eras and aeons are written in the background as soon as their inputs
 exist: a narrative once all steps of its block have first-pass summaries
 (a step whose summary failed is left out as a gap), and an era once all five
-narratives of its block exist. Every level is kept, so any request can use
+narratives of its block exist. An aeon is generated once all five eras of its
+fixed block exist. Every level is kept, so any request can use
 whichever level fits. Each narrative is built from its steps' individual
-summaries and each era from its five narratives. The prompts ask for summaries
+summaries, each era from its five narratives, and each aeon from its five eras.
+Aeons must be smaller than their source eras and are tried before history is
+omitted. Failed, oversized or nonshrinking aeons leave lower levels available;
+their attempt markers survive resume and another attempt waits 20 turns.
+The prompts ask for summaries
 organized by run, each run introduced with its number and step range, and for the
 step where each fact, decision, and unresolved item occurred, so `recall_history`
 can fetch it without searching. The harness accepts whatever structure the model
@@ -455,7 +461,7 @@ The summarizer returns a JSON object with separate factual `summary` and filtere
 `reasoning_summary` strings, each limited to 6,000 characters. Short steps
 should get short summaries. The working model continues without waiting.
 One dispatcher runs every background summary: step summaries oldest first, then
-narratives, then eras. It runs **at most one job per background provider at a
+narratives, eras and aeons. It runs **at most one job per background provider at a
 time**, so with one background provider every summary runs in turn. The ready
 queue holds at most 32 step references. Further steps wait on their retained
 originals and enter the queue as it drains. Only an active job copies its payload,

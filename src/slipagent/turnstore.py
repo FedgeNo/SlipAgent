@@ -111,7 +111,7 @@ class TurnStore:
             if "user_edits" in step._disk["parts"]:
                 step.user_edits = step._disk["parts"]["user_edits"]
             if relocate:
-                for name in ('_disk_summary_state', '_disk_group_state', '_disk_era_state', '_size_index'):
+                for name in ('_disk_summary_state', '_disk_group_state', '_disk_era_state', '_disk_aeon_state', '_size_index'):
                     step.__dict__.pop(name, None)
         self.summarized(step)
 
@@ -133,6 +133,11 @@ class TurnStore:
             first, last = era["step_ids"][0], era["step_ids"][-1]
             step._disk_era = self.write(f"{first:08d}-{last:08d}.era.json", era)
             step._disk_era_state = era
+        aeon = getattr(step, 'aeon_summary', None)
+        if aeon is not None and step.__dict__.get('_disk_aeon_state') is not aeon:
+            first, last = aeon['step_ids'][0], aeon['step_ids'][-1]
+            step._disk_aeon = self.write(f'{first:08d}-{last:08d}.aeon.json', aeon)
+            step._disk_aeon_state = aeon
 
     def refresh_input(self, step: CompletedStep) -> None:
         """Replace archived input after a durable unsent-message discard."""

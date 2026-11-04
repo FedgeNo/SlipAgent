@@ -5,7 +5,7 @@ calls or the user prompts again. History is cut into blocks that close at a run
 boundary once they hold ten turns, or at 20 turns within a long run. Each block
 gets one narrative as soon as all its turns have finished first-pass compaction,
 built from their summaries; each five consecutive blocks get one era as soon as
-those narratives exist. Sessions that already have fixed 20-turn narratives keep
+those narratives exist; each five consecutive eras get an aeon. Sessions that already have fixed 20-turn narratives keep
 fixed blocks through the last of them. Every level is kept; the context view
 chooses which one to serve. The step compactor schedules these jobs with turn
 summaries.
@@ -33,6 +33,8 @@ MERGE_INTERVAL = 20
 NARRATIVE_MIN_STEPS = 10
 ERA_NARRATIVES = 5
 ERA_INTERVAL = MERGE_INTERVAL * ERA_NARRATIVES
+AEON_ERAS = 5
+AEON_INTERVAL = ERA_INTERVAL * AEON_ERAS
 MERGE_MAX_CHARS = 12_000
 
 Route = tuple["APIClient", str, RequestProfile | None, int | None]
@@ -71,6 +73,12 @@ def era_records(steps: list[HistoryStep]) -> list[dict[str, Any]]:
     """Eras, oldest first."""
     return [_with_response_sources(steps, step, getattr(step, "_disk_era", record), '_era_metadata_sources') for step in steps
             if servable(record := getattr(step, "era_summary", None), ERA_INTERVAL)]
+
+
+def aeon_records(steps: list[HistoryStep]) -> list[dict[str, Any]]:
+    """Aeons, oldest first, with the same original retrieval identities."""
+    return [_with_response_sources(steps, step, getattr(step, '_disk_aeon', record), '_aeon_metadata_sources') for step in steps
+            if servable(record := getattr(step, 'aeon_summary', None), AEON_INTERVAL)]
 
 
 def _with_response_sources(steps: list[HistoryStep], anchor: HistoryStep,
@@ -200,10 +208,18 @@ def validate_historical_record(record: Any, anchor: int, total: int) -> None:
 
 
 def validate_era_record(record: Any, anchor: int, total: int) -> None:
+    _validate_aggregate_record(record, anchor, total, ERA_INTERVAL, 'era_summary')
+
+
+def validate_aeon_record(record: Any, anchor: int, total: int) -> None:
+    _validate_aggregate_record(record, anchor, total, AEON_INTERVAL, 'aeon_summary')
+
+
+def _validate_aggregate_record(record: Any, anchor: int, total: int, interval: int, representation: str) -> None:
     keys = {"record_type", "representation", "step_id", "step_ids", "compressed_summary", "created_at_step"}
     if not isinstance(record, dict) or set(record) - {"runs"} != keys:
-        raise ValueError("invalid era summary record")
-    _validate_ids(record, anchor, total, ERA_INTERVAL, "era_summary")
+        raise ValueError(f'invalid {representation} record')
+    _validate_ids(record, anchor, total, interval, representation)
 
 
 def _limits(owner: StepCompactor, model: str, capabilities: RequestProfile | None,
@@ -262,7 +278,7 @@ def schedule_history_merge(owner: StepCompactor, steps: list[HistoryStep], clien
 
 def ready_job(owner: StepCompactor, steps: list[HistoryStep], active: set[Any],
               route: Route) -> tuple[Any, Coroutine[Any, Any, None]] | None:
-    """The oldest narrative, then the oldest era, whose inputs are all available."""
+    """The oldest narrative, era, then aeon whose inputs are all available."""
     from .context import message_tokens
 
     client, model, capabilities, max_tokens = route
@@ -313,8 +329,36 @@ def ready_job(owner: StepCompactor, steps: list[HistoryStep], active: set[Any],
         setattr(anchor, "era_attempt", total)
         if owner.on_step is not None:
             owner.on_step(anchor)  # type: ignore[arg-type]
-        return key, _era(owner, anchor, narratives, copy.deepcopy(era_source), runs, era_prompt, client,
-                         model, capabilities, reserve, total, owner.generation)
+        return key, _aggregate(owner, anchor, narratives, copy.deepcopy(era_source), runs, era_prompt, client,
+                               model, capabilities, reserve, total, owner.generation, kind='era')
+    era_spans = [(closed[start][0], closed[start + ERA_NARRATIVES - 1][1])
+                 for start in range(0, len(closed) - ERA_NARRATIVES + 1, ERA_NARRATIVES)]
+    aeon_prompt = Message.system(load_prompt('aeon-summary-prompt.md', max_characters=MERGE_MAX_CHARS))
+    for start in range(0, len(era_spans) - AEON_ERAS + 1, AEON_ERAS):
+        group = era_spans[start:start + AEON_ERAS]
+        anchor = steps[group[-1][1]]
+        key = ('aeon', anchor.id)
+        if (key in active or _covers(getattr(anchor, 'aeon_summary', None), steps, group[0][0], group[-1][1])
+                or not _due(anchor, 'aeon_attempt', total)):
+            continue
+        eras = []
+        for first, last in group:
+            record = getattr(steps[last], 'era_summary', None)
+            if not _covers(record, steps, first, last):
+                break
+            eras.append(record)
+        if len(eras) < AEON_ERAS:
+            continue
+        source = {'eras': [{'step_ids': record['step_ids'],
+                            'runs': sorted({runs[step_id - 1] for step_id in record['step_ids']}),
+                            'compressed_summary': record['compressed_summary']} for record in eras]}
+        if message_tokens([aeon_prompt, Message.user(source)]) > budget:
+            continue
+        setattr(anchor, 'aeon_attempt', total)
+        if owner.on_step is not None:
+            owner.on_step(anchor)  # type: ignore[arg-type]
+        return key, _aggregate(owner, anchor, eras, copy.deepcopy(source), runs, aeon_prompt, client,
+                               model, capabilities, reserve, total, owner.generation, kind='aeon')
     return None
 
 
@@ -396,15 +440,18 @@ async def _merge(owner: StepCompactor, anchor: HistoryStep, batch: list[HistoryS
                    generation, f"turns {batch[0].id}–{batch[-1].id}")
 
 
-async def _era(owner: StepCompactor, anchor: HistoryStep, narratives: list[dict[str, Any]], source: dict[str, Any],
+async def _aggregate(owner: StepCompactor, anchor: HistoryStep, narratives: list[dict[str, Any]], source: dict[str, Any],
                runs: list[int], system: Message, client: APIClient, model: str, capabilities: RequestProfile | None,
-               reserve: int, created_at: int, generation: int) -> None:
+               reserve: int, created_at: int, generation: int, *, kind: str) -> None:
     def build(summary: str) -> dict[str, Any]:
         ids = [step_id for narrative in narratives for step_id in narrative["step_ids"]]
-        record = {"record_type": "history_step", "representation": "era_summary", "step_id": anchor.id,
+        record = {"record_type": "history_step", "representation": f'{kind}_summary', "step_id": anchor.id,
                   "step_ids": ids, "runs": sorted({runs[step_id - 1] for step_id in ids}),
                   "compressed_summary": summary, "created_at_step": created_at}
-        validate_era_record(record, anchor.id, created_at)
+        if kind == 'aeon':
+            validate_aeon_record(record, anchor.id, created_at)
+        else:
+            validate_era_record(record, anchor.id, created_at)
         return record
 
     replaced = [Message.user(narrative) for narrative in narratives]
@@ -415,5 +462,5 @@ async def _era(owner: StepCompactor, anchor: HistoryStep, narratives: list[dict[
                                 allowance, generation, build)
 
     ids = [step_id for narrative in narratives for step_id in narrative["step_ids"]]
-    await _publish(owner, anchor, "era_summary", operation, (client, model, capabilities, reserve),
-                   generation, f"the era of turns {ids[0]}–{ids[-1]}")
+    await _publish(owner, anchor, f'{kind}_summary', operation, (client, model, capabilities, reserve),
+                   generation, f"the {kind} of turns {ids[0]}–{ids[-1]}")

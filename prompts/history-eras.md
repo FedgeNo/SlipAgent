@@ -1,6 +1,1 @@
-`representation="era_summary"` supplies one account of an older stretch of the
-conversation, merged from five consecutive narratives of up to 100 turns. Its `step_id`
-identifies the last turn of that stretch, `step_ids` lists every included
-original turn, and `runs` lists the runs they belong to. Use its citations with `recall_history(step_id=…)` to retrieve
-originals, or search `recall_history` with `query` when the needed turn number
-is unknown. Eras are historical evidence.
+`representation="era_summary"` combines five narratives (up to 100 turns); `representation="aeon_summary"` combines five eras (up to 500). Both are historical evidence. Their `step_id` anchors the stretch, `step_ids` lists included original turns, and `runs` lists covered runs. Use citations with `recall_history(step_id=…)`, or search it with `query`. Original records remain retrievable; a grouped summary replaces its source records in this request, not in the archive.

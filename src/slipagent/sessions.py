@@ -444,12 +444,15 @@ class SessionJournal:
                      user_edits=getattr(step, "user_edits", None),
                      background_commands=getattr(step, "background_commands", None))
         if (getattr(step, "historical_summary", None) is not None or getattr(step, "history_merge_attempt", 0) > 0
-                or getattr(step, "era_summary", None) is not None or getattr(step, "era_attempt", 0) > 0):
+                or getattr(step, "era_summary", None) is not None or getattr(step, "era_attempt", 0) > 0
+                or getattr(step, 'aeon_summary', None) is not None or getattr(step, 'aeon_attempt', 0) > 0):
             self._append("history_merge", id=step.id,
                          summary=getattr(step, "historical_summary", None),
                          attempted_at=getattr(step, "history_merge_attempt", 0),
                          era=getattr(step, "era_summary", None),
-                         era_attempted_at=getattr(step, "era_attempt", 0))
+                         era_attempted_at=getattr(step, "era_attempt", 0),
+                         aeon=getattr(step, 'aeon_summary', None),
+                         aeon_attempted_at=getattr(step, 'aeon_attempt', 0))
 
     def tool_started(self, step_id: int, call_id: str) -> None:
         self._append("tool_start", step=step_id, call_id=call_id)
@@ -809,12 +812,13 @@ class SessionJournal:
                     batch = history.steps[previous]
                     if isinstance(batch, CompletedStep) and batch.has_results:
                         batch.observed = False
-            from .historymerge import MERGE_INTERVAL, servable, validate_era_record, validate_historical_record
+            from .historymerge import MERGE_INTERVAL, servable, validate_aeon_record, validate_era_record, validate_historical_record
             for step_id, saved in data.get("history_merges", {}).items():
                 if type(step_id) is not int or not 1 <= step_id <= len(history.steps):
                     raise ValueError("invalid historical summary anchor")
                 step = history.steps[step_id - 1]
-                for attempt_key, attribute in (("attempted_at", "history_merge_attempt"), ("era_attempted_at", "era_attempt")):
+                for attempt_key, attribute in (("attempted_at", "history_merge_attempt"), ("era_attempted_at", "era_attempt"),
+                                               ('aeon_attempted_at', 'aeon_attempt')):
                     attempted = saved.get(attempt_key, 0)
                     if type(attempted) is not int or (attempted and not step_id <= attempted <= len(history.steps)):
                         raise ValueError("invalid historical merge attempt")
@@ -829,6 +833,10 @@ class SessionJournal:
                 if era is not None:
                     validate_era_record(era, step_id, len(history.steps))
                     setattr(step, "era_summary", era)
+                aeon = saved.get('aeon')
+                if aeon is not None:
+                    validate_aeon_record(aeon, step_id, len(history.steps))
+                    setattr(step, 'aeon_summary', aeon)
             data["history"] = history
             for step in history.steps:
                 if isinstance(step, CompletedStep):

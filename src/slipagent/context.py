@@ -115,7 +115,7 @@ HISTORY_GUIDANCE: dict[str, Callable[[list[dict[str, Any]]], bool]] = {
         record.get("representation") == "excerpt" or record.get("excerpted_fields") for record in records),
     "history-failed-requests.md": lambda records: any("request_failure" in record for record in records),
     "history-narratives.md": lambda records: any(record.get("representation") == "historical_summary" for record in records),
-    "history-eras.md": lambda records: any(record.get("representation") == "era_summary" for record in records),
+    "history-eras.md": lambda records: any(record.get("representation") in {'era_summary', 'aeon_summary'} for record in records),
 }
 
 
@@ -327,6 +327,8 @@ class CompletedStep(HistoryStep):
     _disk_group_state: Any
     _disk_era: dict[str, Any]
     _disk_era_state: Any
+    _disk_aeon: dict[str, Any]
+    _disk_aeon_state: Any
 
     @property
     def request(self) -> str:
@@ -761,7 +763,7 @@ class ConversationHistory:
         required = {len(self.steps) - 1} if required_last else set()
         if unseen_results is not None:
             required.add(unseen_results)
-        from .historymerge import era_records, historical_records
+        from .historymerge import aeon_records, era_records, historical_records
         parts: dict[tuple[int, bool], list[Message]] = {}
         costs: dict[tuple[int, bool], HistorySize] = {}
         sizing = HistorySizeIndex(TokenEstimates().history_bytes)
@@ -823,7 +825,7 @@ class ConversationHistory:
         count = len(self.steps)
         recent_start = max(0, count - RECENT_FULL_STEPS)
         older_end = min(recent_start, count - (count + 2) // 3)
-        FULL, STEP, NARRATIVE, ERA, PARTIAL, DROPPED = range(6)
+        FULL, STEP, NARRATIVE, ERA, AEON, PARTIAL, DROPPED = range(7)
         level = [FULL] * count
         unit_records: dict[int, dict[str, Any]] = {}
         unit_costs = [supplied(index, False)[1] for index in range(count)]
@@ -877,7 +879,7 @@ class ConversationHistory:
                 return False
             current: dict[int, HistorySize] = {}
             for index in members:
-                if level[index] in (NARRATIVE, ERA):
+                if level[index] in (NARRATIVE, ERA, AEON):
                     covering = unit_records[index]
                     current[-id(covering)] = record_costs[id(covering)]
                 else:
@@ -897,7 +899,7 @@ class ConversationHistory:
         def drop_step(index: int) -> bool:
             if index in required or level[index] == DROPPED:
                 return False
-            if level[index] in (NARRATIVE, ERA):
+            if level[index] in (NARRATIVE, ERA, AEON):
                 record = unit_records[index]
                 members = [member for member in range(count)
                            if level[member] == level[index] and unit_records.get(member) is record]
@@ -978,6 +980,9 @@ class ConversationHistory:
                 for record in era_records(self.steps):
                     if merge_into(record, ERA, "_era_size", boundary):
                         yield
+                for record in aeon_records(self.steps):
+                    if merge_into(record, AEON, '_aeon_size', boundary):
+                        yield
                 first = boundary
             # Exhaust each older turn before touching a newer one. The newest
             # five stay original until reductions outside that window cannot fit.
@@ -1016,7 +1021,7 @@ class ConversationHistory:
                     entries.append((self.steps[index].id, supplied(index, level[index] == STEP)[0]))
                 elif level[index] == PARTIAL:
                     entries.append((self.steps[index].id, partials[index]))
-                elif level[index] in (NARRATIVE, ERA):
+                elif level[index] in (NARRATIVE, ERA, AEON):
                     record = unit_records[index]
                     if record["step_id"] not in emitted:
                         emitted.add(record["step_id"])
@@ -1042,6 +1047,8 @@ class ConversationHistory:
                 merge_into(record, NARRATIVE, "_narrative_size", boundary)
             for record in era_records(self.steps):
                 merge_into(record, ERA, "_era_size", boundary)
+            for record in aeon_records(self.steps):
+                merge_into(record, AEON, '_aeon_size', boundary)
 
         if total_bytes() <= available:
             return finish(selection())

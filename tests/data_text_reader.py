@@ -105,10 +105,16 @@ def read_json_input(text):
         return json.loads(text[cursor + len(current_header):])
     payload, cursor = json.JSONDecoder().raw_decode(text, cursor)
     blocks = {}
+    calls = []
     while cursor < len(text):
         if text.startswith(current_header, cursor):
             payload.update(json.loads(text[cursor + len(current_header):]))
             break
+        call_header = "\n\nTool Call Block:\n"
+        if text.startswith(call_header, cursor):
+            call, cursor = json.JSONDecoder().raw_decode(text, cursor + len(call_header))
+            calls.append(call)
+            continue
         match = re.match(r"\n\nTool Result Block (\d+) \((\d+) characters\):\n", text[cursor:])
         assert match, repr(text[cursor:])
         cursor += match.end()
@@ -117,17 +123,25 @@ def read_json_input(text):
         assert len(blocks[int(match[1])]) == length
         cursor += length
 
+    call_blocks = iter(calls)
+
     def restore(value):
         if isinstance(value, list):
             return [restore(item) for item in value]
         if isinstance(value, dict):
+            if set(value) == {"tool_call_block"}:
+                call = next(call_blocks)
+                assert call['call_id'] == value['tool_call_block']
+                return restore(call)
             if set(value) == {"tool_result_block", "characters", "format"}:
                 original = blocks[value["tool_result_block"]]
                 assert len(original) == value["characters"]
                 return json.loads(original) if value["format"] == "json" else original
             return {key: restore(item) for key, item in value.items()}
         return value
-    return restore(payload)
+    restored = restore(payload)
+    assert next(call_blocks, None) is None
+    return restored
 
 
 def system_tool_definitions(system):

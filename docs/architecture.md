@@ -181,7 +181,8 @@ Tool-call arguments, structured tool results, observation envelopes, input recor
 and frozen compaction inputs remain dictionaries or lists internally. External JSON
 text is decoded at entry. File contents and command output remain literal string
 fields. Working-model user input serializes labelled Historical Context (an
-indented history JSON object and its literal tool-result blocks), followed by a
+indented history JSON object referencing Tool Call Blocks, each immediately
+followed by its literal tool-result blocks), followed by a
 labelled Current Request JSON object at the very end of the message. System data
 sections, compression inputs, and terminal output use labelled literal text.
 Journals and HTTP transport encode JSON only at their destination boundaries.

@@ -33,13 +33,17 @@ notifications or selected history with saved edits. Requests without them omit
 both the fields and that guidance.
 
 Each full history record contains `user_prompts`, `agent_response`, and `tool_calls`. `user_prompts` lists only the messages the user sent in that step.
-Each call retains its `call_id`, `tool_name`, and argument object, with its raw
+Each entry references a Tool Call Block by `call_id`. That block retains the
+call's `call_id`, `tool_name`, and argument object, with its raw
 outcome reference under `result` for success or `error` for failure. Legacy observations
 without a recorded status use `unclassified_result`. Labels belong to keys;
 no classification prefixes are inserted into result contents. Each reference identifies a numbered block, its character count, and its `text` or `json` format. Textual results are copied verbatim, even when they resemble JSON. Explicitly structured results use pretty-printed JSON blocks.
 
 Records remain raw objects and lists internally. At the message boundary the
-user-input metadata is serialized and exact result blocks are appended without extra escaping or indentation. The HTTP client then encodes the
+user-input metadata is serialized, then each call block is followed immediately
+by its exact result blocks without extra escaping or indentation. Arguments and
+result bodies appear once. Saved originals and indexed retrieval keep their
+existing shape. The HTTP client then encodes the
 provider's required transport envelope; native tool-call arguments also use the
 JSON string required by that protocol. Quotes, backslashes, and newlines round-trip
 without changing the values or allowing text to create sibling input fields.

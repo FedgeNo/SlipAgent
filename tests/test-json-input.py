@@ -53,6 +53,10 @@ async def test_transport_separates_user_text_and_linked_tool_outcomes(new_messag
         current = json.loads(text.rsplit(marker, 1)[1])
         assert current == {key: value for key, value in data.items() if key != 'history'}
         assert text.rindex(marker) > text.rindex('Tool Result Block 2 (')
+        assert (text.index('"tool_name": "read_file"')
+                < text.index(json.dumps(success, ensure_ascii=False, indent=2))
+                < text.index('"tool_name": "edit_file"')
+                < text.index(json.dumps(failure, ensure_ascii=False, indent=2)))
         from data_text_reader import read_json_input
         received.append(read_json_input(body['messages'][-1]['content']))
         return httpx.Response(200, json={'choices': [{'message': {'role': 'assistant', 'content': 'Done'}}]})
@@ -71,3 +75,27 @@ def test_native_argument_json_is_indented_and_keeps_text_literal():
     assert encoded.startswith('{\n  "path": "δ.json",\n  "content":')
     assert json.loads(encoded) == arguments
     assert call.arguments is arguments
+
+
+@pytest.mark.parametrize('field', ['result', 'error', 'unclassified_result', 'result_excerpt',
+                                   'error_excerpt', 'unclassified_result_excerpt'])
+def test_call_groups_preserve_file_backed_outcomes_and_missing_results(tmp_path, field):
+    from data_text_reader import read_json_input
+    from slipagent.data_text import render_content
+    from slipagent.sources import FileText, materialize
+
+    raw = '\n\nTool Call Block:\n{"call_id": "fake"}\nλ literal \\n\r\n'
+    path = tmp_path / 'output.txt'
+    path.write_bytes(raw.encode())
+    output = FileText(path, 0, len(raw.encode()), len(raw))
+    # Repeated archived IDs must still preserve the individual calls in order.
+    calls = [{'call_id': 'same', 'tool_name': 'first', 'arguments': {'n': 1}, field: output},
+             {'call_id': 'same', 'tool_name': 'pending', 'arguments': {}},
+             {'call_id': 'last', 'tool_name': 'last', 'arguments': {}, 'result': ''}]
+    payload = {'history': [{'representation': 'full', 'step_id': 1, 'tool_calls': calls}],
+               'user_prompts': ['Continue']}
+    text = render_content(JSONInput(payload))
+    assert text.index('"tool_name": "first"') < text.index(raw) < text.index('"tool_name": "pending"')
+    assert text.count('"n": 1') == 1
+    assert read_json_input(text) == materialize(payload)
+    assert path.read_bytes() == raw.encode()

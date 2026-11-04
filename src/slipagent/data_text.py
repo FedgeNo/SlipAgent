@@ -50,7 +50,8 @@ def content_chunks(value: Any) -> Iterator[str]:
     if isinstance(value, TextSource):
         yield from value.chunks()
     elif isinstance(value, JSONInput):
-        blocks: list[tuple[Any, int]] = []
+        groups: list[tuple[dict[str, Any], list[tuple[Any, int, int]]]] = []
+        block_count = 0
 
         payload = dict(value.data)
         if "history" in payload:
@@ -63,24 +64,32 @@ def content_chunks(value: Any) -> Iterator[str]:
                 calls = []
                 for call in record["tool_calls"]:
                     result = dict(call)
+                    blocks = []
                     for key in ("result", "error", "unclassified_result", "result_excerpt", "error_excerpt", "unclassified_result_excerpt"):
                         if key not in call:
                             continue
                         child = call[key]
                         characters = len(child) if isinstance(child, (str, FileText)) else sum(map(len, json_chunks(child)))
-                        blocks.append((child, characters))
-                        result[key] = {"tool_result_block": len(blocks), "characters": characters,
+                        block_count += 1
+                        blocks.append((child, characters, block_count))
+                        result[key] = {"tool_result_block": block_count, "characters": characters,
                                        "format": "text" if isinstance(child, (str, FileText)) else "json"}
-                    calls.append(result)
+                    calls.append({"tool_call_block": call["call_id"]})
+                    groups.append((result, blocks))
                 projected["tool_calls"] = calls
                 history.append(projected)
             payload["history"] = history
         if "history" in payload:
             yield load_prompt("input-history.md").strip() + "\n\n"
             yield from json_chunks({"history": payload.pop("history")})
-        for index, (text, characters) in enumerate(blocks, 1):
-            yield f"\n\nTool Result Block {index} ({characters} characters):\n"
-            yield from text_chunks(text) if isinstance(text, (str, FileText)) else json_chunks(text)
+        for call, blocks in groups:
+            # Keep arguments beside their observations without copying payloads
+            # into the history metadata or escaping literal tool output.
+            yield "\n\nTool Call Block:\n"
+            yield from json_chunks(call)
+            for text, characters, index in blocks:
+                yield f"\n\nTool Result Block {index} ({characters} characters):\n"
+                yield from text_chunks(text) if isinstance(text, (str, FileText)) else json_chunks(text)
         if payload:
             # Keep the actual request after every historical observation, even
             # when observations stream from disk and contain apparent headings.

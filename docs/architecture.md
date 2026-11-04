@@ -335,8 +335,10 @@ Context construction proceeds in this order:
    for system data sections, compression input, and archive retrieval.
    Every step is sent in full while the history fits the budget. Over budget,
    `ConversationHistory.view` applies reductions from the oldest end until the
-   indexed size fits within the limit: step
-   summaries outside the newest five turns, then each eligible narrative and era.
+   indexed size fits within the limit: step summaries in the older two thirds,
+   then each eligible narrative and era wholly within that region. If needed,
+   repeat those levels outside the newest five turns. The newer third is rounded
+   up and the five-turn protection takes precedence for short histories.
    It then exhausts older turns through excerpts and omission before reducing
    any newer turn. The newest five remain original when they fit after those
    older reductions. Within that window, summaries, excerpts, and omission

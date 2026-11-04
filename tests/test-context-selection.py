@@ -331,6 +331,35 @@ async def test_over_budget_summarizes_only_the_oldest_steps_needed():
     assert message_tokens(view) <= int(length * .85) - 1000
 
 
+@pytest.mark.parametrize('representation,span,attribute', [
+    ('historical_summary', 20, 'historical_summary'),
+    ('era_summary', 100, 'era_summary'),
+])
+async def test_older_groups_preserve_the_newest_third(representation, span, attribute):
+    history, messages = conversation([f'Original {index}: ' + 'x' * 4000 for index in range(180)])
+    for step in history.steps:
+        step.summary = f'Summary {step.id}: ' + 's' * 2000
+        step.observed = True
+    history.compact_through = 120
+    individual = await history.view(messages, [], keep_steps=5,
+                                    context_length=1_000_000, max_output=1000)
+    history.compact_through = 0
+    record = {'record_type': 'history_step', 'representation': representation,
+              'step_id': span, 'step_ids': list(range(1, span + 1)),
+              'compressed_summary': 'Older durable findings.', 'created_at_step': 180}
+    setattr(history.steps[span - 1], attribute, record)
+    # The input allowance is 1,000 tokens below the individually summarized view.
+    length = int(message_tokens(individual) / .85)
+    view = await history.view(messages, [], keep_steps=5,
+                              context_length=length, max_output=1000)
+    records = [record for record in context_records(view) if record['record_type'] == 'history_step']
+    assert any(record['representation'] == representation for record in records)
+    recent = [record for record in records if record['step_id'] > 120]
+    assert len(recent) == 60
+    assert all(record['representation'] == 'full' for record in recent)
+    assert message_tokens(view) <= int(length * .85) - 1000
+
+
 @pytest.mark.parametrize('archived', [False, True])
 @pytest.mark.parametrize('native', [False, True])
 async def test_budget_selection_sends_exactly_one_oldest_summary(tmp_path, archived, native):

@@ -363,13 +363,14 @@ async def test_narratives_replace_their_block_only_under_budget_pressure():
     roomy = request_input(await history.view(messages, [], keep_steps=50, context_length=1_000_000, max_output=1000))
     assert all(record["representation"] == "full" for record in roomy["history"])
     medium = request_input(await history.view(messages, [], keep_steps=50, context_length=66_000, max_output=1000))
-    assert all(record['representation'] in {'full', 'compressed'} for record in medium['history'])
+    assert medium['history'][0]['representation'] == 'historical_summary'
+    assert [record['step_id'] for record in medium['history'] if record['representation'] == 'full'] == list(range(21, 31))
     view = await history.view(messages, [], keep_steps=50, context_length=55_000, max_output=1000)
     records = request_input(view)["history"]
     narrative = next(record for record in records if record["representation"] == "historical_summary")
     assert narrative["step_ids"] == list(range(1, 21))
     assert not any(record["step_id"] < 20 for record in records)
-    assert [record["step_id"] for record in records if record["representation"] == "full"] == list(range(26, 31))
+    assert [record["step_id"] for record in records if record["representation"] == "full"] == list(range(21, 31))
     assert message_tokens(view) <= int(55_000 * .85) - 1000
     recalled = await RecallHistoryTool(history).invoke({"step_id": 1, "call_id": "read-1"})
     assert "ORIGINAL " * 1000 in content_text(recalled.content)

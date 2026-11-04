@@ -368,13 +368,17 @@ from the bytes of each record and scaled by measured calibration.
 When the full history does not fit, SlipAgent compresses **from the oldest end,
 only as far as needed**, and stops as soon as the request fits:
 
-1. Individual steps outside the **latest five** are replaced by their summaries,
-   oldest first. A step whose summary is missing or
+1. Individual steps in the **older two thirds** are replaced by their summaries,
+   oldest first. At least the latest five are excluded. A step whose summary is missing or
    no smaller keeps its original.
-2. Each narrative block that lies wholly in the summarized part is replaced by
+2. Each available narrative block wholly within that older region is replaced by
    its **narrative**, oldest first. A block follows runs: it closes at the end of
    a run once it holds **10 steps**, and a longer run is cut every **20 steps**.
-3. Each **five consecutive narratives** are replaced by their **era**, oldest first.
+3. Each available **era** wholly within that region replaces its source records,
+   oldest first. An era summarizes **five consecutive narratives**. If still over
+   budget, repeat these three levels for the remaining turns outside the latest
+   five. The newest third (rounded up) therefore stays full until available older
+   narratives and eras have been tried; it is a preference, not a hard reservation.
 4. If still over budget, older records are excerpted and then omitted, oldest
    first, before reducing newer records. The newest five can use smaller summaries
    and excerpts only after older optional history is exhausted.

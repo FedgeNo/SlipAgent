@@ -815,11 +815,12 @@ class ConversationHistory:
             return parts[key], costs[key]
 
         # Selection starts from full originals on every request and compresses
-        # only what the budget requires, always from the oldest end: step
-        # summaries and grouped memory outside the newest five, then exhaust
-        # older turns before reducing newer ones. keep_steps is compatibility only.
+        # only what the budget requires. Consolidate the older two thirds
+        # before summarizing the newer third; the newest five remain the
+        # last resort. keep_steps is compatibility only.
         count = len(self.steps)
         recent_start = max(0, count - RECENT_FULL_STEPS)
+        older_end = min(recent_start, count - (count + 2) // 3)
         FULL, STEP, NARRATIVE, ERA, PARTIAL, DROPPED = range(6)
         level = [FULL] * count
         unit_records: dict[int, dict[str, Any]] = {}
@@ -955,15 +956,18 @@ class ConversationHistory:
             return True
 
         async def reductions() -> AsyncIterator[None]:
-            for index in range(recent_start):
-                if summarize_step(index):
-                    yield
-            for record in historical_records(self.steps):
-                if merge_into(record, NARRATIVE, "_narrative_size", recent_start):
-                    yield
-            for record in era_records(self.steps):
-                if merge_into(record, ERA, "_era_size", recent_start):
-                    yield
+            first = 0
+            for boundary in (older_end, recent_start):
+                for index in range(first, boundary):
+                    if summarize_step(index):
+                        yield
+                for record in historical_records(self.steps):
+                    if merge_into(record, NARRATIVE, "_narrative_size", boundary):
+                        yield
+                for record in era_records(self.steps):
+                    if merge_into(record, ERA, "_era_size", boundary):
+                        yield
+                first = boundary
             # Exhaust each older turn before touching a newer one. The newest
             # five stay original until reductions outside that window cannot fit.
             for index in range(count):

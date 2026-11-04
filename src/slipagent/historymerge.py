@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any, TypeGuard
 
 from .capabilities import RequestProfile, model_context_limit
 from .prompts import load_prompt
-from .records import response_source, step_record
+from .records import history_metadata, response_source, step_record
 from .types import Message
 
 if TYPE_CHECKING:
@@ -63,13 +63,13 @@ def servable(record: Any, interval: int) -> TypeGuard[dict[str, Any]]:
 
 def historical_records(steps: list[HistoryStep]) -> list[dict[str, Any]]:
     """Narratives, oldest first."""
-    return [_with_response_sources(steps, step, getattr(step, "_disk_group", record), '_group_sources') for step in steps
+    return [_with_response_sources(steps, step, getattr(step, "_disk_group", record), '_group_metadata_sources') for step in steps
             if servable(record := getattr(step, "historical_summary", None), MERGE_INTERVAL)]
 
 
 def era_records(steps: list[HistoryStep]) -> list[dict[str, Any]]:
     """Eras, oldest first."""
-    return [_with_response_sources(steps, step, getattr(step, "_disk_era", record), '_era_sources') for step in steps
+    return [_with_response_sources(steps, step, getattr(step, "_disk_era", record), '_era_metadata_sources') for step in steps
             if servable(record := getattr(step, "era_summary", None), ERA_INTERVAL)]
 
 
@@ -90,7 +90,7 @@ def _with_response_sources(steps: list[HistoryStep], anchor: HistoryStep,
             previous['last_step'] = step_id
         else:
             ranges.append({'first_step': step_id, 'last_step': step_id, **source})
-    enriched = {**record, 'response_sources': ranges} if ranges else record
+    enriched = history_metadata({**record, 'response_sources': ranges} if ranges else record)
     anchor.__dict__[cache_key] = (record, enriched)
     return enriched
 

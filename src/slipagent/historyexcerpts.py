@@ -11,8 +11,8 @@ from .sources import FileText, json_chunks, text_chunks
 
 def excerpt_fields(record: dict[str, Any], budget: int,
                    measure: Callable[[dict[str, Any]], int], *, results_only: bool = False,
-                   prefer_results: bool = False) -> dict[str, Any] | None:
-    """Trim tool content first, or optional prose to preserve a fitting newest batch.
+                   prefer_results: bool = False, reasoning_first: bool = False) -> dict[str, Any] | None:
+    """Trim fields in the caller's order of evidence and reasoning priority.
 
     When the requested budget cannot hold even minimal metadata, return the
     smallest useful projection so the caller can reduce another large turn.
@@ -80,7 +80,11 @@ def excerpt_fields(record: dict[str, Any], budget: int,
     for index, result in enumerate(record.get("tool_results", [])):
         results.extend(candidates(result["content"], ["tool_results", index, "content"]))
     prose = [candidates(record.get(field), [field]) for field in ('reasoning', 'agent_response')]
-    groups = [*prose, results] if prefer_results else [results, *prose]
+    groups = [results, *prose]
+    if reasoning_first:
+        groups = [prose[0], results, prose[1]]
+    if prefer_results:
+        groups = [*prose, results]
     for field in ("user_edits", "background_commands"):
         groups.append(candidates(record.get(field), [field]))
     failure = record.get("request_failure")

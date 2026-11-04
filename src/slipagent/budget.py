@@ -16,14 +16,12 @@ class ContextBudget:
         self.model = ""
         self.profile: Any = None
         self.scale = 1.0
-        self.fraction = 1.0
         self.measurements: deque[float] = deque(maxlen=CALIBRATION_WINDOW)
 
     def select(self, model: str, profile: Any) -> float:
         # Refreshing endpoint metadata invalidates measurements for old routing.
         if self.model != model or self.profile is not profile:
             self.model, self.profile, self.scale = model, profile, 1.0
-            self.fraction = 1.0
             self.measurements = deque(maxlen=CALIBRATION_WINDOW)
         return self.scale
 

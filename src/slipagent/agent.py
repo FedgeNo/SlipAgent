@@ -442,7 +442,7 @@ class Agent:
 
     async def _context_view(self, specs: list[ToolSpec], step: int, *,
                             capabilities: RequestProfile | None = None, preview: bool = False,
-                            repair: str = "", budget_fraction: float | None = None,
+                            repair: str = "",
                             candidate_model: str | None = None) -> list[Message]:
         """Assemble the exact model-visible state within its endpoint limits.
 
@@ -486,7 +486,7 @@ class Agent:
         with nullcontext() if preview else timing_log(self.registry).measure('context_selection', step):
             return await builder.build(
                 specs, length, self._uses_native_tools(capabilities, model=model), capabilities=capabilities,
-                preview=preview, repair=repair, budget_fraction=budget_fraction,
+                preview=preview, repair=repair,
             )
 
     def _uses_native_tools(self, capabilities: RequestProfile | None, *, model: str | None = None) -> bool:
@@ -561,7 +561,7 @@ class Agent:
                 self._emit(AgentEvent(kind="user_message_sent", text=text))
 
     async def _queued_context(self, specs: list[ToolSpec], step: int, *,
-                              repair: str = "", budget_fraction: float | None = None) -> list[Message]:
+                              repair: str = "") -> list[Message]:
         # Context preparation can yield to input. Rebuild if more prompts arrive
         # so every message waiting at submission joins the same request.
         while True:
@@ -574,7 +574,7 @@ class Agent:
                     activated[index] = text
             queue = input_queue(self)
             signature = queue.signature()
-            context = await self._context_view(specs, step, repair=repair, budget_fraction=budget_fraction)
+            context = await self._context_view(specs, step, repair=repair)
             if not self.pending and signature == queue.signature():
                 queue.prepared = signature
                 return context
@@ -725,8 +725,8 @@ class Agent:
             self.client, self.registry, self._budget(),
             RequestSettings(self.model, self.temperature, self.max_tokens, self.session_id),
             RequestHooks(
-                context=lambda repair, fraction: self._queued_context(
-                    specs, len(self.history.steps) + 1, repair=repair, budget_fraction=fraction),
+                context=lambda repair: self._queued_context(
+                    specs, len(self.history.steps) + 1, repair=repair),
                 reserve=self._reserve_request, exhausted=lambda: self._requests >= self.max_steps,
                 has_pending=lambda: bool(self.pending) or input_queue(self).changed(), delivered=self._queued_messages_sent,
                 account=self._account_usage, persist=self._persist, emit=self._emit,

@@ -17,6 +17,7 @@ from .environment import harness_python_environment, session_environment
 from .mcp import MCPTool
 from .prompts import PromptSections, load_prompt, model_prompt_profile
 from .protocol import model_response_format
+from .records import history_metadata
 from .repomap import RepositoryMap
 from .tools.base import ToolRegistry
 from .tools.blocking import run_blocking
@@ -48,7 +49,7 @@ class ContextBuilder:
     async def build(
         self, specs: list[ToolSpec], length: int, native_tools: bool, *,
         capabilities: RequestProfile | None = None, preview: bool = False,
-        repair: str = "", budget_fraction: float | None = None,
+        repair: str = "",
     ) -> list[Message]:
         model_profile = model_prompt_profile(self.settings.model)
         length = model_context_limit(self.settings.model, capabilities, length)
@@ -185,7 +186,7 @@ class ContextBuilder:
                          references=json.dumps(references, ensure_ascii=False, indent=2)), 46, owner="user")
         jobs = self.registry.resources.jobs
         if "monitor_command" in available_names and jobs is not None:
-            monitors = jobs.monitors.snapshots()
+            monitors = [history_metadata(monitor) for monitor in jobs.monitors.snapshots()]
             if not monitors:
                 sections.add("monitor_setup", "Command Monitoring Setup", load_prompt("monitor-setup.md"), 47)
             active = [monitor for monitor in monitors if monitor["state"] == "active"]
@@ -200,20 +201,22 @@ class ContextBuilder:
         if not preview:
             self.registry.services["background_snapshot"] = copy.deepcopy(
                 state_notes.get("background_commands", {}).get("completed", []))
+        if 'background_commands' in state_notes:
+            background = state_notes['background_commands']
+            state_notes['background_commands'] = {**background,
+                'completed': [history_metadata(job) for job in background.get('completed', [])]}
         if state_notes:
             sections.add("state", "Current Harness State", load_prompt('harness-state.md', state=render_data(state_notes)), 50)
         extra_instructions = sections.render()
         budget = copy.copy(self.budget) if preview else self.budget
         token_scale = budget.select(self.settings.model, capabilities)
-        if budget_fraction is None:
-            budget_fraction = budget.fraction
         history = replace(self.history, steps=list(self.history.steps), task=copy.deepcopy(self.history.task)) if preview else self.history
         repository_map = ""
         if environment is not None:
             if self.registry.resources.repository_map is None:
                 self.registry.resources.repository_map = RepositoryMap(environment.workspace)
             query = next((m.content or "" for m in reversed(self.messages) if m.role == "user"), "")
-            repository_map = await self.registry.resources.repository_map.snapshot(query, min(128_000, int(length * budget_fraction * .03 * 3)))
+            repository_map = await self.registry.resources.repository_map.snapshot(query, min(128_000, int(length * .03 * 3)))
         view_options: dict[str, Any] = dict(
             user_edits=[{**entry, "edit_id": key} for key, entry in self.registry.context_notes.get("user_edits", {}).items()
                         if not entry.get("delivered")],
@@ -224,7 +227,7 @@ class ContextBuilder:
             overthinking=self.settings.overthinking,
             reasoning_history_steps=self.settings.reasoning_history_steps,
             filtered_thoughts=self.settings.filtered_thoughts,
-            context_length=int(length * budget_fraction),
+            context_length=length,
             max_output=self.settings.max_tokens or min(8192, max(256, length // 8)),
             native_tools=native_tools,
             text_tool_history=not native_tools,

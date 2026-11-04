@@ -396,10 +396,11 @@ Context construction proceeds in this order:
    occupy `response_excerpts`. Request assembly does not append its JSON envelope,
    tool definitions, or system guidance to archived turns.
    Before omitting an individual turn, field-level excerpts preserve its identity and
-   fitting fields. `historyexcerpts.py` shortens the largest tool-result content
-   first, preserving smaller results, arguments, reply text, and reasoning when
-   they fit. Only after result reductions prove insufficient may it shorten
-   reasoning/reply text, delivered edit/background metadata, arguments, or
+   fitting fields. `historyexcerpts.py` normally shortens reasoning before tool
+   results. Outside the newest five turns, a single result larger than both the
+   available record budget and four times its reasoning size can be shortened
+   first, retaining a much smaller interpretation of old monolithic output.
+   Remaining reductions shorten reply text, delivered edit/background metadata, arguments, or
    historical user messages. An older turn is removed if its remaining metadata
    still cannot fit, before touching newer observations. If the newest tool
    batch fits without its optional reasoning/reply prose, that prose is shortened
@@ -446,13 +447,11 @@ candidate's explicit capability profile, whose context length must be a positive
 prompt tokens, including its tool/schema overhead. The multiplier is the mean measured-to-estimated ratio of the latest five valid measurements with a 10% safety margin. It can rise or fall, resets on model/profile replacement, and does not change configured limits. Existing live instances initialize the measurement window at their next observation. It is applied to a fresh
 estimate of each selected view; old absolute usage is never applied to a newly
 compacted history. Compaction requests do not update this calibration.
-The reduced fraction learned during overflow recovery persists until the
-model/profile changes, avoiding the same oversized history on the next call.
-Explicit provider input-context errors allow two smaller-budget retries, each
-reserving a working request. They do not consume the malformed-response retry
-counter, duplicate tools, or modify originals. Stop and request limits still
-apply. If the next request would be identical, recovery reports that it cannot
-shrink further instead of resending it.
+Explicit provider input-context errors are recorded as failed attempts and
+reported without automatically retrying with less history. Context selection
+uses the configured allowance on every request; a provider rejection does not
+introduce a persistent reduction or alter originals. Other configured model
+fallback behavior remains independent of context budgeting.
 
 `RepositoryMap` adds optional, budgeted orientation. Files are bounded by count,
 traversal time, source bytes and output characters. Python ASTs and bundled
@@ -927,6 +926,16 @@ The block's last `CompletedStep` owns its `historical_summary` record, and the
 last step of an era's fifth block owns its `era_summary`. Narratives retain
 `step_ids`, `runs`, and `sources` (turn IDs, runs, call IDs, names and artifact references)
 copied by the harness, independent of generated prose; eras retain `step_ids` and `runs`.
+Model-facing artifact references retain record/step/call IDs, tool name when
+present, kind, filename/path, and byte size. Full command scripts, embedded
+documents, error bodies, and storage payload descriptors remain original data;
+they are not copied into reference metadata. This projection also applies to
+already-saved narratives, without rewriting their archives. Size indexes measure
+the same projected references that the model receives.
+Background-job notifications use the same artifact projection. Their command
+identity is a first-line preview of at most 120 characters with an explicit
+truncation flag; complete commands remain in logs and original calls. This also
+applies to saved background notifications and current monitor references.
 Anchors store `history_merge_attempt` and `era_attempt` before dispatch; journal
 `history_merge` events persist all four fields. Resume validates IDs and metadata
 shape; a narrative without `runs` must match a fixed 20-turn block, and one that

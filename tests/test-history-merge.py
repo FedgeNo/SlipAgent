@@ -125,7 +125,7 @@ async def test_each_fixed_block_of_twenty_gets_a_narrative_as_soon_as_its_summar
     assert record["step_ids"] == list(range(1, 21)) and record["step_id"] == 20
     assert record["created_at_step"] == 20
     assert record["sources"][0] == {"step_id": 1, "run": 1, "tool_calls": [{"call_id": "read-1", "tool_name": "read_file"}],
-                                      "artifacts": [{"record_id": 1, "step_id": 1, "call_id": "read-1"}]}
+                                      "artifacts": [{"record_id": 1, "step_id": 1, "call_id": "read-1", "tool_name": "read_file"}]}
     prompt = content_text(client.calls[0]["messages"][0].content)
     assert "one compact narrative" in prompt and "original `step_id` numbers" in prompt and "call_id" in prompt
     assert [step.full_text() for step in history.steps] == originals
@@ -393,6 +393,55 @@ def attach_layers(history):
             "compressed_summary": f"ERA {era * 100 + 1}-{era * 100 + 100} " + "saga " * 300, "created_at_step": anchor.id}
 
 
+@pytest.mark.parametrize('representation', ['full', 'compressed', 'historical_summary'])
+@pytest.mark.parametrize('archived', [False, True])
+async def test_artifact_metadata_excludes_payloads_but_originals_remain_retrievable(tmp_path, representation, archived):
+    from slipagent.turnstore import TurnStore
+
+    history, messages = history_with_posts(20, size=70)
+    reference = {'record_id': 1, 'step_id': 1, 'call_id': 'read-1', 'kind': 'command',
+                 'filename': '1.v2.json', 'bytes': 123,
+                 'command': 'python - <<\'PY\'\n' + 'DOCUMENT PAYLOAD ' * 1000,
+                 'payloads': {'output': {'sha256': 'private-storage-detail'}},
+                 'format_version': 2, 'error_suffix': 'error body', 'record_bytes': 456}
+    history.steps[0].messages[-1].content['artifacts'] = [reference]
+    history.steps[0].background_commands = [{'log_id': 'background-1', 'command': reference['command'],
+                                           'streams': {}, 'artifacts': [reference]}]
+    store = TurnStore(tmp_path / 'turns')
+    try:
+        if archived:
+            for step in history.steps:
+                store.archive(step, messages)
+        if representation == 'compressed':
+            history.compact_through = 1
+        elif representation == 'historical_summary':
+            attach_layers(history)
+            history.steps[19].historical_summary['sources'][0]['artifacts'] = [reference]
+            history.steps[19].historical_summary['sources'][0]['tool_calls'] = [
+                {'call_id': 'read-1', 'tool_name': 'read_file'}]
+            history.compact_through = 20
+        messages.append(Message.user('Continue'))
+        view = await history.view(messages, [], keep_steps=5, context_length=1_000_000, max_output=1000)
+        records = request_input(view)['history']
+        record = records[0]
+        assert record['representation'] == representation
+        refs = record['sources'][0]['artifacts'] if representation == 'historical_summary' else record['artifacts']
+        expected = {key: reference[key] for key in ('record_id', 'step_id', 'call_id', 'kind', 'filename', 'bytes')}
+        assert refs == [{**expected, 'tool_name': 'read_file'}]
+        assert 'DOCUMENT PAYLOAD' not in content_text(view[-1].content)
+        assert 'private-storage-detail' not in content_text(view[-1].content)
+        if representation != 'historical_summary':
+            background = record['background_commands'][0]
+            assert background['log_id'] == 'background-1'
+            assert background['command_preview'] == "python - <<'PY'"
+            assert background['command_truncated'] is True
+        recalled = await RecallHistoryTool(history).invoke({'step_id': 1, 'call_id': 'read-1'})
+        assert 'DOCUMENT PAYLOAD' in content_text(recalled.content)
+        assert reference['command'].endswith('DOCUMENT PAYLOAD ' * 1000)
+    finally:
+        store.close()
+
+
 async def test_compression_levels_advance_from_the_oldest_end_as_the_budget_shrinks():
     history, messages = history_with_posts(240, size=700)
     attach_layers(history)
@@ -415,6 +464,18 @@ async def test_compression_levels_advance_from_the_oldest_end_as_the_budget_shri
     # Dropping starts at the very beginning; the newest turns stay.
     covered = [step_id for record in smallest for step_id in record.get('step_ids', [record['step_id']])]
     assert min(covered) > 1 and smallest[-1]["step_id"] == 240
+
+
+async def test_multiple_eras_preserve_complete_coverage_before_omission():
+    history, messages = history_with_posts(340, size=700)
+    attach_layers(history)
+    messages.append(Message.user('Continue'))
+    view = await history.view(messages, [], keep_steps=5, context_length=40000, max_output=1000)
+    records = request_input(view)['history']
+    assert len([record for record in records if record['representation'] == 'era_summary']) == 3
+    covered = {step_id for record in records for step_id in record.get('step_ids', [record['step_id']])}
+    assert covered == set(range(1, 341))
+    assert message_tokens(view) <= int(40000 * .85) - 1000
 
 
 async def test_missing_summary_preserves_original_evidence_when_budget_allows():

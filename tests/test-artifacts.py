@@ -98,7 +98,10 @@ async def test_agent_edit_records_survive_compression_resume_and_fork(workspace,
         assert reference["call_id"] == "edit-1"
         assert "+new contents" in registry.services["artifact_store"].read(reference["record_id"])["output"]
         assert linked_tool_results(record)["tool_calls"][0]["artifacts"] == record["artifacts"]
-        assert step.context_messages(compressed=True)[0].content["artifacts"] == record["artifacts"]
+        metadata = step.context_messages(compressed=True)[0].content['artifacts'][0]
+        assert metadata['record_id'] == reference['record_id']
+        assert metadata['call_id'] == 'edit-1' and metadata['tool_name'] == 'write_file'
+        assert 'command' not in metadata and 'command' in reference
         saved = journal.load(journal.session_id)
         for fork in (False, True):
             restored_registry = build_default_registry(workspace)

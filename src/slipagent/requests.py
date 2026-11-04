@@ -42,7 +42,7 @@ class RequestSettings:
 
 @dataclass(frozen=True)
 class RequestHooks:
-    context: Callable[[str, float | None], Awaitable[list[Message]]]
+    context: Callable[[str], Awaitable[list[Message]]]
     reserve: Callable[[], None]
     exhausted: Callable[[], bool]
     has_pending: Callable[[], bool]
@@ -87,9 +87,7 @@ class RequestDriver:
             extra_body["response_format"] = response_format
         step_usage = Usage()
         attempts = 0
-        overflows = 0
         transport_retries = 0
-        budget_fraction = self.budget.fraction
         repair = ""
         start_next_step = False
         while True:
@@ -97,7 +95,7 @@ class RequestDriver:
                 self.hooks.emit(AgentEvent(kind="step_start", step=step))
                 start_next_step = False
             if self.hooks.has_pending():
-                context = await self.hooks.context(repair, budget_fraction)
+                context = await self.hooks.context(repair)
             self.hooks.reserve()
             request_estimate = 0
             diagnostic_id: int | None = None
@@ -269,26 +267,8 @@ class RequestDriver:
                 self.hooks.account(exc.usage)
                 finish_attempt("context_overflow", detail=str(exc))
                 end_preview(failed=True)
-                try:
-                    if self.hooks.stop_requested():
-                        return RequestStopped(self.hooks.stop_notice(step))
-                    if overflows >= 2:
-                        raise
-                    overflows += 1
-                    budget_fraction *= .65
-                    # Compare before adding failure bookkeeping: a new turn ID
-                    # and error record do not establish that history shrank.
-                    smaller = await self.hooks.context(repair, budget_fraction)
-                finally:
-                    record_failure("context_overflow", str(exc), exc.partial_response or exc.body or "", exc.usage)
-                # Messages and their structured contents compare by value, so
-                # an unchanged request is detected without rendering its text.
-                if smaller == context:
-                    raise ContextError("The provider rejected the current input even without removable history. Originals are preserved; shorten the input or select a larger-context model.")
-                context = await self.hooks.context(repair, budget_fraction)
-                self.budget.fraction = budget_fraction
-                self.hooks.emit(AgentEvent(kind="retry", step=step, text=f"Provider context limit reached; retrying with less history ({overflows}/2). Originals are preserved."))
-                continue
+                record_failure("context_overflow", str(exc), exc.partial_response or exc.body or "", exc.usage)
+                raise
             except APIResponseError as exc:
                 self.hooks.account(exc.usage)
                 finish_attempt("request_error", detail=str(exc), response=exc.partial_response or exc.body or "", usage=exc.usage)
@@ -312,7 +292,7 @@ class RequestDriver:
                 if not retry:
                     raise
                 transport_retries += 1
-                context = await self.hooks.context(repair, budget_fraction)
+                context = await self.hooks.context(repair)
                 continue
             except BaseException as exc:
                 finish_attempt("cancelled" if isinstance(exc, asyncio.CancelledError) else "request_error", detail=str(exc))
@@ -403,6 +383,6 @@ class RequestDriver:
                 )
             # Include diagnostics in the budget calculation, rather than append
             # them to a request that might already fill the available context.
-            context = await self.hooks.context(repair, budget_fraction)
+            context = await self.hooks.context(repair)
 
         return RequestAccepted(completion, record, step_usage)

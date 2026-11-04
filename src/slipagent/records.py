@@ -54,8 +54,37 @@ def linked_tool_results(record: dict[str, Any]) -> dict[str, Any]:
     return projected
 
 
-def record_message(record: dict[str, Any]) -> Message:
-    return Message.user(record)
+def record_message(record: dict[str, Any], *, tool_names: dict[str, str] | None = None) -> Message:
+    return Message.user(history_metadata(record, tool_names=tool_names))
+
+
+def history_metadata(record: dict[str, Any], *, tool_names: dict[str, str] | None = None) -> dict[str, Any]:
+    """Keep artifact identity in context; payloads remain in original records."""
+    projected = dict(record)
+    if 'log_id' in record and 'streams' in record and 'command' in record:
+        command = record['command']
+        preview = command.split('\n', 1)[0][:120]
+        projected.pop('command')
+        projected.update(command_preview=preview, command_truncated=len(preview) < len(command))
+    names = {call['call_id']: call['tool_name'] for call in record.get('tool_calls', [])}
+    if tool_names is not None:
+        names = {**tool_names, **names}
+    if 'artifacts' in record:
+        projected['artifacts'] = [artifact_metadata(reference, names) for reference in record['artifacts']]
+    if 'artifact' in record:
+        projected['artifact'] = artifact_metadata(record['artifact'], names)
+    for field in ('tool_calls', 'tool_results', 'sources', 'user_edits', 'background_commands'):
+        if field in record:
+            projected[field] = [history_metadata(item, tool_names=names) for item in record[field]]
+    return projected
+
+
+def artifact_metadata(reference: dict[str, Any], tool_names: dict[str, str]) -> dict[str, Any]:
+    metadata: dict[str, Any] = {key: reference[key] for key in
+                ('record_id', 'step_id', 'call_id', 'tool_name', 'kind', 'filename', 'path', 'bytes') if key in reference}
+    if reference.get('call_id') in tool_names:
+        metadata['tool_name'] = tool_names[reference['call_id']]
+    return metadata
 
 
 def step_record(messages: list[Message], *, current: bool = False,

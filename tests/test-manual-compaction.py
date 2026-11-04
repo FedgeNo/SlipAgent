@@ -46,7 +46,8 @@ async def test_boundary_compresses_immediately_when_full_history_fits():
     assert records[0]["compressed_summary"] == "summary 1"
     assert "ORIGINAL 3" in records[2]["agent_response"]
     system = "\n".join(content_text(message.content) for message in view if message.role == "system")
-    assert "compact_through" in system and "boundary through step 2" in system
+    assert 'compact_through' in system and 'explicitly requested conversation compaction through step 2' in system
+    assert '# Explicit Conversation Compaction Notice' in system
     recalled = await RecallHistoryTool(history).run(step_id=1, section="response")
     assert "ORIGINAL 1" in content_text(recalled.content)
     assert "ORIGINAL 1" in history.steps[0].messages[1].content

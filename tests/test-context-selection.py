@@ -27,6 +27,22 @@ def conversation(responses):
     return history, messages
 
 
+async def test_only_explicit_compaction_has_a_conversation_compaction_notice():
+    history, messages = conversation([f'Answer {index}' * 100 for index in range(6)])
+    options = dict(keep_steps=5, context_length=100000, max_output=1000)
+    ordinary = await history.view(messages, [], **options)
+    assert '\n# Explicit Conversation Compaction Notice\n' not in content_text(ordinary[0].content)
+    assert 'Without that notice, do not infer such an event' in content_text(ordinary[0].content)
+    history.compact_through = 6
+    for _ in range(2):
+        compacted = await history.view(messages, [], **options)
+        guidance = content_text(compacted[0].content)
+        assert '\n# Explicit Conversation Compaction Notice\n' in guidance
+        assert 'explicitly requested conversation compaction through step 6' in guidance
+        assert 'does not announce a new compaction on each request' in guidance
+        assert history.compact_through == 6
+
+
 async def test_current_run_command_survives_tool_results_without_entering_history():
     history = ConversationHistory()
     messages = [Message.user("Old task"), Message.assistant("Old task finished"),

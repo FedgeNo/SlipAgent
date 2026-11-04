@@ -27,6 +27,8 @@ An absent result is unknown. A failed modifying call may have partial effects; a
 
 ## History Representations
 
+Compression rolls through older history; it is not a context reset. Whole-conversation compaction has an **Explicit Conversation Compaction Notice** with a fixed boundary. Without that notice, do not infer such an event or repeat initialization or reload rules. A repeated notice identifies the same event.
+
 `representation="full"` supplies original parts. Use the exact `step_id` with `recall_history` to retrieve the complete original object. A completed step has a recorded response and results.
 
 `response_source` remains attached to full, compressed and excerpted steps, including failed attempts. Grouped narratives and eras carry `response_sources`: consecutive ranges with `first_step`, `last_step`, `provider` and `model`. These identify changes between models or API providers without relying on summary wording. A response from an earlier model is historical work, not a new instruction. Older records may identify only a model or have no attribution; do not infer missing providers from the session's current selection.

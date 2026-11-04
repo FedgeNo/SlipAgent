@@ -329,6 +329,11 @@ the originals fit the budget. History after it follows normal budget selection.
 The command reports the boundary and any missing individual summaries; it makes
 no model request and does not wait for background compression.
 
+Working requests include an **Explicit Conversation Compaction Notice** with
+that fixed boundary. Its continued presence identifies the same action rather
+than a new event on each turn. Ordinary rolling compression has no such notice
+and does not announce a whole-conversation compaction or context reset.
+
 Missing or larger summaries retain originals. Tool results remain full for
 their first delivery, with the existing excerpt fallback for oversized results.
 Compressed records within the boundary can include available filtered thoughts
@@ -385,6 +390,12 @@ only as far as needed**, and stops as soon as the request fits:
 5. Required unseen tool results and the latest required step remain represented;
    they can be excerpted last but cannot be omitted. Once the selection fits,
    omitted records are restored newest first when space allows.
+
+Within a turn that needs excerpts, reasoning normally gives way before tool
+results. For the newest five turns this priority always applies. An older single
+result that exceeds both the available record budget and four times the size of
+its reasoning may be excerpted first, preserving a much shorter interpretation
+of old monolithic output. Original reasoning and results remain retrievable.
 
 Selection starts fresh on every request. Steps after any manual boundary return
 to full text whenever room allows, for example after a large result has moved
@@ -493,11 +504,10 @@ request usage. A readout must match the active model and provider and mark
 estimates explicitly. Raw UTF-8 estimates are not model-token counts and must
 not be compared directly with the model's token window. Counts are not clamped
 to the limit, so a genuine overrun remains visible for diagnosis.
-Explicit provider context overflow triggers up to two retries with smaller
-history budgets, counted against the step limit. An identical, unshrinkable
-request is not resent. Originals remain available throughout.
-The reduced budget persists for that model/profile so the next call does not
-immediately restore the rejected context size.
+Explicit provider context overflow is recorded and reported without an automatic
+smaller-budget retry. The context selector remains responsible for fitting the
+configured window; a rejected request does not reduce future context allowances.
+Originals remain available throughout.
 Startup and model selection fetch live catalog and endpoint capabilities,
 require a valid context length, and check that the current instructions, tool
 definitions, and reserved output fit before accepting the model. The harness

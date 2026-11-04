@@ -5,6 +5,7 @@ import pytest
 from data_text_reader import request_input
 from slipagent.context import ConversationHistory, RecallHistoryTool, message_tokens
 from slipagent.turnstore import TurnStore
+from slipagent.sources import materialize
 from slipagent.types import Message, ToolCall
 
 
@@ -97,10 +98,11 @@ async def test_oversized_results_reduce_older_turns_before_the_latest_turn():
     for record in records:
         index = record['step_id'] - 1
         assert record['agent_response'] == f"Verified fact {index}. " * 20
-        assert record['reasoning'] == f"Important uncertainty {index}. " * 20
+        assert record['reasoning']['omitted_characters'] == len(f"Important uncertainty {index}. " * 20)
         assert record['user_prompts'] == [f"Permission for task {index}."]
         assert record['tool_calls'][0]['arguments'] == {"command": f"read {index}"}
-        assert all(path[0] == 'tool_results' for path in record.get('excerpted_fields', []))
+        assert record['excerpted_fields'][0] == ['reasoning']
+        assert all(path[0] in {'reasoning', 'tool_results'} for path in record['excerpted_fields'])
 
 
 async def test_older_result_is_removed_before_clipping_an_oversized_new_result():
@@ -134,3 +136,61 @@ async def test_fitting_newest_tool_results_take_priority_over_oversized_reasonin
     assert record['excerpted_fields'] == [['reasoning']]
     assert history.steps[0].messages[1].reasoning == reply.reasoning
     assert message_tokens(view) <= int(20000 * .85) - 1000
+
+
+@pytest.mark.parametrize('age', [0, 1, 4, 10])
+@pytest.mark.parametrize('archived', [False, True])
+async def test_reasoning_gives_way_before_smaller_tool_results(tmp_path, age, archived):
+    history = ConversationHistory()
+    call = ToolCall('read', 'read_file', {})
+    reply = Message.assistant('Reading.', [call])
+    reply.reasoning = 'Reasoning ' * 3000
+    result = 'EXACT RESULT ' * 700
+    messages = [Message.user('Inspect.'), reply,
+                Message.tool_result(call.id, {'tool': call.name, 'call_id': call.id,
+                                             'status': 'success', 'content': result})]
+    for index in range(age):
+        messages += [Message.user(f'Follow-up {index}'), Message.assistant('Noted.')]
+    history.sync(messages)
+    for step in history.steps:
+        step.observed = True
+    store = TurnStore(tmp_path / 'turns')
+    try:
+        if archived:
+            for step in history.steps:
+                store.archive(step, messages)
+        messages.append(Message.user('Continue.'))
+        view = await history.view(messages, [], keep_steps=5, context_length=18000, max_output=1000)
+        record = materialize(next(record for record in request_input(view)['history'] if record['step_id'] == 1))
+        assert record['tool_calls'][0]['result'] == result
+        assert record['excerpted_fields'] == [['reasoning']]
+        assert message_tokens(view) <= int(18000 * .85) - 1000
+        assert materialize(history.steps[0].parts()['reasoning']) == 'Reasoning ' * 3000
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize('age', [0, 4, 10])
+async def test_monolithic_result_retains_short_reasoning_only_when_old(age):
+    history = ConversationHistory()
+    call = ToolCall('read', 'read_file', {})
+    reply = Message.assistant('Reading.', [call])
+    reply.reasoning = 'Useful interpretation. ' * 100
+    messages = [Message.user('Inspect.'), reply,
+                Message.tool_result(call.id, {'tool': call.name, 'call_id': call.id,
+                                             'status': 'success', 'content': 'Huge result ' * 10000})]
+    for index in range(age):
+        messages += [Message.user(f'Follow-up {index}'), Message.assistant('Noted.')]
+    history.sync(messages)
+    for step in history.steps:
+        step.observed = True
+    messages.append(Message.user('Continue.'))
+    view = await history.view(messages, [], keep_steps=5, context_length=18000, max_output=1000)
+    record = next(record for record in request_input(view)['history'] if record['step_id'] == 1)
+    if age >= 5:
+        assert record['reasoning'] == reply.reasoning
+        assert record['excerpted_fields'] == [['tool_results', 0, 'content']]
+    else:
+        assert record['excerpted_fields'] == [['reasoning'], ['tool_results', 0, 'content']]
+        assert record['reasoning']['omitted_characters'] == len(reply.reasoning)
+    assert record['tool_calls'][0]['result_excerpt']['omitted_characters'] > 0

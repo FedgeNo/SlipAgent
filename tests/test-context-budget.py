@@ -45,13 +45,11 @@ def test_calibration_averages_recent_measurements_and_metadata_refresh_invalidat
     assert budget.select("model", profile) == 1
     budget.observe(request, 1000)
     measured = budget.scale
-    budget.fraction = .65
     assert measured > 1
     budget.observe(request, 1)
     assert budget.scale == pytest.approx(measured * 1001 / 2000)
     assert budget.select("model", profile) == budget.scale
     assert budget.select("model", object()) == 1
-    assert budget.fraction == 1
     assert list(budget.measurements) == []
     budget.observe(request, 1000)
     assert budget.select("other", profile) == 1
@@ -102,7 +100,7 @@ def test_streamed_context_error_uses_the_same_recovery_path():
         }}))
 
 
-async def test_provider_overflow_retries_smaller_history_without_losing_originals():
+async def test_provider_overflow_is_reported_without_retry_or_reducing_future_history():
     router = Router({"test/model": ["tools"]}, [{"role": "assistant", "content": "Done"}])
     rejected = []
     def handle(request):
@@ -114,14 +112,20 @@ async def test_provider_overflow_retries_smaller_history_without_losing_original
         agent = Agent(client, ToolRegistry(), "test/model")
         originals = [m for i in range(9) for m in (Message.user(f"old {i}"), Message.assistant(str(i) * 240000))]
         agent.extend(originals)
-        assert await agent.run("current request") == "Done"
+        with pytest.raises(OpenRouterContextError):
+            await agent.run("current request")
         await agent.wait_for_compaction()
-        assert len(json.dumps(router.requests[0])) < len(json.dumps(rejected[0]))
-        assert "current request" in json.dumps(router.requests[0])
+        assert len(rejected) == 1
+        assert not router.requests
         assert agent.messages[:len(originals)] == originals
-        assert len(agent.history.steps) == 11
+        assert len(agent.history.steps) == 10
         assert agent.history.steps[9].request_failure["outcome"] == "context_overflow"
-        assert agent._budget().fraction == .65
+        # A live object may still carry the retired recovery setting after reload.
+        agent._budget().__dict__['fraction'] = .1
+        assert await agent.run("current request") == "Done"
+        assert len(router.requests) == 1
+        assert len(json.dumps(router.requests[0])) >= len(json.dumps(rejected[0])) * .95
+        assert agent.messages[:len(originals)] == originals
 
 
 async def test_unshrinkable_overflow_is_not_sent_twice():
@@ -134,8 +138,28 @@ async def test_unshrinkable_overflow_is_not_sent_twice():
         return router.handle(request)
     async with OpenRouterClient("test", transport=httpx.MockTransport(handle)) as client:
         agent = Agent(client, ToolRegistry(), "test/model")
-        with pytest.raises(Exception, match="without removable history"):
+        with pytest.raises(OpenRouterContextError):
             await agent.run("keep this exact prompt")
         assert len(rejected) == 1
         assert [m.content for m in agent.messages if m.role == "user"] == ["keep this exact prompt"]
         assert agent.history.steps[-1].request_failure["outcome"] == "context_overflow"
+
+
+async def test_background_notification_metadata_does_not_repeat_command_documents():
+    from test_agent import StubClient
+    from slipagent.types import content_text
+
+    command = "python - <<'PY'\n" + 'DOCUMENT PAYLOAD ' * 10000
+    job = {'job_id': 'job-1', 'log_id': 'log-1', 'state': 'complete', 'streams': {},
+           'step_id': 1, 'call_id': 'command-1', 'command': command,
+           'artifacts': [{'record_id': 1, 'command': command, 'step_id': 1, 'call_id': 'command-1'}]}
+    agent = Agent(StubClient([]), ToolRegistry(), 'test/model', context_tokens=30000)
+    agent.extend([Message.user('Continue')])
+    agent.registry.context_notes['background_commands'] = {'completed': [job]}
+    context = await agent._context_view([], 1)
+    system = content_text(context[0].content)
+    assert 'job-1' in system and 'command-1' in system and "python - <<'PY'" in system
+    assert 'DOCUMENT PAYLOAD' not in system
+    assert agent.registry.context_notes['background_commands']['completed'][0]['command'] == command
+    assert agent.registry.services['background_snapshot'][0]['command'] == command
+    await agent.registry.aclose()

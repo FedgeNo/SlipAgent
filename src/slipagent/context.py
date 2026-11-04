@@ -198,10 +198,11 @@ class HistoryStep:
             source = response_source(self.messages)
             if source:
                 record['response_source'] = source
-            references = step_record(self.messages).get("artifacts")
+            original = step_record(self.messages)
+            references = original.get("artifacts")
             if references:
                 record["artifacts"] = references
-            return [record_message(record)]
+            return [record_message(record, tool_names={call['call_id']: call['tool_name'] for call in original['tool_calls']})]
         record = step_record(self.messages, step_id=self.id)
         if record["agent_response"] is not None:
             record["agent_response"] = _visible_response(record["agent_response"])
@@ -420,9 +421,10 @@ class CompletedStep(HistoryStep):
             attribution = {'response_source': source} if source else {}
             if not compressed:
                 return [record_message({**original, **attribution})]
+            names = {call['call_id']: call['tool_name'] for call in original['tool_calls']}
             state = (self.summary, getattr(self, "reasoning_summary", None), self.compaction_status, self.compaction_error)
             if self.__dict__.get("_disk_summary_state") == state:
-                return [record_message({**self._disk_summary["model"], **attribution})]
+                return [record_message({**self._disk_summary["model"], **attribution}, tool_names=names)]
             record: dict[str, Any] = {"record_type": "history_step", "representation": "compressed",
                       "step_id": self.id, "compressed_summary": self.compressed_text(), **attribution}
             for name in ("artifacts", "user_edits", "background_commands", "request_failure", "incomplete"):
@@ -434,7 +436,7 @@ class CompletedStep(HistoryStep):
             if "request_failure" in record:
                 record["request_failure"] = {key: value for key, value in record["request_failure"].items()
                                              if key != "response_excerpt"}
-            return [record_message(record)]
+            return [record_message(record, tool_names=names)]
         part = super().context_messages(compressed=compressed)
         if getattr(self, "background_commands", None):
             part = [record_message({**part[0].content, "background_commands": self.background_commands})]
@@ -779,7 +781,7 @@ class ConversationHistory:
                     indexes[index] = HistorySizeIndex(TokenEstimates().history_bytes)
                     if disk is not None:
                         step.__dict__['_size_index'] = (disk, state, indexes[index])
-            key = (compressed, runs[index], attached, filtered_thoughts, step.id <= self.compact_through)
+            key = (compressed, runs[index], attached, filtered_thoughts, step.id <= self.compact_through, 'artifact_metadata')
             return indexes[index].get(key, part[0].content)
 
         def narrative_cost(record: dict[str, Any], cache: str = "_narrative_size") -> HistorySize:
@@ -939,10 +941,19 @@ class ConversationHistory:
             without_prose = {key: value for key, value in original.items()
                              if key not in ('reasoning', 'agent_response')}
             prefer_results = index == count - 1 and measure(without_prose) <= target
-            if results_only and prefer_results:
+            from .requestbody import value_bytes
+            reasoning_bytes = value_bytes(original.get('reasoning'))
+            largest_result = max(unit_costs[index].result_bytes, default=0)
+            # Keep recent evidence ahead of thoughts. An older result that
+            # cannot fit by itself may yield before much shorter reasoning.
+            oversized_old_result = (index < recent_start
+                                    and largest_result > max(target, 4 * reasoning_bytes))
+            reasoning_first = not oversized_old_result
+            if results_only and (prefer_results or reasoning_first):
                 return False
             clipped = await run_blocking(excerpt_fields, original, target, measure,
-                                         results_only=results_only, prefer_results=prefer_results)
+                                         results_only=results_only, prefer_results=prefer_results,
+                                         reasoning_first=reasoning_first)
             if clipped is None:
                 if measure(original) >= sizing.record_bytes(unit_costs[index]):
                     return False

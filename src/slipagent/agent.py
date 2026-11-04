@@ -567,6 +567,7 @@ class Agent:
         while True:
             self._emit(AgentEvent(kind='phase', text='Building context…'))
             self._drain_pending()
+            await self._catch_up_compression(step)
             activated = self.registry.services.setdefault('skill_invocations', {})
             for index, text in list(self.queued_messages.items()):
                 if activated.get(index) != text:
@@ -578,6 +579,33 @@ class Agent:
             if not self.pending and signature == queue.signature():
                 queue.prepared = signature
                 return context
+
+    async def _catch_up_compression(self, step: int) -> None:
+        compactor = self._compactor()
+        if compactor.routing is None or not compactor.behind(self.history.steps):
+            return
+        if self.stop_requested or self._stop_event().is_set():
+            raise ContextStopped
+        generation = compactor.generation
+        task = asyncio.create_task(compactor.catch_up(self.history.steps,
+            lambda text: self._emit(AgentEvent(kind='phase', step=step, text=text))))
+        stopped = asyncio.create_task(self._stop_event().wait())
+        try:
+            await asyncio.wait({task, stopped}, return_when=asyncio.FIRST_COMPLETED)
+            if stopped.done():
+                raise ContextStopped
+            try:
+                await task
+            except asyncio.CancelledError:
+                if compactor.generation != generation:
+                    raise ContextStopped from None
+                raise
+            if compactor.generation != generation:
+                raise ContextStopped
+        finally:
+            task.cancel()
+            stopped.cancel()
+            await asyncio.gather(task, stopped, return_exceptions=True)
 
     def _emit(self, event: AgentEvent) -> None:
         if event.kind == 'phase':

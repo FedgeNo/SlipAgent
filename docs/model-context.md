@@ -373,22 +373,22 @@ from the bytes of each record and scaled by measured calibration.
 When the full history does not fit, SlipAgent compresses **from the oldest end,
 only as far as needed**, and stops as soon as the request fits:
 
-1. Individual steps in the **older two thirds** are replaced by their summaries,
-   oldest first. At least the latest five are excluded. A step whose summary is missing or
-   no smaller keeps its original.
-2. Each available narrative block wholly within that older region is replaced by
-   its **narrative**, oldest first. A block follows runs: it closes at the end of
-   a run once it holds **10 steps**, and a longer run is cut every **20 steps**.
-3. Each available **era** wholly within that region replaces its source records,
-   oldest first. An era summarizes **five consecutive narratives**. Then try each
-   available **aeon**, combining **five consecutive eras** (up to 500 turns),
-   wholly within that region. If still over budget, repeat these levels for the remaining turns outside the latest
-   five. The newest third (rounded up) therefore stays full until available older
-   narratives, eras and aeons have been tried; it is a preference, not a hard reservation.
-4. If still over budget, older records are excerpted and then omitted, oldest
+1. Try available **aeons**, oldest first, wholly within the **older two thirds**
+   and outside the latest five. An aeon combines five eras, up to 500 turns.
+2. Try available **eras** in the same region, oldest first, excluding turns
+   already represented by an aeon. Each era combines five narratives.
+3. Try available **narratives** for the remaining older turns. A block follows
+   runs: it closes at a run boundary after at least 10 steps, or after 20 within
+   a long run.
+4. Try individual step summaries, oldest first. Missing or larger summaries keep
+   their originals. Every aggregate also must save space. If still over budget,
+   repeat these four levels outside the latest five turns. The newest third,
+   rounded up, stays full until older aggregate compression has been tried;
+   this is a preference rather than a hard reservation.
+5. If still over budget, older records are excerpted and then omitted, oldest
    first, before reducing newer records. The newest five can use smaller summaries
    and excerpts only after older optional history is exhausted.
-5. Required unseen tool results and the latest required step remain represented;
+6. Required unseen tool results and the latest required step remain represented;
    they can be excerpted last but cannot be omitted. Once the selection fits,
    omitted records are restored newest first when space allows.
 
@@ -443,10 +443,17 @@ participate when their own API key and a ranked free model are available:
 OpenRouter, NVIDIA, Kilo, Mistral, Google, and Groq. Each attempt uses its destination's
 own capabilities and context/output limits.
 
-The selected coding provider serves only working requests, whatever its model
-costs. Background summaries use the other providers. If no other provider is
-available, nothing is summarized: requests send originals, omit the oldest
-history when needed, and SlipAgent asks for another provider's API key.
+Background summaries use providers other than the selected coding provider.
+When all five newest completed steps lack individual summaries, the next working
+request waits. If the exact primary model is eligible and free, it performs a
+dedicated summary job for the oldest unclaimed step in that five-step window;
+otherwise background providers must make progress before normal work resumes.
+Keeping recent originals in the working context does not trigger this gate when
+their summaries already exist. Canned failure notices do not count as completed
+AI summaries. A single free provider can therefore alternate
+working requests and catch-up compression. A paid or unverified primary is never
+used for compression. If no free job can make progress, the harness reports the
+unavailable catch-up rather than silently continuing or waiting forever.
 
 Any compression failure sends the retry to another provider when possible.
 Transient failures retain the model's eligibility. Permanent/model-format
@@ -459,12 +466,13 @@ Background clients are separate from the working client and close with the sessi
 
 The summarizer returns a JSON object with separate factual `summary` and filtered
 `reasoning_summary` strings, each limited to 6,000 characters. Short steps
-should get short summaries. The working model continues without waiting.
-One dispatcher runs every background summary: step summaries oldest first, then
-narratives, eras and aeons. It runs **at most one job per background provider at a
+should get short summaries. The working model normally continues concurrently,
+subject to the five-step catch-up gate above. One dispatcher prioritizes ready
+**aeons, eras, narratives, then individual summaries**, oldest first within each
+level. It runs **at most one job per background provider at a
 time**, so with one background provider every summary runs in turn. The ready
 queue holds at most 32 step references. Further steps wait on their retained
-originals and enter the queue as it drains. Only an active job copies its payload,
+originals and are considered oldest first without copying their payloads. Only an active job copies its payload,
 and each job selects its provider when it starts.
 
 Unseen tool results reach the next working request even if their summary has

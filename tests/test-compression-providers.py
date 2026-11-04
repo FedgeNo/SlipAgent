@@ -162,7 +162,7 @@ async def test_single_provider_serves_coding_only_and_keeps_originals(routing):
         assert "Original answer" in first.full_text()
         assert len(errors) == 1 and "Compression unavailable" in errors[0]
         assert not router.models.session.notices
-        assert "Compression will not work until a provider with free models is added" in errors[0]
+        assert 'Add a provider with free models to enable background compression' in errors[0]
         assert "OpenRouter or NVIDIA" in errors[0]
     finally:
         await owner.aclose()
@@ -187,7 +187,7 @@ async def test_unrouted_primary_api_is_never_used_for_compression():
             assert not requests
             assert step.summary is None and step.compaction_status == "failed"
             error = next(event for event in events if event.kind == "error")
-            assert "Compression will not work until a provider with free models is added" in error.text
+            assert 'Add a provider with free models to enable background compression' in error.text
             sink = io.StringIO()
             Renderer(Style(False), sink, False).handle(error)
             assert "Error:" in sink.getvalue()

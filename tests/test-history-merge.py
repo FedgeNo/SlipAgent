@@ -457,7 +457,7 @@ async def test_compression_levels_advance_from_the_oldest_end_as_the_budget_shri
         assert records[-1]["step_id"] == 240
         seen.append(records)
     assert all(record["representation"] == "full" for record in seen[0])
-    assert {record["representation"] for record in seen[1]} == {"compressed", "full"}
+    assert {record["representation"] for record in seen[1]} == {"era_summary", "full"}
     assert any(record["representation"] == "historical_summary" for records in seen for record in records)
     assert any(record["representation"] == "era_summary" for records in seen for record in records)
     smallest = seen[-1]

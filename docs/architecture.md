@@ -336,8 +336,9 @@ Context construction proceeds in this order:
    for system data sections, compression input, and archive retrieval.
    Every step is sent in full while the history fits the budget. Over budget,
    `ConversationHistory.view` applies reductions from the oldest end until the
-   indexed size fits within the limit: step summaries in the older two thirds,
-   then each eligible narrative, era and aeon wholly within that region. If needed,
+   indexed size fits within the limit: available aeons, eras, narratives, then
+   individual step summaries in the older two thirds, oldest first within each
+   level and only when the replacement saves space. If needed,
    repeat those levels outside the newest five turns. The newer third is rounded
    up and the five-turn protection takes precedence for short histories.
    It then exhausts older turns through excerpts and omission before reducing
@@ -822,24 +823,44 @@ Older failed turns with canned summaries and no AI reasoning summary are queued
 when work resumes; interruption still cancels background work.
 
 After archiving a complete batch, `Agent._archive_step` submits it to
-`StepCompactor`, a registry-owned service. One dispatcher runs step summaries
-(oldest first), then due narratives, eras and aeons, with at most one job per
+`StepCompactor`, a registry-owned service. One dispatcher prioritizes ready
+aeons, eras, narratives, then individual summaries, oldest first within each
+level, with at most one job per
 background provider at a time; a single slot runs jobs in order on the
 dispatcher task. The ready queue holds at most 32 original-step references. Further steps retain deferred request
-metadata on their originals and refill the queue as it drains. Only the active
+metadata on their originals and are considered oldest first without payload copies. Only the active
 request copies its immutable original prompt, response, calls, results, thoughts,
 and up to 25 earlier steps. CLI sessions attach `CompressionProviders` and the
 session-owned `ModelRouting` service. Both compactors use one selection/retry
 loop, rotating through each configured provider's best ranked free model.
-The selected coding provider is always excluded. `CompressionProviders.slots`
+The selected coding provider is excluded from background rotation. `CompressionProviders.slots`
 counts the remaining providers; selection reserves an idle provider and waits for
 a release notification when every eligible alternative is busy. Completion and
 cancellation release the reservation and wake waiting requests. With no eligible
-background provider, startup and attempted compression show a feed error stating
-that compression will not work until a provider with free models is added,
+background provider, startup and attempted compression show a feed error asking
+for a provider with free models to enable background compression,
 recommending OpenRouter or NVIDIA. Repeated unavailable jobs share one error
 until routing recovers. Summaries are marked unavailable; originals remain intact.
 Real API clients without free-model routing cannot fall back to the primary model.
+
+Before a working context is built, `Agent._catch_up_compression` gates the next
+request if all five newest completed steps lack summaries. This measures missing
+stored AI summaries, not full representations selected for the working context;
+canned failure notices without AI reasoning summaries still count as pending.
+`CompressionProviders.primary` admits only the exact selected catalog model if
+it is eligible and free. That primary can lend a dedicated tool-free summary
+request for the oldest unclaimed step in the five-step window while working
+requests are paused. `_compact` rechecks pricing and model/provider identity
+before using that route. Paid and unverified primaries are never called.
+
+Otherwise the working request waits for background progress. A progress event
+wakes it on summary publication without waiting for the entire dispatcher to
+finish. Resume requeues missing work on eligible background providers; no active
+step can be claimed twice. Stop cancels owned primary assistance or the waiter
+while leaving unrelated background jobs owned by the compactor. Reset wakes
+waiters, cancels owned jobs and invalidates claims. If no free job can progress,
+catch-up reports a context error with originals preserved. Previews never invoke
+this gate. Compression usage remains excluded from working-request accounting.
 Each attempt uses its destination's own
 profile; every failure advances rotation, including failures during capability
 lookup, context checking, and response validation. Concurrent jobs also avoid
@@ -908,7 +929,7 @@ blocks through the last of them. A block is ready once every turn has a
 first-pass summary or a failed first pass (a gap); five consecutive blocks are
 ready for an era once all their narratives exist. The complete
 source must fit the provisional route budget; sources are never truncated. All
-jobs call `StepCompactor.request`:
+background jobs call `StepCompactor.request`:
 transient transport failures retry persistently with shared API backoff. Other
 failures advance providers and exclude that route for compression; a context
 fit failure excludes it only from this job. Failures are scoped to provider/model,

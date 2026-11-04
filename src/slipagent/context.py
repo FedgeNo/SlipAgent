@@ -971,17 +971,17 @@ class ConversationHistory:
         async def reductions() -> AsyncIterator[None]:
             first = 0
             for boundary in (older_end, recent_start):
-                for index in range(first, boundary):
-                    if summarize_step(index):
-                        yield
-                for record in historical_records(self.steps):
-                    if merge_into(record, NARRATIVE, "_narrative_size", boundary):
+                for record in aeon_records(self.steps):
+                    if merge_into(record, AEON, '_aeon_size', boundary):
                         yield
                 for record in era_records(self.steps):
                     if merge_into(record, ERA, "_era_size", boundary):
                         yield
-                for record in aeon_records(self.steps):
-                    if merge_into(record, AEON, '_aeon_size', boundary):
+                for record in historical_records(self.steps):
+                    if merge_into(record, NARRATIVE, "_narrative_size", boundary):
+                        yield
+                for index in range(first, boundary):
+                    if summarize_step(index):
                         yield
                 first = boundary
             # Exhaust each older turn before touching a newer one. The newest
@@ -1040,15 +1040,15 @@ class ConversationHistory:
         # A manual boundary chooses economical compressed forms even when the
         # full history fits. Later steps still follow normal budget selection.
         boundary = min(self.compact_through, count)
-        for index in range(boundary):
-            summarize_step(index)
         if boundary:
-            for record in historical_records(self.steps):
-                merge_into(record, NARRATIVE, "_narrative_size", boundary)
-            for record in era_records(self.steps):
-                merge_into(record, ERA, "_era_size", boundary)
             for record in aeon_records(self.steps):
                 merge_into(record, AEON, '_aeon_size', boundary)
+            for record in era_records(self.steps):
+                merge_into(record, ERA, "_era_size", boundary)
+            for record in historical_records(self.steps):
+                merge_into(record, NARRATIVE, "_narrative_size", boundary)
+            for index in range(boundary):
+                summarize_step(index)
 
         if total_bytes() <= available:
             return finish(selection())

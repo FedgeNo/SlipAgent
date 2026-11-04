@@ -278,7 +278,7 @@ def schedule_history_merge(owner: StepCompactor, steps: list[HistoryStep], clien
 
 def ready_job(owner: StepCompactor, steps: list[HistoryStep], active: set[Any],
               route: Route) -> tuple[Any, Coroutine[Any, Any, None]] | None:
-    """The oldest narrative, era, then aeon whose inputs are all available."""
+    """The oldest ready aeon, then era, then narrative."""
     from .context import message_tokens
 
     client, model, capabilities, max_tokens = route
@@ -286,51 +286,6 @@ def ready_job(owner: StepCompactor, steps: list[HistoryStep], active: set[Any],
     budget, reserve = _limits(owner, model, capabilities, max_tokens)
     runs = run_numbers(steps)
     closed = blocks(steps, runs)
-    narrative_prompt = Message.system(load_prompt("historical-summary-prompt.md", max_characters=MERGE_MAX_CHARS))
-    for first, last in closed:
-        anchor = steps[last]
-        key = ("narrative", anchor.id)
-        if (key in active or _covers(getattr(anchor, "historical_summary", None), steps, first, last)
-                or not _due(anchor, "history_merge_attempt", total)):
-            continue
-        prepared = _narrative_source(steps, runs, first, last)
-        if prepared is None:
-            continue
-        batch, source = prepared
-        if message_tokens([narrative_prompt, Message.user(source)]) > budget:
-            continue  # Complete source summaries cannot fit this route; never truncate them.
-        setattr(anchor, "history_merge_attempt", total)
-        if owner.on_step is not None:
-            owner.on_step(anchor)  # type: ignore[arg-type]
-        return key, _merge(owner, anchor, batch, copy.deepcopy(source), narrative_prompt, client,
-                           model, capabilities, reserve, total, owner.generation)
-    era_prompt = Message.system(load_prompt("era-summary-prompt.md", max_characters=MERGE_MAX_CHARS))
-    for start in range(0, len(closed) - ERA_NARRATIVES + 1, ERA_NARRATIVES):
-        group = closed[start:start + ERA_NARRATIVES]
-        anchor = steps[group[-1][1]]
-        key = ("era", anchor.id)
-        if (key in active or _covers(getattr(anchor, "era_summary", None), steps, group[0][0], group[-1][1])
-                or not _due(anchor, "era_attempt", total)):
-            continue
-        narratives = []
-        for first, last in group:
-            record = getattr(steps[last], "historical_summary", None)
-            if not _covers(record, steps, first, last):
-                break
-            narratives.append(record)
-        if len(narratives) < ERA_NARRATIVES:
-            continue
-        era_source = {"narratives": [{"step_ids": record["step_ids"],
-                                      "runs": sorted({runs[step_id - 1] for step_id in record["step_ids"]}),
-                                      "compressed_summary": record["compressed_summary"]}
-                                     for record in narratives]}
-        if message_tokens([era_prompt, Message.user(era_source)]) > budget:
-            continue
-        setattr(anchor, "era_attempt", total)
-        if owner.on_step is not None:
-            owner.on_step(anchor)  # type: ignore[arg-type]
-        return key, _aggregate(owner, anchor, narratives, copy.deepcopy(era_source), runs, era_prompt, client,
-                               model, capabilities, reserve, total, owner.generation, kind='era')
     era_spans = [(closed[start][0], closed[start + ERA_NARRATIVES - 1][1])
                  for start in range(0, len(closed) - ERA_NARRATIVES + 1, ERA_NARRATIVES)]
     aeon_prompt = Message.system(load_prompt('aeon-summary-prompt.md', max_characters=MERGE_MAX_CHARS))
@@ -359,6 +314,51 @@ def ready_job(owner: StepCompactor, steps: list[HistoryStep], active: set[Any],
             owner.on_step(anchor)  # type: ignore[arg-type]
         return key, _aggregate(owner, anchor, eras, copy.deepcopy(source), runs, aeon_prompt, client,
                                model, capabilities, reserve, total, owner.generation, kind='aeon')
+    era_prompt = Message.system(load_prompt("era-summary-prompt.md", max_characters=MERGE_MAX_CHARS))
+    for start in range(0, len(closed) - ERA_NARRATIVES + 1, ERA_NARRATIVES):
+        group = closed[start:start + ERA_NARRATIVES]
+        anchor = steps[group[-1][1]]
+        key = ("era", anchor.id)
+        if (key in active or _covers(getattr(anchor, "era_summary", None), steps, group[0][0], group[-1][1])
+                or not _due(anchor, "era_attempt", total)):
+            continue
+        narratives = []
+        for first, last in group:
+            record = getattr(steps[last], "historical_summary", None)
+            if not _covers(record, steps, first, last):
+                break
+            narratives.append(record)
+        if len(narratives) < ERA_NARRATIVES:
+            continue
+        era_source = {"narratives": [{"step_ids": record["step_ids"],
+                                      "runs": sorted({runs[step_id - 1] for step_id in record["step_ids"]}),
+                                      "compressed_summary": record["compressed_summary"]}
+                                     for record in narratives]}
+        if message_tokens([era_prompt, Message.user(era_source)]) > budget:
+            continue
+        setattr(anchor, "era_attempt", total)
+        if owner.on_step is not None:
+            owner.on_step(anchor)  # type: ignore[arg-type]
+        return key, _aggregate(owner, anchor, narratives, copy.deepcopy(era_source), runs, era_prompt, client,
+                               model, capabilities, reserve, total, owner.generation, kind='era')
+    narrative_prompt = Message.system(load_prompt("historical-summary-prompt.md", max_characters=MERGE_MAX_CHARS))
+    for first, last in closed:
+        anchor = steps[last]
+        key = ("narrative", anchor.id)
+        if (key in active or _covers(getattr(anchor, "historical_summary", None), steps, first, last)
+                or not _due(anchor, "history_merge_attempt", total)):
+            continue
+        prepared = _narrative_source(steps, runs, first, last)
+        if prepared is None:
+            continue
+        batch, source = prepared
+        if message_tokens([narrative_prompt, Message.user(source)]) > budget:
+            continue  # Complete source summaries cannot fit this route; never truncate them.
+        setattr(anchor, "history_merge_attempt", total)
+        if owner.on_step is not None:
+            owner.on_step(anchor)  # type: ignore[arg-type]
+        return key, _merge(owner, anchor, batch, copy.deepcopy(source), narrative_prompt, client,
+                           model, capabilities, reserve, total, owner.generation)
     return None
 
 

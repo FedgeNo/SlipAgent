@@ -1,7 +1,7 @@
 """Whole-step summaries and filtered thoughts, queued after complete tool batches.
 
-One dispatcher runs every background summary: completed steps oldest first,
-then narratives, eras and aeons (see `historymerge`). It runs one
+One dispatcher prioritizes ready aeons, eras, narratives, then individual
+summaries, oldest first within each level (see `historymerge`). It runs one
 job per background provider at a time, so a single provider serializes them all.
 A bounded ready queue holds step references; deferred steps retain request
 metadata on their originals. Each step job materializes its request when it
@@ -24,9 +24,9 @@ from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any, TypeVar, cast
 
 from .capabilities import RequestProfile, model_context_limit
-from .context import SUMMARY_MAX_CHARS, CompletedStep, HistoryStep, message_tokens
+from .context import SUMMARY_MAX_CHARS, CompletedStep, ContextError, HistoryStep, message_tokens
 from .api import APIClient, APIResponseError, APITransportError, RETRYABLE_STATUS
-from .types import Completion, Message, Usage
+from .types import Completion, Message, ModelInfo, Usage
 from .compressionproviders import COMPRESSION_UNAVAILABLE, CompressionProviders, CompressionUnavailableError
 from .lifecycle import finish_cleanup
 from .prompts import load_prompt
@@ -95,6 +95,11 @@ def _frozen_step(step: HistoryStep) -> HistoryStep:
         frozen.tool_results = [message for message in messages if message.role == "tool"]
     return frozen
 
+
+def _needs_summary(step: HistoryStep) -> bool:
+    return step.summary is None or (getattr(step, 'request_failure', None) is not None
+                                    and getattr(step, 'reasoning_summary', None) is None)
+
 class StepCompactor:
     def __init__(self, on_usage: Callable[[Usage], None], on_error: Callable[[str], None]) -> None:
         self.on_usage = on_usage
@@ -123,8 +128,7 @@ class StepCompactor:
             # or interrupted by a restart, are requested again with this route.
             for index, earlier in enumerate(conversation):
                 if (earlier is not step and isinstance(earlier, CompletedStep)
-                        and (earlier.summary is None or (getattr(earlier, "request_failure", None) is not None
-                             and earlier.reasoning_summary is None))
+                        and _needs_summary(earlier)
                         and (getattr(earlier, "compaction_status", None) in {"cancelled", "interrupted"}
                              or (getattr(earlier, "request_failure", None) is not None
                                  and earlier.reasoning_summary is None and earlier.compaction_status == "complete")
@@ -150,7 +154,7 @@ class StepCompactor:
 
     def track(self, conversation: list[HistoryStep], client: APIClient, model: str,
               capabilities: RequestProfile | None, max_tokens: int | None) -> None:
-        """Schedule any due narratives and eras for a conversation on this route."""
+        """Schedule due grouped compression for a conversation on this route."""
         self.__dict__["_conversation"] = conversation
         self.__dict__["_route"] = (client, model, capabilities, max_tokens)
         self.dispatch()
@@ -164,7 +168,15 @@ class StepCompactor:
             previous = tuple(job for job in self.jobs if not job.done())
             job = asyncio.create_task(self._drain(generation, previous), name=name)
             self.jobs.add(job)
-            job.add_done_callback(self.jobs.discard)
+            job.add_done_callback(self._job_finished)
+
+    def _progress_event(self) -> asyncio.Event:
+        progress: asyncio.Event = self.__dict__.setdefault('_compression_progress', asyncio.Event())
+        return progress
+
+    def _job_finished(self, job: asyncio.Task[None]) -> None:
+        self.jobs.discard(job)
+        self._progress_event().set()
 
     async def slots(self) -> int:
         """One background job per eligible provider; one without provider routing."""
@@ -183,26 +195,98 @@ class StepCompactor:
             self.on_error(f"Compression unavailable: {error}")
 
     def _next_job(self, active: set[Any], generation: int) -> tuple[Any, Coroutine[Any, Any, None]] | None:
-        queue = self.__dict__.setdefault("_ready", deque())
-        while True:
-            if not queue:
-                for step in chain(self.__dict__.get("_conversation", []), self.__dict__.get("_standalone_steps", [])):
-                    if getattr(step, "_compaction_request", None) is not None:
-                        queue.append(step)
-                        if len(queue) == COMPACTION_QUEUE_SIZE:
-                            break
-            if not queue:
-                break
-            step = queue.popleft()
-            request = step.__dict__.pop("_compaction_request", None)
-            if request is not None:
-                return ("step", step.id), self._summarize_step(step, request, generation)
         conversation = self.__dict__.get("_conversation")
         route = self.__dict__.get("_route")
-        if conversation is None or route is None:
+        if conversation is not None and route is not None:
+            from .historymerge import ready_job
+            grouped = ready_job(self, conversation, active, route)
+            if grouped is not None:
+                return grouped
+        queue = self.__dict__.setdefault('_ready', deque())
+        claimed = self.__dict__.setdefault('_active_steps', set())
+        candidates = (step for step in chain(conversation or [], self.__dict__.get('_standalone_steps', []), queue)
+                      if getattr(step, '_compaction_request', None) is not None
+                      and (generation, step.id) not in claimed)
+        step = min(candidates, key=lambda step: step.id, default=None)
+        if step is None:
+            queue.clear()
             return None
-        from .historymerge import ready_job
-        return ready_job(self, conversation, active, route)
+        request = step.__dict__.pop('_compaction_request')
+        self.__dict__['_ready'] = deque(item for item in queue if item is not step)
+        claimed.add((generation, step.id))
+        return ('step', step.id), self._summarize_step(step, request, generation)
+
+    @staticmethod
+    def behind(steps: list[HistoryStep]) -> bool:
+        """Retaining full context is normal; five missing summaries is a backlog."""
+        return len(steps) >= 5 and all(_needs_summary(step) for step in steps[-5:])
+
+    async def catch_up(self, steps: list[HistoryStep], phase: Callable[[str], None]) -> None:
+        """Gate working requests while all five newest turns lack summaries."""
+        routing = self.routing
+        if routing is None:
+            return
+        generation = self.generation
+        claimed = self.__dict__.setdefault('_active_steps', set())
+        # Resume can leave missing summaries without an in-memory queued job.
+        background = await routing.background() if self.behind(steps) else []
+        if generation != self.generation or not self.behind(steps):
+            return
+        if background:
+            session = routing.models.session
+            for index in range(len(steps) - 5, len(steps)):
+                step = steps[index]
+                if (isinstance(step, CompletedStep) and _needs_summary(step)
+                        and (self.generation, step.id) not in claimed
+                        and step.__dict__.get('_compaction_request') is None):
+                    self.submit(step, session.client, session.agent.model, None, None,
+                                history=steps[max(0, index - 25):index], conversation=steps)
+        attempted_primary = False
+        while generation == self.generation and self.behind(steps):
+            progress = self._progress_event()
+            progress.clear()
+            if not attempted_primary:
+                phase('Checking compression backlog…')
+                primary = await routing.primary()
+                if generation != self.generation:
+                    return
+                if primary is not None:
+                    client, model = primary
+                    claimed = self.__dict__.setdefault('_active_steps', set())
+                    target = next((step for step in steps[-5:] if isinstance(step, CompletedStep)
+                                   and _needs_summary(step) and (generation, step.id) not in claimed), None)
+                    if target is not None:
+                        attempted_primary = True
+                        profile = await client.model_capabilities(model.id)
+                        if generation != self.generation:
+                            return
+                        if profile is None:
+                            raise ContextError('The free primary has no compression capability profile; originals are preserved.')
+                        phase(f'Compressing step {target.id} with the free primary…')
+                        # Claim synchronously before dispatch can assign this turn elsewhere.
+                        if (generation, target.id) in claimed or not _needs_summary(target):
+                            continue
+                        claimed.add((generation, target.id))
+                        target.__dict__.pop('_compaction_request', None)
+                        index = target.id - 1
+                        request = (client, model.id, profile, min(8192, profile.max_completion_tokens or 8192),
+                                   tuple(_frozen_step(prior) for prior in steps[max(0, index - 25):index]),
+                                   steps, _frozen_step(target))
+                        job = asyncio.create_task(self._summarize_step(target, request, generation, primary=model),
+                                                  name=f'slipagent-primary-compaction-{target.id}')
+                        self.jobs.add(job)
+                        job.add_done_callback(self._job_finished)
+                        await job
+                        if not self.behind(steps):
+                            break
+            phase('Waiting for free background compression…')
+            if not self.behind(steps):
+                break
+            pending = [job for job in self.jobs if not job.done()]
+            if not pending:
+                raise ContextError('Compression could not catch up: no free compression job is making progress. '
+                                   'Originals are preserved; add a provider with free models or retry compression.')
+            await progress.wait()
 
     def _finish_timing(self, ticket: int | None, task: asyncio.Task[None]) -> None:
         if self.timings is not None:
@@ -247,7 +331,7 @@ class StepCompactor:
                 task.add_done_callback(partial(self._finish_timing, ticket))
                 running[task] = key
                 self.jobs.add(task)
-                task.add_done_callback(self.jobs.discard)
+                task.add_done_callback(self._job_finished)
             if not running:
                 self.__dict__.pop("_standalone_steps", None)
                 return
@@ -261,7 +345,15 @@ class StepCompactor:
                 if task is not changed:
                     running.pop(task)
 
-    async def _summarize_step(self, step: CompletedStep, request: tuple[Any, ...], generation: int) -> None:
+    async def _summarize_step(self, step: CompletedStep, request: tuple[Any, ...], generation: int,
+                              *, primary: ModelInfo | None = None) -> None:
+        try:
+            await self._summarize_claimed_step(step, request, generation, primary=primary)
+        finally:
+            self.__dict__.setdefault('_active_steps', set()).discard((generation, step.id))
+
+    async def _summarize_claimed_step(self, step: CompletedStep, request: tuple[Any, ...], generation: int,
+                                     *, primary: ModelInfo | None = None) -> None:
         queued = step.__dict__.pop('_compaction_queued_at', None)
         if queued is not None and self.timings is not None:
             self.timings.record('compaction_wait', self.timings.clock() - queued, step.id)
@@ -274,16 +366,22 @@ class StepCompactor:
                                           for prior in history if prior.id < step.id])
         source['history_omitted'] = 0
         step.compaction_status = "pending"
-        await self._compact(step, source, client, model, capabilities, max_tokens, generation)
+        await self._compact(step, source, client, model, capabilities, max_tokens, generation, primary=primary)
 
     async def _compact(self, step: CompletedStep, source: dict[str, Any], client: APIClient, model: str,
-                       capabilities: RequestProfile | None, max_tokens: int | None, generation: int) -> None:
+                       capabilities: RequestProfile | None, max_tokens: int | None, generation: int,
+                       *, primary: ModelInfo | None = None) -> None:
         async def summarize(destination: APIClient, selected: str, profile: RequestProfile | None,
                             reserve: int | None) -> None:
             await self._compact_once(step, {**source, "history": list(source["history"])}, destination,
                                      selected, profile, reserve, generation)
         try:
-            await self.request(summarize, client, model, capabilities, max_tokens, generation)
+            if primary is not None:
+                if not eligible_free(primary) or primary.id != model or primary.provider != client.provider:
+                    raise CompressionUnavailableError(COMPRESSION_UNAVAILABLE)
+                await summarize(client, model, capabilities, max_tokens)
+            else:
+                await self.request(summarize, client, model, capabilities, max_tokens, generation)
         except Exception as exc:
             if generation != self.generation:
                 return
@@ -434,6 +532,7 @@ class StepCompactor:
         callback = getattr(self, "on_step", None)
         if callback is not None:
             callback(step)
+        self._progress_event().set()
 
     async def _summary_request(self, messages: list[Message], client: APIClient, model: str,
                                capabilities: RequestProfile | None, reserve: int, generation: int) -> tuple[str, str]:
@@ -516,6 +615,8 @@ class StepCompactor:
 
     def reset(self) -> None:
         self.generation += 1
+        self._progress_event().set()
+        self.__dict__.pop('_active_steps', None)
         for step in chain(self.__dict__.get("_ready", []), self.__dict__.get("_conversation", []),
                           self.__dict__.get("_standalone_steps", [])):
             if getattr(step, "_compaction_request", None) is not None:

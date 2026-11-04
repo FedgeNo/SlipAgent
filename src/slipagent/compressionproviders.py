@@ -1,7 +1,7 @@
 """One provider rotation shared by every background compression attempt.
 
-The selected coding provider serves only working requests; background jobs use
-the other configured providers, at most one job per provider at a time.
+Background jobs use other configured providers, at most one job per provider.
+An eligible free primary can assist while normal working requests are paused.
 """
 
 from __future__ import annotations
@@ -15,8 +15,9 @@ from .providers import PROVIDERS, create_client
 from .types import ModelInfo
 
 COMPRESSION_UNAVAILABLE = (
-    "No eligible free models are available for compression. Compression will not work "
-    "until a provider with free models is added. Add OpenRouter or NVIDIA."
+    "No eligible free background models are available for compression. Add a provider "
+    "with free models to enable background compression, such as OpenRouter or NVIDIA. "
+    "An eligible free primary can assist when five completed steps lack summaries."
 )
 
 
@@ -39,6 +40,15 @@ class CompressionProviders:
     async def slots(self) -> int:
         """How many background jobs may run at once: one per eligible provider."""
         return len({model.provider for model in await self.background()})
+
+    async def primary(self) -> tuple[APIClient, ModelInfo] | None:
+        """Borrow the current primary only when its exact catalog model is free."""
+        session = self.models.session
+        candidates = await self.models.candidates('compression')
+        for model in candidates:
+            if model.provider == session.client.provider and model.id == session.agent.model:
+                return session.client, model
+        return None
 
     async def select(self, excluded: set[str], *, failed_provider: str | None = None,
                      revision: int | None = None, busy: Counter[str] | None = None) -> tuple[APIClient, ModelInfo]:

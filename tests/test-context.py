@@ -21,7 +21,7 @@ from test_agent import summary_response
 
 from slipagent.agent import Agent, STOP_NOTICE, STEP_LIMIT_NOTICE
 from slipagent.cli import Renderer, Style, build_parser
-from slipagent.config import Config, ConfigError
+from slipagent.config import Config, ConfigError, DEFAULT_MODEL
 from slipagent.context import (
     ContextError, ConversationHistory, RecallHistoryTool, SUMMARY_START, message_tokens,
     SUMMARY_END, TOOL_SUMMARY_KEY, response_memory, tool_response_memory,
@@ -1068,12 +1068,13 @@ def test_real_cli_hides_memory_rolls_window_and_recalls_originals(tmp_path):
     with StubOpenRouter([first, *intermediate, second, third, text_step(reply(8, "Inspection complete.", "User asked inspect and report; model reported completion.",
                                                                "User asked inspect and report; model recalled exact original input, response and file content."))]) as stub:
         result = run_cli("-p", "inspect and report",
-                         "--base-url", stub.base_url, "--model", "stub/one", cwd=tmp_path)
+                         "--base-url", stub.base_url, "--model", DEFAULT_MODEL, cwd=tmp_path)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "Inspection complete."
     assert SUMMARY_START not in result.stdout + result.stderr
     assert "read_file(" in result.stderr
     assert len(stub.requests) == 8
+    assert stub.summary_requests
     third_messages = stub.requests[6]["messages"]
     first_record = context_records(third_messages)[0]
     assert first_record["step_id"] == 1

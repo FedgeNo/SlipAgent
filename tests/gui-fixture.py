@@ -45,6 +45,11 @@ async def main():
                                             Message(role='tool', name='update_plan', tool_call_id='fixture-plan',
                                                     content={'tool': 'update_plan', 'call_id': 'fixture-plan', 'status': 'success', 'content': plan})])
             session.agent.history.sync(session.agent.messages)
+            for step in session.agent.history.steps:
+                step.summary = f'Fixture summary of history step {step.id}.'
+                step.reasoning_summary = ''
+                step.compaction_status = 'complete'
+                step.results_summarized = True
             session.agent._persist()
             session.registry.resources.artifacts.save('Example retained output', 'Complete retained output for browser inspection.\n', kind='output')
             target = project / 'restore.txt'

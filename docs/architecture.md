@@ -18,10 +18,11 @@ the workspace having a copy of SlipAgent's own `AGENTS.md`.
 The built-in model instructions and tool descriptions live in the checkout's top-level `prompts/` folder. Wheel builds include that folder as `slipagent/prompts`. `prompts.py` locates the application resources independently of the working project and reads UTF-8 text at use time. `agent.py` renders the main template's workspace and interpreter and refreshes it before each CLI model request, including with live reload disabled. Other dynamic templates use explicit `${name}` substitutions without interpreting inserted data as templates. The reload frame monitors these resources along with Python sources; compatible source reloads preserve their service owners. Missing resources and invalid templates report errors.
 File reads and edits, command-output recovery, background jobs, Git previews,
 and language-server navigation are described in their respective tool definitions.
-Working requests include complete contracts for core and loaded tools in the
-system's Available Tool Definitions section; other eligible tools appear in a
-short discovery catalog. Native-tool requests also carry the selected definitions in
-the API tool field required for native calls.
+Native working requests supply complete contracts for core and loaded tools
+only in the API `tools` field; their system text does not duplicate those schemas.
+Embedded JSON and GLM XML requests retain their complete textual definitions.
+Other eligible tools appear in a short discovery catalog. Tool-use guidance,
+MCP instructions, discovery restrictions and schema budgeting apply to both channels.
 
 The background-summary prompt is in `prompts/background-summary-prompt.md`. `compaction.py` reads it when building each isolated summary request. Protocol, history, environment, recovery, and tool guidance use the same loader. Tool specs read descriptions and argument-description mappings on each access; argument schemas and behavior remain in Python. See `prompts/README.md` for the editable file map.
 

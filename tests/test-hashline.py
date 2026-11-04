@@ -7,6 +7,7 @@ import pytest
 
 from slipagent import cli
 from slipagent.agent import Agent
+from slipagent.capabilities import ModelCapabilities
 from slipagent.tools import build_default_registry
 from slipagent.tools.hashline import HASHLINE_NAMES, anchored_view, set_hashline
 from slipagent.tools.discovery import tool_catalog
@@ -153,9 +154,12 @@ async def test_changed_during_planning_is_rejected(workspace, registry, monkeypa
     assert path.read_text() == 'external\n'
 
 
-async def test_deferred_definitions_and_disabled_prompts(workspace, registry, monkeypatch):
+@pytest.mark.parametrize('native', [False, True])
+async def test_deferred_definitions_and_disabled_prompts(workspace, registry, native):
     agent = Agent(StubClient([]), registry, 'test')
-    context = await agent._queued_context(registry.specs(), 1)
+    profile = ModelCapabilities({}, [{'tag': 'stub', 'supported_parameters': ['tools'] if native else ['response_format'],
+                                      'context_length': 1000000}])
+    context = await agent._context_view(registry.specs(), 1, capabilities=profile)
     assert 'read_hashlines' in content_text(context[0].content)
     assert 'Copy anchors exactly' not in content_text(context[0].content)
     assert 'edit_hashlines' not in {spec.name for spec in agent._visible_specs(registry.specs())}
@@ -165,15 +169,20 @@ async def test_deferred_definitions_and_disabled_prompts(workspace, registry, mo
     assert result.content['definitions'] == []
     agent.extend([Message.assistant(None, [call('load_tools', names=sorted(HASHLINE_NAMES))]),
                   Message.tool_result('call_load_tools', {'tool': 'load_tools', 'status': 'success', 'content': result.content})])
-    context = await agent._queued_context(registry.specs(), 1)
-    assert 'Copy anchors exactly' in content_text(context[0].content)
+    context = await agent._context_view(registry.specs(), 1, capabilities=profile)
+    if native:
+        assert 'Copy anchors exactly' not in content_text(context[0].content)
+        definitions = {spec.name: spec.description for spec in agent._visible_specs(registry.specs())}
+        assert 'Copy anchors exactly' in definitions['edit_hashlines']
+    else:
+        assert 'Copy anchors exactly' in content_text(context[0].content)
     assert HASHLINE_NAMES <= {spec.name for spec in agent._visible_specs(registry.specs())}
     catalog = tool_catalog(registry)
     rebuilt = build_default_registry(workspace, services=registry.services)
     assert catalog.loaded >= HASHLINE_NAMES
     assert rebuilt.builtin_names >= HASHLINE_NAMES
     set_hashline(registry, False)
-    context = await agent._queued_context(registry.specs(), 1)
+    context = await agent._context_view(registry.specs(), 1, capabilities=profile)
     supplied = '\n'.join(content_text(message.content) for message in context)
     assert 'Copy anchors exactly' not in supplied
     assert not HASHLINE_NAMES & {spec.name for spec in agent._visible_specs(registry.specs())}

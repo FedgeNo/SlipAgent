@@ -36,7 +36,7 @@ async def test_tool_guidance_reaches_actual_request_body(workspace, native):
             view = await agent._context_view(registry.specs(), 0, capabilities=profile)
             await client.chat(model="test", messages=view, tools=agent._visible_specs(registry.specs()) if native else None,
                               request_profile=profile)
-            initial = system_tool_definitions(captured[0]["messages"][0]["content"])
+            initial = captured[0].get('tools') if native else system_tool_definitions(captured[0]['messages'][0]['content'])
             assert "write_file" in {item["function"]["name"] for item in initial}
             assert 'run_python' in {item['function']['name'] for item in initial}
             if native:
@@ -49,14 +49,13 @@ async def test_tool_guidance_reaches_actual_request_body(workspace, native):
                               request_profile=profile)
         body = captured[1]
         system = body["messages"][0]["content"]
-        system_definitions = system_tool_definitions(system)
         assert all("# Available Tool Definitions" not in message["content"] for message in body["messages"] if message["role"] == "user")
         if native:
             definitions = body["tools"]
-            assert system_definitions == definitions
+            assert '# Available Tool Definitions' not in system
         else:
             assert "tools" not in body
-            definitions = system_definitions
+            definitions = system_tool_definitions(system)
         descriptions = {item["function"]["name"]: item["function"]["description"] for item in definitions}
         assert "substring" in descriptions["edit_file"] and "`old_string`" in descriptions["edit_file"]
         assert "Batch all known needed files and ranges" in descriptions["read_file"]

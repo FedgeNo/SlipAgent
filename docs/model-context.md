@@ -160,7 +160,7 @@ hybrid checkpoints and Nemotron 3.5 Lightning; explicit request values take prec
 
 SlipAgent uses [OpenRouter's native tool-call format](https://openrouter.ai/docs/guides/features/tool-calling)
 when the selected endpoints advertise `tools`. Tool definitions go in the API's
-`tools` parameter; calls arrive in `message.tool_calls`, separately from the
+`tools` parameter without a second copy in system text; calls arrive in `message.tool_calls`, separately from the
 response text. The harness preserves each call ID and stores its result with
 the matching `call_id` in that step's `tool_results` array. The next request
 supplies the completed step in the user-input metadata, with each literal result block referenced

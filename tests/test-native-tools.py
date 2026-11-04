@@ -309,6 +309,31 @@ async def test_json_only_fallback_omits_native_parameters_and_replays_observatio
     assert context_records(router.requests[1]["messages"])[0]["tool_calls"][0]["tool_name"] == "record"
 
 
+@pytest.mark.parametrize('parameters', [['tools'], ['tools', 'response_format']])
+async def test_native_tool_contract_is_not_duplicated_in_system_text(parameters):
+    tool = RecordingTool()
+    tool.description = 'Distinctive native tool contract: retain this description.'
+    tool.parameters = {'type': 'object', 'properties': {
+        'value': {'type': 'string', 'description': 'Distinctive native argument guidance.'}},
+        'required': ['value'], 'additionalProperties': False}
+    first = wire('Recording.')
+    first['tool_calls'] = [native_call()]
+    router = Router({'test/native': parameters}, [first, wire()])
+    async with OpenRouterClient('test', transport=httpx.MockTransport(router.handle)) as client:
+        agent = Agent(client, ToolRegistry([tool]), 'test/native', system_prompt='Keep this custom instruction.')
+        assert await agent.run('Record A.') == 'Done.'
+    assert tool.seen == [{'value': 'A'}]
+    for request in router.requests:
+        system = request['messages'][0]['content']
+        assert 'Keep this custom instruction.' in system
+        assert '# Available Tool Definitions' not in system
+        assert 'Distinctive native tool contract' not in system
+        assert 'Distinctive native argument guidance' not in system
+        contract = next(entry['function'] for entry in request['tools'] if entry['function']['name'] == 'record')
+        assert contract['description'] == tool.description
+        assert contract['parameters']['properties']['value']['description'] == 'Distinctive native argument guidance.'
+
+
 async def test_selection_refreshes_and_caches_native_support_between_calls(tmp_path):
     def final(body):
         return {"role": "assistant", "content": json.dumps({"response": "Done."})}

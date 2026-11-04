@@ -86,7 +86,7 @@ The `z-ai/glm-5.3` and `z-ai/glm-5.3-flash` profiles use the GLM XML channel and
 | `overthinking-*.md` | Archived reasoning guidance |
 | `workspace-*.md`, `environment-*.md` | Access policy and Python environment guidance |
 | `harness-installation.md` | Running harness code location, supplied only in Danger Mode |
-| `tool-definitions.md`, `tool-definitions-glm-xml.md`, `harness-state.md` | Headed runtime data blocks |
+| `tool-definitions.md`, `tool-definitions-glm-xml.md`, `harness-state.md` | Embedded JSON/GLM XML tool definitions and headed harness state; native definitions are supplied only through the API `tools` field |
 | `call-label.md` | Description of the optional `call_label` argument added to every tool |
 | `project-instructions-*.md` | Project instruction scope and delivery |
 | `instruction-scope.md`, `instruction-file.md`, `instruction-file-unreadable.md` | Dynamic scope, source labels, and unreadable-file notices |

@@ -120,11 +120,17 @@ async def test_loading_changes_prompt_and_api_definitions_on_the_next_turn(nativ
         assert "optional_record" in system
         assert "A distinctive long contract" not in system
         assert "# Additional Tool Catalog" in system
-        assert "## Core Tools\n\n```json\n{\n  \"load_tools\"" in system
-        assert "## Additional Loaded Tools\n\n```json\n{}" in system
+        if native:
+            assert '# Available Tool Definitions' not in system
+        else:
+            assert "## Core Tools\n\n```json\n{\n  \"load_tools\"" in system
+            assert "## Additional Loaded Tools\n\n```json\n{}" in system
         assert "| `optional_record` | Record an optional value. |" in system
         for request in router.requests[1:]:
-            assert "A distinctive long contract" in request["messages"][0]["content"]
+            definitions = json.dumps(request['tools']) if native else request['messages'][0]['content']
+            assert 'A distinctive long contract' in definitions
+            if native:
+                assert 'A distinctive long contract' not in request['messages'][0]['content']
         if native:
             assert {tool["function"]["name"] for tool in first["tools"]} == {"load_tools", "update_plan"}
             assert all("optional_record" in {tool["function"]["name"] for tool in request["tools"]}

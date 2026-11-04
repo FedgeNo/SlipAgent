@@ -154,7 +154,7 @@ class ContextBuilder:
             sections.add("tools", "Tools", load_prompt('tool-definitions-glm-xml.md', definitions="\n".join(
                 json.dumps({"name": spec.name, "description": spec.description, "parameters": spec.parameters},
                            ensure_ascii=False) for spec in specs)), 10, owner="tools", dynamic=False)
-        else:
+        elif not native_tools:
             sections.add("tools", "Available Tool Definitions", load_prompt('tool-definitions.md',
                          core_definitions=json.dumps({spec.name: {"description": spec.description, "parameters": spec.parameters}
                                                       for spec in specs if spec.name in CORE_TOOLS}, ensure_ascii=False, indent=2),

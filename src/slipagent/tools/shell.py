@@ -132,9 +132,11 @@ class RunCommandTool(Tool):
         return command
 
     async def _spawn(self, command: str, *, input_channel: CommandInput | None = None) -> asyncio.subprocess.Process:
+        # A new session still inherits fd 0 unless replaced. Commands must not
+        # consume UI mouse packets or change the SSH terminal's input modes.
         return await asyncio.create_subprocess_shell(
             command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            stdin=asyncio.subprocess.PIPE if input_channel is not None else None,
+            stdin=asyncio.subprocess.PIPE if input_channel is not None else asyncio.subprocess.DEVNULL,
             cwd=str(self.workspace.root), env=_subprocess_env(), start_new_session=os.name == 'posix')
 
 

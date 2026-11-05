@@ -10,6 +10,8 @@ Commands use a non-login shell with the user's inherited environment, including 
 
 ## Output
 
+Commands receive EOF on stdin and never inherit the user's terminal.
+
 Each stream returns up to 32,000,000 characters, retaining beginning and end for larger output. Combined results remain subject to the context budget. Treat omitted output as unknown.
 
 Session logs retain decoded output within the disk quota. Use `read_command_output` with the returned log ID and recovery call to page or tail it. Lost bytes are reported.

@@ -150,6 +150,9 @@ and perform only operations within the user's task.
 
 ### Background Commands
 
+Ordinary foreground and background shell commands receive EOF on stdin; they
+never inherit the CLI's terminal or read keyboard and mouse input from it.
+
 Pass `{"command":"your test command","background":true,"timeout":120}` to
 `run_command`. It returns a `job_id` and `log_id`. Use `command_jobs` with
 `{"action":"wait","job_id":"ID_FROM_RESULT","timeout":10}` to wait briefly,

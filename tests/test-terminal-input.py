@@ -3,6 +3,9 @@
 import asyncio
 import importlib
 import os
+import json
+import shlex
+import sys
 from unittest.mock import Mock
 
 import pytest
@@ -16,6 +19,70 @@ helpers = importlib.import_module('test-terminal')
 display = helpers.display
 wait_until = helpers.wait_until
 pytestmark = pytest.mark.skipif(os.name != 'posix', reason='POSIX terminal modes')
+
+
+@pytest.mark.parametrize('background', [False, True])
+async def test_run_command_cannot_change_ui_terminal_or_consume_mouse_input(tmp_path, background):
+    import termios
+    import tty
+    from test_cli_e2e import cli_environment
+
+    # Only the disposable slave is inherited by the harness subprocess. Never
+    # replace pytest's stdin or let the probe touch the developer's terminal.
+    master, slave = os.openpty()
+    process = None
+    try:
+        tty.setraw(slave)
+        original = termios.tcgetattr(slave)
+        packet = b'\x1b[<64;1;2M'
+        os.write(master, packet)
+        probe = '''import json, os, termios
+from pathlib import Path
+terminal = os.isatty(0)
+if terminal:
+    modes = termios.tcgetattr(0)
+    modes[3] |= termios.ECHO | termios.ICANON
+    termios.tcsetattr(0, termios.TCSANOW, modes)
+Path('stdin-probe.json').write_text(json.dumps({'terminal': terminal,
+    'input': None if terminal else os.read(0, 1).hex()}))
+'''
+        command = shlex.join([sys.executable, '-c', probe])
+        driver = '''import asyncio, sys
+from pathlib import Path
+from slipagent.jobs import CommandJobs, CommandJobsTool
+from slipagent.tools.output import CommandArchive
+from slipagent.tools.shell import RunCommandTool
+from slipagent.workspace import Workspace
+async def main():
+    archive, jobs = CommandArchive(100000), CommandJobs()
+    try:
+        result = await RunCommandTool(Workspace(Path.cwd()), archive, jobs).run(
+            sys.argv[1], background=sys.argv[2] == 'True')
+        assert not result.is_error, result.content
+        if sys.argv[2] == 'True':
+            result = await CommandJobsTool(jobs).run('wait', result.content['job_id'], timeout=5)
+            assert result.content['state'] == 'completed', result.content
+    finally:
+        await jobs.aclose()
+        await archive.aclose()
+asyncio.run(main())
+'''
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, '-c', driver, command, str(background), cwd=tmp_path,
+            stdin=slave, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            start_new_session=True, env=cli_environment())
+        stdout, stderr = await asyncio.wait_for(process.communicate(), 15)
+        assert process.returncode == 0, (stdout, stderr)
+        assert termios.tcgetattr(slave) == original
+        assert json.loads((tmp_path / 'stdin-probe.json').read_text()) == {'terminal': False, 'input': ''}
+        os.set_blocking(slave, False)
+        assert os.read(slave, len(packet)) == packet
+    finally:
+        if process is not None and process.returncode is None:
+            process.kill()
+            await process.communicate()
+        os.close(master)
+        os.close(slave)
 
 
 @pytest.mark.parametrize('drift', ['cooked', 'input_translation'])

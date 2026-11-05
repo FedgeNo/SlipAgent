@@ -1397,8 +1397,10 @@ cancelled writes close stdin and report possible partial delivery; successful
 submission does not establish consumption. Job settlement closes the channel
 even if cancellation wins before execution or while spawning. Input uses normal
 tool-start journaling and result history; resume never replays it or reconnects
-to prior processes. Ordinary stdin behavior and execution deadlines are unchanged.
-No PTY is allocated.
+to prior processes. Ordinary foreground and background shell commands use
+`DEVNULL` for stdin, so they cannot consume UI input or change its terminal modes
+through an inherited descriptor. Interactive jobs receive only their owned pipe.
+Execution deadlines are unchanged. No PTY is allocated.
 
 `command_jobs` provides list/status/wait/stop. Its bounded wait never cancels the
 owned task; output is retrieved incrementally through `read_command_output`.

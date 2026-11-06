@@ -252,18 +252,19 @@ def _narrative_source(steps: list[HistoryStep], runs: list[int], first: int,
     for index in range(first, last + 1):
         step = steps[index]
         if step.summary is None:
-            # A failed first pass is a permanent gap; anything else may still finish.
+            # Leave failed first passes out; their originals and later retries remain separate.
             if getattr(step, "compaction_status", None) != "failed":
                 return None
             continue
         original = step._disk["model"] if hasattr(step, "_disk") else step_record(step.messages)
-        summary = step._disk_summary["summary"] if hasattr(step, "_disk_summary") else step.summary
+        compressed = step.context_messages(compressed=True)[0].content
+        summary = compressed['compressed_summary']
         source["steps"].append({
             "step_id": step.id,
             "run": runs[index],
             "tool_calls": [{"call_id": call["call_id"], "tool_name": call["tool_name"]}
                            for call in original["tool_calls"]],
-            "artifacts": step.context_messages(compressed=True)[0].content.get("artifacts", []),
+            "artifacts": compressed.get("artifacts", []),
             "compressed_summary": summary,
         })
         batch.append(step)
@@ -307,7 +308,7 @@ def ready_job(owner: StepCompactor, steps: list[HistoryStep], active: set[Any],
         source = {'eras': [{'step_ids': record['step_ids'],
                             'runs': sorted({runs[step_id - 1] for step_id in record['step_ids']}),
                             'compressed_summary': record['compressed_summary']} for record in eras]}
-        if message_tokens([aeon_prompt, Message.user(source)]) > budget:
+        if message_tokens([aeon_prompt, Message.user(source)]) > budget and capabilities is None and owner.routing is None:
             continue
         setattr(anchor, 'aeon_attempt', total)
         if owner.on_step is not None:
@@ -334,7 +335,7 @@ def ready_job(owner: StepCompactor, steps: list[HistoryStep], active: set[Any],
                                       "runs": sorted({runs[step_id - 1] for step_id in record["step_ids"]}),
                                       "compressed_summary": record["compressed_summary"]}
                                      for record in narratives]}
-        if message_tokens([era_prompt, Message.user(era_source)]) > budget:
+        if message_tokens([era_prompt, Message.user(era_source)]) > budget and capabilities is None and owner.routing is None:
             continue
         setattr(anchor, "era_attempt", total)
         if owner.on_step is not None:
@@ -352,7 +353,7 @@ def ready_job(owner: StepCompactor, steps: list[HistoryStep], active: set[Any],
         if prepared is None:
             continue
         batch, source = prepared
-        if message_tokens([narrative_prompt, Message.user(source)]) > budget:
+        if message_tokens([narrative_prompt, Message.user(source)]) > budget and capabilities is None and owner.routing is None:
             continue  # Complete source summaries cannot fit this route; never truncate them.
         setattr(anchor, "history_merge_attempt", total)
         if owner.on_step is not None:
@@ -364,8 +365,8 @@ def ready_job(owner: StepCompactor, steps: list[HistoryStep], active: set[Any],
 
 async def _summarize(owner: StepCompactor, system: Message, source: dict[str, Any], replaced: list[Message],
                      destination: APIClient, selected: str, profile: RequestProfile | None,
-                     allowance: int | None, generation: int, build: Any) -> dict[str, Any]:
-    from .api import APIClient
+                     allowance: int | None, generation: int, build: Any, step_id: int) -> dict[str, Any]:
+    from .api import APIClient, APIContextError
     from .compaction import COMPACTION_TIMEOUT, CompactionBudgetError, decode_summary
     from .context import message_tokens
 
@@ -374,18 +375,34 @@ async def _summarize(owner: StepCompactor, system: Message, source: dict[str, An
         options.update(request_profile=profile, disable_timeout=True, single_attempt=True)
     limit = min(profile.context_length, profile.max_prompt_tokens or profile.context_length) if profile else 128_000
     limit = model_context_limit(selected, profile, limit)
-    if message_tokens([system, Message.user(source)]) + (allowance or 8192) > int(limit * .85):
-        raise CompactionBudgetError("the grouped summaries exceed the compression provider's context budget")
-    async with asyncio.timeout(COMPACTION_TIMEOUT):
-        completion = await destination.chat(
-            model=selected, messages=[system, Message.user(source)], tools=None,
-            max_tokens=allowance if profile is not None and "max_tokens" in profile.parameters else None,
-            extra_body={}, **options,
-        )
+    budget = int(limit * .85) - (allowance or 8192)
+
+    async def chunks(chunk_budget: int) -> dict[str, str]:
+        if profile is None:
+            raise CompactionBudgetError('Grouped chunking requires a provider capability profile.')
+        scaffold = {'user_prompt': '', 'history': [], 'history_omitted': 0, 'grouped_summaries': source}
+        summary, _ = await owner._chunked_retry(step_id, scaffold, destination, selected, profile,
+                                               allowance or 8192, chunk_budget, generation)
+        return {'summary': summary}
+
+    if message_tokens([system, Message.user(source)]) > budget:
+        value: Any = await chunks(budget)
+    else:
+        try:
+            async with asyncio.timeout(COMPACTION_TIMEOUT):
+                completion = await destination.chat(
+                    model=selected, messages=[system, Message.user(source)], tools=None,
+                    max_tokens=allowance if profile is not None and 'max_tokens' in profile.parameters else None,
+                    extra_body={}, **options)
+        except APIContextError:
+            value = await chunks(budget // 2)
+        else:
+            if generation != owner.generation:
+                return {}
+            owner.on_usage(completion.usage)
+            value = decode_summary(completion)
     if generation != owner.generation:
         return {}
-    owner.on_usage(completion.usage)
-    value = decode_summary(completion)
     if not isinstance(value, dict) or set(value) != {"summary"}:
         raise ValueError("the historical compactor must return only summary")
     record: dict[str, Any] = build(value["summary"])
@@ -434,7 +451,7 @@ async def _merge(owner: StepCompactor, anchor: HistoryStep, batch: list[HistoryS
     async def operation(destination: APIClient, selected: str, profile: RequestProfile | None,
                         allowance: int | None) -> dict[str, Any]:
         return await _summarize(owner, system, source, replaced, destination, selected, profile,
-                                allowance, generation, build)
+                                allowance, generation, build, anchor.id)
 
     await _publish(owner, anchor, "historical_summary", operation, (client, model, capabilities, reserve),
                    generation, f"turns {batch[0].id}–{batch[-1].id}")
@@ -459,7 +476,7 @@ async def _aggregate(owner: StepCompactor, anchor: HistoryStep, narratives: list
     async def operation(destination: APIClient, selected: str, profile: RequestProfile | None,
                         allowance: int | None) -> dict[str, Any]:
         return await _summarize(owner, system, source, replaced, destination, selected, profile,
-                                allowance, generation, build)
+                                allowance, generation, build, anchor.id)
 
     ids = [step_id for narrative in narratives for step_id in narrative["step_ids"]]
     await _publish(owner, anchor, f'{kind}_summary', operation, (client, model, capabilities, reserve),

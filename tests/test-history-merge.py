@@ -47,6 +47,8 @@ def history_with_posts(total, size=3000, run_length=20):
 class MergeClient:
     def __init__(self, *, malformed=False, pause=False):
         self.calls = []
+        self.call_sizes = []
+        self.group_chunks = []
         self.malformed = malformed
         self.started = asyncio.Event()
         self.release = asyncio.Event()
@@ -55,10 +57,17 @@ class MergeClient:
 
     async def chat(self, **kwargs):
         self.calls.append(kwargs)
+        self.call_sizes.append(message_tokens(kwargs['messages']))
         self.started.set()
         await self.release.wait()
-        text = "bad json" if self.malformed else json.dumps({"summary":
-            "The user requested inspection. Tools returned observations (step_id 1, call_id read-1); further inspections followed."})
+        value = {'summary': 'The user requested inspection. Tools returned observations (step_id 1, call_id read-1); further inspections followed.'}
+        source = kwargs['messages'][1].content
+        if isinstance(source, dict) and source.get('phase'):
+            value['reasoning_summary'] = ''
+            if source['phase'] == 'chunk':
+                from slipagent.sources import materialize
+                self.group_chunks.append(materialize(source))
+        text = 'bad json' if self.malformed else json.dumps(value)
         return Completion(Message.assistant(text), "test", usage=Usage(prompt_tokens=100, completion_tokens=30))
 
 
@@ -176,12 +185,15 @@ async def test_unsettled_first_passes_hold_a_block_and_failed_ones_are_gaps():
     assert not client.calls
     history.steps[2].compaction_status = "failed"
     history.steps[9].compaction_status = "failed"
+    owner._schedule_retry(history.steps[2])
+    owner._schedule_retry(history.steps[9])
     schedule(owner, history, client)
     await owner.wait()
     record = historical_records(history.steps)[0]
     assert record["step_ids"] == [i for i in range(1, 21) if i not in (3, 10)]
     assert record["step_id"] == 20
     assert [source["step_id"] for source in record["sources"]] == record["step_ids"]
+    await owner.aclose()
 
 
 @pytest.mark.parametrize("outcome", ["recover", "reset", "permanent"])
@@ -300,15 +312,18 @@ async def test_grouped_retry_wait_is_cancelled_at_session_grace_deadline(monkeyp
     history, _ = history_with_posts(30)
     originals = [step.full_text() for step in history.steps]
     requests, errors = [], []
+    started = asyncio.Event()
 
     def handle(request):
         requests.append(request)
+        started.set()
         return httpx.Response(429, headers={"Retry-After": "60"}, json={"error": "unavailable"})
 
     owner = StepCompactor(lambda _: None, errors.append)
     async with OpenRouterClient("dummy", transport=httpx.MockTransport(handle)) as client:
         free_compaction(owner, client)
         schedule(owner, history, client)
+        await asyncio.wait_for(started.wait(), 2)
         await asyncio.wait_for(owner.settle(), 1)
     assert len(requests) == 1 and not owner.jobs and not errors
     assert not historical_records(history.steps)
@@ -322,15 +337,39 @@ async def test_merge_fits_frozen_provider_budget_without_truncating_source_summa
     small = RequestProfile(context_length=20000, max_prompt_tokens=20000, parameters=set())
     schedule(owner, history, client, small)
     await owner.wait()
-    assert not client.calls  # Twenty complete source summaries cannot fit.
+    assert len(historical_records(history.steps)) == 2
+    assert client.group_chunks
+    assert all(size <= int(20000 * .85) - 8192 for size in client.call_sizes)
+    sources = [record['value'] for chunk in client.group_chunks for record in chunk['records']
+               if 'value' in record and 'step_id' in record['value']]
+    assert sorted(source['step_id'] for source in sources) == list(range(1, 41))
+    for source in sources:
+        assert source['compressed_summary'] == history.steps[source['step_id'] - 1].summary
+    calls = len(client.calls)
     larger = RequestProfile(context_length=60000, parameters={"max_tokens"})
     schedule(owner, history, client, larger)
     await owner.wait()
-    assert len(client.calls) == 2
-    call = client.calls[0]
-    assert message_tokens(call["messages"]) + call["max_tokens"] <= int(60000 * .85)
-    for source in call["messages"][1].content["steps"]:
-        assert source["compressed_summary"] == history.steps[source["step_id"] - 1].summary
+    assert len(client.calls) == calls  # A larger route reuses the successful cached summaries.
+
+
+async def test_group_provider_context_failure_retries_with_smaller_chunks():
+    from slipagent.api import APIContextError
+    history, _ = history_with_posts(45)
+    class Client(MergeClient):
+        rejected = False
+        async def chat(self, **kwargs):
+            if not self.rejected:
+                self.rejected = True
+                raise APIContextError('The provider rejected this group as too large')
+            return await super().chat(**kwargs)
+    client = Client()
+    owner = StepCompactor(lambda _: None, lambda error: pytest.fail(error))
+    schedule(owner, history, client, RequestProfile(context_length=40000, parameters={'max_tokens'}))
+    await owner.wait()
+    assert client.rejected and client.group_chunks
+    assert [record['step_ids'] for record in historical_records(history.steps)] == [list(range(1, 21)), list(range(21, 41))]
+    assert all(chunk['shared_context']['summary_group'] for chunk in client.group_chunks)
+    await owner.aclose()
 
 
 async def test_second_compactor_is_wired_into_completed_agent_steps():
@@ -642,9 +681,11 @@ async def test_run_block_narratives_with_gaps_survive_resume(tmp_path):
     owner = StepCompactor(lambda _: None, lambda error: pytest.fail(error))
     owner.on_step = journal.step
     schedule(owner, history, MergeClient())
+    owner._schedule_retry(history.steps[4])
     await owner.wait()
     expected = copy.deepcopy(historical_records(history.steps))
     assert [record["step_ids"] for record in expected] == [[i for i in range(1, 13) if i != 5]]
     data = journal.load(journal.session_id)
     assert historical_records(data["history"].steps) == expected
+    await owner.aclose()
     await agent.registry.aclose()

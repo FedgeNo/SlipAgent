@@ -437,7 +437,7 @@ async def test_reduced_history_keeps_active_request_and_complete_latest_tool_bat
     assert [step.full_text() for step in history.steps] == originals
 
 
-async def test_history_can_be_omitted_entirely_if_even_its_summaries_are_too_large():
+async def test_oversized_summary_is_excerpted_without_restoring_originals():
     history = ConversationHistory()
     messages = [Message.user("old request"), Message.assistant("OLD RESPONSE " * 3000),
                 Message.user("latest exact request")]
@@ -445,7 +445,14 @@ async def test_history_can_be_omitted_entirely_if_even_its_summaries_are_too_lar
     history.steps[0].summary = "INFLATED SUMMARY " * 2000
     view = await history.view(messages, [], keep_steps=50,
                               context_length=8000, max_output=1000)
-    assert [context_body(message.content) for message in unpack_context(view) if message.role != "system"] == ["latest exact request"]
+    from data_text_reader import request_input
+    payload = request_input(view)
+    assert payload['user_prompts'] == ['latest exact request']
+    assert len(payload['history']) == 1
+    record = payload['history'][0]
+    assert record['representation'] == 'compressed'
+    assert ['compressed_summary'] in record['excerpted_fields']
+    assert 'OLD RESPONSE' not in str(record)
     assert "OLD RESPONSE" in content_text((await RecallHistoryTool(history).invoke({"step_id": 1})).content)
 
 

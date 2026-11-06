@@ -25,7 +25,7 @@ from typing import Any, TypeVar, cast
 
 from .capabilities import RequestProfile, model_context_limit
 from .context import SUMMARY_MAX_CHARS, CompletedStep, ContextError, HistoryStep, message_tokens
-from .api import APIClient, APIResponseError, APITransportError, RETRYABLE_STATUS
+from .api import APIClient, APIContextError, APIError, APIResponseError, APITransportError, RETRYABLE_STATUS
 from .types import Completion, Message, ModelInfo, Usage
 from .compressionproviders import COMPRESSION_UNAVAILABLE, CompressionProviders, CompressionUnavailableError
 from .lifecycle import finish_cleanup
@@ -40,6 +40,8 @@ COMPACTION_TIMEOUT = 20 * 60
 COMPACTION_RETRIES = 5
 COMPACTION_QUEUE_SIZE = 32
 COMPACTION_GRACE_PERIOD = 120
+FAILED_SUMMARY_RETRY_STEPS = 20
+FAILED_SUMMARY_RETRY_SECONDS = 300
 LEGACY_OVERSIZED_ERROR = "CompactionBudgetError: the complete step exceeds the selected model's compaction context budget"
 
 
@@ -124,24 +126,6 @@ class StepCompactor:
         queue = self.__dict__.setdefault("_ready", deque())
         if conversation is not None:
             self.__dict__["_conversation"] = conversation
-            # Summaries cancelled by an interrupt, credential or model change,
-            # or interrupted by a restart, are requested again with this route.
-            for index, earlier in enumerate(conversation):
-                if (earlier is not step and isinstance(earlier, CompletedStep)
-                        and _needs_summary(earlier)
-                        and (getattr(earlier, "compaction_status", None) in {"cancelled", "interrupted"}
-                             or (getattr(earlier, "request_failure", None) is not None
-                                 and earlier.reasoning_summary is None and earlier.compaction_status == "complete")
-                             or (getattr(earlier, "compaction_status", None) == "failed"
-                                 and earlier.compaction_error == LEGACY_OVERSIZED_ERROR))
-                        and earlier.__dict__.get("_compaction_request") is None):
-                    earlier.__dict__["_compaction_request"] = (
-                        client, model, capabilities, max_tokens,
-                        tuple(_frozen_step(prior) for prior in conversation[max(0, index - 25):index]),
-                        conversation, _frozen_step(earlier))
-                    earlier.compaction_status = "deferred"
-                    if self.timings is not None:
-                        earlier.__dict__['_compaction_queued_at'] = self.timings.clock()
         else:
             self.__dict__.setdefault("_standalone_steps", []).append(step)
         if len(queue) < COMPACTION_QUEUE_SIZE:
@@ -150,6 +134,7 @@ class StepCompactor:
             step.compaction_status = "deferred"
         if conversation is not None:
             self.__dict__["_route"] = (client, model, capabilities, max_tokens)
+            self._queue_retries(conversation, self.__dict__['_route'])
         self.dispatch()
 
     def track(self, conversation: list[HistoryStep], client: APIClient, model: str,
@@ -198,6 +183,7 @@ class StepCompactor:
         conversation = self.__dict__.get("_conversation")
         route = self.__dict__.get("_route")
         if conversation is not None and route is not None:
+            self._queue_retries(conversation, route)
             from .historymerge import ready_job
             grouped = ready_job(self, conversation, active, route)
             if grouped is not None:
@@ -215,6 +201,58 @@ class StepCompactor:
         self.__dict__['_ready'] = deque(item for item in queue if item is not step)
         claimed.add((generation, step.id))
         return ('step', step.id), self._summarize_step(step, request, generation)
+
+    def _queue_retries(self, conversation: list[HistoryStep], route: tuple[Any, ...]) -> None:
+        client, model, capabilities, max_tokens = route
+        now = asyncio.get_running_loop().time()
+        claimed = self.__dict__.setdefault('_active_steps', set())
+        for index, step in enumerate(conversation):
+            if (not isinstance(step, CompletedStep) or (self.generation, step.id) in claimed
+                    or step.__dict__.get('_compaction_request') is not None):
+                continue
+            status = step.compaction_status
+            failed_due = status == 'failed' and (
+                len(conversation) >= step.__dict__.get('_summary_retry_after_step', 0)
+                or now >= step.__dict__.get('_summary_retry_at', 0))
+            interrupted = _needs_summary(step) and (
+                status in {'cancelled', 'interrupted'}
+                or getattr(step, 'request_failure', None) is not None and step.reasoning_summary is None and status == 'complete')
+            if not failed_due and not interrupted:
+                continue
+            step.__dict__['_compaction_request'] = (
+                client, model, capabilities, max_tokens,
+                tuple(_frozen_step(prior) for prior in conversation[max(0, index - 25):index]),
+                conversation, _frozen_step(step))
+            step.compaction_status = 'deferred'
+            if self.timings is not None:
+                step.__dict__['_compaction_queued_at'] = self.timings.clock()
+
+    def _schedule_retry(self, step: CompletedStep) -> None:
+        conversation = self.__dict__.get('_conversation')
+        if conversation is None:
+            return
+        loop = asyncio.get_running_loop()
+        step.__dict__['_summary_retry_after_step'] = len(conversation) + FAILED_SUMMARY_RETRY_STEPS
+        step.__dict__['_summary_retry_at'] = loop.time() + FAILED_SUMMARY_RETRY_SECONDS
+        timer = self.__dict__.get('_retry_timer')
+        if timer is None or timer.cancelled():
+            self.__dict__['_retry_timer'] = loop.call_later(
+                FAILED_SUMMARY_RETRY_SECONDS, self._retry_ready, self.generation)
+
+    def _retry_ready(self, generation: int) -> None:
+        if generation != self.generation:
+            return
+        self.__dict__.pop('_retry_timer', None)
+        if generation == self.generation:
+            self.dispatch()
+            # Failed turns with later deadlines still need a wake-up when idle.
+            conversation = self.__dict__.get('_conversation', [])
+            future = [step.__dict__['_summary_retry_at'] for step in conversation
+                      if getattr(step, 'compaction_status', None) == 'failed'
+                      and step.__dict__.get('_summary_retry_at', 0) > asyncio.get_running_loop().time()]
+            if future:
+                self.__dict__['_retry_timer'] = asyncio.get_running_loop().call_at(
+                    min(future), self._retry_ready, generation)
 
     @staticmethod
     def behind(steps: list[HistoryStep]) -> bool:
@@ -387,12 +425,16 @@ class StepCompactor:
                 return
             step.compaction_status = "failed"
             step.compaction_error = f"{type(exc).__name__}: {exc}"
+            self._schedule_retry(step)
             if isinstance(exc, CompressionUnavailableError):
                 self.report_unavailable(str(exc))
             else:
                 self.on_error(f"Could not summarize step {step.id}: {exc}. Its full original remains available through recall_history.")
             if self.on_step is not None:
-                self.on_step(step)
+                try:
+                    self.on_step(step)
+                except (OSError, APIError) as persistence_error:
+                    self.on_error(f'Could not save failed summary state for step {step.id}: {persistence_error}')
         except asyncio.CancelledError:
             step.compaction_status = "cancelled"
             raise
@@ -447,6 +489,10 @@ class StepCompactor:
                 except Exception as exc:
                     if generation != self.generation:
                         return None
+                    if isinstance(exc, OSError) and not isinstance(exc, TimeoutError):
+                        # Local storage failures say nothing about provider
+                        # health. Let the job's cooldown retry the same route.
+                        raise
                     if routing is None:
                         retry = await self.wait_request_retry(client, attempt, exc)
                     elif isinstance(exc, CompressionUnavailableError) or selected is None:
@@ -497,6 +543,8 @@ class StepCompactor:
             messages = [Message.system(load_prompt("background-summary-prompt.md")),
                         Message.user(source)]
             reserve = max_tokens or 8192
+            budget = 0
+            chunked = False
             if capabilities is not None:
                 context_limit = min(capabilities.context_length, capabilities.max_prompt_tokens or capabilities.context_length)
                 context_limit = model_context_limit(model, capabilities, context_limit)
@@ -511,12 +559,25 @@ class StepCompactor:
                         total -= await run_blocking(message_tokens, [Message.user(source['history'].pop(0))]) - 32
                         source['history_omitted'] += 1
                     total = await run_blocking(message_tokens, messages)
-                if total > budget:
-                    summary, thoughts = await self._chunked_summary(
-                        step.id, source, client, model, capabilities, reserve, budget, generation)
-                    self._publish_summary(step, summary, thoughts if source['reasoning'] else '')
-                    return
-            summary, thoughts = await self._summary_request(messages, client, model, capabilities, reserve, generation)
+                chunked = total > budget
+            while generation == self.generation:
+                try:
+                    if chunked and capabilities is not None:
+                        summary, thoughts = await self._chunked_retry(
+                            step.id, source, client, model, capabilities, reserve, budget, generation)
+                    else:
+                        summary, thoughts = await self._summary_request(
+                            messages, client, model, capabilities, reserve, generation)
+                    break
+                except APIContextError as exc:
+                    if capabilities is None or budget < 2:
+                        raise CompactionBudgetError('The summary model cannot fit its required input.') from exc
+                    # Only this background job changes its chunk size. The
+                    # working model's context allowance is never reduced.
+                    budget //= 2
+                    chunked = True
+            else:
+                return
             self._publish_summary(step, summary, thoughts if source['reasoning'] else '')
         except asyncio.CancelledError:
             step.compaction_status = "cancelled"
@@ -572,7 +633,9 @@ class StepCompactor:
             return await self._summary_request(messages, client, model, capabilities, reserve, generation)
 
         def merge_messages(items: list[dict[str, Any]]) -> list[Message]:
-            return [Message.system(load_prompt("background-summary-prompt.md") + load_prompt("compaction-merge.md")),
+            prompt = (load_prompt('grouped-compaction-chunks.md') if plan.shared.get('summary_group') else
+                      load_prompt('background-summary-prompt.md') + load_prompt('compaction-merge.md'))
+            return [Message.system(prompt),
                     Message.user({"phase": "merge", "shared_context": plan.shared, "notes": items})]
 
         try:
@@ -584,7 +647,9 @@ class StepCompactor:
             for index in range(1, count):
                 left = await run_blocking(edge, plan.chunks[index - 1]["records"], last=True)
                 right = await run_blocking(edge, plan.chunks[index]["records"], last=False)
-                messages = [Message.system(load_prompt("compaction-boundary.md")), Message.user({
+                prompt = (load_prompt('grouped-compaction-chunks.md') if plan.shared.get('summary_group') else
+                          load_prompt('compaction-boundary.md'))
+                messages = [Message.system(prompt), Message.user({
                     "phase": "boundary_review", "shared_context": plan.shared,
                     "boundary": [index, index + 1], "left_tail": left, "right_head": right,
                     "left_summary": notes[index - 1], "right_summary": notes[index]})]
@@ -613,8 +678,22 @@ class StepCompactor:
         finally:
             await run_blocking(plan.close)
 
+    async def _chunked_retry(self, step_id: int, source: dict[str, Any], client: APIClient, model: str,
+                             capabilities: RequestProfile, reserve: int, budget: int,
+                             generation: int) -> tuple[str, str]:
+        while budget > 1:
+            try:
+                return await self._chunked_summary(step_id, source, client, model, capabilities,
+                                                   reserve, budget, generation)
+            except APIContextError:
+                budget //= 2
+        raise CompactionBudgetError('The summary model cannot fit its required chunk metadata.')
+
     def reset(self) -> None:
         self.generation += 1
+        timer = self.__dict__.pop('_retry_timer', None)
+        if timer is not None:
+            timer.cancel()
         self._progress_event().set()
         self.__dict__.pop('_active_steps', None)
         for step in chain(self.__dict__.get("_ready", []), self.__dict__.get("_conversation", []),

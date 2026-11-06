@@ -1,6 +1,6 @@
 `representation="excerpt"` marks bounded text and omissions. Treat missing text as unknown.
 
-Compressed records can also have `excerpted_fields` when attached reasoning or failure details need shortening. Their `compressed_summary` remains the step summary; listed fields use the same excerpt format and original references below.
+Compressed records, narratives, eras and aeons may have `excerpted_fields`, including `compressed_summary`, using the format below. Recall originals via `step_ids` (or `step_id`); summaries are not original fields.
 
 Excerpted calls use `result_excerpt`, `error_excerpt`, or `unclassified_result_excerpt` for bounded observations. `response_excerpts` contains bounded message text and call descriptions. Call arguments may be omitted; retrieve originals when exact arguments matter.
 

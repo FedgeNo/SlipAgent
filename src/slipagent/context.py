@@ -45,6 +45,7 @@ from .historyindex import HistorySize, HistorySizeIndex
 
 DEFAULT_CONTEXT_LENGTH = 1_000_000
 RECENT_FULL_STEPS = 5
+FAILED_SUMMARY_EXCERPT_BYTES = 8 * 1024
 HISTORY_PART_NAMES = ("prompt", "response", "reasoning", "tool_calls", "tool_results", "user_edits", "background_commands")
 
 
@@ -830,7 +831,9 @@ class ConversationHistory:
         unit_records: dict[int, dict[str, Any]] = {}
         unit_costs = [supplied(index, False)[1] for index in range(count)]
         record_costs: dict[int, HistorySize] = {}
+        aggregate_sources: dict[tuple[int, int], dict[str, Any]] = {}
         partials: dict[int, list[Message]] = {}
+        partial_compressed: set[int] = set()
         removed: list[tuple[list[int], int, HistorySize]] = []
         content_bytes = sum(cost.content_bytes for cost in unit_costs)
         block_count = sum(cost.blocks for cost in unit_costs)
@@ -894,6 +897,7 @@ class ConversationHistory:
                 level[index] = form
                 unit_records[index] = record
             record_costs[id(record)] = cost
+            aggregate_sources[(form, record['step_id'])] = record
             return True
 
         def drop_step(index: int) -> bool:
@@ -927,16 +931,24 @@ class ConversationHistory:
             partials[index] = [record_message(record)]
             return True
 
-        async def excerpt_step(index: int, *, results_only: bool) -> bool:
-            if level[index] not in (FULL, STEP) and not (level[index] == PARTIAL and not results_only):
+        async def excerpt_step(index: int, *, results_only: bool, budget: int | None = None) -> bool:
+            if level[index] == DROPPED or level[index] == PARTIAL and results_only:
                 return False
             from .historyexcerpts import excerpt_fields
             from .tools.blocking import run_blocking
             # Reduce the selected form: compressed records can still carry
             # oversized reasoning. Unseen observations keep their original form.
-            original = (supplied(index, True)[0] if level[index] == STEP else
-                        supplied(index, False)[0])[0].content
-            target = max(0, sizing.record_bytes(unit_costs[index]) - max(1, total_bytes() - available))
+            grouped = level[index] in (NARRATIVE, ERA, AEON)
+            compressed = level[index] == STEP or index in partial_compressed
+            if grouped:
+                current = unit_records[index]
+                original = aggregate_sources[(level[index], current['step_id'])]
+                previous_cost = record_costs[id(current)]
+            else:
+                original = supplied(index, compressed)[0][0].content
+                previous_cost = unit_costs[index]
+            target = (max(0, sizing.record_bytes(previous_cost) - max(1, total_bytes() - available))
+                      if budget is None else budget)
             def measure(record: dict[str, Any]) -> int:
                 return sizing.record_bytes(sizing.measure_record(record))
             # Keep a fitting newest batch ahead of its own optional prose.
@@ -945,7 +957,7 @@ class ConversationHistory:
             prefer_results = index == count - 1 and measure(without_prose) <= target
             from .requestbody import value_bytes
             reasoning_bytes = value_bytes(original.get('reasoning'))
-            largest_result = max(unit_costs[index].result_bytes, default=0)
+            largest_result = max(previous_cost.result_bytes, default=0)
             # Keep recent evidence ahead of thoughts. An older result that
             # cannot fit by itself may yield before much shorter reasoning.
             oversized_old_result = (index < recent_start
@@ -957,15 +969,23 @@ class ConversationHistory:
                                          results_only=results_only, prefer_results=prefer_results,
                                          reasoning_first=reasoning_first)
             if clipped is None:
-                if measure(original) >= sizing.record_bytes(unit_costs[index]):
+                if measure(original) >= sizing.record_bytes(previous_cost):
                     return False
                 clipped = original
             cost = sizing.measure_record(clipped)
-            if sizing.record_bytes(cost) >= sizing.record_bytes(unit_costs[index]):
+            if sizing.record_bytes(cost) >= sizing.record_bytes(previous_cost):
                 return False
-            change_cost([unit_costs[index]], [cost])
-            level[index], unit_costs[index] = PARTIAL, cost
-            partials[index] = [record_message(clipped)]
+            change_cost([previous_cost], [cost])
+            if grouped:
+                for member in range(count):
+                    if unit_records.get(member) is current:
+                        unit_records[member] = clipped
+                record_costs[id(clipped)] = cost
+            else:
+                if compressed:
+                    partial_compressed.add(index)
+                level[index], unit_costs[index] = PARTIAL, cost
+                partials[index] = [record_message(clipped)]
             return True
 
         async def reductions() -> AsyncIterator[None]:
@@ -983,6 +1003,14 @@ class ConversationHistory:
                 for index in range(first, boundary):
                     if summarize_step(index):
                         yield
+                    elif (level[index] == FULL and compressible(index)
+                          and self.steps[index].summary is None):
+                        # A failed gap has no AI memory. Keep labelled evidence,
+                        # rather than letting its original displace newer history.
+                        target = max(FAILED_SUMMARY_EXCERPT_BYTES,
+                                     sizing.record_bytes(unit_costs[index]) - max(1, total_bytes() - available))
+                        if await excerpt_step(index, results_only=False, budget=target):
+                            yield
                 first = boundary
             # Exhaust each older turn before touching a newer one. The newest
             # five stay original until reductions outside that window cannot fit.

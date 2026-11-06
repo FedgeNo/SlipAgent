@@ -450,9 +450,13 @@ size, not a model tokenizer. History uses the remaining model allowance;
 `--context-steps` is retained as a deprecated compatibility option; the preferred
 full-call window is the newest five turns, including complete tool results.
 Selection restarts from original history on every request. It tries economical
-summaries/narratives/eras outside that window, then reduces and removes older
+aeons/eras/narratives/individual summaries outside that window, then reduces and removes older
 turns individually. Only if the five-turn window itself cannot fit does it
 reduce those turns, oldest first, leaving the newest observation until last.
+Missing aggregates use their available constituent summaries. Old turns without
+a usable summary are excerpted toward 8 KiB during the older-history pass,
+before reducing newer turns. Excerpting an aggregate or individual summary
+retains its compressed source, representation and original step coverage.
 Explicit `/compact` boundaries continue to request economical compressed forms
 for their covered, already-observed turns. If dropping an oversized unit creates
 spare capacity, other dropped units that fit are restored, recent first; one
@@ -928,8 +932,10 @@ Only a fully validated final merge publishes `summary` and `reasoning_summary`.
 Chunk prompts preserve exact important values/equations, attribution, source
 references, and unresolved dependencies; overlap reduces boundary loss but does
 not make summarization lossless. Original history and manual compaction
-boundaries are unchanged. Legacy failures with the old whole-step budget error
-are rescheduled when a later step is submitted; success clears their old error.
+boundaries are unchanged. Failed individual summaries retry after 20 additional
+turns or five minutes. A generation-owned idle timer wakes the dispatcher without
+blocking waits for current jobs, and reset/shutdown cancel it. Restored failures
+without deadlines retry on the next dispatch; success clears their old error.
 A context overflow or bad summary leaves the originals intact and
 marks the summary failed with a visible warning and a recall reference. Each
 summary attempt has a 20-minute timeout. Retry waits and later attempts can
@@ -953,10 +959,15 @@ move. Sessions with fixed 20-turn narratives (records without `runs`) keep fixed
 blocks through the last of them. A block is ready once every turn has a
 first-pass summary or a failed first pass (a gap); five consecutive blocks are
 ready for an era once all their narratives exist. The complete
-source must fit the provisional route budget; sources are never truncated. All
+source is divided into lossless chunks when it exceeds a known route budget;
+context-size rejections retry with progressively smaller chunks. Without a
+capability profile, oversized jobs retain their lower-level summaries. Sources
+are never truncated. Group chunks use `grouped-compaction-chunks.md` and publish
+only after boundary review and final merging. All
 background jobs call `StepCompactor.request`:
 transient transport failures retry persistently with shared API backoff. Other
-failures advance providers and exclude that route for compression; a context
+failures advance providers and exclude that route for compression; local storage
+errors instead fail the job without penalizing a provider. A context
 fit failure excludes it only from this job. Failures are scoped to provider/model,
 except HTTP 401, which excludes the provider for both uses. Failed routes are
 reused only after healthy candidates run out. Stop after more than the greater
@@ -973,8 +984,8 @@ The block's last `CompletedStep` owns its `historical_summary` record, and the
 last step of an era's fifth block owns its `era_summary`. Five consecutive eras
 form an aeon of up to 500 turns, owned by their last anchor as `aeon_summary`.
 The existing free-only dispatcher builds it from complete era summaries and
-publishes only a smaller, validated result. Context selection tries aeons after
-eras and before omission, respecting the older-two-thirds and newest-five
+publishes only a smaller, validated result. Context selection tries aeons before
+eras, narratives and individual summaries, respecting the older-two-thirds and newest-five
 boundaries. Narratives retain
 `step_ids`, `runs`, and `sources` (turn IDs, runs, call IDs, names and artifact references)
 copied by the harness, independent of generated prose; eras and aeons retain

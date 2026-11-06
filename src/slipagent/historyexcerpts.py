@@ -21,7 +21,9 @@ def excerpt_fields(record: dict[str, Any], budget: int,
     if original_cost <= budget:
         return None
     projected = copy.deepcopy(record)
-    projected["representation"] = "compressed" if record.get("representation") == "compressed" else "excerpt"
+    representation = record.get('representation')
+    projected['representation'] = (representation if representation in
+        {'compressed', 'historical_summary', 'era_summary', 'aeon_summary'} else 'excerpt')
     projected["excerpted_fields"] = []
 
     def candidates(value: Any, path: list[str | int]) -> list[tuple[int, list[str | int], Any]]:
@@ -56,6 +58,8 @@ def excerpt_fields(record: dict[str, Any], budget: int,
             call = record["tool_calls"][path[1]]
             reference.update(call_id=call["call_id"], section="tool_calls",
                              field_path=[0, "function", "arguments", *path[3:]])
+        elif path[0] == 'compressed_summary':
+            reference.update(section='all')
         elif path[0] == "request_failure":
             reference.update(section="all", field_path=path)
         else:
@@ -79,10 +83,10 @@ def excerpt_fields(record: dict[str, Any], budget: int,
     results = []
     for index, result in enumerate(record.get("tool_results", [])):
         results.extend(candidates(result["content"], ["tool_results", index, "content"]))
-    prose = [candidates(record.get(field), [field]) for field in ('reasoning', 'agent_response')]
+    prose = [candidates(record.get(field), [field]) for field in ('reasoning', 'agent_response', 'compressed_summary')]
     groups = [results, *prose]
     if reasoning_first:
-        groups = [prose[0], results, prose[1]]
+        groups = [prose[0], results, *prose[1:]]
     if prefer_results:
         groups = [*prose, results]
     for field in ("user_edits", "background_commands"):

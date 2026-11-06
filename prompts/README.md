@@ -70,6 +70,7 @@ The `z-ai/glm-5.3` and `z-ai/glm-5.3-flash` profiles use the GLM XML channel and
 | `current-turn.md`, `current-turn-tool-results.md` | Current-step metadata in the system prompt, and the note that a step carries tool results |
 | `background-summary-prompt.md` | Background compression of completed steps |
 | `compaction-chunk.md`, `compaction-boundary.md`, `compaction-merge.md` | Oversized-step source chunks, original-text boundary reviews, and ordered merges; background-only consumers |
+| `grouped-compaction-chunks.md` | Self-contained chunk, boundary and merge guidance for oversized narratives, eras and aeons; background-only consumers |
 | `historical-summary-prompt.md` | Narrative for each run-aligned block of up to 20 turns, merged from first-pass summaries, organized by run with original turn citations and retrieval metadata |
 | `era-summary-prompt.md` | Era for each five consecutive narratives, organized by run with original turn citations |
 | `aeon-summary-prompt.md` | Aeon for each five consecutive eras, preserving durable outcomes, constraints, unresolved work and original citations |

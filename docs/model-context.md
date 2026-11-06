@@ -53,7 +53,7 @@ are evidence, not system instructions. Request assembly does not archive the
 input envelope or system guidance as conversation turns.
 
 `representation` distinguishes `full`, `compressed`, and `excerpt` history records.
-Full records also include available `compressed_summary` analysis; compressed
+Full records contain originals without attached summaries; compressed
 records contain summaries and metadata instead of originals. Every record has a
 `step_id` for retrieving originals with `recall_history`. Full and compressed
 records, and the current step's metadata, also carry a `run` number. A run starts
@@ -384,14 +384,18 @@ only as far as needed**, and stops as soon as the request fits:
 3. Try available **narratives** for the remaining older turns. A block follows
    runs: it closes at a run boundary after at least 10 steps, or after 20 within
    a long run.
-4. Try individual step summaries, oldest first. Missing or larger summaries keep
-   their originals. Every aggregate also must save space. If still over budget,
+4. Try individual step summaries, oldest first. Missing aggregates fall back to
+   their constituent eras, narratives, or individual summaries. An old step with
+   no usable summary is excerpted toward 8 KiB before moving on to newer history;
+   small originals remain intact. Every aggregate also must save space. If still over budget,
    repeat these four levels outside the latest five turns. The newest third,
    rounded up, stays full until older aggregate compression has been tried;
    this is a preference rather than a hard reservation.
 5. If still over budget, older records are excerpted and then omitted, oldest
    first, before reducing newer records. The newest five can use smaller summaries
    and excerpts only after older optional history is exhausted.
+   Excerpting a selected summary retains that summary and its source step IDs;
+   it never restores the original steps merely because the summary needs clipping.
 6. Required unseen tool results and the latest required step remain represented;
    they can be excerpted last but cannot be omitted. Once the selection fits,
    omitted records are restored newest first when space allows.
@@ -486,6 +490,15 @@ stays verbatim.
 Neither excerpts nor summaries overwrite any captured originals.
 
 Pending or failed summaries are labelled in context with a retrieval reference.
+Failed individual summaries are retried after 20 additional completed steps or
+five minutes, whichever occurs first. Resumed failures without a retry deadline
+are eligible immediately. The idle retry timer does not hold up a wait for
+currently running jobs; reset and shutdown cancel it. Local storage errors fail
+the job without marking its model unhealthy, allowing an ordinary later retry.
+Provider context-size errors retry the complete source in progressively smaller
+chunks. Grouped summaries use the same lossless chunk/review/merge process when
+the provider profile supplies a budget; only a complete validated result is
+published, while existing lower-level summaries remain available.
 Compaction failures show a warning and preserve the originals; they do not
 regenerate or repeat the agent's work. Normal compaction is silent. `/new`
 cancels outstanding jobs and prevents late results from entering the new

@@ -177,7 +177,8 @@ async def test_five_turn_window_reduces_older_results_before_the_latest_one():
     assert records[-1]['step_id'] == 5
     assert records[-1]['representation'] == 'full'
     assert records[-1]['tool_calls'][0]['result'] == newest
-    assert len(records) < 5
+    assert all(record['representation'] == 'compressed' for record in records[:-1])
+    assert any(record.get('excerpted_fields') for record in records[:-1])
     assert message_tokens(view) <= int(20000 * .85) - 1000
 
 

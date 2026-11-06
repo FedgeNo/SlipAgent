@@ -48,7 +48,9 @@ class ChunkPlan:
 
 
 def chunk_messages(shared: dict[str, Any], records: Any, index: int, count: int) -> list[Message]:
-    return [Message.system(load_prompt("background-summary-prompt.md") + load_prompt("compaction-chunk.md")),
+    prompt = (load_prompt('grouped-compaction-chunks.md') if shared.get('summary_group') else
+              load_prompt('background-summary-prompt.md') + load_prompt('compaction-chunk.md'))
+    return [Message.system(prompt),
             Message.user({"phase": "chunk", "shared_context": shared, "chunk_index": index,
                           "chunk_count": count, "records": records})]
 
@@ -66,6 +68,8 @@ def plan_chunks(step_id: int, source: dict[str, Any], budget: int) -> ChunkPlan:
                                      if key != "response_excerpt"}
         shared["incomplete"] = source.get("incomplete", False)
     plan = ChunkPlan(directory, shared, [])
+    if 'grouped_summaries' in source:
+        shared['summary_group'] = True
 
     def fits(records: list[dict[str, Any]]) -> bool:
         # Reserve room for final indices before the number of chunks is known.
@@ -142,6 +146,9 @@ def plan_chunks(step_id: int, source: dict[str, Any], budget: int) -> ChunkPlan:
             raise ValueError("The compaction model cannot fit an empty source field and its metadata")
 
     def records() -> Iterator[dict[str, Any]]:
+        if 'grouped_summaries' in source:
+            yield from split(['grouped_summaries'], source['grouped_summaries'])
+            return
         for field in ("user_prompt", "agent_response", "reasoning", "user_edits", "background_commands", "request_failure"):
             if field in source:
                 yield from split([field], source[field])

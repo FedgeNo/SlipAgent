@@ -286,6 +286,18 @@ class SessionApplication:
     async def saved_sessions(self) -> list[dict[str, str]]:
         return await run_blocking(self._journal().listing)
 
+    def plan(self) -> Any:
+        from .turnstore import resident_content
+        for step in reversed(self.session.agent.history.steps):
+            for message in reversed(step.messages):
+                if message.role != 'tool':
+                    continue
+                observation = resident_content(message)
+                if (isinstance(observation, dict) and observation.get('tool') == 'update_plan'
+                        and observation.get('status') == 'success'):
+                    return observation['content']
+        return {'status': 'No working plan recorded yet.'}
+
     def _journal(self) -> SessionJournal:
         journal = self.session.registry.resources.journal
         if journal is None:
@@ -356,6 +368,9 @@ class SessionApplication:
 
     def set_danger(self, enabled: bool) -> None:
         with self.change():
+            control = self.session.extensions.get('local_control')
+            if control is not None and control.closing is None:
+                control.set_access(enabled)
             self.session.workspace.access.danger = enabled
 
     def set_hashline(self, enabled: bool) -> None:
@@ -409,6 +424,12 @@ class SessionApplication:
     async def _close(self) -> None:
         session = self.session
         session.extensions['application_closed'] = True
+        control = session.extensions.pop('local_control', None)
+        if control is not None:
+            try:
+                await control.aclose()
+            except Exception:
+                logging.getLogger(__name__).exception('Local control shutdown failed')
         if self.busy or session.work.command_task is not None or session.work.command_tasks:
             self.interrupt()
         await self.wait_for_interrupt()

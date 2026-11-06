@@ -15,6 +15,10 @@ src/slipagent/
 ├── cli.py            session, commands, one-shot mode, event rendering
 ├── agent.py          model-step logic and harness system prompt
 ├── application.py    shared run ownership, session actions and interface subscriptions
+├── localcontrol.py   local JSON-RPC controls, subscriptions and request ownership
+├── localipc.py       Unix socket transport, OS peers and endpoint discovery
+├── winpipe.py        Windows named-pipe ACLs and overlapped transport
+├── controlclient.py  multi-instance discovery and command-line/Python control client
 ├── sessionfactory.py frontend-independent engine/session construction
 ├── gui.py            authenticated loopback browser host and lifecycle
 ├── guitransport.py   bounded live notifications and snapshots

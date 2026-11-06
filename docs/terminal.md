@@ -531,6 +531,10 @@ change to enable the threaded reload frame.
 
 ### Danger Mode
 
+Danger Mode also opens the [local control socket or pipe](local-control.md) to
+any local user. Turning it off restricts control to the same OS user and closes
+other-user connections. `--no-control` disables that endpoint entirely.
+
 `/danger on` enables access outside the workspace for built-in file, search,
 navigation, and Git tools. `/danger off` restores confinement; a bare `/danger`
 or `/danger status` reports the mode. During work, changes queue until the current response and

@@ -65,15 +65,7 @@ class GuiBrowser:
                 'hashline': bool(self.session.registry.services.get('hashline_enabled', True))}
 
     def plan(self) -> Any:
-        for step in reversed(self.session.agent.history.steps):
-            for message in reversed(step.messages):
-                if message.role != 'tool':
-                    continue
-                observation = resident_content(message)
-                if (isinstance(observation, dict) and observation.get('tool') == 'update_plan'
-                        and observation.get('status') == 'success'):
-                    return observation['content']
-        return {'status': 'No working plan recorded yet.'}
+        return application(self.session).plan()
 
     def turn(self, step: HistoryStep) -> dict[str, Any]:
         return step.parts(stream=True) if isinstance(step, CompletedStep) else step.record()

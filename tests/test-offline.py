@@ -12,6 +12,7 @@ from test_cli_e2e import cli_environment
 
 
 def test_isolation_removes_all_provider_configuration(tmp_path, system_temp_root, verified_math_cache, monkeypatch):
+    from contextlib import contextmanager
     from conftest import isolated_session_storage
     from slipagent.providers import PROVIDERS, active_providers, provider_class
 
@@ -20,11 +21,12 @@ def test_isolation_removes_all_provider_configuration(tmp_path, system_temp_root
         provider_class(provider).base_url_env)}
     for name in names:
         monkeypatch.setenv(name, 'inherited-test-sentinel')
-    isolated_session_storage.__wrapped__(tmp_path / 'provider-isolation', system_temp_root, verified_math_cache, monkeypatch)
-    assert {name: os.environ[name] for name in names if name in os.environ} == {'OPENROUTER_API_KEY': 'test-key'}
-    assert active_providers() == ['openrouter']
-    child = cli_environment()
-    assert {name: child[name] for name in names if name in child} == {'OPENROUTER_API_KEY': 'test-key'}
+    with contextmanager(isolated_session_storage.__wrapped__)(
+            tmp_path / 'provider-isolation', system_temp_root, verified_math_cache, monkeypatch):
+        assert {name: os.environ[name] for name in names if name in os.environ} == {'OPENROUTER_API_KEY': 'test-key'}
+        assert active_providers() == ['openrouter']
+        child = cli_environment()
+        assert {name: child[name] for name in names if name in child} == {'OPENROUTER_API_KEY': 'test-key'}
 
 
 def test_external_dns_is_blocked():

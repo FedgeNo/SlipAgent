@@ -370,8 +370,8 @@ class DangerCommand(Command):
     name = 'danger'
     banner = '/danger [on|off|status]'
     help = (
-        CommandHelp('/danger on', 'disable workspace path confinement (queues while working)', '/danger on'),
-        CommandHelp('/danger off', 'restore workspace path confinement (queues while working)', '/danger off'),
+        CommandHelp('/danger on', 'lift confinement and allow any local user to control this instance (queues while working)', '/danger on'),
+        CommandHelp('/danger off', 'restore confinement and same-user local control (queues while working)', '/danger off'),
         CommandHelp('/danger', 'show whether danger mode is active (also /danger status)', '/danger'),
     )
 

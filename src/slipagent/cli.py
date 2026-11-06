@@ -879,6 +879,7 @@ class Launcher:
             on_event=lambda event: renderer.handle(event)))
         session.registry.services['first_output_wait'] = lambda deadline: renderer.first_output_wait(
             deadline, skippable=session.model_routing().enabled)
+        session.extensions['control_enabled'] = not getattr(args, 'no_control', False)
         try:
             if defer_startup:
                 session.extensions['startup'] = lambda: self.initialize(session, config, announce=True)
@@ -1343,6 +1344,13 @@ class Repl:
                 return 2
             if not ready:
                 return 0
+            if session.extensions.get('control_enabled', True):
+                from .localcontrol import start_control
+                try:
+                    control_host = await start_control(session)
+                    renderer.emit(f'  Local control: {control_host.endpoint}')
+                except (OSError, RuntimeError) as exc:
+                    renderer.emit(style.red(f'  Local control could not start: {exc}'))
             if session.extensions.pop('gui_on_start', False):
                 from .gui import start_gui
                 try:
@@ -3038,6 +3046,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  slipagent 'add tests for foo'   run a single task and exit\n"
             "  slipagent -p 'explain this repo' --model openai/gpt-5\n"
             "  slipagent --list-models         browse configured providers' catalogs\n"
+            "  slipagent control list         discover running instances\n"
         ),
     )
     parser.add_argument("prompt", nargs="*", help="Task to run, then exit.")
@@ -3049,7 +3058,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--provider", choices=list(PROVIDERS), help="Select an API provider in manual mode (or set SLIPAGENT_PROVIDER for the initial provider).")
     parser.add_argument("--resume", nargs="?", const="latest", help="Restore a project session by full ID, or the latest saved session.")
     parser.add_argument("--danger", action="store_true",
-                        help="Disable built-in workspace path confinement without a confirmation prompt.")
+                        help="Disable workspace confinement and allow any local user to control this instance.")
     parser.add_argument("--update", action="store_true",
                         help="Download the latest SlipAgent from GitHub and run its installer, which checks for local edits first.")
     parser.add_argument("--list-models", action="store_true",
@@ -3063,6 +3072,7 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Show full tool output and per-step token usage.")
     display.add_argument("--no-session", action="store_true", help="Keep conversation and command logs only until reset or exit.")
     display.add_argument('--gui', action='store_true', help='Print a link to the visual browser workspace alongside the CLI.')
+    display.add_argument('--no-control', action='store_true', help='Disable the local control socket or named pipe.')
     display.add_argument('--gui-port', type=int, default=0, help='Loopback browser port (default: choose an available port).')
 
     automation = parser.add_argument_group("automation")
@@ -3103,6 +3113,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    arguments = sys.argv[1:] if argv is None else argv
+    if arguments and arguments[0] == 'control':
+        from .controlclient import main as control_main
+        return control_main(arguments[1:])
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.update:

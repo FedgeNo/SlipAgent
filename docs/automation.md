@@ -2,6 +2,10 @@
 
 [Back to the README](../README.md)
 
+For controlling existing long-running instances without GUI access, see
+[Local Control](local-control.md). It provides local socket/pipe discovery,
+queued submissions, interruption, session controls and live subscriptions.
+
 ## Headless Automation and Evaluations
 
 One-shot runs can stream machine-readable JSON Lines instead of rendered answers:

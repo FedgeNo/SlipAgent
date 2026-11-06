@@ -17,6 +17,7 @@ async def main():
     with tempfile.TemporaryDirectory(prefix='slipagent-browser-') as directory:
         root = Path(directory)
         os.environ['SLIPAGENT_STATE_DIR'] = str(root / 'state')
+        os.environ['SLIPAGENT_CONTROL_DIR'] = str(root / 'control')
         environment = cli_environment()
         os.environ.clear()
         os.environ.update(environment)

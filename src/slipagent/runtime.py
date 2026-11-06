@@ -35,6 +35,8 @@ CORE_MODULES |= frozenset({"semantic", "semantic.cpu", "semantic.embed", "semant
                            "semantic.retrieval", "semantic.search", "semantic.storage",
                            "semantic.watcher", "semantic.service"})
 CORE_MODULES |= frozenset({"sources", "plugins"})
+# ctypes layouts and live Windows handles cannot be rewritten in place.
+CORE_MODULES |= frozenset({'winpipe'})
 POLL_INTERVAL = .5
 _CLASS_INTERNALS = frozenset({
     "__dict__", "__weakref__", "__slots__", "__module__", "__classcell__",

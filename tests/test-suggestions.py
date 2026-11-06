@@ -87,7 +87,7 @@ async def test_clicked_prompt_bypasses_slash_commands_and_whitespace_trimming(mo
     lines = iter([prompt, None])
     runs = []
     renderer = cli.Renderer(cli.Style(False), io.StringIO(), True)
-    session = SimpleNamespace(renderer=renderer, mcp=None, reloader=None, extensions={},
+    session = SimpleNamespace(renderer=renderer, mcp=None, reloader=None, extensions={'control_enabled': False},
                               agent=SimpleNamespace(model="stub", on_event=None), registry=ToolRegistry(),
                               workspace=SimpleNamespace(root=tmp_path))
 

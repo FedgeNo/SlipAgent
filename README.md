@@ -49,6 +49,9 @@ with `/key`; more providers mean more free models to fall back on.
 
 To update later, run `slipagent --update` (or `/update` in the REPL). It downloads the latest commit and
 runs its installer, which warns before replacing any files you have edited.
+[Local control](docs/local-control.md) lets other programs discover and control
+running instances through user-restricted sockets or named pipes without a GUI.
+
 [Installation details](docs/installation.md) cover data locations, Windows,
 and running from a development checkout.
 

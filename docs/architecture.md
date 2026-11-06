@@ -96,6 +96,30 @@ reject held editors; model runs may start but wait at that same boundary.
 Saved journals and history formats are unchanged. Restart after installing new
 dependencies; existing saved sessions resume through the same journal owner.
 
+### Local Control Endpoints
+
+`localcontrol.ControlHost` borrows `SessionApplication`; `localipc` owns Unix
+socket discovery, peer credentials and streams, and `winpipe` owns Windows pipe
+DACLs and overlapped transports. `controlclient` exposes the same protocol without
+GUI imports or provider initialization. REPL startup opens one endpoint unless
+`--no-control` is selected; one-shot runs do not start this service.
+
+`SessionApplication.set_danger` applies endpoint permissions before changing the
+workspace flag. Default access is the same OS account; Danger Mode permits any
+local user. Restricting access also closes foreign clients. Application shutdown
+closes the endpoint before shared resources. The host uses `Lifetime` for request
+and connection ownership, with bounded queues and in-memory reconnect deduplication.
+Accepted submissions use the existing input queue and driver. They do not call
+`Agent.run` through an independent transport loop. Plan lookup is shared through
+`SessionApplication.plan`; history pages stream originals without changing them.
+
+See [Local Control](local-control.md) for protocol version 1, methods, size limits,
+request-ID semantics and the command-line/Python clients. Native pipe setup rejects
+remote clients and uses an explicit current-user SID DACL; public clients receive
+data access without permission to create new server pipe instances.
+`winpipe` is a stable core module: its ctypes layouts and retained native handles
+require a restart when changed, rather than an in-place component reload.
+
 ### Browser Host And Observer Transport
 
 `gui.start_gui` attaches one loopback FastAPI/Uvicorn host to the existing session.

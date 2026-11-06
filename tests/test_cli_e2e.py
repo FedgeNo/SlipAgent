@@ -222,6 +222,8 @@ def cli_environment(**overrides: str) -> dict[str, str]:
     })
     if "NVIDIA_BASE_URL" in os.environ:
         env["NVIDIA_BASE_URL"] = os.environ["NVIDIA_BASE_URL"]
+    if 'SLIPAGENT_CONTROL_DIR' in os.environ:
+        env['SLIPAGENT_CONTROL_DIR'] = os.environ['SLIPAGENT_CONTROL_DIR']
     env.update(overrides)
     return env
 

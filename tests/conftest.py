@@ -8,6 +8,7 @@ import compileall
 import os
 import shutil
 import tempfile
+import uuid
 
 import pytest
 
@@ -52,6 +53,9 @@ def isolated_session_storage(tmp_path: Path, system_temp_root: Path, verified_ma
     monkeypatch.setenv('HOME', str(home))
     monkeypatch.setenv('USERPROFILE', str(home))
     monkeypatch.setenv("SLIPAGENT_STATE_DIR", str(state))
+    # Unix socket paths have a small OS limit; pytest's descriptive paths do not fit.
+    control_root = Path('/tmp') / ('sac-' + uuid.uuid4().hex[:16])
+    monkeypatch.setenv('SLIPAGENT_CONTROL_DIR', str(control_root))
     (state / "math-environment-cache.json").write_text(verified_math_cache, encoding="utf-8")
     for name in ("TMPDIR", "TEMP", "TMP"):
         monkeypatch.setenv(name, str(system_temp))
@@ -61,6 +65,13 @@ def isolated_session_storage(tmp_path: Path, system_temp_root: Path, verified_ma
     # MCP servers inherit a minimal environment; test servers keep the offline guard.
     from slipagent import mcp
     monkeypatch.setattr(mcp, "INHERITED_ENV", (*mcp.INHERITED_ENV, "PYTHONPATH"))
+    try:
+        yield
+    finally:
+        try:
+            shutil.rmtree(control_root)
+        except FileNotFoundError:
+            pass
 
 
 @pytest.fixture(scope="session")

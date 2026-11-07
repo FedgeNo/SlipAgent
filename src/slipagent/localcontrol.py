@@ -353,7 +353,7 @@ class ControlHost:
         if record_path is None or not record_path.is_file():
             raise ValueError('No working request has been sent in this conversation yet.')
         record = json.loads(record_path.read_text())
-        value = json.loads(gzip.decompress((diagnostics.directory / record['request']).read_bytes()).decode('utf-8'))
+        value = json.loads(gzip.decompress((record_path.parent / record['request']).read_bytes()).decode('utf-8'))
         return {'stepId': record['step_id'], 'attempt': record['attempt'], 'sentAt': record['created'],
                 'model': value.get('model') if isinstance(value, dict) else None,
                 'estimatedTokens': math.ceil(ContextBudget.estimate(value) * scale) if isinstance(value, dict) else None,

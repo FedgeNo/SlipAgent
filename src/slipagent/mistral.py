@@ -74,6 +74,8 @@ class MistralClient(APIClient):
 
     def prepare_payload(self, payload: dict[str, Any], profile: RequestProfile | None) -> None:
         payload.pop("session_id", None)
+        from .reasoning import reasoning_options
+        payload.update(reasoning_options(self.provider, payload['model']))
         # Mistral includes stream usage without OpenAI's stream_options field.
         payload.pop("stream_options", None)
         if payload.get("tool_choice") == "required":

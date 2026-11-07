@@ -37,7 +37,7 @@ DEFAULT_MAX_RETRIES = 3
 DEFAULT_TEMPERATURE: float | None = None
 
 # Statuses worth another attempt: transient upstream and rate-limit conditions.
-RETRYABLE_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+RETRYABLE_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
 
 
 class APIError(Exception):
@@ -106,6 +106,7 @@ class APIClient:
     key_env = ""
     model_env = ""
     base_url_env = ""
+    completion_path = '/chat/completions'
 
     def __init__(
         self,
@@ -260,8 +261,17 @@ class APIClient:
                 if on_phase is not None:
                     on_phase("")
         transport_options: dict[str, Any] = {"timeout": None} if disable_timeout else {}
-        raw = await self._request("POST", "/chat/completions", single_attempt=single_attempt, content=body, headers={"Content-Length": str(body.size)}, on_response=on_response, on_raw_response=on_raw_response, **transport_options)
-        return _parse_completion(raw)
+        raw = await self._request("POST", self.completion_path, single_attempt=single_attempt, content=body, headers={"Content-Length": str(body.size)}, on_response=on_response, on_raw_response=on_raw_response, **transport_options)
+        return _parse_completion(self.completion_data(raw))
+
+    def completion_data(self, raw: dict[str, Any]) -> dict[str, Any]:
+        return raw
+
+    def stream_completion(self, on_delta: Callable[[str, str], None], identity_mode: str) -> _StreamCompletion:
+        return _StreamCompletion(on_delta, identity_mode=identity_mode)
+
+    def response_events(self, events: list[str]) -> dict[str, Any]:
+        return _merge_events(events)
 
     async def _stream_request(self, payload: dict[str, Any], on_delta: Callable[[str, str], None], *, single_attempt: bool = False, disable_timeout: bool = False,
                               on_response: Callable[[dict[str, Any]], None] | None = None, request_body: Any = None,
@@ -310,7 +320,7 @@ class APIClient:
             if deadline is not None and on_first_output is not None:
                 on_first_output(deadline)
             try:
-                async with first_output, self._client.stream("POST", f"{self.base_url}/chat/completions", content=content, headers={"Content-Length": str(body.size)}, **transport_options) as response:
+                async with first_output, self._client.stream("POST", f"{self.base_url}{self.completion_path}", content=content, headers={"Content-Length": str(body.size)}, **transport_options) as response:
                     if on_raw_response is not None:
                         on_raw_response(response)
                     if response.status_code >= 400:
@@ -335,6 +345,7 @@ class APIClient:
                         code = embedded.get("code") if isinstance(embedded, dict) else None
                         if type(code) is int:
                             raise _build_error(httpx.Response(code, headers=response.headers, json=raw))
+                        raw = self.completion_data(raw)
                         completion = _parse_completion(raw)
                         wire = raw["choices"][0]["message"]
                         try:
@@ -349,7 +360,7 @@ class APIClient:
                     identity_mode = profile.get("stream_tool_identity", "delta")
                     if "stream_tool_identity" not in profile and self.provider == "nvidia" and "minimax" in payload["model"].lower():
                         identity_mode = "snapshot"
-                    state = _StreamCompletion(announce, identity_mode=identity_mode)
+                    state = self.stream_completion(announce, identity_mode)
                     async for line in response.aiter_lines():
                         if line.startswith("data:"):
                             data.append(line[5:].lstrip(" "))
@@ -432,7 +443,7 @@ class APIClient:
                 if on_response is not None:
                     if data:
                         capture_event("\n".join(data))
-                    on_response(captured if captured is not None else _merge_events(events))
+                    on_response(captured if captured is not None else self.response_events(events))
 
     async def list_models(self) -> list[ModelInfo]:
         """Return the model catalog.

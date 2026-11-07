@@ -128,7 +128,18 @@ class GoogleClient(APIClient):
         if self.free_tier_limited(model) and getattr(self, '_upload_pacer', None) is None:
             self._upload_pacer = UploadPacer(FREE_TIER_TOKENS_PER_MINUTE)
         properties = getattr(self, "_model_properties", {}).get(model, {})
-        if properties.get("thinking") is True or model.startswith(("gemini-2.5-", "gemini-3")):
-            # Request Google's visible summaries while retaining its default thinking level.
-            extra = payload.setdefault("extra_body", {}).setdefault("google", {})
-            extra.setdefault("thinking_config", {})["include_thoughts"] = True
+        from .reasoning import enable_system_thinking, reasoning_options
+        options = reasoning_options(self.provider, model)
+        if options:
+            # Google rejects a simultaneous reasoning_effort and thinking_config.
+            import copy
+            payload['extra_body'] = copy.deepcopy(payload.get('extra_body', {}))
+            payload.pop('reasoning_effort', None)
+            config = payload.setdefault('extra_body', {}).setdefault('google', {}).setdefault('thinking_config', {})
+            selected = options['extra_body']['google']['thinking_config']
+            config.pop('thinking_budget' if 'thinking_level' in selected else 'thinking_level', None)
+            config.update(selected)
+        elif model in FREE_MODELS:
+            enable_system_thinking(payload)
+        elif properties.get('thinking') is True:
+            payload.setdefault('extra_body', {}).setdefault('google', {}).setdefault('thinking_config', {})['include_thoughts'] = True

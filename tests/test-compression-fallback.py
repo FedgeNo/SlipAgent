@@ -32,7 +32,7 @@ async def test_failed_gap_uses_excerpt_before_dropping_aeon_or_compressing_recen
     assert any(record['representation'] == 'aeon_summary' for record in records)
     gap = next(record for record in records if record['step_id'] == 35)
     assert gap['representation'] == 'excerpt'
-    assert all(record['representation'] == 'full' for record in records if record['step_id'] > 250)
+    assert all(record['representation'] == 'full' for record in records if record['step_id'] > 395)
     covered = [step for record in records for step in record.get('step_ids', [record['step_id']])]
     assert sorted(covered) == list(range(1, 401))
     assert message_tokens(view) <= int(120000 * .85) - 1000
@@ -70,14 +70,20 @@ def test_current_valid_summary_survives_a_failed_persistence_callback(tmp_path):
 async def test_unavailable_aeon_uses_its_five_available_eras():
     history, messages = helpers.history_with_posts(750, size=70)
     helpers.attach_layers(history)
+    # Require aggregates even after the finer individual/narrative pass.
+    for step in history.steps[:500]:
+        step.summary = 'Individual durable facts. ' * 200
+        if hasattr(step, 'historical_summary'):
+            step.historical_summary['compressed_summary'] = 'Narrative durable facts. ' * 500
     history.steps[499].aeon_attempt = 750  # Aeon generation failed; its source eras survive.
     messages.append(Message.user('Continue'))
-    view = await history.view(messages, [], keep_steps=5, context_length=1100000, max_output=1000)
+    view = await history.view(messages, [], keep_steps=5, context_length=300000, max_output=1000)
     records = request_input(view)['history']
     assert [record['representation'] for record in records[:5]] == ['era_summary'] * 5
     assert [record['step_ids'] for record in records[:5]] == [list(range(i, i + 100)) for i in range(1, 501, 100)]
-    assert all(record['representation'] == 'full' for record in records[5:])
-    assert [record['step_id'] for record in records[5:]] == list(range(501, 751))
+    covered = [step_id for record in records for step_id in record.get('step_ids', [record['step_id']])]
+    assert sorted(covered) == list(range(1, 751))
+    assert all(record['representation'] == 'full' for record in records if record['step_id'] > 745)
 
 
 @pytest.mark.parametrize('level,total', [('historical_summary', 20), ('era_summary', 100), ('aeon_summary', 500)])

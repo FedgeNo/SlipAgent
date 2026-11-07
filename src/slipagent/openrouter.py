@@ -102,6 +102,8 @@ class OpenRouterClient(APIClient):
             if properties is None:
                 raise ValueError("No model properties were supplied by the catalog or endpoint metadata.")
             capabilities = ModelCapabilities(properties, endpoints)
+            from .reasoning import gateway_reasoning
+            gateway_reasoning(self.provider, endpoint_model, capabilities)
         except ValueError as exc:
             raise OpenRouterConfigError(f"Cannot use {model}: {exc}") from exc
         if store:

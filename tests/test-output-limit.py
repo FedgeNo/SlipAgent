@@ -31,6 +31,6 @@ async def test_truncated_reply_names_the_output_limit(error):
 def test_anthropic_payload_without_profile_keeps_a_default_budget():
     from slipagent.anthropic import AnthropicClient
 
-    payload: dict = {}
+    payload: dict = {'messages': [{'role': 'user', 'content': 'Compute'}]}
     AnthropicClient.prepare_payload(object.__new__(AnthropicClient), payload, None)
     assert payload["max_tokens"] == 8192

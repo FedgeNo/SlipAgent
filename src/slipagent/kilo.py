@@ -41,16 +41,19 @@ class KiloClient(APIClient):
                     properties[name] = top[name]
         options = properties.get("opencode")
         variants = options.get("variants") if isinstance(options, dict) else None
-        if isinstance(variants, dict) and "reasoning" not in properties:
+        published = properties.get('reasoning')
+        if isinstance(variants, dict) and not (isinstance(published, dict) and 'supported_efforts' in published):
             efforts = []
             for variant in variants.values():
                 reasoning = variant.get("reasoning") if isinstance(variant, dict) else None
                 if isinstance(reasoning, dict) and "effort" in reasoning:
                     efforts.append(reasoning["effort"])
             if efforts:
-                properties["reasoning"] = {"supported_efforts": efforts}
+                properties['reasoning'] = {**(published if isinstance(published, dict) else {}), 'supported_efforts': efforts}
         try:
             profile = ModelCapabilities(properties, [{"tag": "kilo", "supported_parameters": parameters}])
+            from .reasoning import gateway_reasoning
+            gateway_reasoning(self.provider, model, profile)
         except ValueError as exc:
             raise APIConfigError(f"Cannot use {model} on Kilo: {exc}") from exc
         if store:

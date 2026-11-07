@@ -129,9 +129,21 @@ are sent only in requests whose selected history contains thoughts; with the mod
 turn, or with no thoughts in the selected records, the model is told nothing about the mode.
 Original thoughts remain available through
 `recall_history`; streaming thoughts still appear in the terminal.
-For OpenRouter, the harness selects the highest reasoning effort
-explicitly listed by the API. When reasoning is supported without listed effort
-choices, it enables reasoning; when unsupported, it sends no reasoning setting.
+SlipAgent selects the highest published reasoning setting for each provider/model.
+OpenRouter and Kilo use live endpoint/catalog choices; exact tested routes fill
+gaps where no effort ladder is published. An endpoint accepting `max` never
+overrides its published `high` or `xhigh` ceiling. Unknown routes without a
+verified effort use their provider defaults, enabling reasoning where advertised.
+Google uses high thinking levels or the largest published Gemini 2.5 budget;
+Groq, Mistral and NVIDIA use reviewed provider-specific controls. Models with
+on/off thinking enable it rather than receiving a fabricated effort level.
+Reasoning-budget caps are removed where the provider publishes that option;
+the request's output and context allowances still apply.
+Direct Claude uses the native Messages API and published Models API capabilities:
+highest effort with adaptive thinking, or a manual thinking budget below the
+output allowance on older models. Visible thoughts are requested where supported;
+higher reasoning takes precedence over displaying them. These settings apply to
+working, repair and free-only background requests through the same provider owner.
 Reply text streams as it arrives, including text inside an unfinished JSON
 `response` string. JSON escapes are decoded across chunk boundaries; tool
 arguments and bookkeeping stay out of previews. These previews are provisional:

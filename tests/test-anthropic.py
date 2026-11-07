@@ -1,4 +1,4 @@
-"""Claude catalog discovery, paid routing, and compatible inference."""
+"""Claude catalog discovery, paid routing, and native inference."""
 
 import io
 import json
@@ -95,12 +95,12 @@ async def test_catalog_auth_error_is_not_an_empty_catalog():
 async def test_streamed_tools_and_nonstreaming_tool_results_use_shared_transport():
     requests = []
     events = [
-        {"choices": [{"delta": {"content": "Checking."}}]},
-        {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call-1", "type": "function",
-                                                "function": {"name": "inspect", "arguments": '{"path":'}}]}}]},
-        {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": '"a.py"}'}}]},
-                      "finish_reason": "tool_calls"}]},
-        {"choices": [], "usage": {"prompt_tokens": 15, "completion_tokens": 8, "total_tokens": 23}},
+        {'type': 'message_start', 'message': {'model': MODEL, 'usage': {'input_tokens': 15}}},
+        {'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': 'Checking.'}},
+        {'type': 'content_block_start', 'index': 1, 'content_block': {'type': 'tool_use', 'id': 'call-1', 'name': 'inspect', 'input': {}}},
+        {'type': 'content_block_delta', 'index': 1, 'delta': {'type': 'input_json_delta', 'partial_json': '{"path":"a.py"}'}},
+        {'type': 'message_delta', 'delta': {'stop_reason': 'tool_use'}, 'usage': {'output_tokens': 8}},
+        {'type': 'message_stop'},
     ]
 
     def respond(request):
@@ -111,8 +111,7 @@ async def test_streamed_tools_and_nonstreaming_tool_results_use_shared_transport
         if payload.get("stream"):
             data = "".join("data: " + json.dumps(event) + "\n\n" for event in events) + "data: [DONE]\n\n"
             return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=data)
-        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "Done"},
-                                                    "finish_reason": "stop"}]})
+        return httpx.Response(200, json={'model': MODEL, 'content': [{'type': 'text', 'text': 'Done'}], 'stop_reason': 'end_turn'})
 
     deltas, snapshots = [], []
     async with providers.create_client("anthropic", api_key="sk-ant-test", transport=httpx.MockTransport(respond)) as client:
@@ -124,7 +123,7 @@ async def test_streamed_tools_and_nonstreaming_tool_results_use_shared_transport
         assert response.tool_calls[0].arguments == {"path": "a.py"}
         assert response.usage.prompt_tokens == 15 and response.usage.completion_tokens == 8
         assert deltas == [("content", "Checking.")]
-        messages.extend([response.message, Message.tool_result("call-1", "File contents")])
+        messages.extend([response.message, Message.tool_result(response.tool_calls[0].id, 'File contents')])
         final = await client.chat(model=MODEL, messages=messages, max_tokens=1024)
         assert final.message.content == "Done"
         with pytest.raises(APIConfigError, match="output limit"):
@@ -133,12 +132,12 @@ async def test_streamed_tools_and_nonstreaming_tool_results_use_shared_transport
             await client.chat(model=MODEL, messages=messages, tool_choice="required")
     body = json.loads(requests[1].content)
     assert body == snapshots[0]
-    assert body["max_tokens"] == 64000 and body["tools"][0]["function"]["name"] == "inspect"
+    assert body["max_tokens"] == 64000 and body['tools'][0]['name'] == 'inspect'
     assert not {"session_id", "temperature", "response_format", "top_p"}.intersection(body)
-    assert requests[-1].url.path == "/v1/chat/completions"
+    assert requests[-1].url.path == '/v1/messages'
     final_body = json.loads(requests[-1].content)
     assert final_body["max_tokens"] == 1024
-    assert final_body["messages"][-1] == {"role": "tool", "tool_call_id": "call-1", "content": "File contents"}
+    assert final_body['messages'][-1] == {'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': response.tool_calls[0].id, 'content': 'File contents'}]}
 
 
 def test_provider_keys_and_configuration():

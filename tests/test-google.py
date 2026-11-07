@@ -101,7 +101,7 @@ async def test_compatible_stream():
 async def test_thought_summaries_requested_and_received(stream):
     def handle(request):
         body = json.loads(request.content)
-        assert body["extra_body"]["google"]["thinking_config"] == {"include_thoughts": True}
+        assert body["extra_body"]["google"]["thinking_config"] == {'include_thoughts': True, 'thinking_level': 'high'}
         assert "reasoning_effort" not in body
         message = {"role": "assistant", "content": "Answer", "reasoning_content": "Considering the problem."}
         if stream:

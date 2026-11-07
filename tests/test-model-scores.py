@@ -138,7 +138,10 @@ async def test_ranked_nvidia_models_can_be_selected_and_requested(model, native,
                           extra_body={"response_format": response_format} if response_format is not None else {})
     assert requests[0]["model"] == model
     assert ("tools" in requests[0]) == native
-    assert "chat_template_kwargs" not in requests[0]
+    if model in {'nvidia/nemotron-3.5-super-vl-120b-a12b', 'nvidia/nemotron-3.5-lightning-30b-a3b'}:
+        assert requests[0]['chat_template_kwargs'] == {'enable_thinking': True}
+    else:
+        assert 'chat_template_kwargs' not in requests[0]
     assert "response_format" not in requests[0]
 
 

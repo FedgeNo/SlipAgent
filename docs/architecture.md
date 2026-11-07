@@ -2229,6 +2229,26 @@ no session usage or spend, and never falls back to a paid primary model.
 
 The agent and compactor use the common `RequestProfile` contract, not a provider class or routing format. `ModelCapabilities` selects OpenRouter routes from live metadata. NVIDIA's explicit profiles describe verified hosted models; unsupported catalog entries stay visible without invented capabilities. Compression profiles come from the background destination rather than the working model. Provider request preparation runs before diagnostics so the inspector sees the final body.
 
+`reasoning.py` owns reviewed direct-provider controls and exact-route tested
+fallbacks. Published model/endpoint effort choices take precedence over accepted
+generic enum probes. OpenRouter/Kilo preserve explicit disabled reasoning and
+use tested maximum effort only when a selected reasoning route omits its ladder.
+Direct providers apply their own effort, budget or thinking switch. Google sends
+one `thinking_config`, never a conflicting simultaneous `reasoning_effort`;
+visible thoughts are secondary to the highest reasoning setting.
+
+`anthropic.py` selects native `/messages` so effort is honored, using the Models
+API's effort and thinking-type capabilities. Frozen `RequestProfile.inference_options`
+retain the selected adaptive/manual configuration. Manual thinking uses at most
+the output allowance minus one token and requires at least 1025 output tokens;
+it never silently increases an already-budgeted output allowance. `anthropicwire.py`
+translates system text, tools, results, thinking and SSE events to/from the shared
+completion channel. Cache-read/creation input counts contribute to prompt usage.
+The common HTTP/SSE owner retains cancellation, retries (including overload 529),
+raw response capture and first-output deadlines. Native streams require
+`message_stop` before publishing a complete response. Claude remains paid and
+ineligible for background compaction.
+
 NVIDIA's `mistralai/mistral-large-4-1t-a52b` profile uses the hosted playground's
 262,144-token context rather than the vendor model card's 1M context. Its
 [inference reference](https://docs.api.nvidia.com/nim/reference/mistralai-mistral-large-4-1t-a52b-infer)

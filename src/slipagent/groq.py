@@ -73,3 +73,5 @@ class GroqClient(APIClient):
 
     def prepare_payload(self, payload: dict[str, Any], profile: RequestProfile | None) -> None:
         payload.pop("session_id", None)
+        from .reasoning import reasoning_options
+        payload.update(reasoning_options(self.provider, payload['model']))

@@ -27,9 +27,9 @@ class NvidiaClient(APIClient):
     base_url_env = "NVIDIA_BASE_URL"
 
     def __init__(self, api_key: str, *, profiles: dict[str, RequestProfile] | None = None,
-                 reasoning_effort: str = "high", reasoning_budget: int | None = None,
+                 reasoning_effort: str | None = None, reasoning_budget: int | None = None,
                  **options: Any) -> None:
-        if reasoning_effort not in {"none", "medium", "high"}:
+        if reasoning_effort not in {None, "none", "medium", "high"}:
             raise APIConfigError("NVIDIA reasoning_effort must be none, medium, or high.")
         if reasoning_budget is not None and (isinstance(reasoning_budget, bool)
                 or not isinstance(reasoning_budget, int) or not -1 <= reasoning_budget <= 32768):
@@ -81,12 +81,17 @@ class NvidiaClient(APIClient):
 
     def prepare_payload(self, payload: dict[str, Any], profile: RequestProfile | None) -> None:
         payload.pop("session_id", None)
+        from .reasoning import enable_system_thinking, reasoning_options
+        for key, value in reasoning_options(self.provider, payload['model']).items():
+            payload.setdefault(key, value)
         if payload.get("model") == MISTRAL_LARGE_4_MODEL:
-            if self.reasoning_effort not in {"none", "high"}:
+            if self.reasoning_effort not in {None, "none", "high"}:
                 raise APIConfigError("NVIDIA Mistral Large 4 reasoning_effort must be none or high.")
             # Omitting this field serves non-reasoning mode on this endpoint.
-            payload.setdefault("reasoning_effort", self.reasoning_effort)
+            if self.reasoning_effort is not None:
+                payload['reasoning_effort'] = self.reasoning_effort
         if payload.get("model") in USER_INSTRUCTIONS:
+            enable_system_thinking(payload)
             messages: list[dict[str, Any]] = []
             for message in payload["messages"]:
                 message = dict(message)
@@ -100,12 +105,14 @@ class NvidiaClient(APIClient):
                     messages.append(message)
             payload["messages"] = messages
         if payload.get("model") == ULTRA_MODEL:
-            template = {"enable_thinking": self.reasoning_effort != "none"}
-            if self.reasoning_effort == "medium":
-                template["medium_effort"] = True
-            payload.setdefault("chat_template_kwargs", template)
+            if self.reasoning_effort is not None:
+                template = {"enable_thinking": self.reasoning_effort != "none"}
+                if self.reasoning_effort == 'medium':
+                    template['medium_effort'] = True
+                payload['chat_template_kwargs'] = template
+                payload['reasoning_effort'] = self.reasoning_effort
             if self.reasoning_budget is not None:
-                payload.setdefault("reasoning_budget", self.reasoning_budget)
+                payload['reasoning_budget'] = self.reasoning_budget
         temperature = payload.get("temperature")
         if temperature is not None and temperature > self.max_temperature:
             raise APIConfigError(f"NVIDIA temperature must be at most {self.max_temperature:g}.")

@@ -1,10 +1,10 @@
-"""Claude's compatible completions and authenticated native model catalog."""
+"""Claude's native Messages API and authenticated model capabilities."""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
-from .api import APIClient, APIConfigError, APIResponseError
+from .api import APIClient, APIConfigError, APIResponseError, _StreamCompletion
 from .capabilities import RequestProfile
 from .types import ModelInfo
 
@@ -18,6 +18,7 @@ class AnthropicClient(APIClient):
     base_url_env = "ANTHROPIC_BASE_URL"
     catalog_requires_auth = True
     max_temperature = 1.0
+    completion_path = '/messages'
 
     def request_headers(self, http_referer: str | None, app_title: str | None) -> dict[str, str]:
         return {"anthropic-version": "2026-10-21"}
@@ -68,12 +69,22 @@ class AnthropicClient(APIClient):
         context, output = entry.get("max_input_tokens"), entry.get("max_tokens")
         if any(type(value) is not int or value <= 0 for value in (context, output)):
             raise APIConfigError(f"Anthropic does not advertise valid token limits for {model!r}.")
-        # Compatible completions support native tools, but newer Claude models
-        # reject forced tool use and sampling overrides. Keep provider defaults.
         profile = RequestProfile(parameters={"max_tokens", "tools", "tool_choice"},
                                  context_length=context, max_prompt_tokens=context,
                                  max_completion_tokens=output)
         profile.tool_choices = [{"auto": True, "none": True, "required": False, "function": False}]
+        from .reasoning import highest_effort
+        capabilities = entry.get('capabilities') or {}
+        efforts = capabilities.get('effort') or {}
+        effort = highest_effort([name for name, value in efforts.items()
+                                 if isinstance(value, dict) and value.get('supported') is True])
+        types = (capabilities.get('thinking') or {}).get('types') or {}
+        if effort is not None:
+            profile.inference_options['output_config'] = {'effort': effort}
+        if types.get('adaptive', {}).get('supported') is True:
+            profile.inference_options['thinking'] = {'type': 'adaptive'}
+        elif types.get('enabled', {}).get('supported') is True:
+            profile.inference_options['thinking'] = {'type': 'enabled'}
         if store:
             self.cache_capabilities(model, profile)
         return profile
@@ -83,3 +94,34 @@ class AnthropicClient(APIClient):
             payload.pop(name, None)
         # Anthropic requires an output budget; use the model's advertised limit.
         payload.setdefault("max_tokens", (profile.max_completion_tokens or 8192) if profile else 8192)
+        if profile is not None:
+            import copy
+            payload.update(copy.deepcopy(profile.inference_options))
+            if payload.get('thinking', {}).get('type') == 'enabled':
+                if payload['max_tokens'] < 1025:
+                    raise APIConfigError('Claude thinking requires an output allowance of at least 1025 tokens.')
+                payload['thinking']['budget_tokens'] = payload['max_tokens'] - 1
+        from .anthropicwire import message_payload
+        message_payload(payload)
+
+    def completion_data(self, raw: dict[str, Any]) -> dict[str, Any]:
+        from .anthropicwire import completion_data
+        try:
+            return completion_data(raw)
+        except (KeyError, ValueError, TypeError, AttributeError) as exc:
+            raise APIResponseError(f'Anthropic returned a malformed message: {exc}') from exc
+
+    def stream_completion(self, on_delta: Callable[[str, str], None], identity_mode: str) -> _StreamCompletion:
+        from .anthropicwire import AnthropicStream
+        return AnthropicStream(on_delta)
+
+    def response_events(self, events: list[str]) -> dict[str, Any]:
+        # Native block-start/delta events cannot be merged as OpenAI choice deltas.
+        import json
+        records = []
+        for event in events:
+            try:
+                records.append(json.loads(event))
+            except ValueError:
+                records.append({'unparsed_event': event})
+        return {'events': records}

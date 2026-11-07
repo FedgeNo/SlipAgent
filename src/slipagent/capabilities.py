@@ -26,6 +26,7 @@ class RequestProfile:
         self.max_completion_tokens = max_completion_tokens
         self.format = format
         self.tool_choices: list[dict[str, bool] | None] = []
+        self.inference_options: dict[str, Any] = {}
 
     @property
     def native_tools(self) -> bool:
@@ -74,6 +75,7 @@ class ModelCapabilities(RequestProfile):
         reasoning = [entry for entry in compatible if _reasoning_allowed(entry)
                      and (entry["efforts"] is None or any(effort in EFFORT_ORDER for effort in entry["efforts"]))]
         self.reasoning: dict[str, Any] | None = None
+        self.inference_options: dict[str, Any] = {}
         self.include_reasoning = False
         if reasoning:
             compatible = reasoning

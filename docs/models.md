@@ -175,9 +175,10 @@ Claude is a paid primary model and does not join automatic free selection or
 background compaction. The catalog supplies input/output limits but no prices,
 so prices display as unknown. Compaction requires other configured free providers.
 
-Claude uses Anthropic's [OpenAI-compatible completions endpoint](https://platform.claude.com/docs/en/cli-sdks-libraries/libraries/openai-sdk)
-for streaming replies and native tool calls. This endpoint does not expose
-thinking text or prompt caching. Sampling stays at Anthropic's defaults, and
+Claude uses Anthropic's native Messages endpoint for streaming replies, reasoning
+and tool calls. Its Models API selects the highest published effort and adaptive
+thinking where supported. Older models use manual thinking budgets within the
+reserved output allowance. Sampling stays at Anthropic's defaults, and
 forced tool calls and JSON response-format constraints are not advertised.
 When no output limit is configured, requests reserve up to 8,192 output tokens.
 
@@ -218,7 +219,10 @@ does not depend on Google's opaque native function-call signatures.
 Google's free Gemini tier and always-free Gemma 4 models participate in
 background compression when eligible.
 SlipAgent requests thought summaries from Google's thinking models and displays
-them in the reasoning stream, using the model's default thinking level.
+them in the reasoning stream, using the highest published thinking level or
+Gemini 2.5 budget. Both options belong in one `thinking_config`; Google rejects
+a simultaneous `reasoning_effort`. Higher reasoning takes precedence over
+visible thoughts when a provider cannot supply both.
 Leading `<thought>…</thought>` blocks are separated from response content before
 tool-call JSON parsing, including when their tags span streaming chunks.
 Google free-tier model uploads are paced at 200,000 estimated input tokens per
@@ -266,4 +270,4 @@ async with create_client(config.provider, api_key=config.api_key,
                               max_tokens=4096)
 ```
 
-Pass that client to `Agent` to use the normal coding loop. `NvidiaClient(profiles={model_id: RequestProfile(…)})` supports additional explicitly verified models. Its Ultra reasoning options are `none`, `medium`, and `high` (default); `reasoning_budget` accepts -1 or 0–32,768 tokens. See [the provider contract](architecture.md#api-provider-modules) for extending the registry. Restart existing SlipAgent processes after changing the shared provider/state contracts.
+Pass that client to `Agent` to use the normal coding loop. `NvidiaClient(profiles={model_id: RequestProfile(…)})` supports additional explicitly verified models. Its default reasoning settings follow each reviewed model: published highest effort, enabled thinking, or an exact-route tested fallback. Ultra defaults to full `high` thinking without an extra reasoning-budget cap. Explicit Ultra overrides remain `none`, `medium`, and `high`; `reasoning_budget` accepts -1 or 0–32,768 tokens. See [the provider contract](architecture.md#api-provider-modules) for extending the registry. Restart existing SlipAgent processes after changing the shared provider/state contracts.

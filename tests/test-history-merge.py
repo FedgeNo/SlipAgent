@@ -496,9 +496,14 @@ async def test_compression_levels_advance_from_the_oldest_end_as_the_budget_shri
         assert records[-1]["step_id"] == 240
         seen.append(records)
     assert all(record["representation"] == "full" for record in seen[0])
-    assert {record["representation"] for record in seen[1]} == {"era_summary", "full"}
+    # Finer forms first: step summaries alone satisfy the first shortfall, and
+    # the oldest end only advances to narratives, then eras, as budgets shrink.
+    assert {record["representation"] for record in seen[1]} == {"compressed", "full"}
+    complete = [records for records in seen if min(
+        step_id for record in records for step_id in record.get("step_ids", [record["step_id"]])) == 1]
+    oldest = [order[records[0]["representation"]] for records in complete]
+    assert oldest == sorted(oldest) and oldest[0] == 1 and 2 in oldest and 4 in oldest
     assert any(record["representation"] == "historical_summary" for records in seen for record in records)
-    assert any(record["representation"] == "era_summary" for records in seen for record in records)
     smallest = seen[-1]
     # Dropping starts at the very beginning; the newest turns stay.
     covered = [step_id for record in smallest for step_id in record.get('step_ids', [record['step_id']])]

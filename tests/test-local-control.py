@@ -388,3 +388,43 @@ async def test_no_control_flag_disables_the_repl_endpoint(tmp_path, monkeypatch)
         assert 'Local control:' not in session.renderer.stream.getvalue()
         assert await instances() == []
         assert not stub.requests
+
+
+async def test_context_pages_serve_the_latest_outgoing_request_of_this_conversation(controlled):
+    from slipagent.requestbody import RequestBody
+    session, host = controlled
+    missing = await request(host.endpoint, 'context')
+    assert 'No working request' in missing['error']['message']
+    text = 'Exact λ request ' * 2000
+    body = RequestBody({'model': 'test/model', 'messages': [{'role': 'system', 'content': 'rules'},
+                                                            {'role': 'user', 'content': text}]})
+    session.agent._emit(AgentEvent(kind='context', step=4, request_body=body))
+    restored, offset = '', 0
+    while True:
+        page = (await request(host.endpoint, 'context', {'offset': offset, 'limit': 4096}))['result']
+        assert page['stepId'] == 4 and page['model'] == 'test/model'
+        assert page['estimatedTokens'] == body.estimate and page['sentAt'].endswith('+00:00')
+        assert page['attempt'] is None  # No request diagnostics in this session.
+        assert len(page['text']) <= 4096
+        restored += page['text']
+        offset = page['nextOffset']
+        if offset is None:
+            break
+    assert json.loads(restored)['messages'][1]['content'] == text
+    session.agent._emit(AgentEvent(kind='context', step=5, text=json.dumps({'model': 'text/form', 'messages': []})))
+    page = (await request(host.endpoint, 'context'))['result']
+    assert page['stepId'] == 5 and page['model'] == 'text/form' and page['estimatedTokens'] is None
+    assert json.loads(page['text']) == {'model': 'text/form', 'messages': []}
+    await application(session).reset()
+    stale = await request(host.endpoint, 'context')
+    assert 'No working request' in stale['error']['message']
+    # A host whose event handler never retained the body serves the newest diagnostics attempt.
+    from slipagent.diagnostics import RequestDiagnostics
+    diagnostics = RequestDiagnostics()
+    diagnostics.use_directory(Path(session.workspace.root) / 'requests')
+    session.registry.resources.diagnostics = diagnostics
+    attempt = diagnostics.begin(RequestBody({'model': 'logged/model', 'messages': [{'role': 'user', 'content': 'λ'}]}),
+                                step=1, step_id=1)
+    page = (await request(host.endpoint, 'context'))['result']
+    assert page['attempt'] == attempt and page['stepId'] == 1 and page['model'] == 'logged/model'
+    assert page['estimatedTokens'] > 0 and json.loads(page['text'])['messages'][0]['content'] == 'λ'

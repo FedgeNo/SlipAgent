@@ -90,6 +90,7 @@ second agent or duplicate tool execution.
 | `new_task` | None | Establish a task boundary while idle |
 | `history` | `stepId`, optional `offset`, `limit` | A character page of the original step's JSON |
 | `plan` | Optional `offset`, `limit` | A character page of the latest saved plan's JSON |
+| `context` | Optional `offset`, `limit` | A character page of the latest outgoing working request body as JSON, with `stepId`, `attempt`, `sentAt`, `model`, and calibrated `estimatedTokens` |
 | `subscribe` | None | Current status, followed by live notifications |
 | `unsubscribe` | None | Stop live notifications on this connection |
 
@@ -97,6 +98,16 @@ History and plan offsets start at zero. Their default and maximum page size is
 16,384 characters. Responses provide `text` and `nextOffset`; concatenate pages
 before decoding the original JSON. History step IDs run from 1 through `status.steps`.
 Original history remains available regardless of model-context compression.
+`context` pages the same request the context view shows (`Ctrl+\`): the full
+provider body of the most recent working attempt, including retries, with the
+selected history representations actually sent. It is replaced by each new
+attempt, is unavailable before the first request of a conversation, and is as
+private as the request logs. The host serves the request it retained when the
+body was sent, or otherwise the newest attempt in the request diagnostics
+(the same files `/requests` reads), which also covers a resumed conversation
+whose last request predates this process. `attempt` matches `/requests`
+numbering. `estimatedTokens` is the calibrated estimate, not
+provider-reported usage.
 Supply `sessionId` while paging to reject reads that cross a conversation change.
 Saved-session pages use item offsets with a default and maximum limit of 100,
 returning `items` and `nextOffset`.
@@ -107,7 +118,7 @@ Subscriptions receive JSON-RPC notifications with method `event` or `state`.
 Their `params` include `instanceId` and a monotonic `sequence`. Event text is
 limited to 2,048 characters and reports `truncated`; use original history for full
 completed outputs. Outgoing model-request context bodies and raw tool payloads
-are excluded from live events. Reconnect with `status` and retrieve history to
+are excluded from live events; read the latest body with `context`. Reconnect with `status` and retrieve history to
 resynchronize; notifications are not replayed.
 
 ## Bounds And Lifetime

@@ -13,7 +13,8 @@ or compressed history actually sent. Scroll with the mouse wheel, arrow keys,
 Page Up/Down, or Home/End. The footer, draft, and transcript scroll position
 remain available. Isolated background summaries do not replace this view.
 Before the first working request, the view indicates that none has
-been sent.
+been sent. The same request is readable from outside the terminal through the
+[local control](local-control.md) `context` method.
 
 System instructions, tool definitions, and current-step metadata appear in the
 system prompt. Native tools also use the API tool field. A single user message
@@ -377,20 +378,24 @@ from the bytes of each record and scaled by measured calibration.
 When the full history does not fit, SlipAgent compresses **from the oldest end,
 only as far as needed**, and stops as soon as the request fits:
 
-1. Try available **aeons**, oldest first, wholly within the **older two thirds**
-   and outside the latest five. An aeon combines five eras, up to 500 turns.
-2. Try available **eras** in the same region, oldest first, excluding turns
-   already represented by an aeon. Each era combines five narratives.
-3. Try available **narratives** for the remaining older turns. A block follows
-   runs: it closes at a run boundary after at least 10 steps, or after 20 within
-   a long run.
-4. Try individual step summaries, oldest first. Missing aggregates fall back to
-   their constituent eras, narratives, or individual summaries. An old step with
-   no usable summary is excerpted toward 8 KiB before moving on to newer history;
-   small originals remain intact. Every aggregate also must save space. If still over budget,
-   repeat these four levels outside the latest five turns. The newest third,
-   rounded up, stays full until older aggregate compression has been tried;
-   this is a preference rather than a hard reservation.
+1. Try individual **step summaries**, oldest first, within the **older two
+   thirds** and outside the latest five. An old step with no usable summary is
+   excerpted toward 8 KiB before moving on to newer history; small originals
+   remain intact.
+2. Try available **narratives** in the same region, oldest first. A block
+   follows runs: it closes at a run boundary after at least 10 steps, or after
+   20 within a long run.
+3. Try available **eras** in the same region, oldest first. Each era combines
+   five narratives.
+4. Try available **aeons** in the same region, oldest first. An aeon combines
+   five eras, up to 500 turns. Finer forms are preferred because each keeps
+   more of its turns; a coarser form replaces them only while the request
+   still does not fit. Missing aggregates leave their constituent eras,
+   narratives, or individual summaries in place. Every aggregate also must
+   save space over the forms it replaces. If still over budget, repeat these
+   four levels outside the latest five turns. The newest third, rounded up,
+   stays full until older compression has been tried; this is a preference
+   rather than a hard reservation.
 5. If still over budget, older records are excerpted and then omitted, oldest
    first, before reducing newer records. The newest five can use smaller summaries
    and excerpts only after older optional history is exhausted.

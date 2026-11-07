@@ -59,7 +59,7 @@ async def test_oldest_pending_individual_precedes_newer_queued_work(monkeypatch)
             await work
 
 
-async def test_small_context_deficit_uses_old_aeon_before_individual_summaries():
+async def test_small_context_deficit_uses_oldest_individual_summaries_before_the_aeon():
     history, messages = helpers.history_with_posts(750, size=70)
     helpers.attach_layers(history)
     history.steps[499].aeon_summary = {'record_type': 'history_step', 'representation': 'aeon_summary',
@@ -69,10 +69,14 @@ async def test_small_context_deficit_uses_old_aeon_before_individual_summaries()
     length = int(message_tokens(full) / .85)
     view = await history.view(messages, [], keep_steps=5, context_length=length, max_output=1000)
     records = request_input(view)['history']
-    assert records[0]['representation'] == 'aeon_summary'
-    assert records[0]['step_ids'] == list(range(1, 501))
-    assert all(record['representation'] == 'full' for record in records[1:])
-    assert [record['step_id'] for record in records[1:]] == list(range(501, 751))
+    # Finer forms first: a small deficit costs a few of the oldest turns their
+    # originals, while the aeon and every narrative stay unused.
+    representations = [record['representation'] for record in records]
+    assert representations[0] == 'compressed' and 'full' in representations
+    assert set(representations) == {'compressed', 'full'}
+    assert representations == sorted(representations)  # Every summary precedes every original.
+    assert [record['step_id'] for record in records] == list(range(1, 751))
+    assert message_tokens(view) <= int(length * .85) - 1000
     assert message_tokens(view) <= int(length * .85) - 1000
 
 

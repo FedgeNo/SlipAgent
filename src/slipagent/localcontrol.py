@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
+import math
 import os
+import time
 import uuid
+from datetime import datetime, timezone
 from collections import OrderedDict
 from typing import Any, Literal
 
@@ -161,8 +165,9 @@ class ControlHost:
         self.requests: OrderedDict[str, tuple[str, asyncio.Task[dict[str, Any]]]] = OrderedDict()
         self.sequence = 0
         self.closing: asyncio.Task[None] | None = None
-        self.unsubscribe = self.controller.subscribe(self.event)
-        self.unsubscribe_state = self.controller.states.subscribe(self.state)
+        # Late binding keeps reloaded handler code in effect for a running host.
+        self.unsubscribe = self.controller.subscribe(lambda event: self.event(event))
+        self.unsubscribe_state = self.controller.states.subscribe(lambda state: self.state(state))
 
     async def start(self) -> None:
         await self.listener.start(self.connected, self.danger)
@@ -196,7 +201,15 @@ class ControlHost:
 
     def event(self, event: AgentEvent) -> None:
         if event.kind == 'context':
+            # Bodies are served on request through `context`, never streamed.
+            diagnostics = self.session.registry.resources.diagnostics
+            attempt = diagnostics.sequence if diagnostics is not None and not diagnostics.error else None
+            self.__dict__['_latest_context'] = (self.session.agent.session_id, event.step, attempt,
+                                                event.request_body, event.text, time.time())
             return
+        if event.kind == 'user_queue_reset':
+            # A cleared conversation has no outgoing request until its first one is sent.
+            self.__dict__.pop('_latest_context', None)
         self.publish('event', {'kind': event.kind, 'step': event.step, 'text': event.text[:2048],
             'truncated': len(event.text) > 2048,
             'toolCall': {'id': event.tool_call.id, 'name': event.tool_call.name} if event.tool_call else None})
@@ -240,7 +253,7 @@ class ControlHost:
             if request.session_id is not None and request.session_id != self.session.agent.session_id:
                 raise RuntimeError('The session changed; refresh status before applying the action.')
             result = await self.execute(request.method, request.params)
-            if (request.method in ('history', 'plan') and request.session_id is not None
+            if (request.method in ('history', 'plan', 'context') and request.session_id is not None
                     and request.session_id != self.session.agent.session_id):
                 raise RuntimeError('The session changed while reading; refresh status before continuing.')
             response = {'jsonrpc': '2.0', 'id': request.id, 'result': result}
@@ -277,6 +290,9 @@ class ControlHost:
         if method == 'plan':
             paging = PageParams.model_validate(params)
             return await run_blocking(lambda: self.text_page(app.plan(), paging))
+        if method == 'context':
+            paging = PageParams.model_validate(params)
+            return await run_blocking(self.context_page, paging)
         if method == 'sessions':
             listing = SessionsParams.model_validate(params)
             sessions = await app.saved_sessions()
@@ -310,6 +326,38 @@ class ControlHost:
         step = steps[page.step_id - 1]
         value = step.parts(stream=True) if isinstance(step, CompletedStep) else step.record()
         return {'stepId': page.step_id, **self.text_page(value, page)}
+
+    def context_page(self, page: PageParams) -> dict[str, Any]:
+        """The latest outgoing working request of this conversation, retries included.
+
+        The retained request event is exact and costs no disk read. Without it,
+        for example on a host whose handler predates the event, the request
+        diagnostics hold the same body as the newest attempt.
+        """
+        from .budget import ContextBudget
+        from .sources import materialize
+        scale = self.session.agent._budget().scale
+        latest = self.__dict__.get('_latest_context')
+        if latest is not None and latest[0] == self.session.agent.session_id:
+            _, step, attempt, body, text, sent = latest
+            value = body.index if body is not None else json.loads(text)
+            estimate = getattr(body, 'estimate', None)
+            return {'stepId': step, 'attempt': attempt,
+                    'sentAt': datetime.fromtimestamp(sent, timezone.utc).isoformat(),
+                    'model': materialize(value.get('model')) if isinstance(value, dict) else None,
+                    'estimatedTokens': math.ceil(estimate * scale) if estimate else None,
+                    **self.text_page(value, page)}
+        diagnostics = self.session.registry.resources.diagnostics
+        record_path = (diagnostics.directory / f'{diagnostics.sequence:08d}.json'
+                       if diagnostics is not None and not diagnostics.error and diagnostics.sequence else None)
+        if record_path is None or not record_path.is_file():
+            raise ValueError('No working request has been sent in this conversation yet.')
+        record = json.loads(record_path.read_text())
+        value = json.loads(gzip.decompress((diagnostics.directory / record['request']).read_bytes()).decode('utf-8'))
+        return {'stepId': record['step_id'], 'attempt': record['attempt'], 'sentAt': record['created'],
+                'model': value.get('model') if isinstance(value, dict) else None,
+                'estimatedTokens': math.ceil(ContextBudget.estimate(value) * scale) if isinstance(value, dict) else None,
+                **self.text_page(value, page)}
 
     def text_page(self, value: Any, page: PageParams) -> dict[str, Any]:
         from .sources import json_chunks

@@ -989,17 +989,11 @@ class ConversationHistory:
             return True
 
         async def reductions() -> AsyncIterator[None]:
+            # Finest stored forms first: a step summary keeps more of a turn
+            # than its narrative, which keeps more than an era or aeon. Each
+            # region moves to a coarser level only while it still does not fit.
             first = 0
             for boundary in (older_end, recent_start):
-                for record in aeon_records(self.steps):
-                    if merge_into(record, AEON, '_aeon_size', boundary):
-                        yield
-                for record in era_records(self.steps):
-                    if merge_into(record, ERA, "_era_size", boundary):
-                        yield
-                for record in historical_records(self.steps):
-                    if merge_into(record, NARRATIVE, "_narrative_size", boundary):
-                        yield
                 for index in range(first, boundary):
                     if summarize_step(index):
                         yield
@@ -1011,6 +1005,15 @@ class ConversationHistory:
                                      sizing.record_bytes(unit_costs[index]) - max(1, total_bytes() - available))
                         if await excerpt_step(index, results_only=False, budget=target):
                             yield
+                for record in historical_records(self.steps):
+                    if merge_into(record, NARRATIVE, "_narrative_size", boundary):
+                        yield
+                for record in era_records(self.steps):
+                    if merge_into(record, ERA, "_era_size", boundary):
+                        yield
+                for record in aeon_records(self.steps):
+                    if merge_into(record, AEON, '_aeon_size', boundary):
+                        yield
                 first = boundary
             # Exhaust each older turn before touching a newer one. The newest
             # five stay original until reductions outside that window cannot fit.

@@ -26,7 +26,6 @@ class RequestProfile:
         self.max_completion_tokens = max_completion_tokens
         self.format = format
         self.tool_choices: list[dict[str, bool] | None] = []
-        self.inference_options: dict[str, Any] = {}
 
     @property
     def native_tools(self) -> bool:
@@ -45,7 +44,7 @@ class RequestProfile:
 class ModelCapabilities(RequestProfile):
     """Capabilities shared by the endpoints allowed to handle this request."""
 
-    def __init__(self, model: dict[str, Any], endpoints: list[dict[str, Any]]) -> None:
+    def __init__(self, model: dict[str, Any], endpoints: list[dict[str, Any]], *, default_reasoning: bool = False) -> None:
         architecture = model.get("architecture", {})
         if isinstance(architecture, dict):
             for field in ("input_modalities", "output_modalities"):
@@ -75,9 +74,8 @@ class ModelCapabilities(RequestProfile):
         reasoning = [entry for entry in compatible if _reasoning_allowed(entry)
                      and (entry["efforts"] is None or any(effort in EFFORT_ORDER for effort in entry["efforts"]))]
         self.reasoning: dict[str, Any] | None = None
-        self.inference_options: dict[str, Any] = {}
         self.include_reasoning = False
-        if reasoning:
+        if reasoning and not default_reasoning:
             compatible = reasoning
             # Endpoint choices override catalog choices when the endpoint lists them.
             efforts = {effort for entry in compatible if "reasoning" in entry["supported_parameters"]

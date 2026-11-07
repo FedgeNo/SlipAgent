@@ -176,9 +176,8 @@ background compaction. The catalog supplies input/output limits but no prices,
 so prices display as unknown. Compaction requires other configured free providers.
 
 Claude uses Anthropic's native Messages endpoint for streaming replies, reasoning
-and tool calls. Its Models API selects the highest published effort and adaptive
-thinking where supported. Older models use manual thinking budgets within the
-reserved output allowance. Sampling stays at Anthropic's defaults, and
+and tool calls. Claude models use provider-default reasoning effort and thinking
+settings, including through OpenRouter and Kilo. Sampling stays at Anthropic's defaults, and
 forced tool calls and JSON response-format constraints are not advertised.
 When no output limit is configured, requests reserve up to 8,192 output tokens.
 

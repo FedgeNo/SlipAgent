@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from .capabilities import EFFORT_ORDER, ModelCapabilities
+from .capabilities import ModelCapabilities
 from .data_text import MessageSections, RenderedContent
 
 
@@ -45,8 +45,8 @@ MISTRAL_HIGH = {
 }
 
 
-def highest_effort(choices: list[str]) -> str | None:
-    return next((value for value in EFFORT_ORDER if value in choices), None)
+def claude_model(model: str) -> bool:
+    return model.removeprefix('~').startswith(('anthropic/claude-', 'claude-'))
 
 
 def gateway_reasoning(provider: str, model: str, profile: ModelCapabilities) -> None:

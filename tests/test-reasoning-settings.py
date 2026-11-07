@@ -5,7 +5,7 @@ import json
 import httpx
 import pytest
 
-from slipagent.api import APIConfigError, APITransportError, RetryPolicy
+from slipagent.api import APITransportError, RetryPolicy
 from slipagent.anthropic import AnthropicClient
 from slipagent.capabilities import ModelCapabilities
 from slipagent.providers import create_client
@@ -106,8 +106,8 @@ def claude_catalog(*, adaptive=True, efforts=('low', 'high', 'max')):
                                                              'enabled': {'supported': not adaptive}}}}}]}
 
 
-@pytest.mark.parametrize('adaptive,efforts,expected', [(True, ('high', 'max'), 'max'), (False, ('low', 'high'), 'high'), (False, (), None)])
-async def test_claude_uses_published_effort_and_thinking_mode(adaptive, efforts, expected):
+@pytest.mark.parametrize('adaptive,efforts', [(True, ('high', 'max')), (False, ('low', 'high')), (False, ())])
+async def test_claude_keeps_default_reasoning_regardless_of_published_choices(adaptive, efforts):
     bodies = []
     def respond(request):
         if request.method == 'GET':
@@ -120,14 +120,35 @@ async def test_claude_uses_published_effort_and_thinking_mode(adaptive, efforts,
         await client.model_capabilities('claude-test')
         result = await client.chat(model='claude-test', messages=[Message.system('Rules'), Message.user('Compute')], max_tokens=2048)
         assert result.message.content == '42' and result.usage.prompt_tokens == 10
-        if not adaptive:
-            with pytest.raises(APIConfigError, match='1025'):
-                await client.chat(model='claude-test', messages=[Message.user('Compute')], max_tokens=1024)
+        await client.chat(model='claude-test', messages=[Message.user('Compute')], max_tokens=1024)
     body = bodies[0]
-    assert body.get('output_config') == ({'effort': expected} if expected else None)
-    assert body['thinking'] == ({'type': 'adaptive'} if adaptive else {'type': 'enabled', 'budget_tokens': 2047})
+    assert 'output_config' not in body
+    assert 'thinking' not in body
     assert body['system'] == 'Rules'
     assert 'reasoning_effort' not in body
+
+
+@pytest.mark.parametrize('provider', ['openrouter', 'kilo'])
+async def test_gateway_claude_keeps_default_effort_and_routes(provider):
+    model = 'anthropic/claude-sonnet-5.5'
+    entry = {'id': model, 'context_length': 200000, 'supported_parameters': ['tools', 'reasoning'],
+             'reasoning': {'supported_efforts': ['low', 'max']}}
+    endpoints = [{'tag': 'low', 'context_length': 200000, 'supported_parameters': ['tools', 'reasoning'],
+                  'reasoning': {'supported_efforts': ['low']}},
+                 {'tag': 'max', 'context_length': 200000, 'supported_parameters': ['tools', 'reasoning'],
+                  'reasoning': {'supported_efforts': ['max']}}]
+    bodies = []
+    def respond(request):
+        if request.method == 'GET':
+            return httpx.Response(200, json={'data': {'endpoints': endpoints}} if request.url.path.endswith('/endpoints') else {'data': [entry]})
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={'choices': [{'message': {'content': '42'}}]})
+    async with create_client(provider, api_key='dummy', transport=httpx.MockTransport(respond)) as client:
+        profile = await client.model_capabilities(model)
+        await client.chat(model=model, messages=[Message.user('Compute')])
+    assert not {'reasoning', 'reasoning_effort', 'include_reasoning'}.intersection(bodies[0])
+    if provider == 'openrouter':
+        assert profile.providers == ['low', 'max']
 
 
 @pytest.mark.parametrize('complete', [True, False])

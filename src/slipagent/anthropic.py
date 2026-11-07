@@ -73,34 +73,20 @@ class AnthropicClient(APIClient):
                                  context_length=context, max_prompt_tokens=context,
                                  max_completion_tokens=output)
         profile.tool_choices = [{"auto": True, "none": True, "required": False, "function": False}]
-        from .reasoning import highest_effort
-        capabilities = entry.get('capabilities') or {}
-        efforts = capabilities.get('effort') or {}
-        effort = highest_effort([name for name, value in efforts.items()
-                                 if isinstance(value, dict) and value.get('supported') is True])
-        types = (capabilities.get('thinking') or {}).get('types') or {}
-        if effort is not None:
-            profile.inference_options['output_config'] = {'effort': effort}
-        if types.get('adaptive', {}).get('supported') is True:
-            profile.inference_options['thinking'] = {'type': 'adaptive'}
-        elif types.get('enabled', {}).get('supported') is True:
-            profile.inference_options['thinking'] = {'type': 'enabled'}
         if store:
             self.cache_capabilities(model, profile)
         return profile
 
     def prepare_payload(self, payload: dict[str, Any], profile: RequestProfile | None) -> None:
-        for name in ("session_id", "temperature", "top_p", "response_format", "reasoning_effort"):
+        for name in ("session_id", "temperature", "top_p", "response_format", "reasoning_effort", 'thinking'):
             payload.pop(name, None)
+        if 'output_config' in payload:
+            payload['output_config'] = dict(payload['output_config'])
+            payload['output_config'].pop('effort', None)
+            if not payload['output_config']:
+                payload.pop('output_config')
         # Anthropic requires an output budget; use the model's advertised limit.
         payload.setdefault("max_tokens", (profile.max_completion_tokens or 8192) if profile else 8192)
-        if profile is not None:
-            import copy
-            payload.update(copy.deepcopy(profile.inference_options))
-            if payload.get('thinking', {}).get('type') == 'enabled':
-                if payload['max_tokens'] < 1025:
-                    raise APIConfigError('Claude thinking requires an output allowance of at least 1025 tokens.')
-                payload['thinking']['budget_tokens'] = payload['max_tokens'] - 1
         from .anthropicwire import message_payload
         message_payload(payload)
 

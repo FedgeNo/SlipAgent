@@ -55,7 +55,8 @@ class OpenRouterClient(APIClient):
             payload["max_completion_tokens"] = payload.pop("max_tokens")
         payload.setdefault("provider", profile.provider_preferences() if isinstance(profile, ModelCapabilities)
                            else {"require_parameters": True})
-        if isinstance(profile, ModelCapabilities):
+        from .reasoning import claude_model
+        if isinstance(profile, ModelCapabilities) and not claude_model(payload['model']):
             if profile.reasoning is not None:
                 payload["reasoning"] = profile.reasoning
             elif profile.include_reasoning:
@@ -101,8 +102,8 @@ class OpenRouterClient(APIClient):
         try:
             if properties is None:
                 raise ValueError("No model properties were supplied by the catalog or endpoint metadata.")
-            capabilities = ModelCapabilities(properties, endpoints)
-            from .reasoning import gateway_reasoning
+            from .reasoning import claude_model, gateway_reasoning
+            capabilities = ModelCapabilities(properties, endpoints, default_reasoning=claude_model(endpoint_model))
             gateway_reasoning(self.provider, endpoint_model, capabilities)
         except ValueError as exc:
             raise OpenRouterConfigError(f"Cannot use {model}: {exc}") from exc

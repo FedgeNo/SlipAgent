@@ -2237,11 +2237,10 @@ Direct providers apply their own effort, budget or thinking switch. Google sends
 one `thinking_config`, never a conflicting simultaneous `reasoning_effort`;
 visible thoughts are secondary to the highest reasoning setting.
 
-`anthropic.py` selects native `/messages` so effort is honored, using the Models
-API's effort and thinking-type capabilities. Frozen `RequestProfile.inference_options`
-retain the selected adaptive/manual configuration. Manual thinking uses at most
-the output allowance minus one token and requires at least 1025 output tokens;
-it never silently increases an already-budgeted output allowance. `anthropicwire.py`
+Claude models use provider-default reasoning effort and thinking settings.
+OpenRouter/Kilo do not filter their routes by highest effort or add reasoning
+overrides. `anthropic.py` retains native `/messages` without forcing effort,
+thinking mode or a manual thinking budget. `anthropicwire.py`
 translates system text, tools, results, thinking and SSE events to/from the shared
 completion channel. Cache-read/creation input counts contribute to prompt usage.
 The common HTTP/SSE owner retains cancellation, retries (including overload 529),

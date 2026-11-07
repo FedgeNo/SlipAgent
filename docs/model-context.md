@@ -139,9 +139,9 @@ Groq, Mistral and NVIDIA use reviewed provider-specific controls. Models with
 on/off thinking enable it rather than receiving a fabricated effort level.
 Reasoning-budget caps are removed where the provider publishes that option;
 the request's output and context allowances still apply.
-Direct Claude uses the native Messages API and published Models API capabilities:
-highest effort with adaptive thinking, or a manual thinking budget below the
-output allowance on older models. Visible thoughts are requested where supported;
+Claude models are an exception: direct Anthropic, OpenRouter and Kilo leave
+reasoning effort, thinking mode and thinking budgets at provider defaults.
+Direct Claude retains the native Messages API. Visible thoughts are requested where supported;
 higher reasoning takes precedence over displaying them. These settings apply to
 working, repair and free-only background requests through the same provider owner.
 Reply text streams as it arrives, including text inside an unfinished JSON

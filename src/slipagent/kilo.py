@@ -51,8 +51,9 @@ class KiloClient(APIClient):
             if efforts:
                 properties['reasoning'] = {**(published if isinstance(published, dict) else {}), 'supported_efforts': efforts}
         try:
-            profile = ModelCapabilities(properties, [{"tag": "kilo", "supported_parameters": parameters}])
-            from .reasoning import gateway_reasoning
+            from .reasoning import claude_model, gateway_reasoning
+            profile = ModelCapabilities(properties, [{"tag": "kilo", "supported_parameters": parameters}],
+                                        default_reasoning=claude_model(model))
             gateway_reasoning(self.provider, model, profile)
         except ValueError as exc:
             raise APIConfigError(f"Cannot use {model} on Kilo: {exc}") from exc
@@ -62,7 +63,8 @@ class KiloClient(APIClient):
 
     def prepare_payload(self, payload: dict[str, Any], profile: RequestProfile | None) -> None:
         payload.pop("session_id", None)
-        if isinstance(profile, ModelCapabilities):
+        from .reasoning import claude_model
+        if isinstance(profile, ModelCapabilities) and not claude_model(payload['model']):
             if profile.reasoning is not None:
                 payload["reasoning"] = profile.reasoning
             elif profile.include_reasoning:

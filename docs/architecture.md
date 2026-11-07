@@ -463,9 +463,11 @@ a usable summary are excerpted toward 8 KiB during the older-history pass,
 before reducing newer turns. Excerpting an aggregate or individual summary
 retains its compressed source, representation and original step coverage.
 Explicit `/compact` boundaries continue to request economical compressed forms
-for their covered, already-observed turns. If dropping an oversized unit creates
-spare capacity, other dropped units that fit are restored, recent first; one
-unfittable unit cannot block the rest. Aggregated records restore their complete
+for their covered, already-observed turns. A unit whose excerpt could not close
+the shortfall by itself is dropped intact rather than clipped first. If dropping
+an oversized unit creates spare capacity, other dropped units that fit are
+restored, recent first, each in the best form that fits (intact before
+excerpted); one unfittable unit cannot block the rest. Aggregated records restore their complete
 source-step coverage and are emitted once. Mandatory instructions, tool definitions,
 response schemas, current input, output reservation, and token calibration are
 budgeted on every request. History costs are added in bytes before applying the

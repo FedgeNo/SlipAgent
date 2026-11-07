@@ -1015,16 +1015,27 @@ class ConversationHistory:
                     if merge_into(record, AEON, '_aeon_size', boundary):
                         yield
                 first = boundary
+            def unit_bytes(index: int) -> int:
+                if level[index] in (NARRATIVE, ERA, AEON):
+                    return sizing.record_bytes(record_costs[id(unit_records[index])])
+                return sizing.record_bytes(unit_costs[index])
+
+            # Trim records that dominate the budget before any unit is dropped.
+            # One oversized result or reasoning block would otherwise displace
+            # every older summary and aggregate at a fraction of its own size.
             # Exhaust each older turn before touching a newer one. The newest
             # five stay original until reductions outside that window cannot fit.
+            # A unit that cannot close the deficit on its own is dropped intact,
+            # so backfill can restore it whole rather than as a stub.
             for index in range(count):
                 if level[index] == DROPPED or index in required:
                     continue
                 if index >= recent_start and summarize_step(index):
                     yield
-                for results_only in (True, False):
-                    if await excerpt_step(index, results_only=results_only):
-                        yield
+                if total_bytes() - available < unit_bytes(index):
+                    for results_only in (True, False):
+                        if await excerpt_step(index, results_only=results_only):
+                            yield
                 if drop_step(index):
                     yield
             # Required observations and the latest failure share the same
@@ -1061,11 +1072,26 @@ class ConversationHistory:
             return [message for _, part in entries for message in part]
 
         def backfill() -> list[Message]:
+            # Newest first, each in the best form that fits: a clipped unit's
+            # intact summary, original or aggregate comes back before its excerpt.
             for members, form, cost in reversed(removed):
-                if total_bytes([cost]) <= available:
-                    for member in members:
-                        level[member] = form
-                    change_cost([], [cost])
+                options: list[tuple[int, HistorySize, dict[str, Any] | None]] = [(form, cost, None)]
+                if form == PARTIAL and len(members) == 1:
+                    compressed = members[0] in partial_compressed
+                    options.insert(0, (STEP if compressed else FULL, supplied(members[0], compressed)[1], None))
+                elif form in (NARRATIVE, ERA, AEON):
+                    current = unit_records[members[0]]
+                    original = aggregate_sources[(form, current['step_id'])]
+                    if original is not current:
+                        options.insert(0, (form, record_costs[id(original)], original))
+                for candidate, candidate_cost, record in options:
+                    if total_bytes([candidate_cost]) <= available:
+                        for member in members:
+                            level[member] = candidate
+                            if record is not None:
+                                unit_records[member] = record
+                        change_cost([], [candidate_cost])
+                        break
             return finish(selection())
 
         # A manual boundary chooses economical compressed forms even when the

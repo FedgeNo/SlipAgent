@@ -397,13 +397,17 @@ only as far as needed**, and stops as soon as the request fits:
    stays full until older compression has been tried; this is a preference
    rather than a hard reservation.
 5. If still over budget, older records are excerpted and then omitted, oldest
-   first, before reducing newer records. The newest five can use smaller summaries
+   first, before reducing newer records. A record is excerpted only when the
+   excerpt alone can close the shortfall; otherwise it is omitted intact, so it
+   can return whole later. The newest five can use smaller summaries
    and excerpts only after older optional history is exhausted.
    Excerpting a selected summary retains that summary and its source step IDs;
    it never restores the original steps merely because the summary needs clipping.
 6. Required unseen tool results and the latest required step remain represented;
    they can be excerpted last but cannot be omitted. Once the selection fits,
-   omitted records are restored newest first when space allows.
+   omitted records are restored newest first when space allows, each in the
+   best form that fits: an intact summary, original or aggregate before its
+   excerpt.
 
 Within a turn that needs excerpts, reasoning normally gives way before tool
 results. For the newest five turns this priority always applies. An older single

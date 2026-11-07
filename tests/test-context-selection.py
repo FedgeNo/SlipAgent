@@ -178,7 +178,11 @@ async def test_five_turn_window_reduces_older_results_before_the_latest_one():
     assert records[-1]['representation'] == 'full'
     assert records[-1]['tool_calls'][0]['result'] == newest
     assert all(record['representation'] == 'compressed' for record in records[:-1])
-    assert any(record.get('excerpted_fields') for record in records[:-1])
+    # An older summary that cannot close the shortfall alone is omitted intact,
+    # never clipped to a stub; the remaining older summaries stay whole.
+    assert not any(record.get('excerpted_fields') for record in records[:-1])
+    assert 0 < len(records) - 1 < 4
+    assert [record['step_id'] for record in records] == list(range(6 - len(records), 6))
     assert message_tokens(view) <= int(20000 * .85) - 1000
 
 

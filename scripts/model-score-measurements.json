@@ -1595,6 +1595,18 @@
     "https://arxiv.org/pdf/2608.13505"
    ],
    "notes": "Aggregator listing (DataLearner, 64.04) for Intern-S2-397B; the technical report uses SWE-Bench Pro and Multilingual, which are not calibrated here. Single-benchmark, third-party estimate. AIHubMix serves intern-s2-free."
+  },
+  {
+   "model": "liquid/lfm-3-1.7b",
+   "benchmarks": {
+    "SWE Verified": 43.4,
+    "Terminal 2.1": 12.9,
+    "LiveCodeBench": 73.5
+   },
+   "sources": [
+    "https://huggingface.co/LiquidAI/LFM3-1.7B"
+   ],
+   "notes": "Developer-reported on the model card (BF16, vLLM): SWE-bench Verified and Terminal-Bench 2.1 with the OpenCode agent, LiveCodeBench v6. The card SciCode figure is not the Artificial Analysis subproblem metric and is not used. Liquid states the model is not recommended for agentic coding. Kilo and OpenRouter serve liquid/lfm-3-1.7b:free."
   }
  ]
 }

@@ -545,7 +545,7 @@ the same model/version estimate across providers. Higher scores sort first,
 after free/paid grouping, with provider/model IDs breaking ties. Zero is a valid
 score; `None` indicates missing evidence. `modelscores.UNKNOWN_MODEL_SCORE`
 sets the routing priority for unscored free models to 95.7, above Gemini 3.8
-Flash at 95.4. `modelpricing.selection_score` applies that preference to catalog
+Flash at 95.6. `modelpricing.selection_score` applies that preference to catalog
 ordering and both routing purposes without changing `ModelInfo.score`.
 Catalog discovery announces newly encountered unscored free models once and
 identifies their default priority. Reviewed evidence gaps use the same priority

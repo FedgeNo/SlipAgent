@@ -87,6 +87,26 @@ async def test_capabilities_and_request_use_published_tools_formats_and_highest_
     assert body["reasoning_effort"] == "max" and "session_id" not in body
 
 
+def test_scores_come_from_the_id_alone_so_cached_catalogs_keep_them():
+    from slipagent import startupcache
+    from slipagent.modelscores import SCORES, reviewed_model
+    from slipagent.types import ModelInfo
+    expected = {"coding-glm-5.3-free": "z-ai/glm-5.3", "coding-kimi-k3-free": "moonshotai/kimi-k3",
+                "kimi-for-coding-free": "moonshotai/kimi-k2.7-code", "xiaomi-mimo-v2.6-pro-free": "xiaomi/mimo-v2.6-pro",
+                "mimo-v2-flash-free": "xiaomi/mimo-v2-flash", "nemotron-3.5-lightning-free": "nvidia/nemotron-3.5-lightning",
+                "dots-3-note-preview-free": "dots-studio/dots-3-note-preview", "xing4.0-29b-a4b-free": "xingchen-agi/xing4.0-29b-a4b",
+                "k2.6-code-preview-free": "moonshotai/kimi-k2.6", "glm-4.7-flash-free": "z-ai/glm-4.7-flash"}
+    for model_id, canonical in expected.items():
+        assert ModelInfo(model_id, provider="aihubmix").score == SCORES[canonical] is not None, model_id
+    # Reviewed gaps are recognised, so they are not announced as newly released.
+    assert reviewed_model("aihubmix", "agents-a1-free") and reviewed_model("aihubmix", "crouton-alpha-free")
+    assert ModelInfo("coding-glm-5.3-free", provider="openrouter").score is None
+    startupcache.save_catalogs([ModelInfo("coding-glm-5.3-free", provider="aihubmix",
+                                          pricing={"prompt": "0", "completion": "0"})], {"aihubmix": "id"})
+    cached = startupcache.cached_catalog({"aihubmix": "id"})
+    assert cached and cached[0].score == SCORES["z-ai/glm-5.3"]
+
+
 def test_provider_is_registered_and_activated_by_its_key():
     assert isinstance(create_client("aihubmix", api_key="dummy"), AIHubMixClient)
     assert "aihubmix" in active_providers({"AIHUBMIX_API_KEY": "key"})

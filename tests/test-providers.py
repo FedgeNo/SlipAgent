@@ -118,7 +118,8 @@ async def test_nvidia_mistral_large_four_uses_hosted_limits_and_native_tools(eff
     async with NvidiaClient("dummy", reasoning_effort=effort, transport=httpx.MockTransport(handle)) as client:
         models = await client.list_models()
         profile = await client.model_capabilities(MISTRAL_LARGE_4_MODEL)
-        assert models[0].score == 93.9
+        from slipagent.modelscores import SCORES
+        assert models[0].score == SCORES['mistralai/mistral-large-4-1t-a52b'] is not None
         assert models[0].context_length == profile.context_length == 262_144
         assert profile.max_completion_tokens == 262_144
         assert profile.native_tools and profile.format is None

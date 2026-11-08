@@ -418,7 +418,10 @@ only as far as needed**, and stops as soon as the request fits:
    they can be excerpted last but cannot be omitted. Once the selection fits,
    omitted records are restored newest first when space allows, each in the
    best form that fits: an intact summary, original or aggregate before its
-   excerpt.
+   excerpt. The last reduction can save far more than the shortfall, so any
+   remaining room then returns originals to summarized or excerpted turns,
+   newest first, skipping turns whose originals do not fit. Turns through an
+   explicit `/compact` boundary keep their compressed forms.
 
 Within a turn that needs excerpts, reasoning normally gives way before tool
 results. For the newest five turns this priority always applies. An older single

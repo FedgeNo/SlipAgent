@@ -1087,6 +1087,22 @@ class ConversationHistory:
                                 unit_records[member] = record
                         change_cost([], [candidate_cost])
                         break
+            # Reductions stop as soon as the request fits, and the last one can
+            # save far more than the shortfall. Spend the surplus on originals of
+            # summarized or excerpted turns, newest first, skipping any that do
+            # not fit. Manual compaction keeps its compressed forms.
+            for index in range(count - 1, -1, -1):
+                if (level[index] not in (STEP, PARTIAL) or index in required
+                        or self.steps[index].id <= self.compact_through):
+                    continue
+                original = supplied(index, False)[1]
+                change_cost([unit_costs[index]], [original])
+                if total_bytes() > available:
+                    change_cost([original], [unit_costs[index]])
+                    continue
+                level[index], unit_costs[index] = FULL, original
+                partials.pop(index, None)
+                partial_compressed.discard(index)
             return finish(selection())
 
         # A manual boundary chooses economical compressed forms even when the

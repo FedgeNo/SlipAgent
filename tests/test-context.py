@@ -226,8 +226,10 @@ async def test_oversized_old_step_is_summarized_and_later_steps_stay_full():
     view = await history.view(messages, [], keep_steps=50,
                               context_length=200000, max_output=8192, summarize=unused)
     wire = "\n".join(content_text(message.content) for message in view)
-    # Summarizing the two oldest steps frees enough room; every later step stays full.
+    # Summarizing the oversized step frees enough room; the oldest step's original
+    # returns from the surplus and every later step stays full.
     assert [context_body(message.content) for message in unpack_context(view) if message.role == "user"] == [
+        "FULL USER REQUEST 0: preserve this exact wording λ",
         *(f"FULL USER REQUEST {index}: preserve this exact wording λ" for index in range(2, 51)),
         "current request",
     ]

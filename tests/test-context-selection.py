@@ -599,3 +599,26 @@ async def test_archived_history_costs_are_measured_once(monkeypatch):
         assert first == 2 and reads.count(len(code)) == 0
     finally:
         history.clear()
+
+
+async def test_surplus_from_the_last_reduction_restores_the_newest_summarized_originals():
+    # The walk must summarize the large turn 15 to fit, which frees far more than
+    # the shortfall; that surplus returns originals to the newest small turns.
+    answers = [f"Older detail {index} " * 160 for index in range(14)]
+    answers += ["LARGE RESULT " * 6000]
+    answers += [f"Recent answer {index}" for index in range(5)]
+    history, messages = conversation(answers)
+    full = await history.view(messages, [], keep_steps=5, context_length=4_000_000, max_output=1000)
+    # The shortfall exceeds what the small turns' summaries save, so turn 15 must
+    # be summarized; its saving then leaves room for only some small originals.
+    length = int((message_tokens(full) - 32_000 + 1000) / .85)
+    view = await history.view(messages, [], keep_steps=5, context_length=length, max_output=1000)
+    records = {record['step_id']: record['representation'] for record in context_records(view)
+               if record['record_type'] == 'history_step'}
+    assert records[15] == 'compressed'
+    assert all(records[step] == 'full' for step in range(16, 21))
+    restored = [step for step in range(1, 15) if records[step] == 'full']
+    # Newest first: the restored originals are the newest of the small turns.
+    assert restored and restored == list(range(15 - len(restored), 15))
+    assert records[1] == 'compressed'
+    assert message_tokens(view) <= int(length * .85) - 1000

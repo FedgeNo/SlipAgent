@@ -465,7 +465,9 @@ for their covered, already-observed turns. A unit whose excerpt could not close
 the shortfall by itself is dropped intact rather than clipped first. If dropping
 an oversized unit creates spare capacity, other dropped units that fit are
 restored, recent first, each in the best form that fits (intact before
-excerpted); one unfittable unit cannot block the rest. Aggregated records restore their complete
+excerpted); one unfittable unit cannot block the rest. Remaining capacity then
+restores originals of summarized or excerpted turns, newest first, skipping any
+that do not fit and leaving turns through a manual boundary compressed. Aggregated records restore their complete
 source-step coverage and are emitted once. Mandatory instructions, tool definitions,
 response schemas, current input, output reservation, and token calibration are
 budgeted on every request. History costs are added in bytes before applying the

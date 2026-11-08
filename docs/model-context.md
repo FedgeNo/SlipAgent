@@ -390,24 +390,23 @@ from the bytes of each record and scaled by measured calibration.
 When the full history does not fit, SlipAgent compresses **from the oldest end,
 only as far as needed**, and stops as soon as the request fits:
 
-1. Try individual **step summaries**, oldest first, within the **older two
-   thirds** and outside the latest five. An old step with no usable summary is
-   excerpted toward 8 KiB before moving on to newer history; small originals
-   remain intact.
-2. Try available **narratives** in the same region, oldest first. A block
+1. Walk the turns outside the latest five from the oldest. Each turn first
+   uses its **step summary** in place of its original. An old step with no
+   usable summary is excerpted toward 8 KiB instead; small originals remain
+   intact.
+2. When the walk reaches the last turn of a **narrative**, that narrative is
+   tried in place of its turns before any newer turn is reduced. A block
    follows runs: it closes at a run boundary after at least 10 steps, or after
    20 within a long run.
-3. Try available **eras** in the same region, oldest first. Each era combines
-   five narratives.
-4. Try available **aeons** in the same region, oldest first. An aeon combines
-   five eras, up to 500 turns. Finer forms are preferred because each keeps
-   more of its turns; a coarser form replaces them only while the request
-   still does not fit. Missing aggregates leave their constituent eras,
-   narratives, or individual summaries in place. Every aggregate also must
-   save space over the forms it replaces. If still over budget, repeat these
-   four levels outside the latest five turns. The newest third, rounded up,
-   stays full until older compression has been tried; this is a preference
-   rather than a hard reservation.
+3. At the last turn of an **era**, which combines five narratives, the era is
+   tried next; at the last turn of an **aeon**, which combines five eras and up
+   to 500 turns, the aeon is tried after that.
+4. A small shortfall therefore costs only the oldest turns their originals,
+   while a larger one makes the old end coarser, level by level, before any
+   newer turn loses its original. Every request ends with a contiguous run of
+   the newest turns in full. Missing aggregates leave their constituent eras,
+   narratives, or individual summaries in place, and every aggregate must save
+   space over the forms it replaces.
 5. If still over budget, older records are excerpted and then omitted, oldest
    first, before reducing newer records. A record is excerpted only when the
    excerpt alone can close the shortfall; otherwise it is omitted intact, so it

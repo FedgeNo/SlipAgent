@@ -364,13 +364,11 @@ Context construction proceeds in this order:
    for system data sections, compression input, and archive retrieval.
    Every step is sent in full while the history fits the budget. Over budget,
    `ConversationHistory.view` applies reductions from the oldest end until the
-   indexed size fits within the limit: individual step summaries, then
-   available narratives, eras, and aeons in the older two thirds, oldest first
-   within each level and only when the replacement saves space. Finer forms
-   come first and a coarser form replaces them only while the request still
-   does not fit. If needed,
-   repeat those levels outside the newest five turns. The newer third is rounded
-   up and the five-turn protection takes precedence for short histories.
+   indexed size fits within the limit. It walks the turns outside the newest
+   five oldest first: each turn takes its step summary, and once a narrative,
+   era or aeon is complete at that turn it is tried, finest first, before any
+   newer turn is reduced. Replacements apply only when they save space. The
+   old end therefore turns coarser before recent turns lose their originals.
    It then exhausts older turns through excerpts and omission before reducing
    any newer turn. The newest five remain original when they fit after those
    older reductions. Within that window, summaries, excerpts, and omission
@@ -454,9 +452,9 @@ and a 15% estimation margin before fitting history. Text estimates use UTF-8
 size, not a model tokenizer. History uses the remaining model allowance;
 `--context-steps` is retained as a deprecated compatibility option; the preferred
 full-call window is the newest five turns, including complete tool results.
-Selection restarts from original history on every request. It tries individual
-summaries, then narratives, eras, and aeons outside that window, finest first,
-then reduces and removes older turns individually. Only if the five-turn window itself cannot fit does it
+Selection restarts from original history on every request. Outside that window
+it walks from the oldest turn, applying each turn's summary and then each
+narrative, era and aeon completed at that turn, then reduces and removes older turns individually. Only if the five-turn window itself cannot fit does it
 reduce those turns, oldest first, leaving the newest observation until last.
 Missing aggregates use their available constituent summaries. Old turns without
 a usable summary are excerpted toward 8 KiB during the older-history pass,

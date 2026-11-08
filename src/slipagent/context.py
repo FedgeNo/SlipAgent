@@ -820,12 +820,10 @@ class ConversationHistory:
             return parts[key], costs[key]
 
         # Selection starts from full originals on every request and compresses
-        # only what the budget requires. Consolidate the older two thirds
-        # before summarizing the newer third; the newest five remain the
-        # last resort. keep_steps is compatibility only.
+        # only what the budget requires, oldest turns first; the newest five
+        # remain the last resort. keep_steps is compatibility only.
         count = len(self.steps)
         recent_start = max(0, count - RECENT_FULL_STEPS)
-        older_end = min(recent_start, count - (count + 2) // 3)
         FULL, STEP, NARRATIVE, ERA, AEON, PARTIAL, DROPPED = range(7)
         level = [FULL] * count
         unit_records: dict[int, dict[str, Any]] = {}
@@ -989,40 +987,37 @@ class ConversationHistory:
             return True
 
         async def reductions() -> AsyncIterator[None]:
-            # Finest stored forms first: a step summary keeps more of a turn
-            # than its narrative, which keeps more than an era or aeon. Each
-            # region moves to a coarser level only while it still does not fit.
-            first = 0
-            for boundary in (older_end, recent_start):
-                for index in range(first, boundary):
-                    if summarize_step(index):
+            # Walk outward from the oldest turn. Each turn first gives up its
+            # original for its own summary; once a narrative, era or aeon is
+            # complete at that turn, it is tried, finest first, before any newer
+            # turn is reduced. A small shortfall therefore costs only the oldest
+            # turns their originals, and a larger one coarsens the old end level
+            # by level while recent turns keep theirs.
+            aggregates: dict[int, list[tuple[dict[str, Any], int, str]]] = {}
+            for records, form, cache in ((historical_records(self.steps), NARRATIVE, '_narrative_size'),
+                                         (era_records(self.steps), ERA, '_era_size'),
+                                         (aeon_records(self.steps), AEON, '_aeon_size')):
+                for record in records:
+                    aggregates.setdefault(record['step_id'] - 1, []).append((record, form, cache))
+            for index in range(recent_start):
+                if summarize_step(index):
+                    yield
+                elif (level[index] == FULL and compressible(index)
+                      and self.steps[index].summary is None):
+                    # A failed gap has no AI memory. Keep labelled evidence,
+                    # rather than letting its original displace newer history.
+                    target = max(FAILED_SUMMARY_EXCERPT_BYTES,
+                                 sizing.record_bytes(unit_costs[index]) - max(1, total_bytes() - available))
+                    if await excerpt_step(index, results_only=False, budget=target):
                         yield
-                    elif (level[index] == FULL and compressible(index)
-                          and self.steps[index].summary is None):
-                        # A failed gap has no AI memory. Keep labelled evidence,
-                        # rather than letting its original displace newer history.
-                        target = max(FAILED_SUMMARY_EXCERPT_BYTES,
-                                     sizing.record_bytes(unit_costs[index]) - max(1, total_bytes() - available))
-                        if await excerpt_step(index, results_only=False, budget=target):
-                            yield
-                for record in historical_records(self.steps):
-                    if merge_into(record, NARRATIVE, "_narrative_size", boundary):
+                for record, form, cache in aggregates.get(index, []):
+                    if merge_into(record, form, cache, index + 1):
                         yield
-                for record in era_records(self.steps):
-                    if merge_into(record, ERA, "_era_size", boundary):
-                        yield
-                for record in aeon_records(self.steps):
-                    if merge_into(record, AEON, '_aeon_size', boundary):
-                        yield
-                first = boundary
             def unit_bytes(index: int) -> int:
                 if level[index] in (NARRATIVE, ERA, AEON):
                     return sizing.record_bytes(record_costs[id(unit_records[index])])
                 return sizing.record_bytes(unit_costs[index])
 
-            # Trim records that dominate the budget before any unit is dropped.
-            # One oversized result or reasoning block would otherwise displace
-            # every older summary and aggregate at a fraction of its own size.
             # Exhaust each older turn before touching a newer one. The newest
             # five stay original until reductions outside that window cannot fit.
             # A unit that cannot close the deficit on its own is dropped intact,

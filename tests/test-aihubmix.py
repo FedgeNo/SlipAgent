@@ -62,8 +62,9 @@ async def test_catalog_reads_the_public_endpoint_and_trusts_only_suffixed_free_r
     assert models["coding-glm-5.3"].pricing == {"prompt": "1.4e-06", "completion": "4.4e-06"}
     assert all(model.provider == "aihubmix" for model in models.values())
     # Vendor namespaces reach existing benchmark scores; unknown models stay unscored.
-    assert models["coding-glm-5.3-free"].score == 94.7
-    assert models["gemma-4-31b-it-free"].score == 68.3
+    from slipagent.modelscores import SCORES
+    assert models["coding-glm-5.3-free"].score == SCORES["z-ai/glm-5.3"]
+    assert models["gemma-4-31b-it-free"].score == SCORES["google/gemma-4-31b-it"]
     assert models["crouton-alpha-free"].score is None
 
 

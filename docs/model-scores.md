@@ -16,18 +16,18 @@ Missing benchmarks remain `None` in model metadata and display as **benchmark
 unknown**. Free models with missing benchmarks participate in automatic working
 and compression selection using `UNKNOWN_MODEL_SCORE` in `modelscores.py`.
 The current routing priority is **95.7**, immediately above Gemini 3.8 Flash
-(95.6), below DeepSeek V4.1 Flash (96.1) and MiniMax M3.1 Flash (96.4).
+and MiMo-V2.6-Pro (95.4), below DeepSeek V4.1 Flash (96.1) and MiniMax M3.1 Flash (96.3).
 This is a user-selected routing preference, not a benchmark result or calibrated
 estimate. New free previews such as `stealth/crouton-alpha` use it automatically;
 reviewed evidence gaps use it too. Published scores replace the preference when
 available. Generic routers remain excluded; pricing, credentials, billing tier,
 model exclusions and failure handling still determine eligibility.
 
-## Calibration reviewed October 30, 2026
+## Calibration reviewed November 8, 2026
 
 The scores are computed from raw published results saved in
 [`scripts/model-score-measurements.json`](../scripts/model-score-measurements.json):
-255 results for 114 models, including 45 reference models that are not scored for
+295 results for 130 models, including 43 reference models that are not scored for
 routing. Eleven text-coding benchmarks are connected through shared models.
 SWE-bench Verified supplies the reference scale. DeepSWE 1.1, Terminal-Bench 2.0
 and 2.1, Artificial Analysis Terminal-Bench 4.0 and SciCode subproblems,
@@ -56,17 +56,17 @@ The command refuses a benchmark it cannot connect.
 
 | Benchmark | Offset | Results | Models with another result |
 | --- | ---: | ---: | ---: |
-| SWE Verified | 0.00 | 36 | 36 |
+| SWE Verified | 0.00 | 45 | 44 |
 | DeepSWE 1.1 | +2.25 | 27 | 26 |
-| Terminal 2.0 | +1.16 | 12 | 12 |
-| Terminal 2.1 | +0.81 | 40 | 38 |
-| Terminal 4.0 (AA) | +5.18 | 18 | 18 |
-| SciCode subproblems (AA) | +1.62 | 18 | 18 |
-| LiveCodeBench | −0.62 | 27 | 23 |
+| Terminal 2.0 | +1.20 | 19 | 19 |
+| Terminal 2.1 | +0.84 | 47 | 44 |
+| Terminal 4.0 (AA) | +5.02 | 20 | 20 |
+| SciCode subproblems (AA) | +1.84 | 26 | 26 |
+| LiveCodeBench | −0.61 | 34 | 30 |
 | BigCodeBench complete | −1.30 | 30 | 24 |
 | HumanEval | −2.60 | 35 | 23 |
-| FLTEval pass@1 | +2.25 | 5 | 4 |
-| MT-Bench coding | −2.31 | 7 | 6 |
+| FLTEval pass@1 | +2.26 | 5 | 4 |
+| MT-Bench coding | −2.30 | 7 | 6 |
 
 The October 29 review agreed with the earlier agentic benchmarks, which used a different, partly
 unrecorded set of results: the DeepSWE and Terminal-Bench offsets moved by 0.3 log-odds or
@@ -89,15 +89,15 @@ developer page: Step 5 Preview (BenchLM), dots-3 note preview (BenchLM), MiniMax
 Flash (a reading of MiniMax's launch table image), and Muse Glimmer (Qubrid). Their
 records say so.
 
-Leaving out each of 228 results from models with several results, then refitting and
+Leaving out each of 266 results from models with several results, then refitting and
 predicting it, produced:
 
 | Absolute prediction error | Percentage points |
 | --- | ---: |
 | Mean | 8.2 |
 | Median | 5.3 |
-| 90th percentile | 19.4 |
-| Largest | 38.4 |
+| 90th percentile | 20.3 |
+| Largest | 38.0 |
 
 These are errors predicting held-out benchmark results, not confidence intervals for
 the final scores. Several withheld results belong to the same model, so they are not
@@ -167,6 +167,29 @@ review following an independent audit. These are separate benchmark metrics
 with separate fitted offsets. The resulting score remains an uncertain
 cross-benchmark estimate, not a 93.5% task completion rate. Kilo's live pricing
 continues to determine free eligibility, including after its temporary promotion.
+
+## Z.ai and AIHubMix free models, November 8, 2026
+
+Adding Z.ai and AIHubMix brought free routes for GLM 4.6–5.2, Kimi K3 and
+K2.7 Code, MiniMax M2–M3, MiMo-V2-Flash and V2.6, Qwen3.6 Plus Preview and
+Intern-S2. Their results come from the developers' model cards (SWE Verified,
+Terminal-Bench 2.0, LiveCodeBench v6) and Artificial Analysis' 2026-10-30 data
+snapshot (Terminal-Bench 2.1 and 4.0, SciCode); each record names its sources.
+GLM-5.2 and Kimi K3 were reference models and are now scored. Kimi Code documents
+`kimi-for-coding` as Kimi K2.7 Code, and K2.6 Code Preview was the beta of Kimi
+K2.6, so both are aliases. Qwen3.6 Plus Preview uses third-party quotations of
+Alibaba's table and Intern-S2 one aggregator result; their records say so.
+
+Artificial Analysis' Terminal-Bench 4.0 values of 0–2% for GLM-5.1, MiniMax M2.7
+and M3 and Kimi K2.7 Code are left out: the same snapshot gives those models 55–68%
+on Terminal-Bench 2.1, which points to incomplete runs rather than ability. The
+refit moved existing scores by at most 1.7 points.
+
+GLM-4.5-Flash (no documented checkpoint), GLM-5-Turbo (published tables repeat
+GLM-5's numbers), Agents-A1 (only contradictory auto-generated listings) and
+Crouton Alpha (a stealth preview) are reviewed gaps and use the unknown routing
+priority. GLM-4.6V-Flash on Z.ai and Nemotron 3.5 Content Safety are excluded
+from coding listings as vision and moderation models.
 
 ## MT-Bench Coding Conversion
 

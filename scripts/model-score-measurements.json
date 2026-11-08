@@ -1,5 +1,5 @@
 {
- "reviewed": "2026-10-30",
+ "reviewed": "2026-11-08",
  "scales": {
   "MT-Bench coding": {
    "min_score": 1,
@@ -203,9 +203,13 @@
    },
    "sources": [
     "https://huggingface.co/moonshotai/Kimi-K2.6",
-    "https://artificialanalysis.ai/models/kimi-k2-6"
+    "https://artificialanalysis.ai/models/kimi-k2-6",
+    "https://dev.to/jangwook_kim_e31e7291ad98/kimi-code-k26-moonshot-ais-coding-model-vs-claude-code-1jab"
    ],
-   "notes": "Developer-reported; Terminus-2 for Terminal 2.0. Terminal-Bench 4.0: independently measured by Artificial Analysis with mini-swe-agent, pass@1 averaged over three repeats per task; reviewed 2026-10-30. Exact release and reasoning variant from the AA model page. SciCode uses the AA test-subproblem metric, not full-problem success; AA currently marks the dataset under review after an independent audit."
+   "notes": "Developer-reported; Terminus-2 for Terminal 2.0. Terminal-Bench 4.0: independently measured by Artificial Analysis with mini-swe-agent, pass@1 averaged over three repeats per task; reviewed 2026-10-30. Exact release and reasoning variant from the AA model page. SciCode uses the AA test-subproblem metric, not full-problem success; AA currently marks the dataset under review after an independent audit. k2.6-code-preview is the Kimi Code K2.6 beta that preceded general availability by one week (secondhand report); AIHubMix serves k2.6-code-preview-free.",
+   "aliases": [
+    "moonshotai/k2.6-code-preview"
+   ]
   },
   {
    "model": "thinkingmachines/inkling-small",
@@ -806,13 +810,16 @@
    "model": "moonshotai/kimi-k3",
    "benchmarks": {
     "Terminal 2.1": 88.3,
-    "DeepSWE 1.1": 67.5
+    "DeepSWE 1.1": 67.5,
+    "SciCode subproblems (AA)": 59.5
    },
    "sources": [
     "https://huggingface.co/zai-org/glm-5.3",
-    "https://huggingface.co/poolside/Laguna-S-2.1"
+    "https://huggingface.co/poolside/Laguna-S-2.1",
+    "https://artificialanalysis.ai/models/kimi-k3"
    ],
-   "reference": true
+   "reference": false,
+   "notes": "Scored from 2026-11-08 because AIHubMix serves coding-kimi-k3-free; SciCode from the Artificial Analysis 2026-10-30 snapshot (Max reasoning)."
   },
   {
    "model": "deepseek/deepseek-v4-pro",
@@ -851,12 +858,15 @@
    "model": "z-ai/glm-5.2",
    "benchmarks": {
     "Terminal 2.1": 81.0,
-    "DeepSWE 1.1": 46.2
+    "DeepSWE 1.1": 46.2,
+    "SciCode subproblems (AA)": 51.2
    },
    "sources": [
-    "https://huggingface.co/zai-org/glm-5.3"
+    "https://huggingface.co/zai-org/glm-5.3",
+    "https://artificialanalysis.ai/models/glm-5-2"
    ],
-   "reference": true
+   "reference": false,
+   "notes": "Scored from 2026-11-08 because AIHubMix serves coding-glm-5.2-free; SciCode from the Artificial Analysis 2026-10-30 snapshot (Max reasoning)."
   },
   {
    "model": "anthropic/claude-fable-5",
@@ -1393,6 +1403,198 @@
     "https://huggingface.co/LiquidAI/LFM2.5-2.6B"
    ],
    "notes": "LiveCodeBench v6 from the model card; the card says the model is not recommended for agentic coding."
+  },
+  {
+   "model": "z-ai/glm-4.7-flash",
+   "benchmarks": {
+    "SWE Verified": 59.2,
+    "LiveCodeBench": 64.0
+   },
+   "sources": [
+    "https://huggingface.co/zai-org/GLM-4.7-Flash",
+    "https://docs.z.ai/guides/overview/pricing"
+   ],
+   "notes": "Developer-reported on the model card (LCB v6). Z.ai serves glm-4.7-flash free; AIHubMix serves glm-4.7-flash-free."
+  },
+  {
+   "model": "z-ai/glm-4.7",
+   "benchmarks": {
+    "SWE Verified": 73.8,
+    "Terminal 2.0": 41.0,
+    "LiveCodeBench": 84.9,
+    "Terminal 2.1": 45.3
+   },
+   "sources": [
+    "https://huggingface.co/zai-org/GLM-4.7",
+    "https://artificialanalysis.ai/models/glm-4-7"
+   ],
+   "notes": "SWE Verified, Terminal-Bench 2.0 and LCB v6 developer-reported on the model card; Terminal-Bench 2.1 from Artificial Analysis (reasoning). AIHubMix serves coding-glm-4.7-free."
+  },
+  {
+   "model": "z-ai/glm-4.6",
+   "benchmarks": {
+    "SWE Verified": 68.0,
+    "Terminal 2.0": 24.5,
+    "LiveCodeBench": 82.8,
+    "Terminal 2.1": 49.4
+   },
+   "sources": [
+    "https://huggingface.co/zai-org/GLM-4.7",
+    "https://artificialanalysis.ai/models/glm-4-6-reasoning"
+   ],
+   "notes": "SWE Verified, Terminal-Bench 2.0 and LCB v6 from the GLM-4.7 card comparison table; Terminal-Bench 2.1 from Artificial Analysis (reasoning). AIHubMix serves coding-glm-4.6-free."
+  },
+  {
+   "model": "z-ai/glm-5",
+   "benchmarks": {
+    "SWE Verified": 77.8,
+    "Terminal 2.0": 56.2
+   },
+   "sources": [
+    "https://huggingface.co/zai-org/GLM-5"
+   ],
+   "notes": "Developer-reported: SWE Verified with OpenHands; standard (not verified-dataset) Terminal-Bench 2.0 with Terminus 2. AIHubMix serves coding-glm-5-free."
+  },
+  {
+   "model": "z-ai/glm-5.1",
+   "benchmarks": {
+    "Terminal 2.0": 63.5,
+    "Terminal 2.1": 61.8,
+    "SciCode subproblems (AA)": 44.8
+   },
+   "sources": [
+    "https://huggingface.co/zai-org/GLM-5.1",
+    "https://artificialanalysis.ai/models/glm-5-1"
+   ],
+   "notes": "Terminal-Bench 2.0 (Terminus-2) developer-reported; Artificial Analysis results from its 2026-10-30 data snapshot. Its Terminal-Bench 4.0 entry for this checkpoint (2.0%) is excluded as implausible beside its own Terminal-Bench 2.1 result, pending AA re-runs. AIHubMix serves coding-glm-5.1-free."
+  },
+  {
+   "model": "moonshotai/kimi-k2.7-code",
+   "benchmarks": {
+    "Terminal 2.1": 67.4,
+    "SciCode subproblems (AA)": 47.8
+   },
+   "sources": [
+    "https://artificialanalysis.ai/models/kimi-k2-7-code",
+    "https://www.kimi.com/en/resources/kimi-k2-7-code"
+   ],
+   "notes": "Artificial Analysis results from its 2026-10-30 data snapshot. Its Terminal-Bench 4.0 entry for this checkpoint (1.0%) is excluded as implausible beside its own Terminal-Bench 2.1 result, pending AA re-runs. Kimi Code documents kimi-for-coding as Kimi K2.7 Code; AIHubMix serves kimi-for-coding-free.",
+   "aliases": [
+    "moonshotai/kimi-for-coding"
+   ]
+  },
+  {
+   "model": "minimax/minimax-m2",
+   "benchmarks": {
+    "SWE Verified": 69.4,
+    "LiveCodeBench": 83.0
+   },
+   "sources": [
+    "https://huggingface.co/MiniMaxAI/MiniMax-M2"
+   ],
+   "notes": "Developer-reported; LCB aligned with Artificial Analysis methodology. The original Terminal-Bench 1.0 result is not a calibrated benchmark. AIHubMix serves coding-minimax-m2-free."
+  },
+  {
+   "model": "minimax/minimax-m2.1",
+   "benchmarks": {
+    "SWE Verified": 74.0,
+    "Terminal 2.0": 47.9,
+    "LiveCodeBench": 81.0
+   },
+   "sources": [
+    "https://huggingface.co/MiniMaxAI/MiniMax-M2.1"
+   ],
+   "notes": "Developer-reported on the model card. AIHubMix serves coding-minimax-m2.1-free."
+  },
+  {
+   "model": "minimax/minimax-m2.5",
+   "benchmarks": {
+    "SWE Verified": 80.2
+   },
+   "sources": [
+    "https://huggingface.co/MiniMaxAI/MiniMax-M2.5"
+   ],
+   "notes": "Developer-reported in the model card introduction; single-benchmark estimate. AIHubMix serves coding-minimax-m2.5-free."
+  },
+  {
+   "model": "minimax/minimax-m2.7",
+   "benchmarks": {
+    "Terminal 2.1": 55.4,
+    "SciCode subproblems (AA)": 50.1
+   },
+   "sources": [
+    "https://artificialanalysis.ai/models/minimax-m2-7"
+   ],
+   "notes": "Artificial Analysis results from its 2026-10-30 data snapshot. Its Terminal-Bench 4.0 entry for this checkpoint (0%) is excluded as implausible beside its own Terminal-Bench 2.1 result, pending AA re-runs. AIHubMix serves coding-minimax-m2.7-free."
+  },
+  {
+   "model": "minimax/minimax-m3",
+   "benchmarks": {
+    "Terminal 2.1": 65.2,
+    "SciCode subproblems (AA)": 47.1
+   },
+   "sources": [
+    "https://artificialanalysis.ai/models/minimax-m3"
+   ],
+   "notes": "Artificial Analysis results from its 2026-10-30 data snapshot. Its Terminal-Bench 4.0 entry for this checkpoint (2.0%) is excluded as implausible beside its own Terminal-Bench 2.1 result, pending AA re-runs. AIHubMix serves coding-minimax-m3-free."
+  },
+  {
+   "model": "xiaomi/mimo-v2-flash",
+   "benchmarks": {
+    "SWE Verified": 73.4,
+    "Terminal 2.0": 38.5,
+    "LiveCodeBench": 80.6
+   },
+   "sources": [
+    "https://huggingface.co/XiaomiMiMo/MiMo-V2-Flash"
+   ],
+   "notes": "Developer-reported post-training results (LCB v6). AIHubMix serves mimo-v2-flash-free."
+  },
+  {
+   "model": "xiaomi/mimo-v2.6-pro",
+   "benchmarks": {
+    "Terminal 4.0 (AA)": 34.8,
+    "SciCode subproblems (AA)": 60.9
+   },
+   "sources": [
+    "https://artificialanalysis.ai/models/mimo-v2-6-pro"
+   ],
+   "notes": "Artificial Analysis results from its 2026-10-30 data snapshot. AIHubMix serves xiaomi-mimo-v2.6-pro-free."
+  },
+  {
+   "model": "xiaomi/mimo-v2.6-flash",
+   "benchmarks": {
+    "Terminal 4.0 (AA)": 22.7,
+    "SciCode subproblems (AA)": 51.3
+   },
+   "sources": [
+    "https://artificialanalysis.ai/models/mimo-v2-6-flash"
+   ],
+   "notes": "Artificial Analysis results from its 2026-10-30 data snapshot. AIHubMix serves xiaomi-mimo-v2.6-flash-free."
+  },
+  {
+   "model": "qwen/qwen3.6-plus-preview",
+   "benchmarks": {
+    "SWE Verified": 78.8,
+    "Terminal 2.0": 61.6,
+    "LiveCodeBench": 87.1
+   },
+   "sources": [
+    "https://dev.to/apilover/qwen36-plus-api-beats-claude-on-terminal-benchmarks-2dc3",
+    "https://www.datalearner.com/en/ai-models/pretrained-models/qwen-3.6-plus-preview/analysis"
+   ],
+   "notes": "Third-party quotations of Alibaba's developer-reported table for the preview checkpoint (LCB v6); the later Qwen3.6-Plus release does not inherit these. AIHubMix serves qwen3.6-plus-preview-free."
+  },
+  {
+   "model": "internlm/intern-s2",
+   "benchmarks": {
+    "Terminal 2.1": 64.0
+   },
+   "sources": [
+    "https://www.datalearner.com/en/ai-models/pretrained-models/intern-s2-397b",
+    "https://arxiv.org/pdf/2608.13505"
+   ],
+   "notes": "Aggregator listing (DataLearner, 64.04) for Intern-S2-397B; the technical report uses SWE-Bench Pro and Multilingual, which are not calibrated here. Single-benchmark, third-party estimate. AIHubMix serves intern-s2-free."
   }
  ]
 }

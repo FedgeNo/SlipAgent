@@ -23,7 +23,9 @@ async def test_catalog_needs_no_request_and_marks_only_the_free_flash_models():
     assert models["glm-5.3"].pricing == {"prompt": "1.4e-06", "completion": "4.4e-06"}
     assert models["glm-4.7-flash"].context_length == 200000
     # Z.ai's bare IDs share the z-ai namespace used by benchmark scores.
-    assert models["glm-5.3"].score == 94.7 and models["glm-5.3-flash"].score == 93.4
+    from slipagent.modelscores import SCORES
+    assert models["glm-5.3"].score == SCORES["z-ai/glm-5.3"]
+    assert models["glm-4.7-flash"].score == SCORES["z-ai/glm-4.7-flash"] is not None
 
 
 async def test_capabilities_and_request_enable_thinking_with_native_tools():

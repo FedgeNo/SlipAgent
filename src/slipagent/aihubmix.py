@@ -11,7 +11,13 @@ from .types import ModelInfo
 
 # Catalog vendors as the namespaces used by model scores.
 VENDORS = {"zhipu": "z-ai", "moonshot": "moonshotai", "minimax": "minimax", "nvidia": "nvidia",
-           "google": "google", "xiaomi": "xiaomi", "cohere": "cohere", "alibaba": "qwen"}
+           "google": "google", "xiaomi": "xiaomi", "cohere": "cohere", "alibaba": "qwen",
+           "dots-studio": "dots-studio", "liquid": "liquid", "xingchen": "xingchen-agi"}
+# Free IDs the catalog lists without a vendor, or under a vendor prefix of their own.
+IDENTITIES = {"flint-v1.0": "recursive/flint-v1.0", "mimo-v2-flash": "xiaomi/mimo-v2-flash",
+              "crouton-alpha": "stealth/crouton-alpha", "xiaomi-mimo-v2.6-pro": "xiaomi/mimo-v2.6-pro",
+              "xiaomi-mimo-v2.6-flash": "xiaomi/mimo-v2.6-flash", "intern-s2": "internlm/intern-s2",
+              "agents-a1": "internscience/agents-a1", "k2.6-code-preview": "moonshotai/k2.6-code-preview"}
 EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 TOOL_FEATURES = {"tools", "tool_calling", "function_calling"}
 
@@ -74,6 +80,8 @@ class AIHubMixClient(APIClient):
     @staticmethod
     def score_identity(entry: dict[str, Any]) -> str:
         model = entry["model_id"].removesuffix("-free").removeprefix("coding-")
+        if model in IDENTITIES:
+            return IDENTITIES[model]
         vendor = VENDORS.get(str(entry.get("vendor")))
         return f"{vendor}/{model}" if vendor else model
 

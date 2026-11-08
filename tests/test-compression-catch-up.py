@@ -201,11 +201,25 @@ async def test_primary_does_not_duplicate_an_inflight_step(catchup):
     assert read_data(catchup.requests[0]['messages'][1]['content'])['user_prompt'] == 'Request 2'
 
 
-async def test_paid_primary_without_background_jobs_reports_unavailable(catchup):
+async def test_paid_primary_without_background_jobs_warns_and_continues(catchup):
     catchup.model.pricing = {'prompt': '1', 'completion': '1'}
-    with pytest.raises(ContextError, match='no free compression job'):
-        await catchup.owner.catch_up(catchup.history.steps, lambda text: None)
+    for _ in range(2):
+        await asyncio.wait_for(catchup.owner.catch_up(catchup.history.steps, lambda text: None), 5)
     assert not catchup.requests
+    # One persistent warning, not one per request; originals stay in place.
+    assert [error for error in catchup.errors if 'No free compression job is making progress' in error] == [
+        'Compression unavailable: ' + __import__('slipagent.compaction', fromlist=['x']).CATCH_UP_UNAVAILABLE]
+    assert all(step.summary is None for step in catchup.history.steps)
+
+
+async def test_stalled_compression_lets_the_working_request_proceed(catchup):
+    catchup.model.pricing = {'prompt': '1', 'completion': '1'}
+    agent = Agent(catchup.client, ToolRegistry(), catchup.model.id)
+    agent.messages, agent.history = catchup.messages, catchup.history
+    agent.registry.resources.compactor = catchup.owner
+    assert await asyncio.wait_for(agent.run('Continue'), 10) == 'Done'
+    assert [request for request in catchup.requests
+            if 'Summarizing the Previous Turn' not in request['messages'][0]['content']]
 
 
 async def test_cancelling_primary_assistance_preserves_original_and_releases_claim(catchup):
@@ -274,9 +288,31 @@ async def test_reset_during_route_lookup_does_not_queue_old_history(catchup, mon
 async def test_primary_repriced_as_paid_is_not_called(catchup, monkeypatch):
     catchup.model.pricing = {'prompt': '1', 'completion': '1'}
     monkeypatch.setattr(catchup.routing, 'primary', AsyncMock(return_value=(catchup.client, catchup.model)))
-    with pytest.raises(ContextError, match='no free compression job'):
-        await catchup.owner.catch_up(catchup.history.steps, lambda text: None)
+    await asyncio.wait_for(catchup.owner.catch_up(catchup.history.steps, lambda text: None), 5)
     assert not catchup.requests
+    assert any('No free compression job is making progress' in error for error in catchup.errors)
+
+
+async def test_backlogged_window_summaries_precede_ready_grouped_work(monkeypatch):
+    history, _ = helpers.history_with_posts(45, size=70)
+    helpers.attach_layers(history)
+    del history.steps[39].historical_summary  # Block 21–40 has a ready narrative job.
+    owner = StepCompactor(lambda _: None, lambda error: pytest.fail(error))
+    monkeypatch.setattr(owner, 'dispatch', lambda: None)
+    client = StubClient([])
+    for step in history.steps[-5:]:
+        step.summary = None
+    for step in history.steps[-5:]:
+        owner.submit(step, client, 'test', None, None, history=history.steps[:step.id - 1], conversation=history.steps)
+    key, work = owner._next_job(set(), owner.generation)
+    work.close()
+    assert key == ('step', 41)
+    for step in history.steps[-5:]:
+        step.summary = 'Done.'
+        step.__dict__.pop('_compaction_request', None)
+    key, work = owner._next_job(set(), owner.generation)
+    work.close()
+    assert key == ('narrative', 40)
 
 
 async def test_context_preview_does_not_start_catchup(catchup):

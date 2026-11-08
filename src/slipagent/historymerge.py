@@ -5,7 +5,11 @@ calls or the user prompts again. History is cut into blocks that close at a run
 boundary once they hold ten turns, or at 20 turns within a long run. Each block
 gets one narrative as soon as all its turns have finished first-pass compaction,
 built from their summaries; each five consecutive blocks get one era as soon as
-those narratives exist; each five consecutive eras get an aeon. Sessions that already have fixed 20-turn narratives keep
+those narratives exist; each five consecutive eras get an aeon. A narrative is
+rebuilt once a turn it skipped as a failed gap gains its summary, and an era or
+aeon once a level below it covers more turns, so recovered turns rejoin the
+hierarchy; the previous record is served until its replacement is published.
+Sessions that already have fixed 20-turn narratives keep
 fixed blocks through the last of them. Every level is kept; the context view
 chooses which one to serve. The step compactor schedules these jobs with turn
 summaries.
@@ -166,6 +170,19 @@ def _covers(record: Any, steps: list[HistoryStep], first: int, last: int) -> Typ
             and bool(record.get("step_ids")) and record["step_ids"][0] >= steps[first].id)
 
 
+def _recovered(steps: list[HistoryStep], record: dict[str, Any], first: int, last: int) -> bool:
+    """Whether a turn this narrative skipped as a failed gap now has its summary."""
+    included = set(record["step_ids"])
+    return any(steps[index].id not in included and steps[index].summary is not None
+               for index in range(first, last + 1))
+
+
+def _outgrown(record: dict[str, Any], sources: list[Any]) -> bool:
+    """Whether a lower level now covers turns this aggregate predates."""
+    included = set(record["step_ids"])
+    return any(isinstance(source, dict) and not set(source.get("step_ids", [])) <= included for source in sources)
+
+
 def _validate_ids(record: dict[str, Any], anchor: int, total: int, interval: int, representation: str) -> None:
     ids = record["step_ids"]
     if (not servable(record, interval) or record["step_id"] != anchor
@@ -294,8 +311,10 @@ def ready_job(owner: StepCompactor, steps: list[HistoryStep], active: set[Any],
         group = era_spans[start:start + AEON_ERAS]
         anchor = steps[group[-1][1]]
         key = ('aeon', anchor.id)
-        if (key in active or _covers(getattr(anchor, 'aeon_summary', None), steps, group[0][0], group[-1][1])
-                or not _due(anchor, 'aeon_attempt', total)):
+        existing = getattr(anchor, 'aeon_summary', None)
+        if (key in active or not _due(anchor, 'aeon_attempt', total)
+                or _covers(existing, steps, group[0][0], group[-1][1])
+                and not _outgrown(existing, [getattr(steps[last], 'era_summary', None) for _, last in group])):
             continue
         eras = []
         for first, last in group:
@@ -320,8 +339,10 @@ def ready_job(owner: StepCompactor, steps: list[HistoryStep], active: set[Any],
         group = closed[start:start + ERA_NARRATIVES]
         anchor = steps[group[-1][1]]
         key = ("era", anchor.id)
-        if (key in active or _covers(getattr(anchor, "era_summary", None), steps, group[0][0], group[-1][1])
-                or not _due(anchor, "era_attempt", total)):
+        existing = getattr(anchor, "era_summary", None)
+        if (key in active or not _due(anchor, "era_attempt", total)
+                or _covers(existing, steps, group[0][0], group[-1][1])
+                and not _outgrown(existing, [getattr(steps[last], "historical_summary", None) for _, last in group])):
             continue
         narratives = []
         for first, last in group:
@@ -346,8 +367,9 @@ def ready_job(owner: StepCompactor, steps: list[HistoryStep], active: set[Any],
     for first, last in closed:
         anchor = steps[last]
         key = ("narrative", anchor.id)
-        if (key in active or _covers(getattr(anchor, "historical_summary", None), steps, first, last)
-                or not _due(anchor, "history_merge_attempt", total)):
+        existing = getattr(anchor, "historical_summary", None)
+        if (key in active or not _due(anchor, "history_merge_attempt", total)
+                or _covers(existing, steps, first, last) and not _recovered(steps, existing, first, last)):
             continue
         prepared = _narrative_source(steps, runs, first, last)
         if prepared is None:

@@ -894,8 +894,10 @@ wakes it on summary publication without waiting for the entire dispatcher to
 finish. Resume requeues missing work on eligible background providers; no active
 step can be claimed twice. Stop cancels owned primary assistance or the waiter
 while leaving unrelated background jobs owned by the compactor. Reset wakes
-waiters, cancels owned jobs and invalidates claims. If no free job can progress,
-catch-up reports a context error with originals preserved. Previews never invoke
+waiters, cancels owned jobs and invalidates claims. While behind, the dispatcher
+claims the window's step jobs before grouped work. If no free job can progress,
+catch-up reports one deduplicated warning and returns, leaving selection to
+serve originals and excerpts. Previews never invoke
 this gate. Compression usage remains excluded from working-request accounting.
 Each attempt uses its destination's own
 profile; every failure advances rotation, including failures during capability

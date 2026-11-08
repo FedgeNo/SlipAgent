@@ -453,7 +453,11 @@ can fetch it without searching. The harness accepts whatever structure the model
 returns; narratives also keep the source turn list, call IDs, tool names and
 artifact references copied by the harness. `recall_history` can retrieve exact
 turns or search the full archive when a turn number is unknown. A failed block
-is attempted again after 20 more turns. Results and attempt markers persist
+is attempted again after 20 more turns. A narrative that left out failed turns
+is rebuilt once any of them gains its summary, subject to the same 20-turn wait,
+and an era or aeon is rebuilt once a level below it covers more turns; the
+previous record stays in use until its replacement is published, so recovered
+turns rejoin the hierarchy instead of staying separate. Results and attempt markers persist
 across resume and fork; reset cancels pending work. Invalid or non-shrinking
 narratives and eras leave the summaries they would replace intact.
 
@@ -474,15 +478,18 @@ own capabilities and context/output limits.
 
 Background summaries use providers other than the selected coding provider.
 When all five newest completed steps lack individual summaries, the next working
-request waits. If the exact primary model is eligible and free, it performs a
-dedicated summary job for the oldest unclaimed step in that five-step window;
-otherwise background providers must make progress before normal work resumes.
+request waits. While that backlog lasts, background jobs summarize those five
+steps before any narrative, era or aeon. If the exact primary model is eligible
+and free, it performs a dedicated summary job for the oldest unclaimed step in
+that five-step window; otherwise the request waits while background jobs make
+progress.
 Keeping recent originals in the working context does not trigger this gate when
 their summaries already exist. Canned failure notices do not count as completed
 AI summaries. A single free provider can therefore alternate
 working requests and catch-up compression. A paid or unverified primary is never
-used for compression. If no free job can make progress, the harness reports the
-unavailable catch-up rather than silently continuing or waiting forever.
+used for compression. If no free job can make progress, the harness shows one
+persistent warning and continues: turns without summaries keep their originals
+or labelled excerpts, and the gate is checked again on the next request.
 
 Any compression failure sends the retry to another provider when possible.
 Transient failures retain the model's eligibility. Permanent/model-format

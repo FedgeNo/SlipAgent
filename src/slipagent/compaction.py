@@ -43,6 +43,9 @@ COMPACTION_GRACE_PERIOD = 120
 FAILED_SUMMARY_RETRY_STEPS = 20
 FAILED_SUMMARY_RETRY_SECONDS = 300
 LEGACY_OVERSIZED_ERROR = "CompactionBudgetError: the complete step exceeds the selected model's compaction context budget"
+CATCH_UP_UNAVAILABLE = ("No free compression job is making progress, so the newest turns lack summaries. "
+                        "Work continues with original turns and excerpts; originals are preserved. "
+                        "Add a provider with free models to restore background compression.")
 
 
 class CompactionBudgetError(ValueError):
@@ -182,25 +185,37 @@ class StepCompactor:
     def _next_job(self, active: set[Any], generation: int) -> tuple[Any, Coroutine[Any, Any, None]] | None:
         conversation = self.__dict__.get("_conversation")
         route = self.__dict__.get("_route")
+        queue = self.__dict__.setdefault('_ready', deque())
+        claimed = self.__dict__.setdefault('_active_steps', set())
+
+        def claim(step: HistoryStep) -> tuple[Any, Coroutine[Any, Any, None]]:
+            request = step.__dict__.pop('_compaction_request')
+            self.__dict__['_ready'] = deque(item for item in queue if item is not step)
+            claimed.add((generation, step.id))
+            return ('step', step.id), self._summarize_step(step, request, generation)
+
+        def ready(step: HistoryStep) -> bool:
+            return getattr(step, '_compaction_request', None) is not None and (generation, step.id) not in claimed
+
         if conversation is not None and route is not None:
             self._queue_retries(conversation, route)
+            # A backlog in the newest five gates working requests; clear it
+            # before grouped work, which never releases that gate.
+            if self.behind(conversation):
+                window = next((step for step in conversation[-5:] if ready(step)), None)
+                if window is not None:
+                    return claim(window)
             from .historymerge import ready_job
             grouped = ready_job(self, conversation, active, route)
             if grouped is not None:
                 return grouped
-        queue = self.__dict__.setdefault('_ready', deque())
-        claimed = self.__dict__.setdefault('_active_steps', set())
         candidates = (step for step in chain(conversation or [], self.__dict__.get('_standalone_steps', []), queue)
-                      if getattr(step, '_compaction_request', None) is not None
-                      and (generation, step.id) not in claimed)
+                      if ready(step))
         step = min(candidates, key=lambda step: step.id, default=None)
         if step is None:
             queue.clear()
             return None
-        request = step.__dict__.pop('_compaction_request')
-        self.__dict__['_ready'] = deque(item for item in queue if item is not step)
-        claimed.add((generation, step.id))
-        return ('step', step.id), self._summarize_step(step, request, generation)
+        return claim(step)
 
     def _queue_retries(self, conversation: list[HistoryStep], route: tuple[Any, ...]) -> None:
         client, model, capabilities, max_tokens = route
@@ -322,8 +337,10 @@ class StepCompactor:
                 break
             pending = [job for job in self.jobs if not job.done()]
             if not pending:
-                raise ContextError('Compression could not catch up: no free compression job is making progress. '
-                                   'Originals are preserved; add a provider with free models or retry compression.')
+                # Nothing can progress now. Missing summaries already degrade to
+                # labelled excerpts in selection, so continue rather than stop.
+                self.report_unavailable(CATCH_UP_UNAVAILABLE)
+                return
             await progress.wait()
 
     def _finish_timing(self, ticket: int | None, task: asyncio.Task[None]) -> None:

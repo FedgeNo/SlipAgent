@@ -193,6 +193,40 @@ async def test_unsettled_first_passes_hold_a_block_and_failed_ones_are_gaps():
     assert record["step_ids"] == [i for i in range(1, 21) if i not in (3, 10)]
     assert record["step_id"] == 20
     assert [source["step_id"] for source in record["sources"]] == record["step_ids"]
+    # A recovered gap rejoins its narrative once the block is due again.
+    history.steps[2].summary, history.steps[2].compaction_status = "Turn 3 recovered.", "complete"
+    calls = len(client.calls)
+    schedule(owner, history, client)
+    await owner.wait()
+    assert len(client.calls) == calls  # Not before the 20-turn wait.
+    history.steps[19].history_merge_attempt = len(history.steps) - 20
+    schedule(owner, history, client)
+    await owner.wait()
+    record = historical_records(history.steps)[0]
+    assert record["step_ids"] == [i for i in range(1, 21) if i != 10]
+    await owner.aclose()
+
+
+async def test_eras_and_aeons_are_rebuilt_when_a_narrative_gains_recovered_turns():
+    history, _ = history_with_posts(500, size=70)
+    attach_layers(history)
+    first_era = history.steps[99].era_summary
+    first_era["step_ids"] = [i for i in range(1, 101) if i != 5]
+    history.steps[499].aeon_summary = {
+        "record_type": "history_step", "representation": "aeon_summary", "step_id": 500,
+        "step_ids": [i for i in range(1, 501) if i != 5], "compressed_summary": "AEON " + "epoch " * 300,
+        "created_at_step": 500}
+    owner = StepCompactor(lambda _: None, lambda error: pytest.fail(error))
+    client = MergeClient()
+    schedule(owner, history, client)
+    await owner.wait()
+    assert history.steps[99].era_summary["step_ids"] == list(range(1, 101))
+    # The aeon was due as well, so it follows once its era covers the turn.
+    schedule(owner, history, client)
+    await owner.wait()
+    assert history.steps[499].aeon_summary["step_ids"] == list(range(1, 501))
+    unchanged = [history.steps[index].era_summary for index in (199, 299, 399, 499)]
+    assert all(era["compressed_summary"].startswith("ERA ") for era in unchanged)
     await owner.aclose()
 
 

@@ -2222,7 +2222,10 @@ these explanatory guides separately from local operational conventions.
 Groq's model catalog deliberately omits pricing (or returns null) for free
 models; priced models include per-token rates. Preserve this provider-specific
 contract: missing Groq pricing means free, not unknown. Do not generalize that
-rule to other providers. Compaction uses only eligible free models, contributes
+rule to other providers. AIHubMix serves free routes as separate model IDs
+ending in `-free`; a zero catalog price counts as free only on such an ID,
+because the unsuffixed model bills. Z.ai publishes no catalog prices, so its
+reviewed table in `zai.py` marks the Flash models free. Compaction uses only eligible free models, contributes
 no session usage or spend, and never falls back to a paid primary model.
 
 `api.py` owns `APIClient`, common errors, HTTP/SSE transport, retries, and completion normalization. `providers.py` maps provider names to implementation classes in separate files and exposes `create_client`. Providers subclass `APIClient`; they supply identity/defaults, capability discovery, optional account metadata, headers, request preparation, and options retained during key replacement. Importing modules does not create connections. `openrouter.py` keeps the previous error aliases for callers using those imports.

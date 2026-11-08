@@ -13,7 +13,8 @@ from typing import Any
 from .api import APIClient, APIConfigError
 from .types import ModelInfo
 
-PROVIDERS = {"openrouter": "OpenRouterClient", "nvidia": "NvidiaClient", "kilo": "KiloClient", "mistral": "MistralClient", "google": "GoogleClient", "groq": "GroqClient", "anthropic": "AnthropicClient"}
+PROVIDERS = {"openrouter": "OpenRouterClient", "nvidia": "NvidiaClient", "kilo": "KiloClient", "mistral": "MistralClient", "google": "GoogleClient", "groq": "GroqClient", "anthropic": "AnthropicClient",
+             "zai": "ZaiClient", "aihubmix": "AIHubMixClient"}
 
 
 KEY_PREFIXES = {"openrouter": ("sk-or-v1-",), "nvidia": ("nvapi-",),

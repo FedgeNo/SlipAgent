@@ -198,6 +198,21 @@ authenticated catalog supplies context limits, per-token prices, and tool and JS
 support; speech, transcription, and guard models are hidden. Groq omits the price of a
 free model, so a model without one is labelled free and, once scored, joins optimal mode.
 
+For Z.ai, add `ZAI_API_KEY=your-key` to your local `.env`, then run
+`slipagent --provider zai`. The default is `glm-4.7-flash`. Z.ai's model route
+requires a key and publishes no prices or limits, so SlipAgent lists a reviewed
+table of GLM models with their context, output limits and prices. GLM-4.7-Flash,
+GLM-4.5-Flash and GLM-4.6V-Flash are free; every listed model takes native tools,
+and requests enable GLM thinking. Models outside the table are rejected.
+
+For AIHubMix, add `AIHUBMIX_API_KEY=your-key` to your local `.env`, then run
+`slipagent --provider aihubmix`. The default is `coding-glm-5.3-free`. SlipAgent
+reads AIHubMix's public catalog for prices, context and output limits, tool and
+structured-output support, and reasoning options; the highest published effort
+is used. Free routes are separate model IDs ending in `-free`; only those count
+as free, because the same model without the suffix bills. Free routes carry
+per-model daily request caps and change over time.
+
 For Mistral, add `MISTRAL_API_KEY=your-key` to your local `.env`, then run
 `slipagent --provider mistral`. The default is `mistral-small-latest`;
 `/models mistral` lists available chat models and

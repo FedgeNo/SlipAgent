@@ -522,7 +522,8 @@ class APIClient:
         on_response: Callable[[dict[str, Any]], None] | None = None,
         on_raw_response: Callable[[httpx.Response], None] | None = None, **kwargs: Any
     ) -> dict[str, Any]:
-        url = f"{self.base_url}{path}"
+        # Some catalogs live outside the inference base path; absolute URLs pass through.
+        url = path if path.startswith(("https://", "http://")) else f"{self.base_url}{path}"
         attempt = 0
         while True:
             try:

@@ -1,7 +1,7 @@
 # SlipAgent
 
 **A coding agent with terminal and browser interfaces, designed for free models with large context windows on
-[OpenRouter](https://openrouter.ai), [NVIDIA](https://build.nvidia.com), [Kilo](https://kilo.ai/gateway), [Mistral](https://console.mistral.ai), [Google Gemini](https://ai.google.dev), and [Groq](https://console.groq.com), with a harness you can modify while it runs.**
+[OpenRouter](https://openrouter.ai), [NVIDIA](https://build.nvidia.com), [Kilo](https://kilo.ai/gateway), [Mistral](https://console.mistral.ai), [Google Gemini](https://ai.google.dev), [Groq](https://console.groq.com), [Z.ai](https://z.ai), and [AIHubMix](https://aihubmix.com), with a harness you can modify while it runs.**
 
 SlipAgent gives a model tools to read, search, edit, test, and commit code in a
 project directory. It keeps asking the model what to do next until the task is

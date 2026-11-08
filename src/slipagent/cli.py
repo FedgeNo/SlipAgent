@@ -3164,6 +3164,8 @@ FIRST_RUN_PROVIDERS = (
     ("groq", "Groq", "https://console.groq.com/keys"),
     ("kilo", "Kilo", "https://kilo.ai"),
     ("anthropic", "Anthropic Claude", "https://platform.claude.com/settings/keys"),
+    ("zai", "Z.ai", "https://docs.z.ai/guides/overview/quick-start"),
+    ("aihubmix", "AIHubMix", "https://docs.aihubmix.com/cn/quick-start"),
 )
 
 

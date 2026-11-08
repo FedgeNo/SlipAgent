@@ -29,6 +29,12 @@ export OPENROUTER_API_KEY="sk-or-…"
 | `GROQ_API_KEY` | — | Required for Groq inference and model discovery. |
 | `GROQ_MODEL` | `openai/gpt-oss-120b` | Groq model ID. |
 | `GROQ_BASE_URL` | `https://api.groq.com/openai/v1` | Groq endpoint override. |
+| `ZAI_API_KEY` | — | Required for Z.ai inference. |
+| `ZAI_MODEL` | `glm-4.7-flash` | Z.ai model ID. |
+| `ZAI_BASE_URL` | `https://api.z.ai/api/paas/v4` | Z.ai endpoint override. |
+| `AIHUBMIX_API_KEY` | — | Required for AIHubMix inference and catalog activation. |
+| `AIHUBMIX_MODEL` | `coding-glm-5.3-free` | AIHubMix model ID. |
+| `AIHUBMIX_BASE_URL` | `https://aihubmix.com/v1` | AIHubMix endpoint override; its public catalog is read beside this path. |
 | `MISTRAL_API_KEY` | — | Required for Mistral inference and model discovery. |
 | `MISTRAL_MODEL` | `mistral-small-latest` | Mistral model ID. |
 | `MISTRAL_BASE_URL` | `https://api.mistral.ai/v1` | Mistral endpoint override. |

@@ -68,6 +68,8 @@ src/slipagent/
 ├── mistral.py        Mistral chat completions and model capabilities
 ├── groq.py           Groq chat completions and live catalog capabilities
 ├── kilo.py           Kilo Gateway and live catalog capabilities
+├── zai.py            Z.ai GLM endpoint and reviewed model table
+├── aihubmix.py       AIHubMix gateway and public catalog capabilities
 ├── anthropic.py      native Claude Messages API and published capabilities
 ├── anthropicwire.py  native Claude request/response and stream translation
 ├── reasoning.py      published reasoning controls and tested route fallbacks

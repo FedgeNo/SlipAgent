@@ -472,7 +472,7 @@ retrievals return complete objects or arrays without character paging.
 the best available ranked free model from each eligible provider.** Every job
 and retry uses one shared rotation, in both normal and optimal modes. Providers
 participate when their own API key and a ranked free model are available:
-OpenRouter, NVIDIA, Kilo, Mistral, Google, and Groq. Each attempt uses its destination's
+OpenRouter, NVIDIA, Kilo, Mistral, Google, Groq, Z.ai and AIHubMix. Each attempt uses its destination's
 own capabilities and context/output limits.
 
 Background summaries use providers other than the selected coding provider.
@@ -642,7 +642,7 @@ Useful flags:
 | `--python` | Explicit project interpreter, overriding project-file settings and discovery. |
 | `--temperature`, `--max-tokens` | Explicit temperature and output limits; temperature applies only to working-model requests. |
 | `-v, --verbose` | Show full tool output and per-step token usage. |
-| `--provider` | Select `openrouter`, `nvidia`, `kilo`, `mistral`, `google`, or `groq`; start in manual mode. |
+| `--provider` | Select `openrouter`, `nvidia`, `kilo`, `mistral`, `google`, `groq`, `zai`, or `aihubmix`; start in manual mode. |
 | `--update` | Download the latest SlipAgent from GitHub and run its installer, which checks for local edits first. |
 | `--list-models` | Print catalogs for providers with configured API keys and qualified model selectors. |
 | `--api-key` | Override the API key for this process; an environment variable avoids putting it in shell history. |

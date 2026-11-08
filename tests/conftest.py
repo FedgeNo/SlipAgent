@@ -37,7 +37,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 def isolated_session_storage(tmp_path: Path, system_temp_root: Path, verified_math_cache: str, monkeypatch):
     """Tests and children use dummy credentials, guarded networking and scratch state."""
     for name in tuple(os.environ):
-        if name.startswith(("OPENROUTER_", "NVIDIA_", "KILO_", "MISTRAL_", "GEMINI_", "GROQ_", "ANTHROPIC_", "SLIPAGENT_", "EXA_")):
+        if name.startswith(("OPENROUTER_", "NVIDIA_", "KILO_", "MISTRAL_", "GEMINI_", "GROQ_", "ANTHROPIC_", "ZAI_", "AIHUBMIX_", "SLIPAGENT_", "EXA_")):
             monkeypatch.delenv(name)
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setenv("SLIPAGENT_NO_DOTENV", "1")

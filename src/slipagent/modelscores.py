@@ -113,6 +113,8 @@ def _identity(provider: str, model: str) -> str:
     model = model.removesuffix(":free")
     if provider in {"google", "groq", "mistral"} and "/" not in model:
         model = f"{provider}/{model}"
+    elif provider == "zai" and "/" not in model:
+        model = f"z-ai/{model}"
     return MODEL_ALIASES.get(model, model)
 
 

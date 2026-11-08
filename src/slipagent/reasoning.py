@@ -69,6 +69,9 @@ def reasoning_options(provider: str, model: str) -> dict[str, Any]:
             return {'reasoning_effort': 'high'}
         if model in {'zai-glm-5-3', 'zai-glm-5-3-flash'}:
             return {'reasoning_effort': 'max'}
+    if provider == 'zai':
+        # Every listed GLM model accepts the published on/off thinking switch.
+        return {'thinking': {'type': 'enabled'}}
     if provider == 'google':
         config: dict[str, Any] = {'include_thoughts': True}
         if model == 'gemini-2.5-pro':

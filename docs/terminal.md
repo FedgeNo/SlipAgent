@@ -47,7 +47,7 @@ In the REPL:
 | `/model free` | Choose from zero-cost models |
 | `/model optimal`, `/model next`, `/model reset` | Automatic selection, skip to the next ranked model, or retry from the top |
 | `/models [filter]` | Shortcut: choose from the catalog, optionally filtered |
-| `/provider <provider>` | Select and remember that provider's default model: Nemotron 3 Ultra on OpenRouter and NVIDIA, Kilo Auto Free, Mistral Small, Gemini 3.8 Flash, or GPT-OSS 120B on Groq; refuse missing models or nonzero/unknown pricing |
+| `/provider <provider>` | Select and remember that provider's default model: Nemotron 3 Ultra on OpenRouter and NVIDIA, Kilo Auto Free, Mistral Small, Gemini 3.8 Flash, GPT-OSS 120B on Groq, GLM-4.7-Flash on Z.ai, or Coding GLM 5.3 Free on AIHubMix; refuse missing models or nonzero/unknown pricing |
 | `/temperature` | Show the explicit temperature or provider default, and whether the selected model supports changing it |
 | `/temperature <value>` | Set the working-model temperature from 0 to 2; unsupported changes report an error |
 | `/context` | Show the working-context cap and the selected model's limit |
@@ -103,12 +103,13 @@ In the REPL:
 Mistral (`mstrl_`), Google (`AIza` or `AQ.`), Groq (`gsk_`), and Kilo JWTs
 identifying a Kilo user. Detection happens locally. An unrecognized format asks
 for the provider; you can also use `/key <provider> <key>` with `openrouter`,
-`nvidia`, `mistral`, `google`, `groq`, or `kilo`. A detected key must agree with an explicitly named provider.
+`nvidia`, `mistral`, `google`, `groq`, `kilo`, `zai`, or `aihubmix`. Z.ai and AIHubMix keys have no
+recognizable format, so name the provider. A detected key must agree with an explicitly named provider.
 
 The key becomes available to model selection, optimal fallback, and compression.
 Adding another provider keeps the current model selected. Replacing the active
 provider's key rebuilds its connection. OpenRouter verifies through `GET /key`;
-Google, Mistral, and Groq use their authenticated model catalogs. NVIDIA and Kilo report
+Google, Mistral, and Groq use their authenticated model catalogs. NVIDIA, Kilo, Z.ai and AIHubMix report
 that authentication will be checked on inference. Failed verification preserves
 existing credentials. Saving for future runs still requires `y` at the prompt
 and updates only the detected provider's entry in the data-directory `.env`.

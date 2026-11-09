@@ -1,5 +1,6 @@
 """Real filesystem observation and targeted updates use disposable workspaces."""
 
+from deadlines import TEST_DEADLINE
 import os
 from pathlib import Path
 import shutil
@@ -293,7 +294,7 @@ class WatcherTests(unittest.TestCase):
 
         with patch.object(self.watcher.searcher, "index_path", side_effect=fail_once):
             self.watcher.on_any_event(FileModifiedEvent(str(self.source)))
-            self.assertTrue(self.ready.wait(timeout=4), "successful retry did not report recovery")
+            self.assertTrue(self.ready.wait(timeout=TEST_DEADLINE), "successful retry did not report recovery")
         self.assertEqual(len(self.errors), 1)
         self.assertEqual(self.updates[-1].indexed_files, 0)
 

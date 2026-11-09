@@ -1,5 +1,6 @@
 """Dedicated reviews enforce read-only execution and validate navigable findings."""
 
+from deadlines import TEST_DEADLINE
 import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -201,7 +202,7 @@ async def test_repl_review_restores_profile_before_deferred_commands(tmp_path, m
     monkeypatch.setattr(cli.CommandRunner, 'apply_deferred', checked_apply)
     task = asyncio.create_task(cli.Repl(session).run_review('working changes', session.renderer.style))
     try:
-        await asyncio.wait_for(entered.wait(), 5)
+        await asyncio.wait_for(entered.wait(), TEST_DEADLINE)
         if outcome == 'interrupted':
             session.agent.request_stop()
         if outcome == 'queued_input':
@@ -211,9 +212,9 @@ async def test_repl_review_restores_profile_before_deferred_commands(tmp_path, m
         release.set()
         if outcome == 'failure':
             with pytest.raises(RuntimeError, match='provider failed'):
-                await asyncio.wait_for(task, 5)
+                await asyncio.wait_for(task, TEST_DEADLINE)
         else:
-            assert await asyncio.wait_for(task, 5) is False
+            assert await asyncio.wait_for(task, TEST_DEADLINE) is False
             assert applied
             assert session.workspace.access.danger == (outcome != 'queued_input')
         state = session.registry.services['last_review']

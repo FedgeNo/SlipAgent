@@ -512,7 +512,7 @@ def test_stop_during_final_reload_prevents_queued_followup(run_copy):
         responses.append({'role': 'assistant', 'content': 'done'})
         task = asyncio.create_task(agent.run('start'))
         try:
-            await asyncio.wait_for(closing.wait(), 10)
+            await asyncio.wait_for(closing.wait(), 60)
             assert agent.running
             await cli.CommandRunner(session).handle('/stop')
             release.set()

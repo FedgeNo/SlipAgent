@@ -1,5 +1,6 @@
 """Durable sessions round-trip originals and recover interruptions without replay."""
 
+from deadlines import TEST_DEADLINE
 import argparse
 from slipagent.types import content_text
 
@@ -165,12 +166,12 @@ async def test_session_transition_finishes_after_compaction_grace(tmp_path, meta
     journal = session.registry.resources.journal
     try:
         if operation == "one-shot":
-            assert await asyncio.wait_for(cli.Launcher(argparse.Namespace()).run_one_shot(session, "Original request"), 5) == 0
+            assert await asyncio.wait_for(cli.Launcher(argparse.Namespace()).run_one_shot(session, "Original request"), TEST_DEADLINE) == 0
         else:
             await session.agent.run("Original request")
-            await asyncio.wait_for(started.wait(), 3)
+            await asyncio.wait_for(started.wait(), TEST_DEADLINE)
             command = "/resume latest" if operation == "resume" else f"/{operation}"
-            await asyncio.wait_for(cli.CommandRunner(session).handle(command), 3)
+            await asyncio.wait_for(cli.CommandRunner(session).handle(command), TEST_DEADLINE)
         assert started.is_set()
         assert not session.agent._compactor().jobs
         if operation == "delete":

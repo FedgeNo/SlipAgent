@@ -143,6 +143,52 @@ async def test_retry_uses_next_alternative_provider(routing, monkeypatch):
         await owner.aclose()
 
 
+async def test_daily_quota_cools_the_model_instead_of_sleeping_through_it(routing, monkeypatch):
+    from slipagent.api import APIClient, APIResponseError
+    router, _, _, _, _ = routing
+    attempts = []
+    original = APIClient.chat
+
+    async def chat(client, **kwargs):
+        attempts.append(client.provider)
+        if len(attempts) == 1:
+            error = APIResponseError("daily request cap reached", status_code=429)
+            error.retry_after = "43200"
+            raise error
+        return await original(client, **kwargs)
+
+    waits = AsyncMock(return_value=True)
+    monkeypatch.setattr(APIClient, "chat", chat)
+    monkeypatch.setattr(APIClient, "wait_retry", waits)
+    owner = StepCompactor(lambda usage: None, lambda error: pytest.fail(error))
+    owner.routing = router
+    steps = [CompletedStep(index, "Inspect", [Message.user("Inspect"), Message.assistant("Done")]) for index in (1, 2)]
+    try:
+        for step in steps:
+            owner.submit(step, StubClient([]), "working", None, 50)
+            await owner.wait()
+        # The quota moves the job on at once and keeps later jobs off that model.
+        assert attempts[:2] == ["nvidia", "kilo"] and "nvidia" not in attempts[2:]
+        assert not waits.await_count and all(step.summary for step in steps)
+        cooled = router.models.cooling()
+        assert any(selector.startswith("nvidia::") for selector in cooled)
+        assert min(cooled.values()) > __import__("time").monotonic() + 40000
+    finally:
+        await owner.aclose()
+
+
+def test_quota_cooldown_reads_only_long_rate_limit_waits():
+    from slipagent.api import APIResponseError
+    from slipagent.modelrouting import quota_cooldown
+    def error(status, retry_after):
+        value = APIResponseError("limited", status_code=status)
+        value.retry_after = retry_after
+        return value
+    assert quota_cooldown(error(429, "3600")) == 3600
+    assert quota_cooldown(error(429, "30")) is None and quota_cooldown(error(429, None)) is None
+    assert quota_cooldown(error(503, "3600")) is None
+
+
 async def test_single_provider_serves_coding_only_and_keeps_originals(routing):
     router, _, options, requests, _ = routing
     options.pop("nvidia")
@@ -534,3 +580,17 @@ async def test_reset_during_lookup_clears_inflight_job_exclusions(routing, monke
         assert not router.models.failed["compression"]
     finally:
         await owner.aclose()
+
+
+def test_working_rejection_cools_a_quota_for_the_providers_full_wait(routing):
+    import time
+    from slipagent.api import APIResponseError
+    router = routing[0]
+    model = ModelInfo("vendor/capped", provider="kilo", pricing={"prompt": "0", "completion": "0"})
+    error = APIResponseError("daily request cap reached", status_code=429)
+    error.retry_after = "7200"
+    router.models.reject_working(model, error)
+    assert router.models.cooling()[model.selector] > time.monotonic() + 7000
+    brief = ModelInfo("vendor/brief", provider="kilo", pricing={"prompt": "0", "completion": "0"})
+    router.models.reject_working(brief, APIResponseError("slow down", status_code=429))
+    assert router.models.cooling()[brief.selector] < time.monotonic() + 400

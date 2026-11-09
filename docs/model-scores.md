@@ -15,8 +15,8 @@ automatic routing candidate. Visual benchmark results contribute nothing.
 Missing benchmarks remain `None` in model metadata and display as **benchmark
 unknown**. Free models with missing benchmarks participate in automatic working
 and compression selection using `UNKNOWN_MODEL_SCORE` in `modelscores.py`.
-The current routing priority is **95.7**, immediately above Gemini 3.8 Flash
-(95.6) and MiMo-V2.6-Pro (95.5), below DeepSeek V4.1 Flash (96.2) and MiniMax M3.1 Flash (96.3).
+The current routing priority is **95.7**, immediately above MiMo-V2.6-Pro (95.5)
+and Gemini 3.8 Flash (95.3), below DeepSeek V4.1 Flash and MiniMax M3.1 Flash (both 96.1).
 This is a user-selected routing preference, not a benchmark result or calibrated
 estimate. New free previews such as `stealth/crouton-alpha` use it automatically;
 reviewed evidence gaps use it too. Published scores replace the preference when
@@ -27,7 +27,7 @@ model exclusions and failure handling still determine eligibility.
 
 The scores are computed from raw published results saved in
 [`scripts/model-score-measurements.json`](../scripts/model-score-measurements.json):
-298 results for 131 models, including 43 reference models that are not scored for
+297 results for 131 models, including 43 reference models that are not scored for
 routing. Eleven text-coding benchmarks are connected through shared models.
 SWE-bench Verified supplies the reference scale. DeepSWE 1.1, Terminal-Bench 2.0
 and 2.1, Artificial Analysis Terminal-Bench 4.0 and SciCode subproblems,
@@ -57,10 +57,10 @@ The command refuses a benchmark it cannot connect.
 | Benchmark | Offset | Results | Models with another result |
 | --- | ---: | ---: | ---: |
 | SWE Verified | 0.00 | 46 | 45 |
-| DeepSWE 1.1 | +2.28 | 27 | 26 |
-| Terminal 2.0 | +1.20 | 19 | 19 |
-| Terminal 2.1 | +0.88 | 48 | 45 |
-| Terminal 4.0 (AA) | +5.04 | 20 | 20 |
+| DeepSWE 1.1 | +2.26 | 27 | 26 |
+| Terminal 2.0 | +1.21 | 19 | 19 |
+| Terminal 2.1 | +0.86 | 48 | 45 |
+| Terminal 4.0 (AA) | +4.91 | 19 | 19 |
 | SciCode subproblems (AA) | +1.86 | 26 | 26 |
 | LiveCodeBench | −0.64 | 35 | 31 |
 | BigCodeBench complete | −1.31 | 30 | 24 |
@@ -89,15 +89,15 @@ developer page: Step 5 Preview (BenchLM), dots-3 note preview (BenchLM), MiniMax
 Flash (a reading of MiniMax's launch table image), and Muse Glimmer (Qubrid). Their
 records say so.
 
-Leaving out each of 269 results from models with several results, then refitting and
+Leaving out each of 268 results from models with several results, then refitting and
 predicting it, produced:
 
 | Absolute prediction error | Percentage points |
 | --- | ---: |
 | Mean | 8.3 |
 | Median | 5.4 |
-| 90th percentile | 20.7 |
-| Largest | 38.0 |
+| 90th percentile | 20.8 |
+| Largest | 36.8 |
 
 These are errors predicting held-out benchmark results, not confidence intervals for
 the final scores. Several withheld results belong to the same model, so they are not
@@ -181,9 +181,11 @@ K2.6, so both are aliases. Qwen3.6 Plus Preview uses third-party quotations of
 Alibaba's table and Intern-S2 one aggregator result; their records say so.
 
 Artificial Analysis' Terminal-Bench 4.0 values of 0–2% for GLM-5.1, MiniMax M2.7
-and M3 and Kimi K2.7 Code are left out: the same snapshot gives those models 55–68%
+and M3, and Kimi K2.7 Code are left out: the same snapshot gives those models 55–68%
 on Terminal-Bench 2.1, which points to incomplete runs rather than ability. The
-refit moved existing scores by at most 1.7 points.
+refit moved existing scores by at most 1.7 points. On November 9 the same rule
+removed Kimi K2.6's 0.5% Terminal-Bench 4.0 entry, which sat beside its 66.7%
+Terminal-Bench 2.0 result; its score rose from 81.7 to 84.3.
 
 LFM3-1.7B on Kilo and OpenRouter scores 42.4 from Liquid's card (SWE Verified,
 Terminal-Bench 2.1 and LiveCodeBench v6 with the OpenCode agent); Liquid does not

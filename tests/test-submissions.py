@@ -1,5 +1,6 @@
 """Immediate, cancellable previews and FIFO command/prompt boundaries."""
 
+from deadlines import TEST_DEADLINE
 import asyncio
 import io
 from importlib import import_module
@@ -57,7 +58,7 @@ async def test_mixed_input_obeys_submission_order(tmp_path, monkeypatch, metadat
     try:
         try:
             # Context construction competes with the full suite's worker load.
-            await asyncio.wait_for(entered.wait(), 5)
+            await asyncio.wait_for(entered.wait(), TEST_DEADLINE)
         except TimeoutError:
             if task.done():
                 task.result()
@@ -72,7 +73,7 @@ async def test_mixed_input_obeys_submission_order(tmp_path, monkeypatch, metadat
         if removal in {"command", "prompt"}:
             queued[1 if removal == "command" else 2].cancelled = True
         release.set()
-        assert not await asyncio.wait_for(task, 5)
+        assert not await asyncio.wait_for(task, TEST_DEADLINE)
         if removal == "limited":
             assert len(client.calls) == 1
             assert session.agent.has_queued_input

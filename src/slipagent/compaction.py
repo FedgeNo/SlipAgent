@@ -30,7 +30,7 @@ from .types import Completion, Message, ModelInfo, Usage
 from .compressionproviders import COMPRESSION_UNAVAILABLE, CompressionProviders, CompressionUnavailableError
 from .lifecycle import finish_cleanup
 from .prompts import load_prompt
-from .modelrouting import eligible_free, transient_error
+from .modelrouting import eligible_free, quota_cooldown, transient_error
 from .tools.blocking import run_blocking
 from .timings import PhaseTimings
 
@@ -516,6 +516,11 @@ class StepCompactor:
                         raise
                     else:
                         failed_provider = selected.provider
+                        quota = quota_cooldown(exc)
+                        if quota is not None:
+                            # Waiting out a quota would hold this provider's slot for hours.
+                            routing.models.reject(selected, "compression", exc)
+                            repairs += 1
                         if not transient_error(exc):
                             excluded.add(selected.selector)
                             if revision == routing.models.revision and not isinstance(exc, CompactionBudgetError):
@@ -524,7 +529,7 @@ class StepCompactor:
                         count = len(await routing.background())
                         if not count or repairs > max(COMPACTION_RETRIES, count):
                             raise
-                        if transient_error(exc):
+                        if transient_error(exc) and quota is None:
                             retry = await self.wait_request_retry(client, attempt, exc)
                         else:
                             # Reuse a failed route only when alternatives run out.

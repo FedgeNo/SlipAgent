@@ -20,11 +20,23 @@ if TYPE_CHECKING:
 
 # Transient working-model failures skip the model for this long, not for the session.
 WORKING_COOLDOWN = 300.0
+# A 429 asking for a longer wait than the one-minute retry ceiling is a quota,
+# such as a daily request cap; skip the model until the provider's stated time.
+QUOTA_RETRY_THRESHOLD = 60.0
 
 
 def transient_error(error: Exception) -> bool:
     return isinstance(error, (APITransportError, TimeoutError)) or (
         isinstance(error, APIResponseError) and error.status_code in RETRYABLE_STATUS)
+
+
+def quota_cooldown(error: Exception) -> float | None:
+    """Seconds a rate limit asks to wait when that exceeds the normal retry ceiling."""
+    if not isinstance(error, APIResponseError) or error.status_code != 429:
+        return None
+    from .api import _parse_retry_after
+    delay = _parse_retry_after(error.retry_after)
+    return delay if delay is not None and delay > QUOTA_RETRY_THRESHOLD else None
 
 
 def eligible_free(model: ModelInfo) -> bool:
@@ -115,7 +127,7 @@ class ModelRouting:
                          and model.provider in credentials and model.provider not in self.failed_providers
                          and eligible_free(model)), key=model_order)
         healthy = [model for model in ranked if model.selector not in self.failed[purpose]]
-        if purpose == "working" and not include_failed:
+        if not include_failed:
             # Cooling models return once every other route is unavailable.
             cooling = self.cooling()
             healthy = [model for model in healthy if model.selector not in cooling] or healthy
@@ -127,6 +139,11 @@ class ModelRouting:
         self.reject(model, "working", error)
 
     def reject(self, model: ModelInfo, purpose: str, error: Exception) -> None:
+        cooldown = quota_cooldown(error)
+        if cooldown is not None:
+            # Quotas belong to the model's account, so they apply to every purpose.
+            cooling = self.cooling()
+            cooling[model.selector] = max(cooling.get(model.selector, 0.0), time.monotonic() + cooldown)
         if isinstance(error, APIResponseError) and error.status_code == 401:
             self.failed_providers.add(model.provider)
         elif not transient_error(error):

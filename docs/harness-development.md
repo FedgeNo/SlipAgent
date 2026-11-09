@@ -153,6 +153,8 @@ Use this checkout's interpreter explicitly:
 ```
 
 The first command is an example; choose focused regressions during development.
+Waits that only guard against hangs use `TEST_DEADLINE` from `tests/deadlines.py`
+(60 seconds, or `SLIPAGENT_TEST_DEADLINE`), so a busy host does not fail healthy tests.
 Run the full suite when preparing to push.
 The full suite uses up to four workers and leaves out tests marked `slow`;
 add `--slow` to include them. Existing uv-created environments may

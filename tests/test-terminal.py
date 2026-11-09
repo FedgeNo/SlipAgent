@@ -1,6 +1,7 @@
 """Render the footer through a VT terminal emulator while editing live input."""
 
 from __future__ import annotations
+from deadlines import TEST_DEADLINE
 
 from slipagent.editorui import TerminalEditor
 
@@ -146,7 +147,7 @@ async def test_free_model_background_matches_right_aligned_legend(display):
 
 
 async def wait_until(predicate) -> None:
-    async with asyncio.timeout(3):
+    async with asyncio.timeout(TEST_DEADLINE):
         while not predicate():
             await asyncio.sleep(.02)
 

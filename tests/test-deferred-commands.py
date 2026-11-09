@@ -1,5 +1,6 @@
 """State-changing commands apply only after the active tool batch has settled."""
 
+from deadlines import TEST_DEADLINE
 from slipagent.types import content_text
 import asyncio
 import io
@@ -55,14 +56,14 @@ async def test_commands_wait_for_tools_and_preserve_stop_and_request_budget(
     monkeypatch.setattr(cli.Repl, "read_line", read)
     step = asyncio.create_task(cli.Repl(session).run_request("Inspect the project", session.renderer.style))
     try:
-        await asyncio.wait_for(entered.wait(), 5)
+        await asyncio.wait_for(entered.wait(), TEST_DEADLINE)
         for command in commands:
             await cli.CommandRunner(session).handle(command)
         assert not session.workspace.access.danger
         if stop:
             await cli.CommandRunner(session).handle("/stop")
         release.set()
-        assert await asyncio.wait_for(step, 5) is False
+        assert await asyncio.wait_for(step, TEST_DEADLINE) is False
         assert session.workspace.access.danger == expected_danger
         assert len(client.calls) == expected_calls
         assert not session.extensions.get("deferred_commands")

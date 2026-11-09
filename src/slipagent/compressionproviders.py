@@ -61,7 +61,7 @@ class CompressionProviders:
             session = self.models.session
             if not ranked:
                 raise CompressionUnavailableError(COMPRESSION_UNAVAILABLE)
-            failures = self.models.failed["compression"] | excluded
+            failures = self.models.failed["compression"] | excluded | set(self.models.cooling())
             healthy = [model for model in ranked if model.selector not in failures]
             available = healthy or ranked
             alternatives = [model for model in available if model.provider != failed_provider]

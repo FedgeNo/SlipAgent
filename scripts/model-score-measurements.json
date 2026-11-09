@@ -198,7 +198,6 @@
     "SWE Verified": 80.2,
     "Terminal 2.0": 66.7,
     "LiveCodeBench": 89.6,
-    "Terminal 4.0 (AA)": 0.5,
     "SciCode subproblems (AA)": 51.5
    },
    "sources": [
@@ -206,7 +205,7 @@
     "https://artificialanalysis.ai/models/kimi-k2-6",
     "https://dev.to/jangwook_kim_e31e7291ad98/kimi-code-k26-moonshot-ais-coding-model-vs-claude-code-1jab"
    ],
-   "notes": "Developer-reported; Terminus-2 for Terminal 2.0. Terminal-Bench 4.0: independently measured by Artificial Analysis with mini-swe-agent, pass@1 averaged over three repeats per task; reviewed 2026-10-30. Exact release and reasoning variant from the AA model page. SciCode uses the AA test-subproblem metric, not full-problem success; AA currently marks the dataset under review after an independent audit. k2.6-code-preview is the Kimi Code K2.6 beta that preceded general availability by one week (secondhand report); AIHubMix serves k2.6-code-preview-free.",
+   "notes": "Developer-reported; Terminus-2 for Terminal 2.0. Terminal-Bench 4.0: independently measured by Artificial Analysis with mini-swe-agent, pass@1 averaged over three repeats per task; reviewed 2026-10-30. Exact release and reasoning variant from the AA model page. SciCode uses the AA test-subproblem metric, not full-problem success; AA currently marks the dataset under review after an independent audit. k2.6-code-preview is the Kimi Code K2.6 beta that preceded general availability by one week (secondhand report); AIHubMix serves k2.6-code-preview-free. Artificial Analysis' 0.5% Terminal-Bench 4.0 entry is excluded as implausible beside its 66.7% Terminal-Bench 2.0 result, the same rule applied to other incomplete AA runs (2026-11-09).",
    "aliases": [
     "moonshotai/k2.6-code-preview"
    ]

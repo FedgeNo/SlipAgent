@@ -174,3 +174,22 @@ async def test_plan_objective_and_tasks_have_leeway_beyond_their_advertised_leng
     assert not (await tool.run(objective="Goal", stages=[{**stages[0], "evidence": "z" * 2000}])).is_error
     refused = await tool.run(objective="Goal", stages=[{**stages[0], "evidence": "z" * 2001}])
     assert refused.is_error and "evidence of at most 1000 characters" in str(refused.content)
+
+
+async def test_context_building_runs_off_the_event_loop_thread(monkeypatch):
+    import threading
+    from slipagent.contextbuilder import ContextBuilder
+    original = ContextBuilder.build
+    threads = []
+    async def recording(self, *arguments, **keywords):
+        threads.append(threading.get_ident())
+        return await original(self, *arguments, **keywords)
+    monkeypatch.setattr(ContextBuilder, 'build', recording)
+    registry = ToolRegistry()
+    agent = Agent(StubClient([]), registry, 'stub')
+    try:
+        agent.messages.append(Message.user('hello'))
+        await agent._context_view(registry.specs(), 1)
+        assert threads and threads[0] != threading.get_ident()
+    finally:
+        await registry.aclose()

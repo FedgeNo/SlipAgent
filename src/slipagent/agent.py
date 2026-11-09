@@ -487,11 +487,15 @@ class Agent:
         if provider_sections is None:
             # A candidate on another provider supplies its own route's sections.
             provider_sections = self.client.prompt_sections(model) if isinstance(self.client, APIClient) else []
+        from .tools.blocking import run_blocking
+        build = builder.build(
+            specs, length, self._uses_native_tools(capabilities, model=model), capabilities=capabilities,
+            preview=preview, repair=repair, provider_sections=provider_sections,
+        )
         with nullcontext() if preview else timing_log(self.registry).measure('context_selection', step):
-            return await builder.build(
-                specs, length, self._uses_native_tools(capabilities, model=model), capabilities=capabilities,
-                preview=preview, repair=repair, provider_sections=provider_sections,
-            )
+            # Selection is CPU-bound and linear in history size; a private
+            # loop on a worker thread keeps the UI loop responsive meanwhile.
+            return await run_blocking(asyncio.run, build)
 
     def _uses_native_tools(self, capabilities: RequestProfile | None, *, model: str | None = None) -> bool:
         channel = model_prompt_profile(self.model if model is None else model).get("tool_channel")

@@ -492,6 +492,8 @@ reported without automatically retrying with less history. Context selection
 uses the configured allowance on every request; a provider rejection does not
 introduce a persistent reduction or alter originals. Other configured model
 fallback behavior remains independent of context budgeting.
+Context building, including history selection, runs on a private event loop in
+an owned worker thread so its history-sized work never stalls the UI loop.
 
 `RepositoryMap` adds optional, budgeted orientation. Files are bounded by count,
 traversal time, source bytes and output characters. Python ASTs and bundled

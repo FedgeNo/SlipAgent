@@ -6,9 +6,9 @@ for benchmark calibration, validation, and uncertainty.
 
 from __future__ import annotations
 
-# Routing preference for missing benchmarks, just above MiMo-V2.6-Pro (95.5) and Gemini 3.8 Flash (95.3).
-# This is not a measured or calibrated coding score.
-UNKNOWN_MODEL_SCORE = 95.7
+# Neutral routing preference for missing benchmarks, mid-table among scored
+# free models; chosen by the user on 2026-11-09. Not a measured coding score.
+UNKNOWN_MODEL_SCORE = 70.0
 
 # Adding a model never renumbers existing models. Keep unavailable IDs so their
 # scores apply if a provider lists them again. None records a reviewed gap.

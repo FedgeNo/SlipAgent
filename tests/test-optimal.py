@@ -35,7 +35,7 @@ def test_score_metadata_is_shared_across_hosts_and_unknowns_stay_unscored():
 
 
 @pytest.mark.parametrize('purpose', ['working', 'compression'])
-async def test_unknown_free_models_are_candidates_above_gemini(optimal_session, purpose):
+async def test_unknown_free_models_are_mid_table_candidates(optimal_session, purpose):
     session, _, _ = optimal_session
     free = {'prompt': '0', 'completion': '0'}
     unknown = ModelInfo('stealth/crouton-alpha', pricing=free)
@@ -46,10 +46,11 @@ async def test_unknown_free_models_are_candidates_above_gemini(optimal_session, 
     routing = session.model_routing()
     try:
         assert [model.id for model in await routing.candidates(purpose)] == [
-            'stealth/crouton-alpha', 'google/gemini-3.8-flash', 'zero']
+            'google/gemini-3.8-flash', 'stealth/crouton-alpha', 'zero']
         await routing.enable()
-        assert session.agent.model == unknown.id
-        assert 'benchmark unknown' in session.renderer.stream.getvalue()
+        assert session.agent.model == 'google/gemini-3.8-flash'
+        from slipagent.modelpricing import score_label
+        assert score_label(unknown) == 'benchmark unknown; routing priority: 70.0/100'
         assert unknown.score is None
     finally:
         await session.agent._compactor().aclose()

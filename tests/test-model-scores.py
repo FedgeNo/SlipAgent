@@ -88,23 +88,23 @@ def test_model_display_uses_estimated_score_and_sorts_highest_first():
     low = ModelInfo("low", score=0.0, pricing=free)
     unknown = ModelInfo("unknown", pricing=free)
     paid = ModelInfo("paid", score=100.0, pricing={"prompt": "1", "completion": "1"})
-    assert sorted([paid, low, unknown, high], key=model_order) == [unknown, high, low, paid]
+    assert sorted([paid, low, unknown, high], key=model_order) == [high, unknown, low, paid]
     assert "estimated coding score: 90.5/100" in ModelPicker(None, Style(False), io.StringIO()).label(high)
     assert "estimated coding score: 0.0/100" in ModelPicker(None, Style(False), io.StringIO()).label(low)
     assert 'benchmark unknown' in ModelPicker(None, Style(False), io.StringIO()).label(unknown)
 
 
-def test_unknown_free_models_rank_above_gemini_without_inventing_benchmarks():
-    from slipagent.modelpricing import model_order
+def test_unknown_free_models_rank_mid_table_without_inventing_benchmarks():
+    from slipagent.modelpricing import model_order, selection_score
     free = {'prompt': '0', 'completion': '0'}
     models = [ModelInfo(name, pricing=free) for name in (
         'google/gemini-3.8-flash', 'stealth/crouton-alpha', 'minimax/minimax-m3.1-flash',
-        'deepseek/deepseek-v4.1-flash', 'openrouter/free')]
+        'google/gemma-4-26b-a4b-it', 'openrouter/free')]
     ranked = [model.id for model in sorted(models, key=model_order)]
-    # The two scored leaders can tie after a refit; their order is not the point.
-    assert set(ranked[:2]) == {'minimax/minimax-m3.1-flash', 'deepseek/deepseek-v4.1-flash'}
-    assert ranked[2:] == ['stealth/crouton-alpha', 'google/gemini-3.8-flash', 'openrouter/free']
-    assert models[1].score is None
+    # Unknown models follow strong scored models and precede weak ones.
+    assert ranked == ['minimax/minimax-m3.1-flash', 'google/gemini-3.8-flash', 'stealth/crouton-alpha',
+                      'google/gemma-4-26b-a4b-it', 'openrouter/free']
+    assert models[1].score is None and selection_score(models[1]) == 70.0
 
 
 @pytest.mark.parametrize("model, native, limit, output", [

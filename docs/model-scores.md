@@ -15,10 +15,11 @@ automatic routing candidate. Visual benchmark results contribute nothing.
 Missing benchmarks remain `None` in model metadata and display as **benchmark
 unknown**. Free models with missing benchmarks participate in automatic working
 and compression selection using `UNKNOWN_MODEL_SCORE` in `modelscores.py`.
-The current routing priority is **95.7**, immediately above MiMo-V2.6-Pro (95.5)
-and Gemini 3.8 Flash (95.3), below DeepSeek V4.1 Flash and MiniMax M3.1 Flash (both 96.1).
-This is a user-selected routing preference, not a benchmark result or calibrated
-estimate. New free previews such as `stealth/crouton-alpha` use it automatically;
+The current routing priority is **70.0**, a neutral mid-table value chosen by the
+user on November 9, 2026, in place of the earlier 95.7. It ties MiMo-V2-Flash
+(70.0) and sits above Laguna XS 2.1 (68.9), so an unknown model is tried after
+strong scored models and before weak ones. This is a user-selected routing
+preference, not a benchmark result or calibrated estimate. New free previews such as `stealth/crouton-alpha` use it automatically;
 reviewed evidence gaps use it too. Published scores replace the preference when
 available. Generic routers remain excluded; pricing, credentials, billing tier,
 model exclusions and failure handling still determine eligibility.

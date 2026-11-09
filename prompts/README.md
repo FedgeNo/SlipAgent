@@ -58,7 +58,7 @@ The `z-ai/glm-5.3` and `z-ai/glm-5.3-flash` profiles use the GLM XML channel and
 | Files | Purpose |
 | --- | --- |
 | `system-prompt.md` | General operating instructions and writing style |
-| `response-common.md` | Shared working-response rules and persistent-planning guidance, always included before the selected tool channel |
+| `response-common.md` | Shared working-response rules, always included before the selected tool channel; planning guidance lives in `tools/update-plan.md` |
 | `harness-python.md` | Running harness interpreter, installed math libraries and versions, standalone calculation commands, and separation from the project environment; supplied in every working context, including custom system prompts |
 | `session-environment.md` | OS user, host, platform, working directory, shell, current local time, model and saved session ID/title when available; supplied in every working context |
 | `selected-skill.md` | Legacy single-skill template retained for running generations without metadata/argument parameters |

@@ -91,9 +91,9 @@ async def test_planning_guidance_reaches_custom_prompt_and_plan_survives_reduced
     agent = Agent(client, registry, 'stub', planning=True, system_prompt='Custom project instructions.')
     try:
         await agent.run('Fix the parser')
-        first = content_text(client.calls[0]['messages'][0].content)
-        assert '## Persistent Planning' in first
-        assert '`update_plan`' in first and 'history compression' in first
+        # Planning guidance travels with the tool definition, so it reaches custom prompts too.
+        plan_tool = next(spec for spec in client.calls[0]['tools'] if spec.name == 'update_plan')
+        assert 'manageable tasks' in plan_tool.description and 'history compression' in plan_tool.description
         for index in range(12):
             agent.messages.extend([Message.user(f'Check {index}'), Message.assistant('Earlier evidence. ' * 400)])
         agent.history.sync(agent.messages)

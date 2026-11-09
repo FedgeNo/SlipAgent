@@ -622,3 +622,41 @@ async def test_surplus_from_the_last_reduction_restores_the_newest_summarized_or
     assert restored and restored == list(range(15 - len(restored), 15))
     assert records[1] == 'compressed'
     assert message_tokens(view) <= int(length * .85) - 1000
+
+
+def test_new_input_is_limited_to_half_of_the_usable_context():
+    from slipagent.context import INPUT_TOO_LARGE, ContextError, check_input_size
+    check_input_size(499, 10, 1000, new_input=True)  # just under half
+    check_input_size(500, 10, 1000, new_input=True)  # exactly half
+    with pytest.raises(ContextError) as refused:
+        check_input_size(501, 10, 1000, new_input=True)  # just over half
+    assert str(refused.value) == INPUT_TOO_LARGE
+    # Continuations carry no new input, so only the full budget applies to them.
+    check_input_size(900, 10, 1000, new_input=False)
+    with pytest.raises(ContextError, match="exceed the context budget"):
+        check_input_size(995, 10, 1000, new_input=False)
+
+
+async def test_largest_accepted_input_still_fits_on_its_continuation():
+    from slipagent.context import INPUT_TOO_LARGE, ContextError
+
+    async def accepted(size):
+        history, messages = ConversationHistory(), [Message.user("P" * size)]
+        try:
+            await history.view(messages, [], keep_steps=5, context_length=24_000, max_output=1000)
+        except ContextError as exc:
+            assert str(exc) == INPUT_TOO_LARGE
+            return False
+        return True
+
+    low, high = 1, 60_000
+    while low < high:
+        middle = (low + high + 1) // 2
+        low, high = (middle, high) if await accepted(middle) else (low, middle - 1)
+    assert not await accepted(low + 1)
+    # The same request, now retained and in its step's history, continues after tools ran.
+    history = ConversationHistory()
+    messages = [Message.user("P" * low), Message.assistant("Checking", [ToolCall("c", "read_file", {"path": "a"})]),
+                Message.tool_result("c", "ok")]
+    view = await history.view(messages, [], keep_steps=5, context_length=24_000, max_output=1000)
+    assert message_tokens(view) <= int(24_000 * .85) - 1000

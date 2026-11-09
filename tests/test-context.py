@@ -822,7 +822,7 @@ async def test_current_input_never_silently_truncates():
     question = "large user input " * 10000
     async def unused(source):
         pytest.fail("should not spend calls summarizing when the current input cannot fit")
-    with pytest.raises(ContextError, match="Shorten the input"):
+    with pytest.raises(ContextError, match="reference a file"):
         await history.view([Message.user(question)], [], keep_steps=50,
                            context_length=9000, max_output=1000, summarize=unused)
     assert not history.steps

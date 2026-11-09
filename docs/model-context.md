@@ -578,7 +578,12 @@ the remaining space accommodates instructions, tools, and selected history.
 Older records are omitted before the recent full window is reduced. Both stored
 versions remain intact, and a summary is used only when it saves tokens.
 It reports a limit if mandatory input and instructions cannot fit even after
-older history is omitted and oversized observations use excerpts.
+older history is omitted and oversized observations use excerpts. A new input,
+including queued messages sent together, may use at most half of the usable
+context: the window after instructions, tool definitions and reserved output.
+Larger input is refused with a request to shorten it or reference a file. A
+continuation sends the active request twice, in `retained_user_prompts` and in
+its step's history record, and the limit keeps both copies within the budget.
 
 A bounded repository map supplies file paths and declaration outlines for Python,
 JavaScript, TypeScript/TSX, PHP, Go, Rust, C/C++, Java, C#, Ruby, and other supported

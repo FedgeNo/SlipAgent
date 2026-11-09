@@ -71,6 +71,23 @@ class ContextError(APIError):
     """Context cannot fit safely without dropping the current user input."""
 
 
+INPUT_TOO_LARGE = ("The new input exceeds half of the usable context for this model (its window after "
+                   "instructions, tools and reserved output). Shorten it or reference a file; "
+                   "conversation history is preserved.")
+
+
+def check_input_size(input_bytes: int, reserve: int, available: int, *, new_input: bool) -> None:
+    """Refuse input that cannot fit, and new input above half of the usable context.
+
+    A continuation sends the active request twice, as retained prompts and in its
+    step's history record, so the half limit keeps both copies within the budget.
+    """
+    if new_input and input_bytes > available // 2:
+        raise ContextError(INPUT_TOO_LARGE)
+    if input_bytes + reserve >= available:
+        raise ContextError("Current input and instructions exceed the context budget. Shorten the input or reference a file; conversation history is preserved.")
+
+
 class ContextStopped(Exception):
     """Compatibility exception for interrupted context preparation."""
 
@@ -722,8 +739,7 @@ class ConversationHistory:
             return sum(len(chunk.encode('utf-8')) for chunk in json_chunks(wire_message(assemble([])[-1]), indent=None))
 
         tail_bytes = input_bytes()
-        if tail_bytes + reserve >= available:
-            raise ContextError("Current input and instructions exceed the context budget. Shorten the input or reference a file; conversation history is preserved.")
+        check_input_size(tail_bytes, reserve, available, new_input=has_new_user_input)
         if user_edits:
             from .editdelivery import bounded_notifications
             edit_budget = min(2048, max(256, int(available * token_scale / 3 * .2)),

@@ -470,7 +470,9 @@ restores originals of summarized or excerpted turns, newest first, skipping any
 that do not fit and leaving turns through a manual boundary compressed. Aggregated records restore their complete
 source-step coverage and are emitted once. Mandatory instructions, tool definitions,
 response schemas, current input, output reservation, and token calibration are
-budgeted on every request. History costs are added in bytes before applying the
+budgeted on every request. `context.check_input_size` refuses new input above half
+of the remaining budget, so the retained request and its history record fit together
+on continuations. History costs are added in bytes before applying the
 user-message rounding and allowance once; selection and backfill do not render
 or remeasure a complete candidate request. Newly created excerpts are indexed
 individually. These decisions neither invoke

@@ -97,7 +97,7 @@ async def test_search_crosses_wraps_and_retargets_results_after_resize(display):
             await ui._feed_search.activate(0)
             await wait_until(lambda: not ui._feed_search.show_results)
             assert ui._feed_search.columns == 49
-            assert any('crossboundary' in line for line in snapshot()[:17])
+            await wait_until(lambda: any('crossboundary' in line for line in snapshot()[:17]))
             ui.refresh()
             assert ui._feed_search.active
             pipe.send_text('\x1b')
@@ -124,7 +124,7 @@ async def test_search_keyboard_activation_no_matches_and_escape_preserve_the_tur
             assert ui._feed_search.window.content.__dict__['_keyboard_key'] == ('feed-search', 0)
             await terminal_tests.send_keys(ui, pipe, '\r')
             await wait_until(lambda: not ui._feed_search.show_results)
-            assert any('alpha target omega' in line for line in snapshot()[:17])
+            await wait_until(lambda: any('alpha target omega' in line for line in snapshot()[:17]))
             assert ui._lines.empty()
             pipe.send_text('\x1b')
             await wait_until(lambda: not ui._feed_search.active)

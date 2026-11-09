@@ -499,7 +499,7 @@
   "tests/test-editor.py": "d7805398c6345977876cf0e07e264f161c06843d794f5747a09db6858e20f9ac",
   "tests/test-explorer.py": "4a0fb5dffe42c0a9e1ad0d8775913e285ad31801f467afaed72db26ab973960b",
   "tests/test-failed-turns.py": "dd0e0b12239a53247d32ec1550c70e9a54dcfb870b75379cafafea13ce004329",
-  "tests/test-feed-search.py": "67072366b2d7ab8a525500f4171ce60f18574502bbb95f502f3c7f7f75327150",
+  "tests/test-feed-search.py": "749220665989b285d6464003c501d712a19b416844bafec2c552ab68aa9abe18",
   "tests/test-file-checkpoints.py": "6e1a94c3a03e78e120495fc83317c6b1d53f30df85911245bbbcf8c134dffd68",
   "tests/test-file-picker.py": "fbc482da23701bdbf9ebe839b4cb1a3a278da704a552fa5d15b16b474203bb3e",
   "tests/test-filtered-thoughts.py": "58863443c1cfce9769b46f8e7e2d8a789b3899379279a3a65b153556c01ad772",

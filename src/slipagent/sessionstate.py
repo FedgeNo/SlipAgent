@@ -276,7 +276,8 @@ class Session:
             if capabilities is None:
                 raise APIConfigError("The API did not supply capabilities to verify this model's compatibility.")
             await self.agent._context_view(self.registry.specs(), 0, capabilities=capabilities, preview=True,
-                                           candidate_model=model.id)
+                                           candidate_model=model.id,
+                                           provider_sections=replacement.prompt_sections(model.id))
             if replacement is not self.client and self.agent._compactor().routing is None:
                 # Embedded callers can still use the working client for summaries.
                 self.agent._compactor().reset()

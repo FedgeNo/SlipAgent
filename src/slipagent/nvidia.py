@@ -42,9 +42,7 @@ class NvidiaClient(APIClient):
     async def list_models(self) -> list[ModelInfo]:
         models = await super().list_models()
         for model in models:
-            # NVIDIA's hosted API catalog is available through its free trial.
-            # Pricing and endpoint capabilities are separate facts.
-            model.pricing = {"prompt": "0", "completion": "0"}
+            model.pricing = self.pricing(model.id)
             profile = self.profiles.get(model.id)
             if profile is None:
                 profile = builtin_profile(model.id)
@@ -52,6 +50,17 @@ class NvidiaClient(APIClient):
                 model.context_length = profile.context_length
                 self._model_properties[model.id]["context_length"] = profile.context_length
         return models
+
+    def pricing(self, model: str) -> dict[str, str]:
+        # NVIDIA's hosted API catalog is available through its free trial.
+        # Pricing and endpoint capabilities are separate facts.
+        return {"prompt": "0", "completion": "0"}
+
+    def prompt_sections(self, model: str) -> list[str]:
+        # NVIDIA's free hosted routes deliver each tool call only once it is
+        # complete, and long calls can be cut off, so large files go in parts.
+        from .modelpricing import free_label
+        return ["large-file-writes-in-parts.md"] if free_label(self.pricing(model)) else []
 
     def replacement_options(self) -> dict[str, Any]:
         return {**super().replacement_options(), "profiles": self.profiles,

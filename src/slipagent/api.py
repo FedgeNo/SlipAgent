@@ -484,6 +484,10 @@ class APIClient:
         """Return authoritative account metadata, or None when unsupported."""
         return None
 
+    def prompt_sections(self, model: str) -> list[str]:
+        """Prompt files this provider route adds for a model, after any model-profile sections."""
+        return []
+
     def prepare_payload(self, payload: dict[str, Any], profile: RequestProfile | None) -> None:
         """Apply provider-specific fields before diagnostics and transport."""
 

@@ -443,7 +443,8 @@ class Agent:
     async def _context_view(self, specs: list[ToolSpec], step: int, *,
                             capabilities: RequestProfile | None = None, preview: bool = False,
                             repair: str = "",
-                            candidate_model: str | None = None) -> list[Message]:
+                            candidate_model: str | None = None,
+                            provider_sections: list[str] | None = None) -> list[Message]:
         """Assemble the exact model-visible state within its endpoint limits.
 
         Selection previews must not register input or archive new steps on
@@ -483,10 +484,13 @@ class Agent:
             ContextSettings(model, self.planning, self.context_steps, self.overthinking,
                             self.reasoning_history_steps, self.filtered_thoughts, self.max_tokens),
         )
+        if provider_sections is None:
+            # A candidate on another provider supplies its own route's sections.
+            provider_sections = self.client.prompt_sections(model) if isinstance(self.client, APIClient) else []
         with nullcontext() if preview else timing_log(self.registry).measure('context_selection', step):
             return await builder.build(
                 specs, length, self._uses_native_tools(capabilities, model=model), capabilities=capabilities,
-                preview=preview, repair=repair,
+                preview=preview, repair=repair, provider_sections=provider_sections,
             )
 
     def _uses_native_tools(self, capabilities: RequestProfile | None, *, model: str | None = None) -> bool:

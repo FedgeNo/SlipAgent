@@ -1,10 +1,10 @@
 # Writing Large Files in Parts
 
-This endpoint sends a tool call only after generating all of it, and the
-connection can close while a very long call is still being generated. The call
-is then lost and nothing is written. Successful `write_file` calls here have
-reached about 29,500 characters, so keep each call's new text under about
-**22,000 characters**.
+NVIDIA's free hosted endpoints can send a tool call only after generating all
+of it, and the connection can close while a very long call is still being
+generated. The call is then lost and nothing is written. The largest successful
+`write_file` call measured on one of them was about 29,500 characters, so keep
+each call's new text under about **22,000 characters**.
 
 Size estimates are unreliable, so judge size by structure. Split when the text
 would exceed any of these:

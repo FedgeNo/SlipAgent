@@ -49,7 +49,7 @@ class ContextBuilder:
     async def build(
         self, specs: list[ToolSpec], length: int, native_tools: bool, *,
         capabilities: RequestProfile | None = None, preview: bool = False,
-        repair: str = "",
+        repair: str = "", provider_sections: list[str] | tuple[str, ...] = (),
     ) -> list[Message]:
         model_profile = model_prompt_profile(self.settings.model)
         length = model_context_limit(self.settings.model, capabilities, length)
@@ -138,7 +138,8 @@ class ContextBuilder:
             sections.add("schema", "Reply Format",
                          load_prompt('response-native-text.md'),
                          0, owner="protocol", dynamic=False)
-        for index, filename in enumerate(model_profile.get("sections", [])):
+        # Model-profile sections first, then the provider route's; each file once.
+        for index, filename in enumerate(dict.fromkeys([*model_profile.get("sections", []), *provider_sections])):
             sections.add(f"model_{index}", filename, load_prompt(filename),
                          5, owner="model", dynamic=False)
         if not glm_xml:  # Suggestions need a JSON reply object, which GLM's text replies avoid.

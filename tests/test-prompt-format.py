@@ -185,23 +185,57 @@ async def test_model_prompt_sections_reload_and_follow_model_selection(editable_
     await registry.aclose()
 
 
-async def test_nvidia_minimax_gets_part_write_guidance_alongside_its_write_tools(tmp_path):
-    """Only NVIDIA's MiniMax ID receives the part-wise write guidance; tool contracts stay intact."""
-    from test_agent import StubClient
+@pytest.mark.parametrize("model", ["minimaxai/minimax-m3.1-flash", "z-ai/glm-5.3", "newvendor/discovered-model"])
+async def test_free_nvidia_routes_get_part_write_guidance_once_beside_write_tools(tmp_path, model):
+    """Every free NVIDIA model, including undiscovered IDs, gets the guidance once; tool contracts stay intact."""
+    from slipagent.nvidia import NvidiaClient
     from slipagent.tools import build_default_registry
     from slipagent.workspace import Workspace
     registry = build_default_registry(Workspace(tmp_path))
     try:
         specs = registry.specs()
         assert {"write_file", "edit_file"} <= {spec.name for spec in specs}
-        agent = Agent(StubClient([]), registry, "minimaxai/minimax-m3.1-flash")
-        system = content_text((await agent._context_view(specs, 1))[0].content)
-        assert "# Writing Large Files in Parts" in system and "22,000 characters" in system
+        from slipagent.capabilities import RequestProfile
+        client = NvidiaClient("dummy")
+        agent = Agent(client, registry, model)
+        profile = RequestProfile(parameters={"tools", "tool_choice", "max_tokens"}, context_length=1_000_000)
+        # The working client supplies its route's sections without an explicit argument.
+        system = content_text((await agent._context_view(specs, 1, capabilities=profile))[0].content)
+        assert system.count("# Writing Large Files in Parts") == 1 and "22,000 characters" in system
         assert "SLIPAGENT-CONTINUE-checker-part-2" in system and "`edit_file`" in system
-        agent.model = "minimax/minimax-m3.1-flash"
-        assert "Writing Large Files in Parts" not in content_text((await agent._context_view(specs, 1))[0].content)
+        await client.aclose()
     finally:
         await registry.aclose()
+
+
+async def test_part_write_guidance_skips_paid_nvidia_and_other_providers(tmp_path, monkeypatch, editable_prompts):
+    from slipagent.nvidia import NvidiaClient
+    from slipagent.openrouter import OpenRouterClient
+    from slipagent.tools import build_default_registry
+    from slipagent.workspace import Workspace
+    paid = NvidiaClient("dummy")
+    monkeypatch.setattr(paid, "pricing", lambda model: {"prompt": "0.000001", "completion": "0.000002"})
+    assert paid.prompt_sections("vendor/paid-model") == []
+    assert NvidiaClient("dummy").prompt_sections("vendor/any-free-model") == ["large-file-writes-in-parts.md"]
+    from slipagent.capabilities import RequestProfile
+    profile = RequestProfile(parameters={"tools", "tool_choice", "max_tokens"}, context_length=1_000_000)
+    registry = build_default_registry(Workspace(tmp_path))
+    openrouter = OpenRouterClient("dummy")
+    try:
+        agent = Agent(openrouter, registry, "minimax/minimax-m3.1-flash")
+        assert "Writing Large Files in Parts" not in content_text(
+            (await agent._context_view([], 1, capabilities=profile))[0].content)
+        # A profile that already lists the section composes with the provider's copy once.
+        (editable_prompts / "model-profiles.json").write_text(
+            '{"vendor/listed": {"sections": ["large-file-writes-in-parts.md"]}}')
+        agent.model = "vendor/listed"
+        system = content_text((await agent._context_view(
+            [], 1, capabilities=profile, provider_sections=["large-file-writes-in-parts.md"]))[0].content)
+        assert system.count("# Writing Large Files in Parts") == 1
+    finally:
+        await registry.aclose()
+        await paid.aclose()
+        await openrouter.aclose()
 
 
 def test_prompt_placeholder_errors_name_the_file(editable_prompts):

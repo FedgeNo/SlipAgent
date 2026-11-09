@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__version__ = "0.2.122"
+__version__ = "0.2.123"
 
 import logging
 

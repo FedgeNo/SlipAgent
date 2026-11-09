@@ -49,7 +49,7 @@ For example, to disable structured reply formatting for one exact model:
 }
 ```
 
-The `z-ai/glm-5.3` and `z-ai/glm-5.3-flash` profiles use the GLM XML channel and XML compatibility. The `dots-studio/dots-3-note-preview` and `dots-studio/dots-3-note-preview:free` profiles disable structured reply formatting to avoid interference with native tool calling and enable XML compatibility for calls returned in reply text. Other models have no overrides.
+The `minimaxai/minimax-m3.1-flash` profile (NVIDIA's ID) adds `large-file-writes-in-parts.md`: that endpoint sends tool calls only after generating them whole, and long calls can be cut off, so files above about 22,000 characters (75% of the largest observed successful write) are built in marked parts. The `z-ai/glm-5.3` and `z-ai/glm-5.3-flash` profiles use the GLM XML channel and XML compatibility. The `dots-studio/dots-3-note-preview` and `dots-studio/dots-3-note-preview:free` profiles disable structured reply formatting to avoid interference with native tool calling and enable XML compatibility for calls returned in reply text. Other models have no overrides.
 
 ## Resource Files
 

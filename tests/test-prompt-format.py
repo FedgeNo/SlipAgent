@@ -185,6 +185,25 @@ async def test_model_prompt_sections_reload_and_follow_model_selection(editable_
     await registry.aclose()
 
 
+async def test_nvidia_minimax_gets_part_write_guidance_alongside_its_write_tools(tmp_path):
+    """Only NVIDIA's MiniMax ID receives the part-wise write guidance; tool contracts stay intact."""
+    from test_agent import StubClient
+    from slipagent.tools import build_default_registry
+    from slipagent.workspace import Workspace
+    registry = build_default_registry(Workspace(tmp_path))
+    try:
+        specs = registry.specs()
+        assert {"write_file", "edit_file"} <= {spec.name for spec in specs}
+        agent = Agent(StubClient([]), registry, "minimaxai/minimax-m3.1-flash")
+        system = content_text((await agent._context_view(specs, 1))[0].content)
+        assert "# Writing Large Files in Parts" in system and "22,000 characters" in system
+        assert "SLIPAGENT-CONTINUE-checker-part-2" in system and "`edit_file`" in system
+        agent.model = "minimax/minimax-m3.1-flash"
+        assert "Writing Large Files in Parts" not in content_text((await agent._context_view(specs, 1))[0].content)
+    finally:
+        await registry.aclose()
+
+
 def test_prompt_placeholder_errors_name_the_file(editable_prompts):
     from slipagent import prompts
     (editable_prompts / "instruction-scope.md").write_text("Scope ${scope} ${missing}")

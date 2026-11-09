@@ -10,6 +10,9 @@
             "atlas-cloud": 256000
         }
     },
+    "minimaxai/minimax-m3.1-flash": {
+        "sections": ["large-file-writes-in-parts.md"]
+    },
     "z-ai/glm-5.3": {
         "tool_channel": "glm_xml",
         "xml_tool_calls": true

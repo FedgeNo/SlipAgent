@@ -793,7 +793,7 @@ class TerminalUI:
                 columns = max(0, (self.output.get_size().columns - 18) // 2)
             prefix = fragment_list_to_text(self._activity_status())
             if self._editor_active or self._viewer_active:
-                prefix += "  Esc to Close Text Editor " if self._editor_active else "  Esc to exit viewer "
+                prefix += "  Esc: Close Text Editor " if self._editor_active else "  Esc: exit viewer "
         remaining = columns - display_width(prefix) - 2
         return max(1, remaining if remaining > 0 else columns)
 
@@ -893,8 +893,8 @@ class TerminalUI:
                 tips = ["Ctrl+S saves; Esc closes the editor.", "PgUp/PgDn scrolls with overlap."]
             elif self._viewer_active:
                 tips = ["Scroll to inspect; Esc closes the viewer."]
-            tips.insert(1, "Shift+Tab to select UI component.")
-            tips.append("Press F3 to search")
+            tips.insert(1, "Shift+Tab: select UI component.")
+            tips.append("F3: search")
             if not self.working and self._input_label == "> " and self._menu_future is None and not self._viewer_active and not self._editor_active:
                 tips.append("Click Commands to browse commands.")
             if self.__dict__.get("_folder_opener") is not None:
@@ -1390,9 +1390,9 @@ class TerminalUI:
             label = "Close Text Editor" if self._editor_active else "exit viewer"
             link = (self._task_link(label, "exit-editor", self._close_editor) if mode == "editor" else
                     self._action_link(label, "exit-viewer", self.close_viewer))
-            if display_width(fragment_list_to_text(fragments)) + len("  Esc to " + label + " ") > self.output.get_size().columns - self._right_control_width():
+            if display_width(fragment_list_to_text(fragments)) + len("  Esc: " + label + " ") > self.output.get_size().columns - self._right_control_width():
                 fragments = []
-            fragments.extend([("", "  Esc to " if fragments else "Esc to "), *link, ("", " ")])
+            fragments.extend([("", "  Esc: " if fragments else "Esc: "), *link, ("", " ")])
         if self.__dict__.get("_diff_reference") is not None and self._input_label == "> ":
             return self._activity_notice(fragments, suffix=[("", "  "), *self._action_link(
                 "Remove Diff Reference", "remove-diff-reference", self._remove_diff_reference), ("", " ")])

@@ -89,7 +89,7 @@ QUOTA_REFRESH_INTERVAL = 15 * 60
 LOADING_CONVERSATION_NOTICE = "Loading conversation, this can take some time…"
 # Seconds without model output before the status line shows the deadline.
 FIRST_OUTPUT_NOTICE_SECONDS = 20
-HOLD_NOTICE = "Staying on this model; press Esc again to cancel the turn"
+HOLD_NOTICE = "Staying on this model; Esc: cancel the turn"
 SKIP_NOTICE = "Ctrl+N: next model; Esc: stay on this model"
 WAIT_NOTICE = "Esc: keep waiting without a timeout"
 
@@ -536,7 +536,7 @@ class Renderer:
         self.__dict__["_retry_error"] = error
         if error and error != previous:
             self.emit(self.style.red(f"  ✗ {error}"))
-        text = f"Retrying in {seconds}s (Esc to interrupt)" if error else ""
+        text = f"Retrying in {seconds}s (Esc: interrupt)" if error else ""
         if self.terminal is not None:
             self.terminal.set_retry_status(text)
         elif error and (not previous or seconds % 10 == 0):
@@ -2144,7 +2144,7 @@ class CommandRunner:
             try:
                 if session.renderer.terminal is not None:
                     session.renderer.terminal.set_working(False)
-                    session.renderer.terminal.set_command_status(f"Applying /{command} (Esc to interrupt)")
+                    session.renderer.terminal.set_command_status(f"Applying /{command} (Esc: interrupt)")
                 if await self.run_interactive(line):
                     return False, True
                 # Work paused for a menu continues unless the menu left its session.

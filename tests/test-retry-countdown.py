@@ -130,7 +130,7 @@ def test_renderer_displays_error_once_and_updates_terminal_countdown():
         renderer.retry_countdown("NVIDIA overloaded", seconds)
     renderer.retry_countdown("", 0)
     assert sink.getvalue().count("NVIDIA overloaded") == 1
-    assert updates == [f"Retrying in {seconds}s (Esc to interrupt)" for seconds in (8, 7, 6)] + [""]
+    assert updates == [f"Retrying in {seconds}s (Esc: interrupt)" for seconds in (8, 7, 6)] + [""]
 
 
 async def test_agent_retries_silently_then_stop_interrupts_countdown(monkeypatch):

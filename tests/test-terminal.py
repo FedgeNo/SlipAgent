@@ -1452,7 +1452,7 @@ async def test_pending_editor_notification_flashes_without_changing_status(displ
             monkeypatch.setattr("slipagent.terminal.time", SimpleNamespace(monotonic=lambda: changed_at))
             for frame in PULSE_FRAMES:
                 ui._activity_frame = frame
-                assert fragment_list_to_text(ui._activity_status()) == f"{frame} Starting up… (Esc to interrupt)"
+                assert fragment_list_to_text(ui._activity_status()) == f"{frame} Starting up… (Esc: interrupt)"
                 fragments = ui._activity()
                 assert 'Opening editor' in ''.join(part[1] for part in fragments if 'class:status-flash' in part[0])
                 assert all("class:status-flash" not in part[0] for part in fragments if "Starting up…" in part[1] or "Cancel" in part[1])
@@ -2807,10 +2807,10 @@ async def test_viewer_exit_link_replaces_commands_and_closes_only_on_its_words(d
             ui.input.text = "saved draft"
             ui.set_working(working)
             ui.open_viewer("Contents", "sample text", diff=working)
-            await wait_until(lambda: "Esc to exit viewer" in snapshot()[17])
+            await wait_until(lambda: "Esc: exit viewer" in snapshot()[17])
             row = snapshot()[17]
             assert "Commands" not in row
-            assert "Esc to interrupt" not in row
+            assert "Esc: interrupt" not in row
             start = width(row[:row.index("exit viewer")])
             assert screen.buffer[17][start].underscore
             assert not screen.buffer[17][start - 2].underscore
@@ -3173,7 +3173,7 @@ async def test_menu_cancellation_preserves_input_history_scroll_and_running_turn
             await wait_until(lambda: "Commands" in snapshot()[17])
             pipe.send_text("ignored\x7f\x1b[A\x1c" + cancel_key)
             assert await asyncio.wait_for(choice, 3) is None
-            await wait_until(lambda: "Starting up… (Esc to interrupt)" in snapshot()[17])
+            await wait_until(lambda: "Starting up… (Esc: interrupt)" in snapshot()[17])
             assert snapshot()[:17] == before
             assert ui.input.buffer.text == "draft in progress"
             assert ui.input.buffer.cursor_position == cursor
@@ -3634,7 +3634,7 @@ async def test_working_indicator_pulses_and_becomes_idle(display) -> None:
             assert "Stopping" not in snapshot()[17]
             ui.set_working(False)
             await wait_until(lambda: "Ready" in snapshot()[17])
-            ui.set_command_status("Applying /model (Esc to interrupt)")
+            ui.set_command_status("Applying /model (Esc: interrupt)")
             await wait_until(lambda: "Applying /model" in snapshot()[17])
             assert not ui.working
             ui.set_command_status("")
@@ -3707,7 +3707,7 @@ def test_rotating_tips_do_not_flash_status(display, monkeypatch):
             original = ui._activity()
             clock[0] += 14.01
             rotated = ui._activity()
-            assert "Shift+Tab to select UI component." in ui._notification_text()
+            assert "Shift+Tab: select UI component." in ui._notification_text()
             assert "".join(part[1] for part in rotated) != "".join(part[1] for part in original)
             assert all("status-flash" not in part[0] for part in rotated)
             ui.notify("Saved changes.")
@@ -4640,13 +4640,13 @@ async def test_working_interrupt_hint_click_preserves_draft(display):
         ui.set_working(True)
         task = asyncio.create_task(ui.run())
         try:
-            await wait_until(lambda: any('Esc to interrupt' in row for row in snapshot()))
-            row_index, row = next((index, row) for index, row in enumerate(snapshot()) if 'Esc to interrupt' in row)
+            await wait_until(lambda: any('Esc: interrupt' in row for row in snapshot()))
+            row_index, row = next((index, row) for index, row in enumerate(snapshot()) if 'Esc: interrupt' in row)
             column = row.index('interrupt') + 2
             pipe.send_text(f'\x1b[<0;{column};{row_index + 1}M\x1b[<0;{column};{row_index + 1}m')
             await wait_until(lambda: calls == ['interrupt'])
             assert ui.input.text == 'Keep this draft'
-            assert all(len(part) == 2 for part in ui._activity_status() if 'Esc to ' in part[1])
+            assert all(len(part) == 2 for part in ui._activity_status() if 'Esc: ' in part[1])
         finally:
             ui.close()
             await task
@@ -4684,10 +4684,10 @@ def test_model_wait_hint_actions_dispatch_once_and_leave_input_alone(display, mo
             ui.close()
 
 
-@pytest.mark.parametrize('notice,label', [('Press F3 to search', 'search'),
-    ('Press f3 to search', 'search'),
+@pytest.mark.parametrize('notice,label', [('F3: search', 'search'),
+    ('f3: search', 'search'),
     ('shift+tab to select UI component.', 'select UI component'),
-    ('Shift+Tab to select UI component.', 'select UI component')])
+    ('Shift+Tab: select UI component.', 'select UI component')])
 def test_navigation_hint_actions_use_existing_controls(display, monkeypatch, notice, label):
     from prompt_toolkit.data_structures import Point
     from prompt_toolkit.mouse_events import MouseEvent, MouseButton, MouseEventType
@@ -4719,8 +4719,8 @@ def test_shortcut_links_survive_notice_marquee(display, monkeypatch):
             calls = []
             ui.set_interrupt_handler(lambda: calls.append('interrupt'))
             try:
-                ui.notify('esc to interrupt')
-                assert ui._notification_text(200) == 'Esc to interrupt'
+                ui.notify('esc: interrupt')
+                assert ui._notification_text(200) == 'Esc: interrupt'
                 ui._notification_fragments(6)
                 clock[0] += 2.41
                 fragments = ui._notification_fragments(6)

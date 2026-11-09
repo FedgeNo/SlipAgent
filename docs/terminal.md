@@ -159,7 +159,7 @@ Most inspection and menu actions have both mouse and keyboard paths. Type only
 when entering prompts, command arguments, configuration values, or file edits.
 
 Shortcut labels use `Esc`, `Ctrl`, `Shift`, `Alt`, and the usual key names.
-In application hints such as `Esc to interrupt`, the action words are clickable
+In application hints such as `Esc: interrupt`, the action words are clickable
 and use the same controls as the keyboard shortcut. These links remain active
 while long hints scroll across the status line.
 
@@ -237,7 +237,7 @@ Tab starts at the last link and moves upward, scrolling each selection into view
 Clicking or refocusing the feed resets traversal to start at the last link again.
 **Shift+Tab** selects the next UI component, skipping individual feed links.
 Links receive a visible focus highlight; **Enter** activates them. Tabbing shows
-the tip “Shift+Tab to select UI component.” without flashing.
+the tip “Shift+Tab: select UI component.” without flashing.
 Use the **Inspect** link or **Ctrl+O** to reveal hidden sidebar lists.
 Use **Up/Down** to select an entry and **Enter** to open it.
 Inside the code editor, **Tab** inserts indentation; **Shift+Tab** moves focus

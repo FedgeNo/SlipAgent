@@ -13,7 +13,7 @@ from wcwidth import iter_graphemes, width as display_width
 PULSE_FRAMES = ("🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘")
 NOTICE_SECONDS = 30
 TIP_SECONDS = 15
-NAVIGATION_TIP = "Shift+Tab to select UI component."
+NAVIGATION_TIP = "Shift+Tab: select UI component."
 
 
 class StatusLine:
@@ -96,12 +96,12 @@ class StatusLine:
             return "class:idle", "Ready", True
         # A queued command pauses the run only to apply it; the work then continues.
         label = ("Stopping After This Step" if stopping else "Applying Command After This Step" if pausing
-                 else "Starting up…" if concise else "Starting up… (Esc to interrupt)")
+                 else "Starting up…" if concise else "Starting up… (Esc: interrupt)")
         if self.phase and not stopping and not pausing:
             elapsed = int(time.monotonic() - self.phase_since)
             phase = self.phase.rstrip('.…') + '…'
             label = (f"{phase} ({elapsed}s)" if concise
-                     else f"{phase} ({elapsed}s, Esc to interrupt)")
+                     else f"{phase} ({elapsed}s, Esc: interrupt)")
         return "class:pulse", f"{frame} {label}", False
 
     def marquee(self, fragments: StyleAndTextTuples, columns: int, key: str) -> StyleAndTextTuples:

@@ -239,7 +239,7 @@
         {#if notice}<div class="NoticeBanner" role="status">{notice}<button aria-label="Dismiss Notice" onclick={() => notice = ''}>×</button></div>{/if}
         <div class="WorkspaceGrid">
             <section class="ChatColumn">
-                <div class="ColumnHeading"><h2>Conversation</h2><div><button class="TextButton" title="Press F3 to search" onclick={openSearch}>Search</button><button class="TextButton" onclick={() => { renameOpen = true; renameText = ''; renameTarget = ''; }}>Rename</button><button class="TextButton" disabled={actionBusy || sessionState?.running} onclick={() => action('fork')}>Fork</button></div></div>
+                <div class="ColumnHeading"><h2>Conversation</h2><div><button class="TextButton" title="F3: search" onclick={openSearch}>Search</button><button class="TextButton" onclick={() => { renameOpen = true; renameText = ''; renameTarget = ''; }}>Rename</button><button class="TextButton" disabled={actionBusy || sessionState?.running} onclick={() => action('fork')}>Fork</button></div></div>
                 <div class="FeedContainer">
                     <div class="FeedLayer" class:search-hidden={searchMode}>{#if sessionState}<Feed {revision} sessionId={sessionState.sessionId} {inspect} {jump}/>{/if}</div>
                     {#if searchMode}<Search query={searchQuery} activate={(index) => { jump = -1; searchMode = false; requestAnimationFrame(() => jump = index); }}/>{/if}
@@ -256,7 +256,7 @@
                     {#if promptReference}<div class="HistoryContext"><span>About {promptReference.label}</span><button type="button" aria-label="Remove History Reference" onclick={() => promptReference = undefined}>×</button></div>{/if}
                     <input type="text" aria-label="Prompt" placeholder={promptReference ? 'Ask about this history selection…' : 'Describe what you want to build…'} bind:this={promptInput} bind:value={prompt}
                         onkeydown={(event) => { if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); void submit(); } }}/>
-                    <div class="ComposerFooter"><small>{sessionState?.running ? activity : connection === 'Connected' ? 'Enter to send' : connection}</small><div>
+                    <div class="ComposerFooter"><small>{sessionState?.running ? activity : connection === 'Connected' ? 'Enter: send' : connection}</small><div>
                         {#if sessionState?.running}<button type="button" class="TextButton" onclick={() => action('stop')}>Stop After Turn</button><button type="button" class="DangerButton" onclick={() => action('interrupt')}>Interrupt</button>{/if}
                         <button class="Primary" disabled={sending || !prompt.trim() || connection !== 'Connected'}>{sessionState?.running ? 'Queue ↗' : 'Send ↗'}</button>
                     </div></div>
